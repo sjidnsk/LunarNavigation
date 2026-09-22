@@ -117,6 +117,15 @@ def test_navigation_start_script_launches_only_navigation(tmp_path: Path) -> Non
     assert "start_exploration:=false" in command
 
 
+@pytest.mark.parametrize("script", ["start_navigation.sh", "start_exploration.sh"])
+def test_default_orin_entrypoints_select_legged_hardware(tmp_path: Path, script: str) -> None:
+    _run(tmp_path, script)
+    command = _command(tmp_path / "logs", "ros2")
+    assert "platform_type:=legged" in command
+    assert any(arg.startswith("config_file:=") and arg.endswith("/config/orin_hardware.yaml")
+               for arg in command)
+
+
 def test_rviz_goal_bridge_start_script_launches_the_incremental_bridge(
     tmp_path: Path,
 ) -> None:

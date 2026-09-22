@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Navigation only. Start P3 and start_static_tf_input.sh separately.
+# Legged navigation only. Start P3 and start_static_tf_input.sh separately.
 set -eo pipefail
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-59}"

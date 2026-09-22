@@ -1,5 +1,7 @@
 # Pure Planner 操作手册
 
+当前分支为 **Orin 足式部署**，配置、启动及能力边界以 [足式部署说明](docs/ORIN_LEGGED_DEPLOYMENT.md) 为准。下文轮式与旧部署记录保留历史用途。
+
 104 实机非 TCP 对齐配置见 [Orin 静态 TF 与导航配置](docs/STATIC_TF_INPUT.md)，源码范围与分层验证见 [104/216 对齐记录](docs/ORIN_NON_TCP_ALIGNMENT.md)。实机启动脚本仅启动导航，不启动控制器。
 
 本次主线导入及 30 秒默认等待超时的验证见[集成记录](docs/集成地图探索规划控制修改.md)。下文历史 demo 数据保留其当时参数。

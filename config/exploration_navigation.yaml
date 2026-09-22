@@ -2,7 +2,7 @@ stack:
   mode: incremental_v2
 
 common:
-  platform_type: wheel
+  platform_type: legged
   use_sim_time: false
   frames:
     map: map

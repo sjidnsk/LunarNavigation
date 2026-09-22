@@ -2,8 +2,8 @@ stack:
   mode: incremental_v2
 
 common:
-  platform_type: wheel
-  platform_config: wheel_orin.yaml
+  platform_type: legged
+  platform_config: legged_orin.yaml
   use_sim_time: false
   frames:
     map: map

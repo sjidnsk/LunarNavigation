@@ -128,7 +128,7 @@ def test_single_stack_config_has_only_shared_mode_platform_and_node_defaults() -
     assert set(config) == {"stack", "common", "exploration", "navigation"}
     assert config["stack"] == {"mode": "incremental_v2"}
     common = config["common"]
-    assert common["platform_type"] == "wheel"
+    assert common["platform_type"] == "legged"
     assert common["coarse_resolution_m"] == 1.0
     assert common["navigation_action"] == "/Car/T4/navigation/navigate_to_pose"
     assert common["local_map_topic"] == "/Car/T3/mapping/grid_map"

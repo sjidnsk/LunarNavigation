@@ -196,7 +196,7 @@ def test_yaml_defaults_construct_only_incremental_action_server_and_share_endpoi
         "incremental_exploration_node",
     ]
     navigation, exploration = [action.kwargs["parameters"][0] for action in actions]
-    assert navigation["platform_type"] == exploration["platform_selector"] == "wheel"
+    assert navigation["platform_type"] == exploration["platform_selector"] == "legged"
     assert navigation["action_name"] == exploration["navigation_action"] == "/Car/T4/navigation/navigate_to_pose"
     assert navigation["exploration_map_topic"] == exploration["exploration_map_topic"] == "/Car/T4/mapping/exploration_map"
     assert navigation["local_window_size_m"] == 64.0

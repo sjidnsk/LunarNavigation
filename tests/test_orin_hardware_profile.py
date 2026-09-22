@@ -10,7 +10,15 @@ def test_hardware_platform_path_resolves_independently_of_working_directory():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     config = module._load_config(str(ROOT / 'config/orin_hardware.yaml'))
-    assert Path(config['common']['platform_config']) == ROOT / 'config/wheel_orin.yaml'
+    assert Path(config['common']['platform_config']) == ROOT / 'config/legged_orin.yaml'
+    common = module._require_common(config)
+    navigation, exploration = module._incremental_parameters(
+        config, common, common['platform_type'], 'unused.yaml', False)
+    assert navigation['platform_type'] == 'legged'
+    assert exploration['platform_selector'] == 'legged'
+    assert navigation['platform_config'] == exploration['platform_config']
+    capability = yaml.safe_load(Path(navigation['platform_config']).read_text())
+    assert capability['platform_type'] == 'LEGGED'
 
 def test_hardware_profile_keeps_physics_and_sets_navigation_margin():
     base = yaml.safe_load((ROOT / 'config/wheel.yaml').read_text())

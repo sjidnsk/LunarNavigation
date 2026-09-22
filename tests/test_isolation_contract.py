@@ -79,6 +79,10 @@ def test_ros_wrapper_has_fixed_capabilities_launch_and_interface_contracts() -> 
         "pure_exploration.yaml",
         "exploration_navigation.yaml",
         "incremental_navigation_interfaces.yaml",
+        "orin_controller.yaml",
+        "orin_hardware.yaml",
+        "wheel_orin.yaml",
+        "legged_orin.yaml",
     }
 
     forbidden_fragments = {

@@ -1,5 +1,7 @@
 # Orin 静态 TF 与导航配置
 
+本足式分支的 `orin_hardware.yaml` 已改用 `legged_orin.yaml`，详见 [足式部署说明](ORIN_LEGGED_DEPLOYMENT.md)。下面的 wheel_orin 数值为原轮式部署记录。
+
 P3 负责发布定位、高程与静态 map→odom；P4 适配器只接收 `/tf_static`
 中的直接 map→odom，并以 5 Hz 原样发布到 `/P4/input/map_to_odom`。
 输入 Reliable/TransientLocal；保留源时间戳，不构造单位变换、不发布共享 TF、
