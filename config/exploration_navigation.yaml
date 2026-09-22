@@ -27,7 +27,7 @@ exploration:
   minimum_frontier_length_m: 1.0
   coverage_target: 0.80
   sensor_range_m: 10.0
-  sensor_fov_deg: 90.0
+  sensor_fov_deg: 360.0
   yaw_offsets_deg: [-45.0, -22.5, 0.0, 22.5, 45.0]
   task_topic: /Car/T4/exploration/task
   status_topic: /Car/T4/exploration/status

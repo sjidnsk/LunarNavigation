@@ -87,3 +87,24 @@ colcon test-result --test-result-base "$artifact/ros-build" --verbose
 
 Humble 足式构建／运行、原生 Orin、真实 DDS／P3 地图、足式执行器和实机闭环均为
 `NOT_RUN`。本机合成地图测试不替代真实地形与运动能力验证，未建立 Orin 性能或 p50／p95 数据。
+
+## 同日追加：360° 传感器视场与平台比较
+
+按用户要求，将足式分支 `config/orin_hardware.yaml` 和
+`config/exploration_navigation.yaml` 的 `sensor_fov_deg` 从 90 改为 360；距离仍为 10 m。
+不修改 legacy/demo 的独立配置、候选 yaw 偏移、终点朝向策略或 P3 驱动。算法已有完整圆周
+分支，仍执行遮挡检查；360° 不代表实际地图已覆盖四周。足式与轮式的实现比较写入
+`docs/ORIN_LEGGED_DEPLOYMENT.md`。
+
+本次配置变更验证（同一 Jazzy 隔离产物目录）：
+
+- `fov360-python.log`：配置、launch、接口相关 28 项检查通过。
+- `fov360-build.log`：两个受影响 ROS 包重新构建、安装成功；已核对安装 YAML 为 360°／10 m。
+- `fov360-tests.log`：两个受影响 ROS 包在 localhost 域 184 串行测试通过。
+- `test_information_gain`、`test_visibility_traversal` 两组 CTest 通过，覆盖圆周视场与遮挡。
+- `fov360-smoke.log`：localhost 域 183 实际启动导航及探索，读回视场 360.0、距离 10.0，
+  两节点使用同一足式配置；未发送目标或车辆控制。
+
+本次仅运行与配置变更相关检查，不重复上一阶段的全量仓库测试；上文未解决的全量回归项和
+Humble／Orin／实机 NOT_RUN 边界继续保留。需要重启目标机探索节点才能读取新配置，
+本次没有远程部署或重启设备。
