@@ -106,7 +106,7 @@ struct RuntimeParameters final {
   const std::filesystem::path share =
       ament_index_cpp::get_package_share_directory(std::string{kPackageName});
   if (configured_path.empty()) {
-    return share / "config" / (std::string{platform} + ".yaml");
+    return share / "config" / (std::string{platform} + "_orin.yaml");
   }
   const std::filesystem::path path{configured_path};
   return path.is_absolute() ? path : share / "config" / path;
@@ -114,9 +114,10 @@ struct RuntimeParameters final {
 
 [[nodiscard]] RuntimeParameters ReadRuntimeParameters(rclcpp::Node& node) {
   const std::string platform_name =
-      node.declare_parameter<std::string>("platform_type", "wheel");
+      node.declare_parameter<std::string>("platform_type", "legged");
   const std::string configured_path =
-      node.declare_parameter<std::string>("platform_config", "");
+      node.declare_parameter<std::string>("platform_config",
+          ResolvePlatformConfig(platform_name, "").string());
   const core::PlatformType platform_type = ParsePlatform(platform_name);
   auto loaded = LoadPlatformConfig(
       ResolvePlatformConfig(platform_name, configured_path), platform_name);
@@ -170,7 +171,7 @@ struct RuntimeParameters final {
       .local_window_size_m = local_window_size_m,
       .odometry_topic = node.declare_parameter<std::string>(
           "odometry_topic", "/Car/T3/localization/odometry"),
-      .tf_topic = node.declare_parameter<std::string>("tf_topic", "/tf"),
+      .tf_topic = node.declare_parameter<std::string>("tf_topic", "/P4/input/map_to_odom"),
       .action_name = node.declare_parameter<std::string>(
           "action_name", "/Car/T4/navigation/navigate_to_pose"),
       .path_reference_topic = node.declare_parameter<std::string>(
@@ -383,16 +384,14 @@ core::TraversabilityProfile PlatformProfileFor(
   core::TraversabilityProfile profile;
   profile.slope_weight = 1.0;
   profile.relief_weight = 1.0;
-  profile.clearance_weight = 0.0;
+  profile.clearance_weight = 2.0;
+  profile.goal_position_tolerance_m = 0.1;
+  profile.goal_yaw_tolerance_rad = 0.05;
   profile.start_blind_zone_margin_m = start_blind_zone_margin_m;
   if (const auto* wheel = std::get_if<core::WheeledCapability>(&capability)) {
-    // Paired clearance/length calibration; see the 2026-09-19 validation report.
-    profile.clearance_weight = 2.0;
     profile.planar_envelope_xy_m = wheel->footprint_xy_m;
     profile.preferred_clearance_m = wheel->minimum_clearance_m;
     profile.maximum_slope_rad = wheel->maximum_slope_rad;
-    profile.goal_position_tolerance_m = 0.30;
-    profile.goal_yaw_tolerance_rad = 0.2617993877991494;
   } else if (const auto* legged =
                  std::get_if<core::LeggedCapability>(&capability)) {
     const double half_x = legged->body_extent_m.x / 2.0;
@@ -402,8 +401,6 @@ core::TraversabilityProfile PlatformProfileFor(
         {half_x, half_y}, {-half_x, half_y}};
     profile.maximum_slope_rad = legged->maximum_slope_rad;
     profile.preferred_clearance_m = legged->minimum_body_clearance_m;
-    profile.goal_position_tolerance_m = 0.20;
-    profile.goal_yaw_tolerance_rad = 0.17453292519943295;
   }
   return profile;
 }
@@ -421,7 +418,10 @@ core::PlanningSessionPorts RealSessionPorts(
   auto patch = std::make_shared<core::RequestLocalStartPatchBuilder>();
   auto wheel = std::get_if<core::WheeledCapability>(&capability)
                    ? std::make_shared<core::WheelLocalPlanner>(
-                         *std::get_if<core::WheeledCapability>(&capability))
+                         *std::get_if<core::WheeledCapability>(&capability),
+                         core::WheelLocalPlannerConfig{
+                             .terminal_yaw_tolerance_rad =
+                                 0.5 * profile.goal_yaw_tolerance_rad})
                    : nullptr;
   auto legged = std::get_if<core::LeggedCapability>(&capability)
                     ? std::make_shared<core::LeggedLocalPlanner>(
@@ -509,7 +509,7 @@ struct IncrementalNavigationNode::Impl final {
     core::PlanningSessionPorts ports =
         factory ? factory(parameters.capability)
                 : RealSessionPorts(parameters.capability, parameters.profile);
-    tracking_feedback_enabled = node.declare_parameter<bool>("enable_tracking_feedback", false);
+    tracking_feedback_enabled = node.declare_parameter<bool>("enable_tracking_feedback", true);
     coordinator = std::make_unique<core::PlanningSessionCoordinator>(
         parameters.capability, parameters.profile,
         core::PlanningSessionCoordinatorConfig{

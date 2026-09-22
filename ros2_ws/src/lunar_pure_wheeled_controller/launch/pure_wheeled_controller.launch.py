@@ -1,48 +1,6 @@
-"""Launch the isolated pure wheeled controller."""
-
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
+"""Launch the wheel deployment policy, with optional explicit overrides."""
+from lunar_pure_wheeled_controller.deployment_launch import generate_controller_launch
 
 
-_PARAMETERS = {
-    "input_mode": "motion_reference",
-    "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
-    "platform_config": "",
-    "path_reference_topic": "/Car/T4/planning/path_reference",
-    "tracking_status_topic": "/Car/T4/control/tracking_status",
-    "reference_topic": "/Car/T4/planning/wheeled_reference",
-    "path_topic": "/Car/T4/planning/local_path",
-    "odometry_topic": "/Car/T3/localization/odometry",
-    "command_topic": "/Car/T5/Car_Cmd_Vel",
-    "execution_cancel_topic": "/Car/T4/execution/cancel",
-    "tf_topic": "/tf",
-    "control_rate_hz": "20.0",
-    "odometry_timeout_s": "0.5",
-    "tf_timeout_s": "0.5",
-    "lookahead_m": "0.5",
-    "max_linear_mps": "0.2",
-    "max_angular_radps": "0.5",
-    "goal_position_tolerance_m": "0.2",
-    "goal_yaw_tolerance_rad": "0.2",
-    "max_cross_track_error_m": "1.0",
-    "spin_kp": "1.5",
-    "translation_epsilon_m": "0.001",
-}
-
-
-def generate_launch_description() -> LaunchDescription:
-    """Expose the adapter topics and tracking-policy parameters."""
-    return LaunchDescription([
-        *(DeclareLaunchArgument(name, default_value=default) for name, default in _PARAMETERS.items()),
-        Node(
-            package="lunar_pure_wheeled_controller",
-            executable="lunar_pure_wheeled_controller_node.py",
-            name="lunar_pure_wheeled_controller",
-            parameters=[{name: (ParameterValue(LaunchConfiguration(name), value_type=str)
-                                if name == "platform_config" else LaunchConfiguration(name))
-                         for name in _PARAMETERS}],
-        ),
-    ])
+def generate_launch_description():
+    return generate_controller_launch('wheel', __file__)

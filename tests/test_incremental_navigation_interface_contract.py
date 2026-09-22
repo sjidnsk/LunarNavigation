@@ -134,7 +134,7 @@ def test_single_stack_config_has_only_shared_mode_platform_and_node_defaults() -
     assert common["local_map_topic"] == "/Car/T3/mapping/grid_map"
     assert common["exploration_map_topic"] == "/Car/T4/mapping/exploration_map"
     assert common["odometry_topic"] == "/Car/T3/localization/odometry"
-    assert common["tf_topic"] == "/tf"
+    assert common["tf_topic"] == "/P4/input/map_to_odom"
     assert common["frames"] == {
         "map": "map",
         "odom": "odom",

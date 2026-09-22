@@ -99,9 +99,11 @@ TEST(PlatformConfigLoader, LoadsPlannerInstalledWheelGeometry) {
 TEST(PlatformConfigLoader, IncrementalDeploymentProfilesAcceptNavigationMargin) {
   for (const auto& platform : {std::string{"wheel"}, std::string{"legged"}}) {
     const auto source = platform == "wheel" ? WheelYaml() : LeggedYaml();
-    const TemporaryYaml yaml{source + "\nstart_blind_zone_margin_m: 0.0\n"};
-    const auto config = LoadIncrementalPlatformConfig(yaml.path(), platform);
-    EXPECT_EQ(config.geometry.platform_type, platform == "wheel" ? "WHEELED" : "LEGGED");
+    for (const auto margin : {"0.0", "3.0"}) {
+      const TemporaryYaml yaml{source + "\nstart_blind_zone_margin_m: " + margin + "\n"};
+      const auto config = LoadIncrementalPlatformConfig(yaml.path(), platform);
+      EXPECT_EQ(config.geometry.platform_type, platform == "wheel" ? "WHEELED" : "LEGGED");
+    }
   }
 }
 

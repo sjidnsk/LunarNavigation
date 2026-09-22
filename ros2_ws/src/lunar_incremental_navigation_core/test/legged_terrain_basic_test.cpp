@@ -35,6 +35,55 @@ IntrinsicTraversalEvaluation Evaluate(Terrain& t, GridIndex p = {7, 7}) {
   return MakePlatformElevationEvaluator(Capability())->Evaluate(*t.snapshot(), p);
 }
 
+struct RangeTerrain final : ElevationRangeView {
+  SparseGridGeometry grid{"map", .2, {}, {0, 0}, {15, 15}};
+  std::vector<ElevationRange> ranges = std::vector<ElevationRange>(225);
+  ElevationRange& at(int x, int y) { return ranges[y * 15 + x]; }
+  const SparseGridGeometry& geometry() const noexcept override { return grid; }
+  std::optional<ElevationRange> ElevationRangeAt(GridIndex p) const noexcept override {
+    if (!grid.Contains(p)) return std::nullopt;
+    return ranges[p.y * 15 + p.x];
+  }
+};
+
+TEST(LeggedTerrainBasic, AdjacentElevationIntervalsCertifyFlatSupport) {
+  for (float half_range : {.013F, .02F}) {
+    RangeTerrain t;
+    for (auto& range : t.ranges) range = {-half_range, half_range};
+    const auto result = MakePlatformElevationEvaluator(Capability())->Evaluate(t, {7, 7});
+    EXPECT_EQ(result.state, IntrinsicCellState::kFree);
+    EXPECT_NEAR(result.slope_rad, 0., 1e-6);
+    EXPECT_NEAR(result.relief_m, 2. * half_range, 1e-6);
+  }
+}
+
+TEST(LeggedTerrainBasic, IsolatedIntervalExtremaCannotCertifySupport) {
+  for (float extreme : {-.05F, .05F, -.6F, .6F}) {
+    RangeTerrain t;
+    t.at(7, 7) = extreme < 0 ? ElevationRange{extreme, 0.F}
+                              : ElevationRange{0.F, extreme};
+    EXPECT_EQ(MakePlatformElevationEvaluator(Capability())->Evaluate(t, {7, 7}).state,
+              IntrinsicCellState::kUnknown);
+  }
+}
+
+TEST(LeggedTerrainBasic, SupportedIntervalsPreserveSlopeAndReliefLimits) {
+  for (double degrees : {0., 29., 31.})
+    for (float half_range : {.02F, .26F}) {
+      RangeTerrain t;
+      for (int y = 0; y < 15; ++y)
+        for (int x = 0; x < 15; ++x) {
+          const float z = float(x * .2 * std::tan(degrees * std::numbers::pi / 180.));
+          t.at(x, y) = {z - half_range, z + half_range};
+        }
+      const auto result = MakePlatformElevationEvaluator(Capability())->Evaluate(t, {7, 7});
+      EXPECT_EQ(result.state, degrees > 30. || half_range > .25F
+                                  ? IntrinsicCellState::kBlocked
+                                  : IntrinsicCellState::kFree);
+      EXPECT_NEAR(result.slope_rad, degrees * std::numbers::pi / 180., 1e-5);
+    }
+}
+
 // Pairwise gradients turn these supported steps into artificial steep ramps.
 TEST(LeggedTerrainBasic, SupportedStepsUseResidualHeightAtMultipleResolutions) {
   for (double resolution : {.1, .2})

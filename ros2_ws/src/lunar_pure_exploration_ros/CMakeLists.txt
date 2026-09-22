@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.22)
 project(lunar_pure_exploration_ros LANGUAGES CXX)
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(diagnostic_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(lunar_planning_msgs REQUIRED)
@@ -57,6 +58,7 @@ target_include_directories(${PROJECT_NAME}_incremental
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     "$<INSTALL_INTERFACE:include>")
 ament_target_dependencies(${PROJECT_NAME}_incremental
+  ament_index_cpp
   diagnostic_msgs
   geometry_msgs
   lunar_planning_msgs
@@ -101,6 +103,8 @@ install(
   FILES
     "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/pure_exploration.yaml"
     "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/exploration_navigation.yaml"
+    "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/wheel_orin.yaml"
+    "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/legged_orin.yaml"
   DESTINATION share/${PROJECT_NAME}/config)
 install(
   FILES "${LUNAR_PURE_EXPLORATION_LAUNCH_SOURCE_DIR}/pure_exploration.launch.py"

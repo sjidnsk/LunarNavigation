@@ -21,12 +21,16 @@ install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME})
 
 install(FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/orin_controller.yaml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/wheel_orin.yaml"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/orin_legged_controller.yaml"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/legged_orin.yaml"
   DESTINATION share/${PROJECT_NAME}/config)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(${PROJECT_NAME}_deployment_policy_test test/test_deployment_policy.py)
+  ament_add_pytest_test(${PROJECT_NAME}_deployment_launch_test test/test_deployment_launch.py)
   ament_add_pytest_test(${PROJECT_NAME}_platform_policy_test test/test_platform_policy.py)
   ament_add_pytest_test(${PROJECT_NAME}_legged_closed_loop_test test/test_legged_closed_loop.py TIMEOUT 90)
   ament_add_pytest_test(${PROJECT_NAME}_shutdown_test test/test_shutdown.py)

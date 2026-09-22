@@ -49,6 +49,7 @@ def _compose(context):
     )
 
     navigator_parameters = {
+        "enable_tracking_feedback": False,
         "platform_type": platform_type,
         "platform_config": platform_config,
         "coarse_resolution_m": 1.0,

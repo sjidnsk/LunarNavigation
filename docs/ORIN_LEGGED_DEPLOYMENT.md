@@ -116,7 +116,7 @@ ros2 topic echo --once /Car/T3/localization/odometry
 `lunar_incremental_navigation_ros/src/incremental_navigation_node.cpp` 的 `PlatformProfileFor`。
 
 净空权重一致后，平台自身的净空距离仍分别使用足式 0.3 m、轮式 0.2 m，
-因此不代表两个平台的净空代价完全相同。通用足式算法默认值未改变，两个足式导航入口显式覆盖权重。
+因此不代表两个平台的净空代价完全相同。正式增量入口与节点缺省值同步为权重 2.0；通用配置也选择 legged_orin.yaml。
 跟踪器复用边界见 [足式跟踪器适配分析](ORIN_LEGGED_TRACKER_ADAPTATION.md)。
 
 ## 足式基础跟踪入口
@@ -130,10 +130,10 @@ bash scripts/orin/start_legged_controller.sh
 ```
 
 配置为 `config/orin_legged_controller.yaml`，能力文件为 `config/legged_orin.yaml`。
-前进上限 0.1 m/s，角速度上限 0.15 rad/s，默认关闭倒车，横向输出始终为零。
+前进上限 0.1 m/s，角速度上限 0.15 rad/s，与轮式一致默认允许倒车，横向输出始终为零。
 线加速度 0.1 m/s²、计划制动减速度 0.15 m/s²、角加速度 0.15 rad/s²，均为初始控制配置，
 不是足式能力表中的实测制动能力。紧急停止及失效路径仍立即输出零速，底盘实际停止响应
-须在驱动接入后验证。里程计／TF 接收超时均为 0.5 s，输入需持续更新。
+须在驱动接入后验证。里程计接收超时 0.5 s、TF 接收超时 5 s，与轮式部署配置一致；输入需持续更新。
 
 节点名与包名继续沿用 `lunar_pure_wheeled_controller`；`platform_type=legged` 使用足式
 能力字段并要求 `incremental_reference` 模式。默认轮式入口保留。低速限制来自专用配置文件，
@@ -152,3 +152,27 @@ ROS_DOMAIN_ID=187 ROS_LOCALHOST_ONLY=1 python3 tests/launch/legged_tracking_prob
 终点朝向预算：导航 0.05 rad、足式规划认证 0.025 rad、跟踪器 0.02 rad。修改任一项时
 需保持规划误差与跟踪误差之和小于导航阈值；离散旋转原语不能达到严格窗口时仍允许 NO_PATH。
 完整闭环证据见 [足式低速跟踪验证](validation/2026-09-22-orin-legged-tracking.md)。
+
+
+## 2026-09-23 参数统一
+
+正式增量导航的硬件、通用、直接节点入口统一为：tracking feedback 开启、净空权重 2、
+起点盲区额外余量 3 m、位置容差 0.1 m、导航朝向容差 0.05 rad、私有 TF 输入。
+平台选择对应的 `_orin.yaml`，显式指定不匹配的平台／能力文件仍拒绝启动。
+足式传感器视场保持 360°，轮式保持 90°；物理能力数值仍按各自平台配置。
+
+轮式和足式跟踪器统一：前视 0.5 m、偏离阈值 1 m、TF 超时 5 s、允许倒车、跟踪位置
+容差 0.1 m／朝向容差 0.02 rad，两种 launch 均自动加载各自部署 YAML。
+前视恢复到 0.5 m 解决已复现的 5 cm／10 cm 横向偏差失败；曲率上限仍为 1/m，因此
+1 m 偏离阈值不是能纠正全部 1 m 偏差的保证。低速上限仍是足式自己的 0.1 m/s 和 0.15 rad/s。
+
+足式区间支持修正为同类区间端点比较，完整平地 ±13/20 mm 区间可通过。中央 3×3 完整
+观测继续防止将未知落脚区拟合为地面；中位数坡度继续避免台阶被拟合为陡坡。
+这两项是观测证据与地形分离策略，不是认为足式物理越障能力弱于轮式。
+
+本轮证据见 [参数统一验证记录](validation/2026-09-23-deployment-policy-unification.md)。
+
+跨平台启动时，显式配套指定 `platform_type` 与 `platform_config`，例如
+`platform_type:=wheel platform_config:=$PWD/config/wheel_orin.yaml`。单独改变类型但仍显式指定
+另一平台能力文件时会报错，不会静默替换。传感器 FOV 仍服从所选 `config_file`；跨平台
+使用时应选择该平台配置文件。旧 `scripts/start_all.sh` 继续显式使用 legacy motion reference 与 `/tf`。

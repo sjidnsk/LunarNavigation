@@ -77,7 +77,7 @@ def main():
         tf_pub = node.create_publisher(TFMessage, PREFIX+'/tf', 10)
         map_pub = node.create_publisher(GridMap, PREFIX+'/map', qos)
         def command(message):
-            assert 0. <= message.linear.x <= .100001
+            assert abs(message.linear.x) <= .100001
             assert abs(message.angular.z) <= .150001
             assert message.linear.y == 0.
             state.update(v=message.linear.x, w=message.angular.z, received=time.monotonic())

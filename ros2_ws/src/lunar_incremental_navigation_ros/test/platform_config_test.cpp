@@ -42,3 +42,22 @@ TEST(PlatformConfig, ModifiedProfileUsesConfiguredValuesAndRejectsInvalidSpeed) 
   EXPECT_NE(invalid.error_detail.find("maximum_forward_speed_mps"), std::string::npos);
   std::filesystem::remove(path);
 }
+
+TEST(PlatformConfig, MissingMarginUsesDeploymentDefaultAndExplicitZeroWins) {
+  for (const std::string platform : {"wheel", "legged"}) {
+    const auto generic = std::string{PLATFORM_CONFIG_DIR} + "/" + platform + ".yaml";
+    const auto defaults = lunar::incremental_navigation_ros::LoadPlatformConfig(generic, platform);
+    ASSERT_TRUE(defaults.capability) << defaults.error_detail;
+    ASSERT_TRUE(defaults.start_blind_zone_margin_m);
+    EXPECT_DOUBLE_EQ(*defaults.start_blind_zone_margin_m, 3.0);
+    auto config = YAML::LoadFile(generic);
+    config["start_blind_zone_margin_m"] = 0.0;
+    const auto path = std::filesystem::temp_directory_path() / ("incremental_zero_margin_" + platform + ".yaml");
+    { std::ofstream output(path); output << config; }
+    const auto explicit_zero = lunar::incremental_navigation_ros::LoadPlatformConfig(path, platform);
+    ASSERT_TRUE(explicit_zero.capability) << explicit_zero.error_detail;
+    ASSERT_TRUE(explicit_zero.start_blind_zone_margin_m);
+    EXPECT_DOUBLE_EQ(*explicit_zero.start_blind_zone_margin_m, 0.0);
+    std::filesystem::remove(path);
+  }
+}

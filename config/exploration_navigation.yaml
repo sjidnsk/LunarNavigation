@@ -3,6 +3,7 @@ stack:
 
 common:
   platform_type: legged
+  platform_config: legged_orin.yaml
   use_sim_time: false
   frames:
     map: map
@@ -12,7 +13,7 @@ common:
   local_map_topic: /Car/T3/mapping/grid_map
   exploration_map_topic: /Car/T4/mapping/exploration_map
   odometry_topic: /Car/T3/localization/odometry
-  tf_topic: /tf
+  tf_topic: /P4/input/map_to_odom
   navigation_action: /Car/T4/navigation/navigate_to_pose
   local_map_qos:
     reliability: reliable
@@ -38,6 +39,9 @@ exploration:
   diagnostics_topic: /Car/T4/exploration/diagnostics
 
 navigation:
+  enable_tracking_feedback: true
+  goal_position_tolerance_m: 0.1
+  goal_yaw_tolerance_rad: 0.05
   clearance_weight: 2.0
   publish_local_fine_map: true
   local_fine_map_topic: /Car/T4/mapping/local_fine_map

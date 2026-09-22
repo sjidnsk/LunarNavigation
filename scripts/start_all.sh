@@ -41,7 +41,13 @@ ros2 launch lunar_pure_planner_ros rviz_goal_bridge.launch.py \
   environment_mode:="${environment_mode}" &
 pids+=("$!")
 
-ros2 launch lunar_pure_wheeled_controller pure_wheeled_controller.launch.py &
+# This legacy stack publishes MotionReference, not incremental PathReference.
+# Preserve its former controller defaults; deployment launch defaults are Orin-specific.
+ros2 launch lunar_pure_wheeled_controller pure_wheeled_controller.launch.py \
+  input_mode:=motion_reference \
+  tf_topic:=/tf tf_timeout_s:=0.5 \
+  max_angular_radps:=0.5 \
+  goal_position_tolerance_m:=0.2 goal_yaw_tolerance_rad:=0.2 &
 pids+=("$!")
 
 wait -n "${pids[@]}"

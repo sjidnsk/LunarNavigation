@@ -21,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include <ament_index_cpp/get_package_share_directory.hpp>
 #include <diagnostic_msgs/msg/diagnostic_array.hpp>
 #include <diagnostic_msgs/msg/diagnostic_status.hpp>
 #include <diagnostic_msgs/msg/key_value.hpp>
@@ -99,9 +100,12 @@ std::size_t PositiveSize(rclcpp::Node& node, const std::string& name,
 
 IncrementalExplorationNodeParameters LoadParameters(rclcpp::Node& node) {
   const auto platform_selector =
-      node.declare_parameter<std::string>("platform_selector", "wheel");
-  const auto platform_config =
-      node.declare_parameter<std::string>("platform_config", "");
+      node.declare_parameter<std::string>("platform_selector", "legged");
+  const auto default_config = std::filesystem::path{
+      ament_index_cpp::get_package_share_directory("lunar_pure_exploration_ros")} /
+      "config" / (platform_selector + "_orin.yaml");
+  const auto platform_config = node.declare_parameter<std::string>(
+      "platform_config", default_config.string());
   if (platform_config.empty()) {
     throw std::invalid_argument{"platform_config is required"};
   }
@@ -117,7 +121,7 @@ IncrementalExplorationNodeParameters LoadParameters(rclcpp::Node& node) {
   const auto sensor_range =
       node.declare_parameter<double>("sensor_range_m", 10.0);
   const auto sensor_fov_deg =
-      node.declare_parameter<double>("sensor_fov_deg", 90.0);
+      node.declare_parameter<double>("sensor_fov_deg", platform_selector == "legged" ? 360.0 : 90.0);
   const auto yaw_offsets_deg = node.declare_parameter<std::vector<double>>(
       "yaw_offsets_deg", {-45.0, -22.5, 0.0, 22.5, 45.0});
   const auto require_positive = [](double value, const char* name) {
@@ -176,7 +180,7 @@ IncrementalExplorationNodeParameters LoadParameters(rclcpp::Node& node) {
           node, "exploration_map_topic", "/Car/T4/mapping/exploration_map"),
       .odometry_topic = AbsoluteTopic(
           node, "odometry_topic", "/Car/T3/localization/odometry"),
-      .tf_topic = AbsoluteTopic(node, "tf_topic", "/tf"),
+      .tf_topic = AbsoluteTopic(node, "tf_topic", "/P4/input/map_to_odom"),
       .task_topic = AbsoluteTopic(
           node, "task_topic", "/Car/T4/exploration/task"),
       .navigation_action = AbsoluteTopic(

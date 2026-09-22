@@ -269,10 +269,12 @@ IntrinsicTraversalEvaluation EvaluateTerrainPatch(
     const double plane =
         resolution * (background_a * p.x + background_b * p.y) + background_c;
     p.residual = p.z - plane;
+    p.low -= plane;
+    p.high -= plane;
     if (p.x == 0 && p.y == 0) center_residual = p.residual;
     if (std::abs(p.x) <= 1 && std::abs(p.y) <= 1) {
-      low = std::min(low, p.low - plane);
-      high = std::max(high, p.high - plane);
+      low = std::min(low, p.low);
+      high = std::max(high, p.high);
     }
   }
   const double relief = high - low;
@@ -300,9 +302,16 @@ IntrinsicTraversalEvaluation EvaluateTerrainPatch(
         const auto& p = points[i];
         const auto& q = points[j];
         if (std::max(std::abs(p.x - q.x), std::abs(p.y - q.y)) != 1) continue;
-        low_supported |= p.residual <= low + band && q.residual <= low + band;
-        high_supported |=
-            p.residual >= high - band && q.residual >= high - band;
+        if constexpr (legged) {
+          // Compare interval endpoints with interval extrema. Midpoints cannot
+          // certify even identical adjacent ranges wider than the support band.
+          low_supported |= p.low <= low + band && q.low <= low + band;
+          high_supported |= p.high >= high - band && q.high >= high - band;
+        } else {
+          low_supported |= p.residual <= low + band && q.residual <= low + band;
+          high_supported |=
+              p.residual >= high - band && q.residual >= high - band;
+        }
       }
     if (!low_supported || !high_supported)
       return {.state = IntrinsicCellState::kUnknown,

@@ -17,7 +17,7 @@ from test_node import make_path, make_odometry, make_direct_map_from_odom
 ROOT = FilePath(__file__).resolve().parents[4]
 
 
-def test_legged_forward_turn_topic_loop_and_fail_closed_inputs():
+def test_legged_turn_topic_loop_and_fail_closed_inputs():
     rclpy.init(args=['--ros-args', '--params-file', str(ROOT / 'config/orin_legged_controller.yaml'),
                     '-p', f'platform_config:={ROOT}/config/legged_orin.yaml',
                     '-p', 'command_topic:=/legged_test/cmd',
@@ -76,7 +76,7 @@ def test_legged_forward_turn_topic_loop_and_fail_closed_inputs():
             controller._tick()
             wait(lambda: len(commands) > count and len(statuses) > feedback_count)
             command, status = commands[-1], statuses[-1]
-            assert 0. <= command.linear.x <= .1 + 1e-9
+            assert abs(command.linear.x) <= .1 + 1e-9
             assert abs(command.angular.z) <= .15 + 1e-9
             assert command.linear.y == command.linear.z == command.angular.x == command.angular.y == 0.
             assert bytes(status.session_id.uuid) == bytes([11] * 16)

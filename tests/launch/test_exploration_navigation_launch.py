@@ -167,6 +167,7 @@ def test_launch_declares_the_single_entrypoint_arguments_and_incremental_default
     assert set(arguments) == {
         "stack_mode",
         "platform_type",
+        "platform_config",
         "config_file",
         "use_sim_time",
         "start_navigation",
@@ -175,6 +176,7 @@ def test_launch_declares_the_single_entrypoint_arguments_and_incremental_default
     }
     assert arguments["stack_mode"] == ""
     assert arguments["platform_type"] == ""
+    assert arguments["platform_config"] == ""
     assert arguments["use_sim_time"] == ""
     assert arguments["start_rviz"] == "false"
     assert arguments["start_navigation"] == "true"
@@ -419,3 +421,42 @@ def test_qos_depth_defaults_to_one_and_invalid_depth_names_field(monkeypatch):
     config["common"]["local_map_qos"]["depth"] = 0
     with pytest.raises(RuntimeError, match="local_map_qos"):
         module._require_common(config)
+
+
+def test_generic_and_hardware_share_deployment_navigation_defaults(monkeypatch):
+    module, _, _ = _launch_module(monkeypatch)
+    for name in ("exploration_navigation.yaml", "orin_hardware.yaml"):
+        config = module._load_config(str(ROOT / "config" / name))
+        common = module._require_common(config)
+        nav, exp = module._incremental_parameters(config, common, "legged", "/default/legged_orin.yaml", False)
+        assert nav["enable_tracking_feedback"] is True
+        assert nav["goal_position_tolerance_m"] == 0.1
+        assert nav["goal_yaw_tolerance_rad"] == 0.05
+        assert nav["clearance_weight"] == 2.0
+        assert nav["tf_topic"] == exp["tf_topic"] == "/P4/input/map_to_odom"
+        assert Path(nav["platform_config"]).name == "legged_orin.yaml"
+        assert Path(nav["platform_config"]).is_file()
+        assert exp["sensor_fov_deg"] == 360.0
+
+
+def test_explicit_platform_and_capability_pair_override_yaml(monkeypatch):
+    module, _, _ = _launch_module(monkeypatch)
+    configured = yaml.safe_load(STACK_CONFIG.read_text())["common"]["platform_type"]
+    other = "wheel" if configured == "legged" else "legged"
+    capability = str(ROOT / "config" / (other + "_orin.yaml"))
+    nodes = _compose(module, platform_type=other, platform_config=capability)
+    nav, exp = [node.kwargs["parameters"][0] for node in nodes]
+    assert nav["platform_type"] == exp["platform_selector"] == other
+    assert nav["platform_config"] == exp["platform_config"] == capability
+
+
+def test_selector_only_override_does_not_silently_replace_explicit_yaml_profile(monkeypatch):
+    module, _, _ = _launch_module(monkeypatch)
+    configured = yaml.safe_load(STACK_CONFIG.read_text())["common"]
+    other = "wheel" if configured["platform_type"] == "legged" else "legged"
+    nodes = _compose(module, platform_type=other)
+    nav, exp = [node.kwargs["parameters"][0] for node in nodes]
+    assert nav["platform_type"] == exp["platform_selector"] == other
+    assert Path(nav["platform_config"]).name == configured["platform_config"]
+    # The strict runtime loaders reject this selector/capability mismatch.
+    assert yaml.safe_load(Path(nav["platform_config"]).read_text())["platform"] != other

@@ -10,19 +10,19 @@ lunar_pure_wheeled_controller:
     tracking_status_topic: /Car/T4/control/tracking_status
     command_topic: /Car/T5/Car_Cmd_Vel
     odometry_timeout_s: 0.5
-    tf_timeout_s: 0.5
+    tf_timeout_s: 5.0
     control_rate_hz: 20.0
     max_linear_mps: 0.1
     max_reverse_mps: 0.1
-    allow_reverse: false
+    allow_reverse: true
     max_angular_radps: 0.15
     max_linear_accel_mps2: 0.1
     max_linear_decel_mps2: 0.15
     max_angular_accel_radps2: 0.15
     max_curvature_per_m: 1.0
     max_lateral_accel_mps2: 0.1
-    lookahead_m: 0.3
-    max_cross_track_error_m: 0.3
+    lookahead_m: 0.5
+    max_cross_track_error_m: 1.0
     goal_position_tolerance_m: 0.1
     # Navigator allows 0.05 rad; planner uses half, tracker leaves margin.
     goal_yaw_tolerance_rad: 0.02

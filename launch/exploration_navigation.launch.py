@@ -202,12 +202,15 @@ def _compose(context):
         ]
 
     if stack_mode == "incremental_v2":
-        common = _require_common(config)
+        common = dict(_require_common(config))
+        explicit_platform_config = LaunchConfiguration("platform_config").perform(context).strip()
+        if explicit_platform_config:
+            common["platform_config"] = str(Path(explicit_platform_config).resolve())
         navigation_share = Path(
             get_package_share_directory("lunar_incremental_navigation_ros")
         )
         platform_config = str(
-            navigation_share / "config" / f"{platform_type}.yaml"
+            navigation_share / "config" / f"{platform_type}_orin.yaml"
         )
         navigation, exploration = _incremental_parameters(
             config, common, platform_type, platform_config, use_sim_time
@@ -240,6 +243,7 @@ def generate_launch_description() -> LaunchDescription:
         [
             DeclareLaunchArgument("stack_mode", default_value=""),
             DeclareLaunchArgument("platform_type", default_value=""),
+            DeclareLaunchArgument("platform_config", default_value=""),
             DeclareLaunchArgument(
                 "config_file",
                 default_value=f"{exploration_share}/config/exploration_navigation.yaml",
