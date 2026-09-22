@@ -125,6 +125,7 @@ install(
     PATTERN "orin_hardware.yaml"
     PATTERN "orin_controller.yaml"
     PATTERN "legged.yaml"
+    PATTERN "legged_orin.yaml"
     PATTERN "incremental_navigation_interfaces.yaml")
 install(
   DIRECTORY "${LUNAR_INCREMENTAL_NAVIGATION_LAUNCH_SOURCE_DIR}/"

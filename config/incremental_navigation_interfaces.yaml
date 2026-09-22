@@ -14,7 +14,7 @@ inputs:
     frame: odom
     child_frame: base_link
   tf:
-    name: /tf
+    name: /P4/input/map_to_odom
     type: tf2_msgs/msg/TFMessage
     owner: external
     chain: [map, odom]

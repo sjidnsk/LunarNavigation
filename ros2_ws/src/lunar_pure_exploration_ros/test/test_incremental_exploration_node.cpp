@@ -58,6 +58,27 @@ class RosEnvironment final : public ::testing::Environment {
 const auto* const kRosEnvironment =
     ::testing::AddGlobalTestEnvironment(new RosEnvironment{});
 
+TEST(IncrementalExplorationDefaults, ResolvesDeploymentProfileForEachPlatform) {
+  for (const std::string selector : {"wheel", "legged"}) {
+    rclcpp::NodeOptions options;
+    options.append_parameter_override("platform_selector", selector);
+    auto node = std::make_shared<IncrementalExplorationNode>(options);
+    EXPECT_NE(node->get_parameter("platform_config").as_string().find(selector + "_orin.yaml"), std::string::npos);
+    EXPECT_DOUBLE_EQ(node->get_parameter("sensor_fov_deg").as_double(), selector == "legged" ? 360.0 : 90.0);
+    EXPECT_EQ(node->get_parameter("tf_topic").as_string(), "/P4/input/map_to_odom");
+  }
+}
+
+TEST(IncrementalExplorationDefaults, ExplicitSensorAndTfOverridesWin) {
+  rclcpp::NodeOptions options;
+  options.append_parameter_override("platform_selector", "legged");
+  options.append_parameter_override("sensor_fov_deg", 120.0);
+  options.append_parameter_override("tf_topic", "/demo/tf");
+  auto node = std::make_shared<IncrementalExplorationNode>(options);
+  EXPECT_DOUBLE_EQ(node->get_parameter("sensor_fov_deg").as_double(), 120.0);
+  EXPECT_EQ(node->get_parameter("tf_topic").as_string(), "/demo/tf");
+}
+
 template <typename Predicate>
 bool WaitFor(Predicate&& predicate,
              const std::chrono::milliseconds timeout = 4s) {

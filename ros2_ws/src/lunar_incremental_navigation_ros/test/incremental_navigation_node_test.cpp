@@ -32,6 +32,7 @@
 #include "lunar_incremental_navigation_ros/planning_debug_publisher.hpp"
 #endif
 #include "lunar_incremental_navigation_ros/request_diagnostics.hpp"
+#include "lunar_incremental_navigation_ros/platform_config.hpp"
 
 namespace lunar::incremental_navigation_ros {
 namespace {
@@ -773,6 +774,29 @@ TEST(IncrementalNavigationNode, StartupParametersRequireRestart) {
   EXPECT_EQ(server->get_parameter("map_frame").as_string(), "map");
 }
 
+TEST(IncrementalNavigationNode, DirectDeploymentDefaultsAndExplicitOverrides) {
+  auto defaults = std::make_shared<IncrementalNavigationNode>();
+  EXPECT_EQ(defaults->get_parameter("platform_type").as_string(), "wheel");
+  EXPECT_FALSE(defaults->get_parameter("platform_config").as_string().empty());
+  EXPECT_TRUE(defaults->get_parameter("enable_tracking_feedback").as_bool());
+  EXPECT_EQ(defaults->get_parameter("tf_topic").as_string(), "/P4/input/map_to_odom");
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("goal_position_tolerance_m").as_double(), 0.1);
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("goal_yaw_tolerance_rad").as_double(), 0.05);
+  rclcpp::NodeOptions wheel_options;
+  wheel_options.append_parameter_override("platform_type", "wheel");
+  auto wheel_defaults = std::make_shared<IncrementalNavigationNode>(wheel_options);
+  EXPECT_NE(wheel_defaults->get_parameter("platform_config").as_string().find("wheel_orin.yaml"), std::string::npos);
+  EXPECT_TRUE(wheel_defaults->get_parameter("enable_tracking_feedback").as_bool());
+  EXPECT_DOUBLE_EQ(wheel_defaults->get_parameter("goal_yaw_tolerance_rad").as_double(), 0.05);
+  auto options = ServerOptions("deployment_override");
+  options.append_parameter_override("goal_position_tolerance_m", 0.3);
+  options.append_parameter_override("goal_yaw_tolerance_rad", 0.2);
+  auto overridden = std::make_shared<IncrementalNavigationNode>(options);
+  EXPECT_FALSE(overridden->get_parameter("enable_tracking_feedback").as_bool());
+  EXPECT_DOUBLE_EQ(overridden->get_parameter("goal_position_tolerance_m").as_double(), 0.3);
+  EXPECT_DOUBLE_EQ(overridden->get_parameter("goal_yaw_tolerance_rad").as_double(), 0.2);
+}
+
 TEST(IncrementalNavigationNode, ClearanceCostHasCalibratedDefaultAndStartupOverride) {
   auto defaults = std::make_shared<IncrementalNavigationNode>(
       ServerOptions("clearance_default"), IncrementalNavigationNodeDependencies{});
@@ -1006,24 +1030,81 @@ TEST(IncrementalNavigationNode,
 }
 #endif
 
-TEST(IncrementalNavigationNode, GoalTolerancesAreFrozenPerPlatformProfile) {
+TEST(IncrementalNavigationNode, LeggedPlannerCannotAcceptStationaryYawOutsideNavigationBudget) {
+  const auto loaded = LoadPlatformConfig(
+      std::string{LUNAR_INCREMENTAL_NAVIGATION_CONFIG_DIR} + "/legged_orin.yaml", "legged");
+  ASSERT_TRUE(loaded.capability);
+  auto profile = PlatformProfileFor(*loaded.capability, 3.0);
+  profile.goal_yaw_tolerance_rad = 0.05;
+  auto ports = RealSessionPorts(*loaded.capability, profile);
+  const core::Pose2 start{.position_m = {.x = 3.5, .y = 3.5}, .yaw_rad = 1.5036};
+  const core::RequestLocalPlanningView view{MakeFine(), start, 0.0, {}};
+  const core::LocalTarget target{.center = start.position_m,
+                                .position_tolerance_m = 0.1,
+                                .is_final_goal = true,
+                                .terminal_yaw_rad = 1.5707963267948966};
+  const auto result = ports.plan_legged(view, start, target,
+      std::chrono::steady_clock::now() + 1s, {});
+  ASSERT_NE(result.status, core::LocalPlanResult::Status::kTimeout);
+  if (result.status == core::LocalPlanResult::Status::kPlanFound) {
+    ASSERT_FALSE(result.path.empty());
+    const auto& q = result.path.back().pose.orientation;
+    const double yaw = std::atan2(2.0*(q.w*q.z+q.x*q.y), 1.0-2.0*(q.y*q.y+q.z*q.z));
+    EXPECT_LE(std::abs(std::atan2(std::sin(yaw-*target.terminal_yaw_rad),
+                                 std::cos(yaw-*target.terminal_yaw_rad))), 0.025);
+  } else {
+    EXPECT_EQ(result.status, core::LocalPlanResult::Status::kNoPath);
+  }
+}
+
+TEST(IncrementalNavigationNode, WheelPlannerCannotAcceptStationaryYawOutsideNavigationBudget) {
+  const auto loaded = LoadPlatformConfig(
+      std::string{LUNAR_INCREMENTAL_NAVIGATION_CONFIG_DIR} + "/wheel_orin.yaml", "wheel");
+  ASSERT_TRUE(loaded.capability);
+  auto profile = PlatformProfileFor(*loaded.capability, 3.0);
+  for (const double yaw_budget : {0.05, 0.2}) {
+    profile.goal_yaw_tolerance_rad = yaw_budget;
+    auto ports = RealSessionPorts(*loaded.capability, profile);
+    const core::Pose2 start{.position_m = {.x = 3.5, .y = 3.5}, .yaw_rad = 1.5036};
+    const core::RequestLocalPlanningView view{MakeFine(), start, 0.0, {}};
+    const core::LocalTarget target{.center = start.position_m,
+                                  .position_tolerance_m = 0.1,
+                                  .is_final_goal = true,
+                                  .terminal_yaw_rad = 1.5707963267948966};
+    const auto result = ports.plan_wheel(view, start, target,
+        std::chrono::steady_clock::now() + 1s, {});
+    ASSERT_EQ(result.status, core::LocalPlanResult::Status::kPlanFound) << result.reason_code;
+    if (result.status == core::LocalPlanResult::Status::kPlanFound) {
+      if (yaw_budget == 0.05) {
+        ASSERT_GE(result.path.size(), 2U) << "Yaw outside the navigation budget must retain an explicit spin segment";
+      } else {
+        EXPECT_EQ(result.path.size(), 1U) << "Explicit wider navigation tolerance must also reach the local planner";
+      }
+      const auto& q = result.path.back().pose.orientation;
+      const double yaw = std::atan2(2.0*(q.w*q.z+q.x*q.y), 1.0-2.0*(q.y*q.y+q.z*q.z));
+      EXPECT_LE(std::abs(std::atan2(std::sin(yaw-*target.terminal_yaw_rad),
+                                   std::cos(yaw-*target.terminal_yaw_rad))), 0.5 * yaw_budget);
+    } else {
+      EXPECT_EQ(result.status, core::LocalPlanResult::Status::kNoPath);
+    }
+  }
+}
+
+TEST(IncrementalNavigationNode, DeploymentGoalTolerancesAreUnifiedAcrossPlatforms) {
   const auto wheel = PlatformProfileFor(
       core::WheeledCapability{.minimum_clearance_m = 0.2}, 0.4);
   const auto legged = PlatformProfileFor(
       core::LeggedCapability{.minimum_body_clearance_m = 0.3}, 0.6);
-  EXPECT_GT(wheel.goal_position_tolerance_m, 0.0);
-  EXPECT_GT(wheel.goal_yaw_tolerance_rad, 0.0);
-  EXPECT_GT(legged.goal_position_tolerance_m, 0.0);
-  EXPECT_GT(legged.goal_yaw_tolerance_rad, 0.0);
-  EXPECT_NE(wheel.goal_position_tolerance_m,
-            legged.goal_position_tolerance_m);
-  EXPECT_NE(wheel.goal_yaw_tolerance_rad, legged.goal_yaw_tolerance_rad);
+  EXPECT_DOUBLE_EQ(wheel.goal_position_tolerance_m, 0.1);
+  EXPECT_DOUBLE_EQ(legged.goal_position_tolerance_m, 0.1);
+  EXPECT_DOUBLE_EQ(wheel.goal_yaw_tolerance_rad, 0.05);
+  EXPECT_DOUBLE_EQ(legged.goal_yaw_tolerance_rad, 0.05);
   EXPECT_DOUBLE_EQ(wheel.start_blind_zone_margin_m, 0.4);
   EXPECT_DOUBLE_EQ(legged.start_blind_zone_margin_m, 0.6);
   EXPECT_DOUBLE_EQ(wheel.preferred_clearance_m, 0.2);
   EXPECT_DOUBLE_EQ(legged.preferred_clearance_m, 0.3);
   EXPECT_DOUBLE_EQ(wheel.clearance_weight, 2.0);
-  EXPECT_DOUBLE_EQ(legged.clearance_weight, 0.0);
+  EXPECT_DOUBLE_EQ(legged.clearance_weight, 2.0);
 }
 
 TEST(IncrementalNavigationNode,

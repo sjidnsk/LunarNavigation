@@ -17,7 +17,7 @@ def test_start_all_starts_planner_and_wheeled_controller() -> None:
     assert 'source "${bundle_root}/ros2_ws/install/setup.bash"' in script
 
 
-def test_start_all_passes_grid_v1_mode_to_the_real_planner_invocation(
+def test_start_all_preserves_legacy_planner_and_controller_contract(
     tmp_path: Path,
 ) -> None:
     captured = tmp_path / "ros2-argv.jsonl"
@@ -26,9 +26,14 @@ def test_start_all_passes_grid_v1_mode_to_the_real_planner_invocation(
     fake_ros2 = fake_bin / "ros2"
     fake_ros2.write_text(
         "#!/usr/bin/env python3\n"
-        "import json, os, sys\n"
+        "import json, os, sys, time\n"
         "with open(os.environ['LUNAR_CAPTURED_ROS2_ARGV'], 'a', encoding='utf-8') as stream:\n"
-        "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n",
+        "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "deadline = time.monotonic() + 3.0\n"
+        "while time.monotonic() < deadline:\n"
+        "    with open(os.environ['LUNAR_CAPTURED_ROS2_ARGV']) as stream:\n"
+        "        if len(stream.readlines()) >= 4: break\n"
+        "    time.sleep(.01)\n",
         encoding="utf-8",
     )
     fake_ros2.chmod(0o755)
@@ -64,6 +69,13 @@ def test_start_all_passes_grid_v1_mode_to_the_real_planner_invocation(
         "platform_type:=wheel",
         "wheel_planner_mode:=grid_traversability_v1",
     ] in argv
+    controller = next(args for args in argv if args[:3] == [
+        "launch", "lunar_pure_wheeled_controller", "pure_wheeled_controller.launch.py"])
+    assert set(controller[3:]) == {
+        "input_mode:=motion_reference", "tf_topic:=/tf", "tf_timeout_s:=0.5",
+        "max_angular_radps:=0.5", "goal_position_tolerance_m:=0.2",
+        "goal_yaw_tolerance_rad:=0.2",
+    }
 
 
 def test_send_goal_prompts_for_planar_goal_and_can_enable_trusted_bridge() -> None:

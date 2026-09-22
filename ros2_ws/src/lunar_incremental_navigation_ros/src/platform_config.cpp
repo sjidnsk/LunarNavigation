@@ -337,7 +337,7 @@ PlatformConfigResult LoadPlatformConfig(const std::filesystem::path& path,
     const std::optional<double> start_blind_zone_margin_m{
         root["start_blind_zone_margin_m"]
             ? NonNegative(root, "start_blind_zone_margin_m")
-            : 0.2};
+            : 3.0};
     return {.capability = std::move(capability),
             .start_blind_zone_margin_m = start_blind_zone_margin_m,
             .reason_code = {}};

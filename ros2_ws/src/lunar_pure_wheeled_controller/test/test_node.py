@@ -820,3 +820,20 @@ def test_startup_parameter_change_is_rejected_without_changing_value(controller_
     assert "map_frame" in result.reason and "restart" in result.reason
     assert controller.get_parameter("map_frame").value == original
     assert controller.set_parameters([Parameter("map_frame", value=original)])[0].successful
+
+
+@pytest.mark.parametrize('mode,config_name', [('motion_reference', 'legged_orin.yaml'),
+                                             ('incremental_path', 'legged_orin.yaml'),
+                                             ('incremental_reference', '')])
+def test_legged_requires_versioned_reference_and_explicit_capability(mode, config_name):
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[4]
+    args = ['--ros-args', '-p', 'platform_type:=legged', '-p', f'input_mode:={mode}']
+    if config_name:
+        args += ['-p', f'platform_config:={root}/config/{config_name}']
+    rclpy.init(args=args)
+    try:
+        with pytest.raises(ValueError, match='legged tracking requires'):
+            PureWheeledControllerNode()
+    finally:
+        rclpy.shutdown()
