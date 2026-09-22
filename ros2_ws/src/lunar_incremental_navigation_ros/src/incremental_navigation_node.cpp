@@ -414,7 +414,8 @@ std::unique_ptr<rclcpp::Executor> MakeIncrementalNavigationExecutor() {
 }
 
 core::PlanningSessionPorts RealSessionPorts(
-    const core::PlatformCapability& capability) {
+    const core::PlatformCapability& capability,
+    const core::TraversabilityProfile& profile) {
   auto global = std::make_shared<core::GlobalRoutePlanner>();
   auto selector = std::make_shared<core::LocalTargetSelector>();
   auto patch = std::make_shared<core::RequestLocalStartPatchBuilder>();
@@ -424,7 +425,10 @@ core::PlanningSessionPorts RealSessionPorts(
                    : nullptr;
   auto legged = std::get_if<core::LeggedCapability>(&capability)
                     ? std::make_shared<core::LeggedLocalPlanner>(
-                          *std::get_if<core::LeggedCapability>(&capability))
+                          *std::get_if<core::LeggedCapability>(&capability),
+                          core::LeggedLocalPlannerConfig{
+                              .terminal_yaw_tolerance_rad =
+                                  0.5 * profile.goal_yaw_tolerance_rad})
                     : nullptr;
   return core::PlanningSessionPorts{
       .plan_global =
@@ -504,7 +508,7 @@ struct IncrementalNavigationNode::Impl final {
     SessionPortsFactory factory = std::move(dependencies.ports_factory);
     core::PlanningSessionPorts ports =
         factory ? factory(parameters.capability)
-                : RealSessionPorts(parameters.capability);
+                : RealSessionPorts(parameters.capability, parameters.profile);
     tracking_feedback_enabled = node.declare_parameter<bool>("enable_tracking_feedback", false);
     coordinator = std::make_unique<core::PlanningSessionCoordinator>(
         parameters.capability, parameters.profile,

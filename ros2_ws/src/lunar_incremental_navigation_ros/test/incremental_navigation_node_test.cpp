@@ -32,6 +32,7 @@
 #include "lunar_incremental_navigation_ros/planning_debug_publisher.hpp"
 #endif
 #include "lunar_incremental_navigation_ros/request_diagnostics.hpp"
+#include "lunar_incremental_navigation_ros/platform_config.hpp"
 
 namespace lunar::incremental_navigation_ros {
 namespace {
@@ -1005,6 +1006,33 @@ TEST(IncrementalNavigationNode,
   system.Cancel(handle);
 }
 #endif
+
+TEST(IncrementalNavigationNode, LeggedPlannerCannotAcceptStationaryYawOutsideNavigationBudget) {
+  const auto loaded = LoadPlatformConfig(
+      std::string{LUNAR_INCREMENTAL_NAVIGATION_CONFIG_DIR} + "/legged_orin.yaml", "legged");
+  ASSERT_TRUE(loaded.capability);
+  auto profile = PlatformProfileFor(*loaded.capability, 3.0);
+  profile.goal_yaw_tolerance_rad = 0.05;
+  auto ports = RealSessionPorts(*loaded.capability, profile);
+  const core::Pose2 start{.position_m = {.x = 3.5, .y = 3.5}, .yaw_rad = 1.5036};
+  const core::RequestLocalPlanningView view{MakeFine(), start, 0.0, {}};
+  const core::LocalTarget target{.center = start.position_m,
+                                .position_tolerance_m = 0.1,
+                                .is_final_goal = true,
+                                .terminal_yaw_rad = 1.5707963267948966};
+  const auto result = ports.plan_legged(view, start, target,
+      std::chrono::steady_clock::now() + 1s, {});
+  ASSERT_NE(result.status, core::LocalPlanResult::Status::kTimeout);
+  if (result.status == core::LocalPlanResult::Status::kPlanFound) {
+    ASSERT_FALSE(result.path.empty());
+    const auto& q = result.path.back().pose.orientation;
+    const double yaw = std::atan2(2.0*(q.w*q.z+q.x*q.y), 1.0-2.0*(q.y*q.y+q.z*q.z));
+    EXPECT_LE(std::abs(std::atan2(std::sin(yaw-*target.terminal_yaw_rad),
+                                 std::cos(yaw-*target.terminal_yaw_rad))), 0.025);
+  } else {
+    EXPECT_EQ(result.status, core::LocalPlanResult::Status::kNoPath);
+  }
+}
 
 TEST(IncrementalNavigationNode, GoalTolerancesAreFrozenPerPlatformProfile) {
   const auto wheel = PlatformProfileFor(

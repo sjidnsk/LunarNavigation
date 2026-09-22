@@ -15,7 +15,7 @@ TEST(PlatformConfig, OrinLeggedProfileLoadsLeggedCapabilityAndRejectsWheelSelect
   EXPECT_DOUBLE_EQ(legged.maximum_gap_width_m, 0.3);
   EXPECT_FALSE(legged.unknown_is_traversable);
   ASSERT_TRUE(result.start_blind_zone_margin_m);
-  EXPECT_DOUBLE_EQ(*result.start_blind_zone_margin_m, 0.0);
+  EXPECT_DOUBLE_EQ(*result.start_blind_zone_margin_m, 3.0);
   EXPECT_FALSE(lunar::incremental_navigation_ros::LoadPlatformConfig(path, "wheel").capability);
 }
 

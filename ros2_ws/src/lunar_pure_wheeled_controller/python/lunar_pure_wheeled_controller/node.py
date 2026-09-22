@@ -24,6 +24,7 @@ from .incremental_path import ParsedIncrementalPath, parse_incremental_path
 from .reference import ParsedReference, parse_reference
 from .tracking import TrackingPolicy, TrackingState, track_trajectory
 from .execution import PathExecutor
+from .platform_policy import platform_policy
 
 
 def _yaw(odometry: Odometry) -> float | None:
@@ -85,6 +86,7 @@ class PureWheeledControllerNode(Node):
             "input_mode": "motion_reference",
             "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
             "platform_config": "",
+            "platform_type": "wheel",
             "path_reference_topic": "/Car/T4/planning/path_reference",
             "tracking_status_topic": "/Car/T4/control/tracking_status",
             "reference_topic": "/Car/T4/planning/wheeled_reference",
@@ -143,25 +145,18 @@ class PureWheeledControllerNode(Node):
             for field in fields(TrackingPolicy)
         }
         platform_path = self.get_parameter("platform_config").value
+        platform_type = self.get_parameter("platform_type").value
+        if platform_type not in {"wheel", "legged"}:
+            raise ValueError("platform_type must be wheel or legged")
+        if platform_type == "legged" and (
+            not platform_path or self._input_mode != "incremental_reference"
+        ):
+            raise ValueError("legged tracking requires platform_config and incremental_reference")
         if platform_path:
-            capability = yaml.safe_load(
-                FilePath(platform_path).read_text(encoding="utf-8")
-            )["capability"]
-            names = dict(
-                max_linear_mps="maximum_forward_speed_mps",
-                max_reverse_mps="maximum_reverse_speed_mps",
-                max_angular_radps="maximum_spin_rate_radps",
-                max_linear_accel_mps2="maximum_acceleration_mps2",
-                max_linear_decel_mps2="maximum_braking_deceleration_mps2",
-                max_angular_accel_radps2="maximum_yaw_acceleration_radps2",
-                max_curvature_per_m="maximum_curvature_per_m",
-                max_lateral_accel_mps2="maximum_lateral_acceleration_mps2",
-            )
-            for key, source in names.items():
-                policy_values[key] = min(
-                    float(policy_values[key]), float(capability[source])
-                )
-        self._policy = TrackingPolicy(**policy_values)
+            document = yaml.safe_load(FilePath(platform_path).read_text(encoding="utf-8"))
+            self._policy = platform_policy(policy_values, document, platform_type)
+        else:
+            self._policy = TrackingPolicy(**policy_values)
         self._executor = PathExecutor(self._policy)
         self._reference_identity = None
         self._retired_sessions = deque(maxlen=64)

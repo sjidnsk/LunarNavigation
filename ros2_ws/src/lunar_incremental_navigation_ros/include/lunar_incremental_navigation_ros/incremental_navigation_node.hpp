@@ -53,7 +53,8 @@ struct IncrementalNavigationNodeDependencies final {
 
 [[nodiscard]] std::unique_ptr<rclcpp::Executor> MakeIncrementalNavigationExecutor();
 [[nodiscard]] lunar::incremental_navigation::PlanningSessionPorts RealSessionPorts(
-    const lunar::incremental_navigation::PlatformCapability& capability);
+    const lunar::incremental_navigation::PlatformCapability& capability,
+    const lunar::incremental_navigation::TraversabilityProfile& profile);
 
 class IncrementalNavigationNode final : public rclcpp::Node {
  public:

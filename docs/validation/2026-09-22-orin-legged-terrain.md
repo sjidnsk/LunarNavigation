@@ -108,3 +108,26 @@ Humble 足式构建／运行、原生 Orin、真实 DDS／P3 地图、足式执�
 本次仅运行与配置变更相关检查，不重复上一阶段的全量仓库测试；上文未解决的全量回归项和
 Humble／Orin／实机 NOT_RUN 边界继续保留。需要重启目标机探索节点才能读取新配置，
 本次没有远程部署或重启设备。
+
+## 同日追加：净空权重、3 m 起点余量与跟踪器分析
+
+按用户最新要求，两个足式导航入口显式设置 clearance_weight=2.0；legged_orin 的
+start_blind_zone_margin_m 从 0 改为 3.0。上述早期 0 m 描述保留为历史决策记录，
+当前生效值以本节和部署文档为准。足式净空距离仍为 0.3 m，360°／10 m 配置保留。
+更新现有配置加载测试的预期值为 3.0。跟踪器源码分析见 ORIN_LEGGED_TRACKER_ADAPTATION.md；
+未修改控制器实现，也未启动车辆命令发布者。
+
+同一隔离产物目录的证据：
+
+- clearance-build.log：两个 ROS 包构建、安装成功。
+- clearance-python.log：配置／launch／接口 28 项检查通过。
+- clearance-tests.log：导航包测试通过，包含 Orin 足式配置加载及 3.0 余量断言。
+  探索包 SuppressedCandidatesAreGrayAndActiveCandidateStaysRed 首次出现状态计数断言失败；
+  测试等待候选抑制计数后立即读取另一个状态消息，存在异步到达时序的可能，但未确证根因。
+- clearance-retest.log：同一环境单独重跑 test_incremental_exploration_node 整组通过；
+  不修改该测试，也不将复跑通过记为问题已修复，首次失败保留在 test-log 对应运行日志中。
+- clearance-smoke.log：实际启动导航／探索读回 clearance_weight=2.0、足式部署配置路径、
+  跟踪反馈开启、视场 360°、距离 10 m；未发目标或控制命令。
+
+Humble、原生 Orin、真实底盘与足式闭环仍 NOT_RUN；本次没有远程部署。之前全量测试的
+未解决项继续保留，本次不宣称全量回归全绿。

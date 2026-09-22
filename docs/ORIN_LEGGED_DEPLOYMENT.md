@@ -13,8 +13,8 @@
 
 `legged_orin.yaml` 继承 Quad48 配置：机身 0.68 × 0.33 m，最大坡度 30°、台阶 0.5 m、
 间隙 0.3 m，前后速度上限 1.5 m/s、横向 0.8 m/s。这些是既有配置上限，不是此次测得的
-实机性能或建议执行速度。未知区域仍不可通行。起点盲区额外余量为 0 m，不继承轮式的
-3 m 扩张；原有起点补图仍有自身支撑与出口认证，0 m 余量不等于停用所有起点补图。
+实机性能或建议执行速度。未知区域仍不可通行。起点盲区额外余量按最新要求设为 3 m；它是机身包络半径之外的余量，
+不是无条件放行半径。原有起点补图的支撑与出口认证仍保留。
 
 在目标 Orin 的本分支源码根目录构建（本次目标环境 NOT_RUN）：
 
@@ -22,7 +22,7 @@
 source /opt/ros/humble/setup.bash
 cd ros2_ws
 colcon build --merge-install \
-  --packages-up-to lunar_incremental_navigation_ros lunar_pure_exploration_ros \
+  --packages-up-to lunar_incremental_navigation_ros lunar_pure_exploration_ros lunar_pure_wheeled_controller \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
 cd ..
 ```
@@ -36,7 +36,8 @@ bash scripts/orin/start_hardware_navigation.sh
 
 沿用实车域 59 与 CycloneDDS 配置；网络及运行目录覆盖方式见
 [静态 TF 说明](STATIC_TF_INPUT.md)。这两个入口只启动适配与导航，不启动控制器或发送目标。
-足式外部执行器仍须消费既有参考并回传匹配反馈，本次没有新增执行器或关闭反馈等待。
+足式基础跟踪入口复用现有控制器，消费版本化参考并回传匹配反馈，启动方法见下节。
+用户确认真实足式驱动尚未接入；当前仅验证标准 Twist 与本地理想平面模型。
 
 需要探索时，在已设置相同域、RMW 和 CYCLONEDDS_URI 的另一个终端执行：
 
@@ -100,9 +101,9 @@ ros2 topic echo --once /Car/T3/localization/odometry
 | 起伏判断 | 残差起伏和相对中心向上凸起分别受障碍起伏／底盘离地间隙约束 | 残差按跨阶高度判定，不能拿轮式底盘间隙替代跨阶上限 |
 | 局部搜索与边检查 | 平面 8 邻域，检查派生 FREE、起步阶段及对角防穿角 | 同样平面搜索，另有动作跨度、线段覆盖格、原始高差／间隙的有向边认证及缓存 |
 | 终点朝向 | 检查是否支持旋转；不支持时要求入射方向满足目标朝向 | 使用有限的旋转基元组合认证目标朝向；不是 32 个 yaw 状态的空间搜索 |
-| 净空软代价 | 默认 clearance_weight=2.0，偏好远离障碍 | 默认 0.0；机身硬包络检查仍保留，并非取消避障 |
-| 起点盲区配置 | wheel_orin 额外余量 3 m | legged_orin 额外余量 0 m；均保留起点补图认证 |
-| 执行器 | 仓库已有轮式路径跟踪控制器 | 本分支只提供导航／探索，足式底层执行器尚需接入和实机验证 |
+| 净空软代价 | 默认 clearance_weight=2.0，偏好远离障碍 | 部署显式 clearance_weight=2.0，与轮式一致；机身硬包络检查仍保留 |
+| 起点盲区配置 | wheel_orin 额外余量 3 m | legged_orin 额外余量 3 m；均保留起点补图认证 |
+| 执行器 | 仓库已有轮式路径跟踪控制器 | 新增低速 vx／omega 跟踪入口；横移未实现，足式底层驱动未接入 |
 
 共同部分包括高程持久化、粗全局引导、全局规划、滚动会话、前沿探索、信息增益、路径简化
 及正式 ROS 接口。二者输出都是平面路径参考，不是足端轨迹。框架内默认到点容差存在平台
@@ -113,3 +114,41 @@ ros2 topic echo --once /Car/T3/localization/odometry
 代码依据：`src/map/platform_elevation_physics.cpp`、`src/wheel/wheel_local_astar.cpp`、
 `src/legged/legged_local_planner.cpp`（均在 `lunar_incremental_navigation_core`），以及
 `lunar_incremental_navigation_ros/src/incremental_navigation_node.cpp` 的 `PlatformProfileFor`。
+
+净空权重一致后，平台自身的净空距离仍分别使用足式 0.3 m、轮式 0.2 m，
+因此不代表两个平台的净空代价完全相同。通用足式算法默认值未改变，两个足式导航入口显式覆盖权重。
+跟踪器复用边界见 [足式跟踪器适配分析](ORIN_LEGGED_TRACKER_ADAPTATION.md)。
+
+## 足式基础跟踪入口
+
+单独启动控制器前，设置与导航相同的 ROS_DOMAIN_ID、RMW_IMPLEMENTATION 和 DDS 配置。
+导航脚本不会自动启动它；同一命令话题只运行一个控制器。目标机驱动尚未接入，以下是
+后续联调入口，不是已完成实机部署的声明：
+
+```bash
+bash scripts/orin/start_legged_controller.sh
+```
+
+配置为 `config/orin_legged_controller.yaml`，能力文件为 `config/legged_orin.yaml`。
+前进上限 0.1 m/s，角速度上限 0.15 rad/s，默认关闭倒车，横向输出始终为零。
+线加速度 0.1 m/s²、计划制动减速度 0.15 m/s²、角加速度 0.15 rad/s²，均为初始控制配置，
+不是足式能力表中的实测制动能力。紧急停止及失效路径仍立即输出零速，底盘实际停止响应
+须在驱动接入后验证。里程计／TF 接收超时均为 0.5 s，输入需持续更新。
+
+节点名与包名继续沿用 `lunar_pure_wheeled_controller`；`platform_type=legged` 使用足式
+能力字段并要求 `incremental_reference` 模式。默认轮式入口保留。低速限制来自专用配置文件，
+手动运行通用节点时必须加载它，不能只传足式能力文件。
+
+本地完整导航验证入口（仅在隔离域运行，先 source 对应 ROS 与构建 overlay）：
+
+```bash
+ROS_DOMAIN_ID=187 ROS_LOCALHOST_ONLY=1 python3 tests/launch/legged_tracking_probe.py \
+  --artifact-dir "$HOME/CodexDownloads/lunar_navigation/legged-tracking-probe"
+```
+
+该脚本用合成平面高程图及理想速度积分模型连接真实导航节点与跟踪器，隔离话题均位于
+`/legged_tracking_probe/`。不代表腿部动力学、真实定位质量或真实底盘通过验收。
+
+终点朝向预算：导航 0.05 rad、足式规划认证 0.025 rad、跟踪器 0.02 rad。修改任一项时
+需保持规划误差与跟踪误差之和小于导航阈值；离散旋转原语不能达到严格窗口时仍允许 NO_PATH。
+完整闭环证据见 [足式低速跟踪验证](validation/2026-09-22-orin-legged-tracking.md)。

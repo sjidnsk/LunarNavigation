@@ -1,0 +1,28 @@
+# Stage 1: planar vx/omega tracking. Actual legged driver is not connected.
+# Values below are initial controller settings, not measured robot limits.
+lunar_pure_wheeled_controller:
+  ros__parameters:
+    platform_type: legged
+    input_mode: incremental_reference
+    odometry_topic: /Car/T3/localization/odometry
+    tf_topic: /P4/input/map_to_odom
+    path_reference_topic: /Car/T4/planning/path_reference
+    tracking_status_topic: /Car/T4/control/tracking_status
+    command_topic: /Car/T5/Car_Cmd_Vel
+    odometry_timeout_s: 0.5
+    tf_timeout_s: 0.5
+    control_rate_hz: 20.0
+    max_linear_mps: 0.1
+    max_reverse_mps: 0.1
+    allow_reverse: false
+    max_angular_radps: 0.15
+    max_linear_accel_mps2: 0.1
+    max_linear_decel_mps2: 0.15
+    max_angular_accel_radps2: 0.15
+    max_curvature_per_m: 1.0
+    max_lateral_accel_mps2: 0.1
+    lookahead_m: 0.3
+    max_cross_track_error_m: 0.3
+    goal_position_tolerance_m: 0.1
+    # Navigator allows 0.05 rad; planner uses half, tracker leaves margin.
+    goal_yaw_tolerance_rad: 0.02
