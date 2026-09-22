@@ -17,14 +17,6 @@
 namespace lunar::incremental_navigation {
 namespace {
 
-struct LocalElevationMeasurements final {
-  bool center_known{};
-  bool neighborhood_complete{};
-  double slope_rad{};
-  double relief_m{};
-  double positive_rise_m{};
-};
-
 [[nodiscard]] bool FiniteNonnegative(const double value) noexcept {
   return std::isfinite(value) && value >= 0.0;
 }
@@ -155,67 +147,10 @@ struct LocalElevationMeasurements final {
   return std::isfinite(sum) ? sum : kLargestFinite;
 }
 
-[[nodiscard]] LocalElevationMeasurements MeasureLocalElevation(
-    const ElevationRangeView& elevation, const GridIndex center) {
-  const std::optional<ElevationRange> center_range =
-      elevation.ElevationRangeAt(center);
-  if (!center_range) {
-    return {};
-  }
-
-  const double center_mid =
-      0.5 * (static_cast<double>(center_range->min_m) +
-             static_cast<double>(center_range->max_m));
-  double minimum = center_range->min_m;
-  double maximum = center_range->max_m;
-  double maximum_slope = 0.0;
-  double maximum_positive_rise = 0.0;
-  bool complete = true;
-  const double resolution_m = elevation.geometry().resolution_m();
-  for (std::int64_t dy = -1; dy <= 1; ++dy) {
-    for (std::int64_t dx = -1; dx <= 1; ++dx) {
-      if (dx == 0 && dy == 0) {
-        continue;
-      }
-      const std::optional<GridIndex> neighbor_index =
-          detail::OffsetWithinGeometry(elevation.geometry(), center, dx, dy);
-      const std::optional<ElevationRange> neighbor =
-          neighbor_index ? elevation.ElevationRangeAt(*neighbor_index)
-                         : std::nullopt;
-      if (!neighbor_index || !neighbor) {
-        complete = false;
-        continue;
-      }
-      const double neighbor_mid =
-          0.5 * (static_cast<double>(neighbor->min_m) +
-                 static_cast<double>(neighbor->max_m));
-      const double planar_distance_m =
-          resolution_m * std::hypot(static_cast<double>(dx),
-                                    static_cast<double>(dy));
-      maximum_slope =
-          std::max(maximum_slope,
-                   std::atan2(std::abs(neighbor_mid - center_mid),
-                              planar_distance_m));
-      minimum = std::min(minimum, static_cast<double>(neighbor->min_m));
-      maximum = std::max(maximum, static_cast<double>(neighbor->max_m));
-      maximum_positive_rise = std::max(
-          maximum_positive_rise,
-          static_cast<double>(neighbor->max_m) - center_mid);
-    }
-  }
-  return LocalElevationMeasurements{
-      .center_known = true,
-      .neighborhood_complete = complete,
-      .slope_rad = maximum_slope,
-      .relief_m = maximum - minimum,
-      .positive_rise_m = std::max(0.0, maximum_positive_rise),
-  };
-}
-
-// Basic wheel terrain model: a fixed 5x5 support window (60% coverage),
-// robust background plane, then unsmoothed local residuals for steps/rocks.
-// Legged evaluation below deliberately retains its existing 3x3 model.
-struct WheelPatchPoint {
+// Shared terrain measurement: 5x5 observations for a robust background plane,
+// unsmoothed 3x3 residual extrema for local discontinuities. Platform policies
+// below keep wheel clearance and legged support/step limits independent.
+struct TerrainPatchPoint {
   int x{}, y{};
   double low{}, high{}, z{}, residual{};
 };
@@ -226,11 +161,13 @@ double PatchMedian(std::array<double, N> values, std::size_t count) {
   return values[count / 2];
 }
 
-IntrinsicTraversalEvaluation EvaluateWheelPatch(
+template <typename Capability>
+IntrinsicTraversalEvaluation EvaluateTerrainPatch(
     const ElevationRangeView& elevation, GridIndex center,
-    const WheeledCapability& capability) {
+    const Capability& capability) {
+  constexpr bool legged = std::is_same_v<Capability, LeggedCapability>;
   if (!elevation.ElevationRangeAt(center)) return {};
-  std::array<WheelPatchPoint, 25> points{};
+  std::array<TerrainPatchPoint, 25> points{};
   std::array<double, 25> heights{};
   std::array<int, 25> indices{};
   indices.fill(-1);
@@ -254,6 +191,14 @@ IntrinsicTraversalEvaluation EvaluateWheelPatch(
     }
   if (count < 15 || min_x >= 0 || max_x <= 0 || min_y >= 0 || max_y <= 0)
     return {};
+
+  if constexpr (legged) {
+    // Plane coverage is not landing support. Retain the local known-support
+    // gate; missing returns must not be smoothed into traversable ground.
+    for (int y = 1; y <= 3; ++y)
+      for (int x = 1; x <= 3; ++x)
+        if (indices[y * 5 + x] < 0) return {};
+  }
 
   // Median adjacent derivatives initialize the background: a sharp step must
   // not tilt the initial fit into an artificial ramp joining its two surfaces.
@@ -308,7 +253,11 @@ IntrinsicTraversalEvaluation EvaluateWheelPatch(
   a = (sxz * syy - syz * sxy) / det;
   b = (syz * sxx - sxz * sxy) / det;
   c = (sz - a * sx - b * sy) / sw;
-  const double slope = std::atan(std::hypot(a, b));
+  // For legged steps, even a robust least-squares refinement can tilt toward
+  // the other landing surface. Use the median background derivatives for the
+  // slope decision; retain the established refined wheel estimate unchanged.
+  const double slope = legged ? std::atan(std::hypot(background_a, background_b))
+                              : std::atan(std::hypot(a, b));
   if (!std::isfinite(slope) || !std::isfinite(c)) return {};
   double low = std::numeric_limits<double>::infinity(), high = -low,
          center_residual = 0.;
@@ -328,15 +277,23 @@ IntrinsicTraversalEvaluation EvaluateWheelPatch(
   }
   const double relief = high - low;
   const double rise = std::max(0., high - center_residual);
-  const bool discontinuity =
-      relief > capability.maximum_local_obstacle_relief_m ||
-      rise > capability.minimum_underbody_clearance_m;
-  if (discontinuity) {
-    // Both surfaces need adjacent support. One tall/low cell stays UNKNOWN,
-    // never FREE; small real obstacles are not silently discarded as outliers.
-    const double band =
-        .25 * std::min(capability.maximum_local_obstacle_relief_m,
-                       capability.minimum_underbody_clearance_m);
+  const double relief_limit = [&] {
+    if constexpr (legged) return capability.maximum_step_height_m;
+    else return capability.maximum_local_obstacle_relief_m;
+  }();
+  const double rise_limit = [&] {
+    if constexpr (legged) return std::numeric_limits<double>::infinity();
+    else return capability.minimum_underbody_clearance_m;
+  }();
+  // A legged step can raise the body onto another supported surface. Wheel
+  // underbody rise is not a legged step limit; full 3D body/footfall execution
+  // certification remains outside this 2.5D terrain evaluator.
+  const bool discontinuity = relief > relief_limit || rise > rise_limit;
+  if (discontinuity || (legged && relief > .0125)) {
+    // Meaningful legged relief requires two supported surfaces even below the
+    // step limit. An isolated tall/low return is UNKNOWN, never free landing.
+    const double band = legged ? std::min(.0125, .25 * relief_limit)
+                               : .25 * std::min(relief_limit, rise_limit);
     bool low_supported = false, high_supported = false;
     for (std::size_t i = 0; i < count; ++i)
       for (std::size_t j = i + 1; j < count; ++j) {
@@ -374,7 +331,7 @@ class WheelElevationEvaluator final : public PlatformElevationEvaluator {
   [[nodiscard]] IntrinsicTraversalEvaluation Evaluate(
       const ElevationRangeView& elevation,
       const GridIndex index) const override {
-    return EvaluateWheelPatch(elevation, index, capability_);
+    return EvaluateTerrainPatch(elevation, index, capability_);
   }
 
  private:
@@ -396,28 +353,7 @@ class LeggedElevationEvaluator final : public PlatformElevationEvaluator {
   [[nodiscard]] IntrinsicTraversalEvaluation Evaluate(
       const ElevationRangeView& elevation,
       const GridIndex index) const override {
-    const LocalElevationMeasurements measured =
-        MeasureLocalElevation(elevation, index);
-    if (!measured.center_known) {
-      return {};
-    }
-    const bool exceeds_physical_limit =
-        measured.slope_rad > capability_.maximum_slope_rad ||
-        measured.relief_m > capability_.maximum_step_height_m;
-    if (exceeds_physical_limit) {
-      return IntrinsicTraversalEvaluation{
-          .state = IntrinsicCellState::kBlocked,
-          .slope_rad = measured.slope_rad,
-          .relief_m = measured.relief_m,
-      };
-    }
-    return IntrinsicTraversalEvaluation{
-        .state = measured.neighborhood_complete
-                     ? IntrinsicCellState::kFree
-                     : IntrinsicCellState::kUnknown,
-        .slope_rad = measured.slope_rad,
-        .relief_m = measured.relief_m,
-    };
+    return EvaluateTerrainPatch(elevation, index, capability_);
   }
 
  private:

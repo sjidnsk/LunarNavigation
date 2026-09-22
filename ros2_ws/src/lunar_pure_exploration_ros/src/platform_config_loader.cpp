@@ -78,11 +78,23 @@ double RequireFiniteDouble(const YAML::Node& node,
   return result;
 }
 
+// Navigation and exploration share deployment capability files. This optional
+// navigation-only field is validated here but never changes exploration geometry.
+void RequirePlatformRoot(const YAML::Node& root) {
+  if (root["start_blind_zone_margin_m"]) {
+    RequireExactKeys(root, {"platform", "platform_id", "platform_type",
+                            "capability_version", "base_frame_id", "capability",
+                            "start_blind_zone_margin_m"});
+    if (RequireFiniteDouble(root, "start_blind_zone_margin_m") < 0.0) InvalidConfig();
+  } else {
+    RequireExactKeys(root, {"platform", "platform_id", "platform_type",
+                            "capability_version", "base_frame_id", "capability"});
+  }
+}
+
 lunar::pure_exploration::PlatformGeometry ParseWheel(
     const YAML::Node& root) {
-  RequireExactKeys(root, {"platform", "platform_id", "platform_type",
-                          "capability_version", "base_frame_id",
-                          "capability"});
+  RequirePlatformRoot(root);
 
   if (RequireNonemptyString(root, "platform") != "wheel" ||
       RequireNonemptyString(root, "platform_type") != "WHEELED" ||
@@ -143,9 +155,7 @@ lunar::pure_exploration::PlatformGeometry ParseWheel(
 
 lunar::pure_exploration::PlatformGeometry ParseLegged(
     const YAML::Node& root) {
-  RequireExactKeys(root, {"platform", "platform_id", "platform_type",
-                          "capability_version", "base_frame_id",
-                          "capability"});
+  RequirePlatformRoot(root);
 
   if (RequireNonemptyString(root, "platform") != "legged" ||
       RequireNonemptyString(root, "platform_type") != "LEGGED" ||

@@ -96,6 +96,25 @@ TEST(PlatformConfigLoader, LoadsPlannerInstalledWheelGeometry) {
   EXPECT_DOUBLE_EQ(config.geometry.minimum_clearance_m, 0.2);
 }
 
+TEST(PlatformConfigLoader, IncrementalDeploymentProfilesAcceptNavigationMargin) {
+  for (const auto& platform : {std::string{"wheel"}, std::string{"legged"}}) {
+    const auto source = platform == "wheel" ? WheelYaml() : LeggedYaml();
+    const TemporaryYaml yaml{source + "\nstart_blind_zone_margin_m: 0.0\n"};
+    const auto config = LoadIncrementalPlatformConfig(yaml.path(), platform);
+    EXPECT_EQ(config.geometry.platform_type, platform == "wheel" ? "WHEELED" : "LEGGED");
+  }
+}
+
+TEST(PlatformConfigLoader, RejectsInvalidOrDuplicateNavigationMargin) {
+  for (const auto& suffix : {"\nstart_blind_zone_margin_m: -0.1\n",
+                             "\nstart_blind_zone_margin_m: .nan\n",
+                             "\nstart_blind_zone_margin_m: .inf\n",
+                             "\nstart_blind_zone_margin_m: 0\nstart_blind_zone_margin_m: 1\n"}) {
+    const TemporaryYaml yaml{LeggedYaml() + suffix};
+    EXPECT_THROW(LoadIncrementalPlatformConfig(yaml.path(), "legged"), std::invalid_argument);
+  }
+}
+
 TEST(PlatformConfigLoader, LoadsPlannerInstalledLeggedGeometry) {
   const LoadedPlatformConfig config =
       LoadIncrementalPlatformConfig(PlannerConfigPath("legged.yaml"),
