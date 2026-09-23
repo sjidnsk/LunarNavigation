@@ -1,0 +1,288 @@
+# P4-owned P3 profile; do not overwrite the P3 original.
+# Source: P3/config/hardware237.yaml, captured 2026-09-23.
+# Source SHA256: 3cad3691dfda9a9b9f030c9c4ca9df406938cb0dd59a2cce09a4368dc42f15d7
+# Only map_resolution and map_window differ. Use a fresh output directory.
+name: 'Quadruped 237: MID-360 LiDAR + internal IMU; vision disabled'
+use_imu: true
+calibration_confirmed: false
+instantaneous_cloud: false
+lidar_topic: /hardware/lidar
+imu_topic: /hardware/imu
+lidar_input_frame: livox_frame
+point_time_field: timestamp
+point_time_scale: 1.0e-09
+max_scan_duration: 0.12
+base_from_imu:
+- - 1.0
+  - 0.0
+  - 0.0
+  - 0.341
+- - 0.0
+  - 1.0
+  - 0.0
+  - 0.02329
+- - 0.0
+  - 0.0
+  - 1.0
+  - 0.055880000000000006
+- - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+base_from_lidar:
+- - 1.0
+  - 0.0
+  - 0.0
+  - 0.33
+- - 0.0
+  - 1.0
+  - 0.0
+  - 0.0
+- - 0.0
+  - 0.0
+  - 1.0
+  - 0.1
+- - 0.0
+  - 0.0
+  - 0.0
+  - 1.0
+stereo_max_skew: 0.01
+min_range: 0.35
+max_range: 40.0
+max_input_points: 40000
+vision_gate:
+  recovery_frames: 4
+  max_speed: 4.0
+  max_angular_speed: 2.0
+  max_step: 6.0
+  max_angle: 1.0
+  max_gap: 1.0
+min_brightness: 8.0
+min_image_features: 25
+require_vins_features: false
+min_vins_features: 15
+image_quality_tolerance: 0.15
+feature_tolerance: 4.5
+source_wall_timeout: 0.8
+lio_max_speed: 3.0
+lio_max_angular_speed: 3.0
+lio_pose_variance:
+- 0.04
+- 0.04
+- 0.04
+- 0.01
+- 0.01
+- 0.01
+vision_pose_variance:
+- 0.01
+- 0.01
+- 0.01
+- 0.005
+- 0.005
+- 0.005
+map_resolution: 0.05
+map_output: elevation_only
+elevation_fusion:
+  enabled: true
+  sensor_std_m: 0.03
+  min_std_m: 0.02
+  process_variance_per_sec: 0.0004
+  max_gain: 0.25
+  gate_floor_m: 0.08
+  gate_ceiling_m: 0.20
+  change_confirmations: 3
+  change_min_span_sec: 0.20
+  change_max_gap_sec: 1.0
+ground_clearance:
+  enabled: true
+  fit_min_radius_m: 0.3
+  fit_radius_m: 3.0
+  ground_min_drop_m: 0.12
+  ground_max_drop_m: 1.5
+  clearance_m: 0.85
+  terrain_radius_m: 8.0
+cloud_voxel_size: 0.12
+cloud_preview_points: 150000
+map_window: 16.0  # 320 x 320 cells at 5 cm.
+map_publish_period: 1.0
+stationary_map_period_sec: 0.5
+max_elevation_points: 12000
+pose_tolerance: 0.15
+pose_max_gap: 0.5
+mapping_wait_timeout: 3.0
+tof_sources: []
+semantic_topic: /task2/seg_mask
+semantic_tolerance: 0.15
+tile_cells: 128
+max_resident_tiles: 64
+tile_cache_mib: 128
+max_query_cells: 250000
+pressure_query_cells: 160000
+global_max_cells: 1000000
+global_publish_period: 2.0
+overview_side_cells: 256
+overview_resolution: 1.0
+preview_voxel_size: 0.15
+obstacle_threshold: 65
+dynamic_map:
+  enabled: true
+  min_period_sec: 0.5
+  confirmations: 3
+  max_gap_sec: 8.0
+  ray_radius_m: 0.04
+  range_margin_m: 0.25
+  max_range_m: 8.0
+  max_candidates: 6000
+  max_changed_cells: 48
+  max_position_variance: 0.01
+  max_rotation_variance: 0.0025
+pose_buffer_samples: 1200
+map_pending_scans: 4
+stereo_queue_depth: 2
+max_image_bytes: 24000000
+max_cloud_bytes: 4000000
+trajectory_max_poses: 5000
+checkpoint_period: 5.0
+min_disk_free_gib: 5.0
+mapper_soft_mib: 1536
+min_system_available_mib: 2048
+process_tree_soft_mib: 6144
+process_tree_stop_mib: 8192
+lidar_cube_side: 160.0
+lidar_detection_range: 40.0
+lidar_map_voxel: 0.4
+max_slope_deg: 35.0
+max_step_m: 0.3
+require_lidar_agreement: true
+visual_pending_samples: 8
+visual_reference_wait: 0.3
+agreement_stamp_tolerance: 0.05
+agreement_pose_max_gap: 0.35
+min_image_contrast: 18.0
+min_feature_coverage: 0.2
+min_image_sharpness: 8.0
+exposure_change_threshold: 65.0
+motion_consistency:
+  translation_floor: 0.15
+  translation_ratio: 0.2
+  rotation_floor: 0.14
+  rotation_ratio: 0.2
+  min_span: 0.5
+  history_seconds: 4.0
+  max_gap: 6.0
+  capacity: 240
+visual_source: none
+visual_odometry_topic: /fusion/learned_raw
+visual_max_age_sec: 1.5
+visual_future_tolerance_sec: 0.1
+ekf_history_seconds: 10.0
+visual_wall_timeout_sec: 1.5
+image_input_reliability: reliable
+lidar_input_reliability: reliable
+adaptive_source_selection: true
+lidar_only_direct_output: true
+lidar_recovery_frames: 3
+lidar_max_pose_variance: 100.0
+independent_visual_min_score: 0.45
+lidar_backend: voxelmap
+voxelmap:
+  stationary_enabled: true
+  stationary_confirm_sec: 2.0
+  stationary_confirm_frames: 10
+  stationary_max_scan_gap_sec: 0.4
+  stationary_imu_window_sec: 0.5
+  stationary_speed_mps: 0.05
+  stationary_anchor_translation_m: 0.03
+  stationary_anchor_rotation_rad: 0.01
+  stationary_range_change_m: 0.03
+  stationary_velocity_std_mps: 0.02
+  threads: 2
+  voxel_size: 1.5
+  downsample_size: 0.15
+  max_iterations: 20
+  tracking_max_speed: 3.0
+  tracking_max_angular_speed: 3.0
+  tracking_max_step: 0.8
+  tracking_max_angle: 0.5
+  map_recovery_enabled: true
+  imu_recovery_max_gap: 4.0
+  imu_recovery_max_step: 3.0
+  imu_recovery_max_angle: 1.2
+  local_map_radius: 35.0
+  max_root_voxels: 8000
+  imu_init_seconds: 1.5
+  imu_init_min_samples: 200
+  imu_max_gap_sec: 0.08
+  imu_end_tolerance_sec: 0.015
+  imu_scan_wait_sec: 0.25
+  imu_init_accel_std: 0.5
+  imu_init_gyro_std: 0.05
+  imu_accel_noise: 0.2
+lidar_recovery_max_step: 3.0
+lidar_recovery_max_angle: 1.2
+output_continuity:
+  max_speed: 3.0
+  max_angular_speed: 3.0
+  max_step: 0.8
+  max_angle: 0.5
+  correction_translation: 0.25
+  correction_rotation: 0.1
+  recovery_max_gap: 4.0
+  recovery_max_step: 3.0
+  recovery_max_angle: 1.2
+imu_mode: auto
+imu_calibration_confirmed: true
+visual_constraint_mode: body_twist
+mapping_pose_settle_sec: 0.2
+normalized_camera_input: true
+ekf_sensor_timeout: 0.5
+telemetry_motion:
+  enabled: false
+stationary:
+  enabled: false  # Legacy image-based detector; real IMU guard runs in VoxelMap.
+  confirm_frames: 3
+  max_gap: 3.0
+cloud_motion_compensated: false
+deskew:
+  enabled: true
+mapping_lidar_topic: /fusion/lidar_deskewed
+imu_input_frame: livox_frame
+hardware:
+  enabled: true
+  split_inertial: true
+  source_domain: 29
+  max_lidar_hz: 20.0
+  imu_history_max_age: 5.0
+  imu_queue_depth: 1000
+  lidar_topic: /livox/lidar
+  imu_topic: /livox/imu
+  clock:
+    mode: device_uptime
+    warmup_method: lower_envelope
+    warmup_seconds: 1.0
+    min_samples: 120
+    max_jitter: 0.04
+    max_drift: 0.1
+    max_age: 3.0
+  clock_reference_topic: /P3/dog/clock_reference
+point_time_reference: first_point
+imu_acceleration_scale: 9.81
+imu_angular_velocity_scale: 1.0
+livox_tag_filter: true
+calibration_provenance:
+  body_mounting_source: /home/yanfa/program/mid360_localization/src/baselink_odom_pkg/config/extrinsics.yaml
+  body_mounting_status: Existing project mounting reused; current mechanical installation
+    not independently measured
+  imu_source: /home/yanfa/program/mid360_localization/src/FAST_LOCALIZATION/config/edu.yaml
+  imu_transform: 'Existing FAST-LIO T_imu_lidar inverted to T_lidar_imu: [0.011, 0.02329,
+    -0.04412] m, R=I'
+  rejected_legacy_source: mid360_mapping/config/edu.yaml carries Ouster-like translation;
+    not used
+  unit_source: Recorded IMU norm ~1; Livox official protocol acceleration g, gyro
+    rad/s
+  point_time_source: Bag FLOAT64 absolute ns; original EDU preprocess subtracts first
+    point
+  clock_note: 'Sensor and host epochs differ. Live: one frozen common reception offset.
+    Bag: fixed explicit offset preserves record-time jitter.'
+  factory_manual: 'https://terra-1-g.djicdn.com/851d20f7b9f64838a34cd02351370894/Livox/Livox_Mid-360_User_Manual_EN.pdf,
+    page 15: IMU axes parallel; origin [11,23.29,-44.12] mm in LiDAR'

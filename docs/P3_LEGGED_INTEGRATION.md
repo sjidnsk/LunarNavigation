@@ -85,3 +85,10 @@ ros2 param get /incremental_exploration platform_selector
 
 本轮只读源码核对和 P4 脚本环境回归已执行；同域实时 P3 样本与实车闭环尚未通过验收。
 源码参数不等同于传感器实测性能。完整证据记录于 docs/validation/2026-09-23-p3-legged-interface-adaptation.md。
+
+## 5 cm 局部地图候选配置
+
+P4 内提供独立的 `config/p3_hardware237_5cm.yaml` 和
+`config/p3_hardware237_bag_5cm.yaml`，分辨率 0.05 m、窗口 16×16 m。
+需要显式选择，不改变 P3 原有入口默认值。配置来源、使用方式、地形复核
+和未验证边界见 [5 cm 复核记录](validation/2026-09-23-legged-5cm-terrain-review.md)。
