@@ -39,6 +39,7 @@ exploration:
 
 navigation:
   clearance_weight: 2.0
+  terrain_background_half_width_m: 0.4
   publish_local_fine_map: true
   local_fine_map_topic: /Car/T4/mapping/local_fine_map
   local_fine_map_window_m: 28.0
