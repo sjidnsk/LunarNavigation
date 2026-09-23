@@ -158,7 +158,9 @@ struct TerrainPatchPoint {
 
 template <typename Container>
 double PatchMedian(Container& values, std::size_t count) {
-  std::sort(values.begin(), values.begin() + count);
+  // Preserve the upper median for even counts without fully sorting.
+  std::nth_element(values.begin(), values.begin() + count / 2,
+                   values.begin() + count);
   return values[count / 2];
 }
 
