@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <bitset>
 #include <cmath>
 #include <limits>
@@ -395,6 +396,10 @@ struct FineCellEvaluator::Impl final {
   struct IntrinsicCacheTile final {
     std::array<IntrinsicTraversalEvaluation, kGridTileCellCount> evaluations;
     std::bitset<kGridTileCellCount> populated;
+    // Lazy 16-cell row summaries; scoped to this immutable elevation view.
+    std::array<std::uint16_t, kGridTileCellCount / 16> hazards{};
+    std::array<std::uint16_t, kGridTileCellCount / 16> blocked{};
+    std::bitset<kGridTileCellCount / 16> summarized;
   };
 
   Impl(const ElevationRangeView& elevation_value,
@@ -435,6 +440,49 @@ struct FineCellEvaluator::Impl final {
     return last_cache_tile->evaluations[offset];
   }
 
+  // Invoke only for non-FREE intrinsic cells, preserving row-major order.
+  // Summaries skip empty spans without changing circle/cell intersection math.
+  template <typename Visitor>
+  bool VisitHazards(GridIndex minimum, GridIndex maximum, Visitor visitor,
+                    bool blocked_only = false) {
+    for (auto y = minimum.y; y < maximum.y; ++y) {
+      for (auto x = minimum.x; x < maximum.x;) {
+        const GridIndex seed{x, y};
+        const auto offset = TileCellOffset(seed);
+        const auto lane = offset % 16;
+        const auto count = std::min<std::int64_t>(maximum.x - x, 16 - lane);
+        static_cast<void>(IntrinsicAt(seed));
+        auto* tile = last_cache_tile;
+        const auto block = offset / 16;
+        if (!tile->summarized.test(block)) {
+          std::uint16_t mask = 0, blocked = 0;
+          const auto base = x - static_cast<std::int64_t>(lane);
+          for (int i = 0; i < 16; ++i) {
+            const GridIndex cell{base + i, y};
+            if (!elevation.geometry().Contains(cell)) continue;
+            const auto state = IntrinsicAt(cell).state;
+            if (state != IntrinsicCellState::kFree)
+              mask |= std::uint16_t(1U << i);
+            if (state == IntrinsicCellState::kBlocked)
+              blocked |= std::uint16_t(1U << i);
+          }
+          tile->hazards[block] = mask;
+          tile->blocked[block] = blocked;
+          tile->summarized.set(block);
+        }
+        const unsigned candidates = blocked_only ? tile->blocked[block] : tile->hazards[block];
+        unsigned mask = (candidates >> lane) & ((1U << count) - 1);
+        while (mask) {
+          const auto bit = std::countr_zero(mask);
+          if (!visitor(GridIndex{x + bit, y})) return false;
+          mask &= mask - 1;
+        }
+        x += count;
+      }
+    }
+    return true;
+  }
+
   [[nodiscard]] FineCellEvaluation Evaluate(const GridIndex candidate) {
     const SparseGridGeometry& geometry = elevation.geometry();
     if (!geometry.Contains(candidate)) {
@@ -445,19 +493,16 @@ struct FineCellEvaluator::Impl final {
         CircleLeavesGeometry(center, hard_radius_m, geometry);
     const auto [minimum, maximum] =
         detail::CellBoundsForRadius(geometry, candidate, hard_radius_m);
-    for (std::int64_t y = minimum.y; y < maximum.y; ++y) {
-      for (std::int64_t x = minimum.x; x < maximum.x; ++x) {
-        const GridIndex seed{.x = x, .y = y};
-        if (!CircleIntersectsCellArea(center, hard_radius_m, geometry, seed)) {
-          continue;
-        }
-        const IntrinsicCellState state = IntrinsicAt(seed).state;
-        if (state == IntrinsicCellState::kBlocked) {
-          return {.state = FineCellState::kBlocked};
-        }
-        intersects_unknown =
-            intersects_unknown || state == IntrinsicCellState::kUnknown;
-      }
+    // Resolve BLOCKED first. Once absent, the first intersecting UNKNOWN
+    // certifies UNKNOWN; scanning every other unknown cell cannot change it.
+    const bool clear = VisitHazards(minimum, maximum, [&](GridIndex seed) {
+      return !CircleIntersectsCellArea(center, hard_radius_m, geometry, seed);
+    }, true);
+    if (!clear) return {.state = FineCellState::kBlocked};
+    if (!intersects_unknown) {
+      intersects_unknown = !VisitHazards(minimum, maximum, [&](GridIndex seed) {
+        return !CircleIntersectsCellArea(center, hard_radius_m, geometry, seed);
+      });
     }
     if (intersects_unknown) {
       return {.state = FineCellState::kUnknown};
@@ -482,17 +527,11 @@ struct FineCellEvaluator::Impl final {
     double nearest_hazard_m = DistanceToGeometryBoundary(center, geometry);
     const auto [clearance_minimum, clearance_maximum] =
         detail::CellBoundsForRadius(geometry, candidate, influence_m);
-    for (std::int64_t y = clearance_minimum.y; y < clearance_maximum.y; ++y) {
-      for (std::int64_t x = clearance_minimum.x;
-           x < clearance_maximum.x; ++x) {
-        const GridIndex seed{.x = x, .y = y};
-        if (IntrinsicAt(seed).state == IntrinsicCellState::kFree) {
-          continue;
-        }
-        nearest_hazard_m = std::min(
-            nearest_hazard_m, DistanceToCellArea(center, geometry, seed));
-      }
-    }
+    VisitHazards(clearance_minimum, clearance_maximum, [&](GridIndex seed) {
+      nearest_hazard_m = std::min(
+          nearest_hazard_m, DistanceToCellArea(center, geometry, seed));
+      return true;
+    });
     const double remaining_clearance_m =
         std::max(0.0, nearest_hazard_m - hard_radius_m);
     const double clearance_penalty = std::clamp(

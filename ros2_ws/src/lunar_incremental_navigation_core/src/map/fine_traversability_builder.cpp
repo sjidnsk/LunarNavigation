@@ -254,19 +254,40 @@ void ValidateMergedChanges(
     const SparseGridGeometry& geometry,
     const std::set<GridIndex>& changed_raw_cells,
     const double influence_m) {
-  std::set<GridIndex> result;
+  // The intersection of a circle's cell-area halo with one grid row is
+  // contiguous. Keep the original endpoint predicate, then union row spans
+  // before materializing cells instead of repeatedly inserting each overlap.
+  std::map<std::int64_t, std::vector<std::pair<std::int64_t, std::int64_t>>> rows;
   for (const GridIndex changed : changed_raw_cells) {
     const auto [minimum, maximum] =
         detail::CellBoundsForRadius(geometry, changed, influence_m);
-    for (std::int64_t y = minimum.y; y < maximum.y; ++y) {
-      for (std::int64_t x = minimum.x; x < maximum.x; ++x) {
-        const GridIndex candidate{.x = x, .y = y};
-        if (CircleIntersectsCellArea(CellCenter(geometry, candidate),
-                                     influence_m, geometry, changed)) {
-          result.insert(candidate);
-        }
+    for (auto y = minimum.y; y < maximum.y; ++y) {
+      auto left = minimum.x, right = maximum.x;
+      const auto intersects = [&](std::int64_t x) {
+        return CircleIntersectsCellArea(CellCenter(geometry, {x, y}),
+                                        influence_m, geometry, changed);
+      };
+      while (left < right && !intersects(left)) ++left;
+      while (left < right && !intersects(right - 1)) --right;
+      if (left < right) rows[y].emplace_back(left, right);
+    }
+  }
+  std::set<GridIndex> result;
+  for (auto& [y, spans] : rows) {
+    std::sort(spans.begin(), spans.end());
+    auto left = spans.front().first, right = spans.front().second;
+    const auto emit = [&](std::int64_t begin, std::int64_t end) {
+      for (auto x = begin; x < end; ++x) result.insert({x, y});
+    };
+    for (std::size_t i = 1; i < spans.size(); ++i) {
+      if (spans[i].first <= right) right = std::max(right, spans[i].second);
+      else {
+        emit(left, right);
+        left = spans[i].first;
+        right = spans[i].second;
       }
     }
+    emit(left, right);
   }
   return result;
 }
