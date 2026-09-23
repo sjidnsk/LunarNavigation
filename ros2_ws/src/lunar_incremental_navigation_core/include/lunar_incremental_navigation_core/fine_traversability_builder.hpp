@@ -29,6 +29,10 @@ struct FineCellEvaluation final {
   double traversal_cost{};
 };
 
+// Square background sampling half-width; minimum two cells retains local guards.
+// Unsupported excessively fine grids are rejected rather than silently truncating.
+[[nodiscard]] int TerrainBackgroundRadiusCells(double half_width_m, double resolution_m);
+
 class PlatformElevationEvaluator {
  public:
   virtual ~PlatformElevationEvaluator() = default;
@@ -38,7 +42,8 @@ class PlatformElevationEvaluator {
 };
 
 [[nodiscard]] std::unique_ptr<const PlatformElevationEvaluator>
-MakePlatformElevationEvaluator(const PlatformCapability& capability);
+MakePlatformElevationEvaluator(const PlatformCapability& capability,
+                               double background_half_width_m = 0.0);
 
 class FineCellEvaluator final {
  public:

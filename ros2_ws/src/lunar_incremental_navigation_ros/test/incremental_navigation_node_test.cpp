@@ -826,6 +826,23 @@ TEST(IncrementalNavigationNode, DirectDeploymentDefaultsAndExplicitOverrides) {
   EXPECT_DOUBLE_EQ(overridden->get_parameter("goal_yaw_tolerance_rad").as_double(), 0.2);
 }
 
+TEST(IncrementalNavigationNode, TerrainBackgroundWidthIsAValidatedStartupParameter) {
+  auto options = ServerOptions("terrain_background_default");
+  auto defaults = std::make_shared<IncrementalNavigationNode>(options);
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("terrain_background_half_width_m").as_double(), 0.4);
+  options.append_parameter_override("terrain_background_half_width_m", 0.0);
+  auto legacy = std::make_shared<IncrementalNavigationNode>(options);
+  EXPECT_DOUBLE_EQ(legacy->get_parameter("terrain_background_half_width_m").as_double(), 0.0);
+  EXPECT_FALSE(legacy->set_parameters_atomically(
+      {rclcpp::Parameter("terrain_background_half_width_m", 0.3)}).successful);
+  for (double width : {-0.1, std::numeric_limits<double>::infinity(),
+                       std::numeric_limits<double>::quiet_NaN()}) {
+    auto invalid = ServerOptions("terrain_background_invalid");
+    invalid.append_parameter_override("terrain_background_half_width_m", width);
+    EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(invalid), std::runtime_error);
+  }
+}
+
 TEST(IncrementalNavigationNode, ClearanceCostHasCalibratedDefaultAndStartupOverride) {
   auto defaults = std::make_shared<IncrementalNavigationNode>(
       ServerOptions("clearance_default"), IncrementalNavigationNodeDependencies{});

@@ -218,6 +218,13 @@ struct RuntimeParameters final {
       parameters.profile.goal_yaw_tolerance_rad <= 0.0) {
     throw std::runtime_error("goal tolerances must be finite and positive");
   }
+  parameters.profile.terrain_background_half_width_m = node.declare_parameter<double>(
+      "terrain_background_half_width_m",
+      std::holds_alternative<core::WheeledCapability>(parameters.capability) ? 0.4 : 0.0);
+  if (!std::isfinite(parameters.profile.terrain_background_half_width_m) ||
+      parameters.profile.terrain_background_half_width_m < 0.0) {
+    throw std::runtime_error("PLANNER_ERROR: invalid terrain background half-width");
+  }
   parameters.profile.clearance_weight = node.declare_parameter<double>(
       "clearance_weight", parameters.profile.clearance_weight);
   if (!std::isfinite(parameters.profile.clearance_weight) ||

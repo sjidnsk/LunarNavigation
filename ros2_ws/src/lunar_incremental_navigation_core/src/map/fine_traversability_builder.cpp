@@ -78,6 +78,7 @@ using Clock = std::chrono::steady_clock;
 void ValidateProfile(const TraversabilityProfile& profile) {
   if (profile.planar_envelope_xy_m.size() < 3U ||
       !FiniteNonnegative(profile.preferred_clearance_m) ||
+      !FiniteNonnegative(profile.terrain_background_half_width_m) ||
       !FiniteNonnegative(profile.slope_weight) ||
       !FiniteNonnegative(profile.relief_weight) ||
       !FiniteNonnegative(profile.clearance_weight)) {
@@ -133,6 +134,7 @@ class ProfileHasher final {
     hasher.Add(vertex.y);
   }
   hasher.Add(profile.preferred_clearance_m);
+  hasher.Add(profile.terrain_background_half_width_m);
   hasher.Add(profile.slope_weight);
   hasher.Add(profile.relief_weight);
   hasher.Add(profile.clearance_weight);
@@ -441,7 +443,9 @@ FineTraversabilityBuilder::Derive(
     const std::set<GridIndex> changed_raw(changed.begin(), changed.end());
     const double influence_m =
         hard_radius_m + profile.preferred_clearance_m +
-        (std::holds_alternative<WheeledCapability>(capability) ? 2.0 : 1.0) *
+        (std::holds_alternative<WheeledCapability>(capability)
+             ? TerrainBackgroundRadiusCells(profile.terrain_background_half_width_m,
+                                            raw->geometry().resolution_m()) : 1) *
         std::sqrt(2.0) * raw->geometry().resolution_m();
     recompute_cells =
         InfluenceCells(raw->geometry(), changed_raw, influence_m);
