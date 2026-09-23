@@ -148,7 +148,7 @@ def test_single_stack_config_has_only_shared_mode_platform_and_node_defaults() -
     }
     assert not {"coarse_resolution_m", "local_map_topic", "exploration_map_topic", "action_name", "navigation_action"} & set(config["exploration"])
     assert not {"coarse_resolution_m", "local_map_topic", "exploration_map_topic", "action_name", "navigation_action"} & set(config["navigation"])
-    assert config["navigation"]["local_window_size_m"] == 64.0
+    assert config["navigation"]["local_window_size_m"] == 32.0
     assert config["navigation"]["local_path_topic"] == "/Car/T4/planning/local_path"
     assert "occupied_threshold" not in config["exploration"]
     text = STACK_CONFIG.read_text(encoding="utf-8").lower()
@@ -156,7 +156,7 @@ def test_single_stack_config_has_only_shared_mode_platform_and_node_defaults() -
     assert "motion_primitives" not in text
     assert "footprint_xy_m" not in text
     navigation_source = NAVIGATION_SOURCE.read_text(encoding="utf-8")
-    assert 'declare_parameter<double>("local_window_size_m", 64.0)' in navigation_source
+    assert 'declare_parameter<double>("local_window_size_m", 32.0)' in navigation_source
 
 
 def test_incremental_explorer_consumes_only_the_published_three_state_map() -> None:
@@ -220,7 +220,10 @@ def test_stack_config_launch_and_cpp_keep_the_exploration_map_contract_closed() 
     assert "result.data[output_index] = 100;" in projector
     assert "rclcpp::KeepLast{1}" in publisher
     assert ".reliable().transient_local()" in publisher
-    assert publisher.count("create_publisher<nav_msgs::msg::OccupancyGrid>") == 1
+    # Optional fine-map publication is distinct from the exploration input.
+    assert navigation.count(
+        "exploration_map_publisher(node, parameters.exploration_map_topic)"
+    ) == 1
     assert navigation.count(
         "exploration_map_publisher(node, parameters.exploration_map_topic)"
     ) == 1
