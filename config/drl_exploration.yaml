@@ -2,7 +2,7 @@
 model: {width: 128, heads: 8, layers: 6}
 learning:
   batch_size: 64
-  microbatch_size: 16
+  microbatch_size: 8
   learning_rate: 0.00001
   gamma: 1.0
   polyak: 0.005

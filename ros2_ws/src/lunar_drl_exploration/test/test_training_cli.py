@@ -26,6 +26,9 @@ def test_default_config_and_explicit_probe_preserve_network_and_batch():
     from lunar_drl_exploration.cli import parser, load_config
     config = load_config(parser().parse_args(['train']))
     assert (config.environments, config.target_rtf, config.warmup) == (8, 30., 1024)
+    operational = Path(__file__).resolve().parents[4] / 'config' / 'drl_exploration.yaml'
+    config = load_config(parser().parse_args(['train', '--config', str(operational)]))
+    assert config.learning.batch_size == 64 and config.learning.microbatch_size == 8
     args = parser().parse_args(['train', '--probe', '--probe-warmup', '4', '--probe-extent', '40', '--probe-budget', '2'])
     config = load_config(args)
     assert config.model.width == 128 and config.model.layers == 6 and config.model.heads == 8
