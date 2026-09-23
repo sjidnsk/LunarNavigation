@@ -70,6 +70,8 @@ Release 离线比较的是同一新核心中 legacy 窗口（0）与物理窗口
 
 ## 证据与未运行层级
 
-本机 Jazzy 构建及测试；NOT_RUN：Humble/Orin、真实 P3 回放、TCP 动力学/实车闭环。未推送、部署或修改 P3。源码修改保留在三个部署分支工作区，未合入主线。
+本机 Jazzy 构建及测试；NOT_RUN：Humble/Orin、真实 P3 回放、TCP 动力学/实车闭环。未推送、部署或修改 P3。上述为验证时状态；后续按用户确认分别提交到三个部署分支，未合入主线。
 
 产物：/home/kai/CodexDownloads/lunar_navigation/terrain-window-20260923/ 。包含 maze.cpp/steps.cpp/corridor.cpp/noise.cpp/incremental.cpp 与 capabilities.hpp、对应 CSV、构建和测试日志。迷宫输入来自 maze-platform-benchmark-20260923/map-*.bin，通道输入来自 wheel-clearance-20260923/corridors/。核心 Release 构建位于 search-optimization-deployment-sync-20260923/{分支工作区名}；ROS 使用本产物目录下独立 build/install。外部探针须针对本次头文件和库重新编译，旧二进制不保证 ABI 兼容。
+
+后续性能优化及大地图对照见 [地图派生性能优化](2026-09-23-terrain-performance-optimization.md)。本文开销数字保留为优化前历史证据。
