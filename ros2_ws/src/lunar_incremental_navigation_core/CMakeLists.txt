@@ -80,6 +80,14 @@ if(BUILD_TESTING)
   endfunction()
 
   lunar_add_core_gtest(
+    lunar_incremental_navigation_core_boundary_distance_index_test
+    test/boundary_distance_index_test.cpp)
+
+  lunar_add_core_gtest(
+    lunar_incremental_navigation_core_local_query_cache_test
+    test/local_query_cache_test.cpp)
+
+  lunar_add_core_gtest(
     lunar_incremental_navigation_core_planning_contract_test
     test/planning_contract_test.cpp)
   lunar_add_core_gtest(
