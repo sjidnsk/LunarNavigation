@@ -1,4 +1,5 @@
 """Production incremental planning and execution in an isolated simulated vehicle."""
+import math
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
@@ -13,6 +14,10 @@ def compose(context):
     nav_share = get_package_share_directory('lunar_incremental_navigation_ros')
     demo_share = get_package_share_directory('lunar_incremental_controller_demo')
     config = nav_share + '/config/wheel.yaml'
+    period = float(LaunchConfiguration('rolling_replan_period_s').perform(context))
+    distance = float(LaunchConfiguration('rolling_replan_distance_m').perform(context))
+    if not math.isfinite(period) or period < 0 or not math.isfinite(distance) or distance < 0:
+        raise ValueError('rolling planning period and distance must be finite and nonnegative')
     navigator = {
         'platform_type': 'wheel', 'platform_config': config,
         'local_map_topic': prefix + '/grid_map',
@@ -24,12 +29,14 @@ def compose(context):
         'diagnostics_topic': prefix + '/diagnostics',
         'exploration_map_topic': prefix + '/exploration_map',
         'enable_tracking_feedback': True,
+        'rolling_replan_period_s': period, 'rolling_replan_distance_m': distance,
         'tracking_status_topic': prefix + '/tracking_status',
         'enable_debug_visualization': True, 'debug_topic_prefix': prefix,
         'debug_fine_window_m': 32.0,
     }
     controller = {
         'input_mode': 'incremental_reference', 'platform_config': config,
+        'enable_rolling_updates': period > 0,
         'path_reference_topic': prefix + '/path_reference',
         'tracking_status_topic': prefix + '/tracking_status',
         'odometry_topic': prefix + '/odometry', 'tf_topic': '/tf',
@@ -57,6 +64,8 @@ def compose(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('case', default_value='manual'),
+        DeclareLaunchArgument('rolling_replan_period_s', default_value='0.5'),
+        DeclareLaunchArgument('rolling_replan_distance_m', default_value='1.0'),
         DeclareLaunchArgument('start_rviz', default_value='true'),
         DeclareLaunchArgument('observation_radius_m', default_value='10.0'),
         OpaqueFunction(function=compose),

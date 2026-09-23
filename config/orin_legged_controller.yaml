@@ -4,6 +4,7 @@ lunar_pure_wheeled_controller:
   ros__parameters:
     platform_type: legged
     input_mode: incremental_reference
+    enable_rolling_updates: false
     odometry_topic: /Car/T3/localization/odometry
     tf_topic: /P4/input/map_to_odom
     path_reference_topic: /Car/T4/planning/path_reference

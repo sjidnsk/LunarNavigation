@@ -1,5 +1,6 @@
 """Transport-neutral execution regressions preserved by the 216 deployment."""
 from dataclasses import replace
+import pytest
 from lunar_pure_wheeled_controller.execution import PathExecutor
 from lunar_pure_wheeled_controller.tracking import TrackingPolicy, TrackingState
 
@@ -28,8 +29,9 @@ def test_lateral_motion_prevents_actual_executor_completion():
     assert not result.command.complete
 
 
-def test_feedback_spike_does_not_reset_command_ramp():
-    executor = PathExecutor(TrackingPolicy())
+@pytest.mark.parametrize('rolling', [False, True])
+def test_feedback_spike_does_not_reset_command_ramp(rolling):
+    executor = PathExecutor(TrackingPolicy(), rolling_updates=rolling)
     executor.set_path(((0, 0, 0), (10, 0, 0)))
     previous = executor.update(TrackingState(0, 0, 0), .05).command.linear_x_mps
     for measured in (.3, .01, .25, .0, .3):

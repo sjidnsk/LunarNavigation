@@ -112,7 +112,7 @@ class VehicleSim(Node):
                                        -size/2 + (y+.5)*resolution)
                   for y in range(n) for x in range(n)]
         observed = values
-        if self.scene.name == 'multiple_exits':
+        if self.scene.name in ('multiple_exits', 'rolling_straight'):
             # Deliberate 360-degree synthetic rolling observation, not a LiDAR model.
             observed = [v if math.hypot(-size/2+(x+.5)*resolution-self.plant.x,
                                        -size/2+(y+.5)*resolution-self.plant.y) <= self.observation_radius

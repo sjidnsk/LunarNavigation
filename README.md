@@ -608,3 +608,43 @@ Action Result 不提供分阶段耗时或调用次数；不能把其中的 `elap
 | `jetson_agx` | `NOT_RUN` | 未执行 Jetson AGX Orin 原生构建、性能、功耗或稳定性验收。 |
 | `historical_missing_global_bag` | `HISTORICAL_SUBSET_ONLY` | 历史记录中的 bag 缺少 `/Car/T3/mapping/global_overview`，仅可作为 `LAVA_TUBE` 局部输入子集；本轮未找到其 metadata，未实际回放。 |
 | `synthetic_global` | `FORBIDDEN` | 禁止生成或使用假全局图；不得用合成、零填充或局部图替代真实 `/Car/T3/mapping/global_overview`；月表验收仍需实机在线全局总览，或重新录制并核验包含该 Topic 的 rosbag。 |
+
+## 移动中滚动局部规划（隔离轮式闭环）
+
+在同一 NavigateToPose 任务内周期生成新 PathReference，正常 TRACKING 中更新路径不强制停车。
+导航协调器管理任务与版本，后台单任务计算候选，控制器负责跟踪、限速和必要的转向/换向制动。
+滚动更新失败时保留仍有效的旧路径；地图失效仍立即停止该引用，最终目标保持停稳确认。
+
+仅在统一 demo launch 中通过下列参数同时启用导航与控制器；不要只给导航打开周期而保留旧控制器行为：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source "$HOME/CodexDownloads/lunar_navigation/rolling-local-planning-20260923/install/setup.bash"
+export ROS_DOMAIN_ID=179  # 先确认该域未被其他实例使用
+ros2 launch lunar_incremental_controller_demo controller_rviz.launch.py \
+  case:=multiple_exits start_rviz:=false \
+  rolling_replan_period_s:=0.5 rolling_replan_distance_m:=1.0
+```
+
+0.5 秒和 1.0 米为本机实验起点，不是 Orin 标定值；根据实测规划耗时、速度和制动余量调整。
+周期设为 0.0 可恢复原分段模式，统一 launch 同时关闭控制器滚动更新。
+参数只在启动时读取。正常更新在转向、制动和最终对齐期间暂停；恢复跟踪后继续。
+局部路径耗尽而新路径未就绪时仍停车；最终目标之外的局部末端在滚动模式下不做末端朝向对齐。
+
+接口定义不变，控制器仍是唯一速度发布者。演示只使用 `/lunar_demo/controller/*`，不连接车辆速度话题。
+设计见 `docs/superpowers/specs/2026-09-23-rolling-local-planning-design.md`；
+验证与未执行环境见 `docs/validation/2026-09-23-rolling-local-planning.md`。
+
+平顺接续观察可用 `case:=rolling_straight observation_radius_m:=3.0`（6 米目标、局部合成观测）。
+在同一 overlay、同一 ROS 域的新终端记录：
+
+```bash
+ros2 run lunar_incremental_controller_demo run_case --case rolling_straight \
+  --timeout 180 --output /tmp/rolling-straight.json
+```
+
+该场景可能因观测边缘局部目标变化触发原有曲率制动；“滚动启用”不表示忽略转弯或换向限制。
+查看报告的 `events` 和 `rolling_summary`：移动中版本更新应出现，不能仅凭 `update_stops` 将必要转向计为异常。
+当前证据与 Humble 栈条件见验证记录；未进行 Orin 或实车验证。
+
+2026-09-23 默认配置更新：上述 incremental 轮式闭环现默认开启滚动规划（0.5 s / 1 m）；省略周期参数即可启用。轮式导航启用执行反馈时默认使用 0.5 s，其他模式仍为 0；控制器仅在 incremental_reference 输入中默认启用。统一 launch 指定 `rolling_replan_period_s:=0.0` 会同时关闭两端。

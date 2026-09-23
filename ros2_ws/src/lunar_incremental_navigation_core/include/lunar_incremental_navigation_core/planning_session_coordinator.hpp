@@ -1,5 +1,7 @@
 #pragma once
 
+#include "lunar_incremental_navigation_core/planning_cycle.hpp"
+
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -34,10 +36,6 @@ enum class CancelReason : std::uint8_t {
   kPreempted,
 };
 
-struct StateInput final {
-  Pose2 base_link_pose;
-};
-
 struct SessionTerminal final {
   SessionId session_id;
   NavigateToPoseResult result;
@@ -67,29 +65,9 @@ struct PlanningSessionCoordinatorConfig final {
   bool require_execution_confirmation{false};
 };
 
-struct PlanningSessionPorts final {
-  std::function<GlobalRouteResult(
-      const GlobalGuidanceSnapshot&, Point2, Point2, SearchDeadline,
-      const StopToken&)>
-      plan_global;
-  std::function<std::optional<LocalTarget>(
-      const FineTraversabilitySnapshot&, const SparseGridGeometry&, Point2,
-      const FinalGoal&,
-      const std::optional<GlobalRoute>&)>
-      select_target;
-  std::function<StartPatchResult(
-      std::shared_ptr<const FineTraversabilitySnapshot>,
-      const SparseGridGeometry&, const Pose2&,
-      const PlatformCapability&, const TraversabilityProfile&)>
-      build_start_patch;
-  std::function<LocalPlanResult(
-      const RequestLocalPlanningView&, const Pose2&, const LocalTarget&,
-      SearchDeadline, const StopToken&)>
-      plan_wheel;
-  std::function<LocalPlanResult(
-      const RequestLocalPlanningView&, const Pose2&, const LocalTarget&,
-      SearchDeadline, const StopToken&)>
-      plan_legged;
+struct PreparedCycle final {
+  std::optional<CycleRequest> request;
+  CycleOutput immediate;
 };
 
 class PlanningSessionCoordinator final {
@@ -110,6 +88,12 @@ class PlanningSessionCoordinator final {
                                       SnapshotBundle snapshots,
                                       CycleTrigger trigger,
                                       SearchDeadline deadline);
+  [[nodiscard]] PreparedCycle PrepareCycle(StateInput, SnapshotBundle, CycleTrigger,
+                                            SearchDeadline, bool rolling = false);
+  [[nodiscard]] CycleOutput ApplyCycle(CycleCandidate, StateInput, SnapshotBundle);
+  void SetFinalAlignment(bool);
+  void StopPendingCycle();
+  [[nodiscard]] double remaining_path_m() const noexcept;
   [[nodiscard]] std::optional<PathReference> OnFineSnapshot(
       std::shared_ptr<const FineTraversabilitySnapshot> fine);
   // Thread-safe interruption only. Start, Cancel and all state transitions

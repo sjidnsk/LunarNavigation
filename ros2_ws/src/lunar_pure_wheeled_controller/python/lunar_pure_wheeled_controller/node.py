@@ -84,6 +84,7 @@ class PureWheeledControllerNode(Node):
         super().__init__("lunar_pure_wheeled_controller")
         defaults = {
             "input_mode": "motion_reference",
+            "enable_rolling_updates": True,
             "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
             "platform_config": "",
             "platform_type": "wheel",
@@ -157,7 +158,11 @@ class PureWheeledControllerNode(Node):
             self._policy = platform_policy(policy_values, document, platform_type)
         else:
             self._policy = TrackingPolicy(**policy_values)
-        self._executor = PathExecutor(self._policy)
+        self._executor = PathExecutor(
+            self._policy, rolling_updates=(platform_type == "wheel"
+                and input_mode == "incremental_reference"
+                and self.get_parameter("enable_rolling_updates").value))
+
         self._reference_identity = None
         self._retired_sessions = deque(maxlen=64)
         self._invalidated_revision = -1
