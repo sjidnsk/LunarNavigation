@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Same discovery policy as foot P3 config/cyclonedds_hardware.xml. -->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <General><AllowMulticast>true</AllowMulticast></General>
+    <Discovery><ParticipantIndex>auto</ParticipantIndex><MaxAutoParticipantIndex>90</MaxAutoParticipantIndex></Discovery>
+  </Domain>
+</CycloneDDS>

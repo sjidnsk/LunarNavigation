@@ -20,8 +20,8 @@ bash scripts/orin/start_static_tf_input.sh
 bash scripts/orin/start_hardware_navigation.sh
 ```
 
-两脚本默认域 59，不启动 P3、探索器、控制器或 RViz 目标桥。网络配置默认读取
-`/home/yanfa/program/cyclonedds.xml`，可预先设置 CYCLONEDDS_URI；运行文件默认
+足式两脚本默认域 69，与 P3 `start_dog.sh` 对齐；不启动 P3、探索器、控制器或 RViz 目标桥。网络配置默认读取
+本包 `config/cyclonedds_p3.xml`，可预先设置 CYCLONEDDS_URI；运行文件默认
 位于 deployment-evidence，可用 P4_RUNTIME_DIR 指定。SIGINT 停止对应终端。
 P3 定位重启/原点变化后必须结束旧任务、重启导航与适配器。
 

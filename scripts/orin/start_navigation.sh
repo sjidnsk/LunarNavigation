@@ -5,6 +5,7 @@ platform_type="${1:-legged}"
 use_sim_time="${2:-false}"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+source "$repository_root/scripts/orin/p3_environment.sh"
 source /opt/ros/humble/setup.bash
 source "$repository_root/ros2_ws/install/setup.bash"
 set -u

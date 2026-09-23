@@ -34,7 +34,7 @@ bash scripts/orin/start_static_tf_input.sh
 bash scripts/orin/start_hardware_navigation.sh
 ```
 
-沿用实车域 59 与 CycloneDDS 配置；网络及运行目录覆盖方式见
+与足式 P3 `start_dog.sh` 对齐，默认域 69，使用本包 `config/cyclonedds_p3.xml`；所有正式入口自动加载同一环境。网络及运行目录覆盖方式见
 [静态 TF 说明](STATIC_TF_INPUT.md)。这两个入口只启动适配与导航，不启动控制器或发送目标。
 足式基础跟踪入口复用现有控制器，消费版本化参考并回传匹配反馈，启动方法见下节。
 用户确认真实足式驱动尚未接入；当前仅验证标准 Twist 与本地理想平面模型。
@@ -44,8 +44,9 @@ bash scripts/orin/start_hardware_navigation.sh
 ```bash
 source /opt/ros/humble/setup.bash
 source ros2_ws/install/setup.bash
-export ROS_DOMAIN_ID=59
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_DOMAIN_ID=69
+export CYCLONEDDS_URI="file://$PWD/config/cyclonedds_p3.xml"
+source scripts/orin/p3_environment.sh
 ros2 launch lunar_pure_exploration_ros exploration_navigation.launch.py \
   config_file:="$PWD/config/orin_hardware.yaml" \
   stack_mode:=incremental_v2 \
@@ -176,3 +177,5 @@ ROS_DOMAIN_ID=187 ROS_LOCALHOST_ONLY=1 python3 tests/launch/legged_tracking_prob
 `platform_type:=wheel platform_config:=$PWD/config/wheel_orin.yaml`。单独改变类型但仍显式指定
 另一平台能力文件时会报错，不会静默替换。传感器 FOV 仍服从所选 `config_file`；跨平台
 使用时应选择该平台配置文件。旧 `scripts/start_all.sh` 继续显式使用 legacy motion reference 与 `/tf`。
+
+P3 源码接口核对、数据流与完整联调命令见 [足式 P3 联调说明](P3_LEGGED_INTEGRATION.md)。此前终端若已导出域 59，需显式改为 69；启动脚本保留人工覆盖，不会偷偷改写。
