@@ -79,6 +79,7 @@ if(BUILD_TESTING)
     lunar_enable_sanitizers(${target})
   endfunction()
 
+  lunar_add_core_gtest(lunar_incremental_navigation_core_terrain_window_test test/terrain_window_test.cpp)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_boundary_distance_index_test
     test/boundary_distance_index_test.cpp)

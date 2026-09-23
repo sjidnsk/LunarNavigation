@@ -805,6 +805,7 @@ TEST(IncrementalNavigationNode, StartupParametersRequireRestart) {
 TEST(IncrementalNavigationNode, DirectDeploymentDefaultsAndExplicitOverrides) {
   auto defaults = std::make_shared<IncrementalNavigationNode>();
   EXPECT_EQ(defaults->get_parameter("platform_type").as_string(), "legged");
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("terrain_background_half_width_m").as_double(), 0.2);
   EXPECT_FALSE(defaults->get_parameter("platform_config").as_string().empty());
   EXPECT_TRUE(defaults->get_parameter("enable_tracking_feedback").as_bool());
   EXPECT_DOUBLE_EQ(defaults->get_parameter("rolling_replan_period_s").as_double(), 0.5);
@@ -824,6 +825,23 @@ TEST(IncrementalNavigationNode, DirectDeploymentDefaultsAndExplicitOverrides) {
   EXPECT_FALSE(overridden->get_parameter("enable_tracking_feedback").as_bool());
   EXPECT_DOUBLE_EQ(overridden->get_parameter("goal_position_tolerance_m").as_double(), 0.3);
   EXPECT_DOUBLE_EQ(overridden->get_parameter("goal_yaw_tolerance_rad").as_double(), 0.2);
+}
+
+TEST(IncrementalNavigationNode, TerrainBackgroundWidthIsAValidatedStartupParameter) {
+  auto options = ServerOptions("terrain_background_default");
+  auto defaults = std::make_shared<IncrementalNavigationNode>(options);
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("terrain_background_half_width_m").as_double(), 0.4);
+  options.append_parameter_override("terrain_background_half_width_m", 0.0);
+  auto legacy = std::make_shared<IncrementalNavigationNode>(options);
+  EXPECT_DOUBLE_EQ(legacy->get_parameter("terrain_background_half_width_m").as_double(), 0.0);
+  EXPECT_FALSE(legacy->set_parameters_atomically(
+      {rclcpp::Parameter("terrain_background_half_width_m", 0.3)}).successful);
+  for (double width : {-0.1, std::numeric_limits<double>::infinity(),
+                       std::numeric_limits<double>::quiet_NaN()}) {
+    auto invalid = ServerOptions("terrain_background_invalid");
+    invalid.append_parameter_override("terrain_background_half_width_m", width);
+    EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(invalid), std::runtime_error);
+  }
 }
 
 TEST(IncrementalNavigationNode, ClearanceCostHasCalibratedDefaultAndStartupOverride) {

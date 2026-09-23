@@ -374,7 +374,7 @@ StartPatchResult RequestLocalStartPatchBuilder::Build(
   }
 
   const std::unique_ptr<const PlatformElevationEvaluator> evaluator =
-      MakePlatformElevationEvaluator(capability);
+      MakePlatformElevationEvaluator(capability, profile.terrain_background_half_width_m);
   const std::set<GridIndex> patch_cells =
       PatchCells(local_window, p0.position_m, patch_radius_m);
   const std::optional<Plane> plane = FitSupportPlane(
