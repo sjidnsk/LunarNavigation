@@ -41,6 +41,7 @@ exploration:
   frontiers_topic: /Car/T4/exploration/frontiers
   diagnostics_topic: /Car/T4/exploration/diagnostics
 navigation:
+  clearance_weight: 2.0
   publish_local_fine_map: true
   local_fine_map_topic: /Car/T4/mapping/local_fine_map
   local_fine_map_window_m: 28.0

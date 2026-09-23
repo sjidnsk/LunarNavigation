@@ -41,6 +41,7 @@ exploration:
   frontiers_topic: /Car/T4/exploration/frontiers
   diagnostics_topic: /Car/T4/exploration/diagnostics
 navigation:
+  clearance_weight: 2.0
   rolling_replan_period_s: 0.5
   rolling_replan_distance_m: 1.0
   publish_local_fine_map: true
