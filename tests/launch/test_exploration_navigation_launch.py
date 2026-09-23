@@ -201,7 +201,7 @@ def test_yaml_defaults_construct_only_incremental_action_server_and_share_endpoi
     assert navigation["platform_type"] == exploration["platform_selector"] == "legged"
     assert navigation["action_name"] == exploration["navigation_action"] == "/Car/T4/navigation/navigate_to_pose"
     assert navigation["exploration_map_topic"] == exploration["exploration_map_topic"] == "/Car/T4/mapping/exploration_map"
-    assert navigation["local_window_size_m"] == 64.0
+    assert navigation["local_window_size_m"] == 32.0
     assert navigation["use_sim_time"].value is False
     assert exploration["use_sim_time"].value is False
 

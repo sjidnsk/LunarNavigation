@@ -139,7 +139,7 @@ struct RuntimeParameters final {
   const double coarse_resolution_m =
       node.declare_parameter<double>("coarse_resolution_m", 1.0);
   const double local_window_size_m =
-      node.declare_parameter<double>("local_window_size_m", 64.0);
+      node.declare_parameter<double>("local_window_size_m", 32.0);
   if (planning_sla_ms <= 0 ||
       planning_hard_timeout_ms <= planning_sla_ms ||
       global_subdeadline_ms <= 0 ||
