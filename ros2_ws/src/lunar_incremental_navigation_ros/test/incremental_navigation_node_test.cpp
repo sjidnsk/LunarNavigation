@@ -397,6 +397,7 @@ struct FakeControl final {
           };
           return result;
         };
+    ports.plan_legged = ports.plan_wheel;
     return ports;
   };
 }
@@ -460,6 +461,11 @@ struct TimingOverrides final {
       rclcpp::Parameter{"odometry_topic", "/test/" + suffix + "/odom"},
       rclcpp::Parameter{"tf_topic", "/test/" + suffix + "/tf"},
   });
+  if (suffix.find("rolling_legged") != std::string::npos) {
+    options.append_parameter_override("platform_type", "legged");
+    options.append_parameter_override("platform_config",
+        std::string{LUNAR_INCREMENTAL_NAVIGATION_CONFIG_DIR} + "/legged_orin.yaml");
+  }
   if (timing) {
     if (timing->rolling_period_s) options.append_parameter_override("rolling_replan_period_s", *timing->rolling_period_s);
     options.append_parameter_override("planning_sla_ms",
@@ -801,6 +807,7 @@ TEST(IncrementalNavigationNode, DirectDeploymentDefaultsAndExplicitOverrides) {
   EXPECT_EQ(defaults->get_parameter("platform_type").as_string(), "wheel");
   EXPECT_FALSE(defaults->get_parameter("platform_config").as_string().empty());
   EXPECT_TRUE(defaults->get_parameter("enable_tracking_feedback").as_bool());
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("rolling_replan_period_s").as_double(), 0.5);
   EXPECT_EQ(defaults->get_parameter("tf_topic").as_string(), "/P4/input/map_to_odom");
   EXPECT_DOUBLE_EQ(defaults->get_parameter("goal_position_tolerance_m").as_double(), 0.1);
   EXPECT_DOUBLE_EQ(defaults->get_parameter("goal_yaw_tolerance_rad").as_double(), 0.05);
@@ -1932,6 +1939,29 @@ TEST(IncrementalNavigationNode, RollingUpdatesBeforeLocalArrival) {
   auto control=std::make_shared<FakeControl>();
   auto states=std::make_shared<StateQueue>();
   RunningSystem system("tracking_rolling_updates", IncrementalNavigationNodeDependencies{
+    .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}},
+    .state_source=[states]{return states->Take();}});
+  auto goal=system.Send(7.5,.5); ASSERT_TRUE(goal);
+  ASSERT_TRUE(WaitFor([&]{return !system.Paths().empty();}));
+  states->Push({.position_m={.x=.7,.y=.5}});
+  ASSERT_TRUE(WaitFor([&]{return system.Paths().size()>=2;}));
+  EXPECT_EQ(system.Paths()[1].state,system.Paths()[1].ACTIVE);
+  EXPECT_EQ(system.Paths()[1].segment_revision,2U);
+  ASSERT_TRUE(WaitFor([&] {
+    for (const auto& item : system.Diagnostics()) {
+      if (FindDiagnosticValue(item, "trigger") == "ROLLING_PERIOD_OR_DISTANCE" &&
+          FindDiagnosticValue(item, "candidate_disposition") == "ADOPTED") return true;
+    }
+    return false;
+  }));
+  EXPECT_NEAR(system.Paths()[1].path.poses.front().pose.position.x,.7,1e-6);
+  system.Cancel(goal);
+}
+TEST(IncrementalNavigationNode, LeggedRollingUpdatesBeforeLocalArrival) {
+  auto control=std::make_shared<FakeControl>();
+  auto states=std::make_shared<StateQueue>();
+  RunningSystem system("tracking_rolling_legged_updates", IncrementalNavigationNodeDependencies{
     .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
     .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}},
     .state_source=[states]{return states->Take();}});

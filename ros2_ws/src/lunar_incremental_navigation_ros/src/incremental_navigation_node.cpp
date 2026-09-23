@@ -514,13 +514,12 @@ struct IncrementalNavigationNode::Impl final {
                 : RealSessionPorts(parameters.capability, parameters.profile);
     tracking_feedback_enabled = node.declare_parameter<bool>("enable_tracking_feedback", true);
     rolling_period_s = node.declare_parameter<double>("rolling_replan_period_s",
-        tracking_feedback_enabled && parameters.platform_type == core::PlatformType::kWheeled ? 0.5 : 0.0);
+        tracking_feedback_enabled ? 0.5 : 0.0);
     rolling_policy = std::make_unique<core::RollingUpdatePolicy>(rolling_period_s,
         node.declare_parameter<double>("rolling_replan_distance_m", 1.0));
     rolling_enabled = rolling_period_s > 0.;
-    if (rolling_enabled && (!tracking_feedback_enabled ||
-        core::CapabilityPlatform(parameters.capability) != core::PlatformType::kWheeled))
-      throw std::invalid_argument("rolling planning requires wheel platform and tracking feedback");
+    if (rolling_enabled && !tracking_feedback_enabled)
+      throw std::invalid_argument("rolling planning requires tracking feedback");
     if (rolling_enabled) worker_ports = Instrument(std::move(ports), worker_metrics);
 
 

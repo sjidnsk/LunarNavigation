@@ -159,8 +159,7 @@ class PureWheeledControllerNode(Node):
         else:
             self._policy = TrackingPolicy(**policy_values)
         self._executor = PathExecutor(
-            self._policy, rolling_updates=(platform_type == "wheel"
-                and input_mode == "incremental_reference"
+            self._policy, rolling_updates=(input_mode == "incremental_reference"
                 and self.get_parameter("enable_rolling_updates").value))
 
         self._reference_identity = None

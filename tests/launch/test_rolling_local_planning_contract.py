@@ -38,3 +38,12 @@ def test_launch_defaults_enable_both_ends(monkeypatch):
     controller = next(n for n in nodes if n.get('name') == 'controller_demo_executor')['parameters'][0]
     assert nav['rolling_replan_period_s'] == .5
     assert controller['enable_rolling_updates'] is True
+
+
+def test_legged_deployment_enables_both_ends():
+    import yaml
+    root = Path(__file__).resolve().parents[2]
+    nav = yaml.safe_load((root / 'config/exploration_navigation.yaml').read_text())
+    controller = yaml.safe_load((root / 'config/orin_legged_controller.yaml').read_text())
+    assert nav['navigation']['rolling_replan_period_s'] == .5
+    assert controller['lunar_pure_wheeled_controller']['ros__parameters']['enable_rolling_updates'] is True

@@ -22,3 +22,5 @@ Humble 容器 `phase2-humble-gridmap:local`，Release，源只读，网络禁用
 - 保留 `RealSessionPorts(capability, profile)` 与平台化控制参数、默认执行确认，不回退为来源分支的较早接口。
 
 Humble 5 包构建成功；core 18/18、ROS 13/13、Python 224 项通过（`real-humble.log`）。Jazzy 配置/部署 launch 测试 25 项通过（`real-launch.log`）。未启动实车控制器，未改 TCP 或设备文件。
+
+后续足式默认开启和公共运行时验证见 [足式默认开启验证](2026-09-23-legged-rolling-default.md)。

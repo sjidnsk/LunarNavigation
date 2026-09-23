@@ -837,3 +837,34 @@ def test_legged_requires_versioned_reference_and_explicit_capability(mode, confi
             PureWheeledControllerNode()
     finally:
         rclpy.shutdown()
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_legged_rolling_default_and_opt_out(enabled):
+    from pathlib import Path
+    from lunar_pure_wheeled_controller.tracking import TrackingState
+    root = Path(__file__).resolve().parents[4]
+    args = ['--ros-args', '-p', 'platform_type:=legged',
+            '-p', 'input_mode:=incremental_reference',
+            '-p', f'platform_config:={root}/config/legged_orin.yaml']
+    if not enabled:
+        args += ['-p', 'enable_rolling_updates:=false']
+    rclpy.init(args=args)
+    controller = None
+    try:
+        controller = PureWheeledControllerNode()
+        executor = controller._executor
+        assert executor.rolling_updates is enabled
+        executor.set_path(((0., 0., 0.), (3., 0., 0.)), identity=('legged', 1))
+        executor.update(TrackingState(.2, 0., 0.), .05)
+        for _ in range(20):
+            executor.update(TrackingState(.2, 0., 0., linear_mps=.1), .05)
+        assert executor.set_path(((.2, 0., 0.), (3., .05, 0.)), identity=('legged', 2))
+        result = executor.update(TrackingState(.2, 0., 0., linear_mps=.1), .05)
+        if enabled:
+            assert result.phase == 'TRACKING'
+            assert 0 < result.command.linear_x_mps <= controller._policy.max_linear_mps
+    finally:
+        if controller is not None:
+            controller.destroy_node()
+        rclpy.shutdown()
