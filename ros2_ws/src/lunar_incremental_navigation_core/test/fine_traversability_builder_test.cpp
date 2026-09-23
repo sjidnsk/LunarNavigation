@@ -801,5 +801,37 @@ TEST(FineTraversabilityBuilder, PublishesCompleteImmutableSnapshotLineage) {
   EXPECT_TRUE(std::isfinite(fine->metrics().derivation_ms));
 }
 
+
+TEST(FineTraversabilityBuilder, OverlappingHighResolutionUpdatesMatchFullDerive) {
+  for (double resolution : {.05, .1, .2}) {
+    auto geometry = Geometry(64, 48, resolution);
+    geometry.origin_m = {-.37, -.61, 0.};
+    PersistentElevationMap map;
+    std::vector<float> values(geometry.CellCount(), 0.F);
+    FineTraversabilityBuilder builder;
+    const auto capability = LeggedCapabilityForTest();
+    const auto profile = Profile(.34, .165, .3);
+    auto previous = builder.Derive(Snapshot(map, geometry, values), capability, profile);
+    for (int revision = 0; revision < 3; ++revision) {
+      for (int y = 15; y < 29; ++y)
+        for (int x = 20; x < 38; ++x)
+          values[y * 64 + x] = revision == 1 ? 0.F : .7F;
+      values[25 * 64 + 45] = revision == 2 ? .8F : .02F;
+      auto raw = Snapshot(map, geometry, values);
+      auto incremental = builder.Derive(raw, capability, profile, previous);
+      auto full = builder.Derive(raw, capability, profile);
+      for (auto y = raw->geometry().min_inclusive().y;
+           y < raw->geometry().max_exclusive().y; ++y)
+        for (auto x = raw->geometry().min_inclusive().x;
+             x < raw->geometry().max_exclusive().x; ++x) {
+          const GridIndex cell{x, y};
+          EXPECT_EQ(incremental->State(cell), full->State(cell));
+          EXPECT_DOUBLE_EQ(incremental->TraversalCost(cell), full->TraversalCost(cell));
+        }
+      previous = incremental;
+    }
+  }
+}
+
 }  // namespace
 }  // namespace lunar::incremental_navigation
