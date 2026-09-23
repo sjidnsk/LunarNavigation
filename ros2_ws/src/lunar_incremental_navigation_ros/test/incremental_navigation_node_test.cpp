@@ -255,6 +255,14 @@ struct FakeControl final {
   std::mutex block_mutex;
   std::condition_variable block_condition;
   bool solver_blocked{};
+  bool release_solver{};
+  std::atomic<int> active_local_calls{}, peak_local_calls{}, completed_local_calls{};
+
+  void ReleaseSolver() {
+    std::scoped_lock lock{block_mutex};
+    release_solver = true;
+    block_condition.notify_all();
+  }
 
   [[nodiscard]] bool WaitUntilBlocked() {
     std::unique_lock lock{block_mutex};
@@ -331,6 +339,15 @@ struct FakeControl final {
                   const core::Pose2& start, const core::LocalTarget& target,
                   const core::SearchDeadline deadline,
                   const core::StopToken& stop) {
+          struct CallScope {
+            FakeControl& control;
+            explicit CallScope(FakeControl& value) : control(value) {
+              const int active = ++control.active_local_calls;
+              int peak = control.peak_local_calls.load();
+              while (peak < active && !control.peak_local_calls.compare_exchange_weak(peak, active)) {}
+            }
+            ~CallScope() { --control.active_local_calls; ++control.completed_local_calls; }
+          } call_scope{*control};
           control->local_deadline_remaining_ms.store(
               std::chrono::duration_cast<std::chrono::milliseconds>(
                   deadline - std::chrono::steady_clock::now())
@@ -347,16 +364,17 @@ struct FakeControl final {
           }
           if (control->block_local_call &&
               call_index == *control->block_local_call) {
-            ++control->local_calls;
             std::unique_lock lock{control->block_mutex};
             control->solver_blocked = true;
             control->block_condition.notify_all();
             std::stop_callback wake_solver{
                 stop, [control] { control->block_condition.notify_all(); }};
             control->block_condition.wait(
-                lock, [&stop] { return stop.stop_requested(); });
-            return core::LocalPlanResult{
-                .status = core::LocalPlanResult::Status::kCanceled};
+                lock, [&stop, control] { return stop.stop_requested() || control->release_solver; });
+            if (stop.stop_requested()) {
+              ++control->local_calls;
+              return core::LocalPlanResult{.status = core::LocalPlanResult::Status::kCanceled};
+            }
           }
           const core::Point2 end = call_index < control->segment_ends.size()
                                        ? control->segment_ends[call_index]
@@ -409,6 +427,7 @@ struct TimingOverrides final {
   std::int64_t planning_sla_ms;
   std::int64_t planning_hard_timeout_ms;
   std::int64_t global_subdeadline_ms;
+  std::optional<double> rolling_period_s;
 };
 
 [[nodiscard]] rclcpp::NodeOptions ServerOptions(
@@ -419,6 +438,8 @@ struct TimingOverrides final {
   options.arguments({"--ros-args", "-r", "__node:=incremental_navigation_" + suffix});
   options.parameter_overrides({
       rclcpp::Parameter{"enable_tracking_feedback", suffix.starts_with("tracking_")},
+      rclcpp::Parameter{"rolling_replan_period_s", suffix.starts_with("tracking_rolling") ? 0.05 : 0.0},
+      rclcpp::Parameter{"rolling_replan_distance_m", 1.0},
       rclcpp::Parameter{"tracking_status_topic", "/test/" + suffix + "/tracking"},
       rclcpp::Parameter{"platform_type", "wheel"},
       rclcpp::Parameter{"platform_config",
@@ -441,6 +462,7 @@ struct TimingOverrides final {
       rclcpp::Parameter{"tf_topic", "/test/" + suffix + "/tf"},
   });
   if (timing) {
+    if (timing->rolling_period_s) options.append_parameter_override("rolling_replan_period_s", *timing->rolling_period_s);
     options.append_parameter_override("planning_sla_ms",
                                       timing->planning_sla_ms);
     options.append_parameter_override("planning_hard_timeout_ms",
@@ -1867,3 +1889,155 @@ TEST(IncrementalNavigationNode, MissingFineSnapshotAbortsWithoutWaiting) {
 
 }  // namespace
 }  // namespace lunar::incremental_navigation_ros
+
+namespace lunar::incremental_navigation_ros {
+TEST(IncrementalNavigationNode, RollingUpdatesBeforeLocalArrival) {
+  auto control=std::make_shared<FakeControl>();
+  auto states=std::make_shared<StateQueue>();
+  RunningSystem system("tracking_rolling_updates", IncrementalNavigationNodeDependencies{
+    .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}},
+    .state_source=[states]{return states->Take();}});
+  auto goal=system.Send(7.5,.5); ASSERT_TRUE(goal);
+  ASSERT_TRUE(WaitFor([&]{return !system.Paths().empty();}));
+  states->Push({.position_m={.x=.7,.y=.5}});
+  ASSERT_TRUE(WaitFor([&]{return system.Paths().size()>=2;}));
+  EXPECT_EQ(system.Paths()[1].state,system.Paths()[1].ACTIVE);
+  EXPECT_EQ(system.Paths()[1].segment_revision,2U);
+  ASSERT_TRUE(WaitFor([&] {
+    for (const auto& item : system.Diagnostics()) {
+      if (FindDiagnosticValue(item, "trigger") == "ROLLING_PERIOD_OR_DISTANCE" &&
+          FindDiagnosticValue(item, "candidate_disposition") == "ADOPTED") return true;
+    }
+    return false;
+  }));
+  EXPECT_NEAR(system.Paths()[1].path.poses.front().pose.position.x,.7,1e-6);
+  system.Cancel(goal);
+}
+TEST(IncrementalNavigationNode, RollingCancelDuringSearchStopsCurrentReference) {
+  auto control=std::make_shared<FakeControl>(); control->block_local_call=1U;
+  RunningSystem system("tracking_rolling_cancel", IncrementalNavigationNodeDependencies{
+    .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}}});
+  auto goal=system.Send(7.5,.5); ASSERT_TRUE(goal);
+  ASSERT_TRUE(control->WaitUntilBlocked());
+  auto result=system.Result(goal); system.Cancel(goal);
+  ASSERT_EQ(result.wait_for(3s),std::future_status::ready);
+  EXPECT_EQ(result.get().code,rclcpp_action::ResultCode::CANCELED);
+  ASSERT_TRUE(WaitFor([&]{auto paths=system.Paths();return !paths.empty() && paths.back().state==paths.back().INVALIDATED;}));
+}
+}
+
+namespace lunar::incremental_navigation_ros {
+TEST(IncrementalNavigationNode, RollingMapInvalidationIsHandledWhileSolverIsBlocked) {
+  auto control=std::make_shared<FakeControl>(); control->block_local_call=1U;
+  control->fail_local_after_calls=2U;
+  auto inject=std::make_shared<std::atomic<bool>>(false);
+  auto blocked=MakeFine(2U,core::GridIndex{.x=3,.y=0});
+  RunningSystem system("tracking_rolling_map", IncrementalNavigationNodeDependencies{
+    .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}},
+    .snapshot_source=[inject,blocked]() -> std::optional<core::SnapshotBundle> {
+      if(inject->exchange(false)) return core::SnapshotBundle{.fine=blocked};
+      return std::nullopt; }});
+  auto goal=system.Send(7.5,.5); ASSERT_TRUE(goal);
+  ASSERT_TRUE(control->WaitUntilBlocked());
+  inject->store(true);
+  ASSERT_TRUE(WaitFor([&]{auto p=system.Paths();return p.size()>=2 && p[1].state==p[1].INVALIDATED;}));
+  auto result=system.Result(goal);
+  ASSERT_EQ(result.wait_for(3s),std::future_status::ready);
+  EXPECT_NE(result.get().code,rclcpp_action::ResultCode::SUCCEEDED);
+  for(const auto& p:system.Paths()) if(p.state==p.ACTIVE) EXPECT_EQ(p.segment_revision,1U);
+}
+TEST(IncrementalNavigationNode, RollingFinalAlignmentFreezesBlockedUpdateAndAcceptsCurrentCompletion) {
+  auto control=std::make_shared<FakeControl>(); control->block_local_call=1U;
+  control->reaches_final_goal=true;
+  auto states=std::make_shared<StateQueue>();
+  RunningSystem system("tracking_rolling_final", IncrementalNavigationNodeDependencies{
+    .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}},
+    .state_source=[states]{return states->Take();}});
+  auto producer=rclcpp::Node::make_shared("rolling_final_publisher");
+  auto publisher=producer->create_publisher<lunar_planning_msgs::msg::TrackingStatus>("/test/tracking_rolling_final/tracking",10);
+  ASSERT_TRUE(WaitFor([&]{return publisher->get_subscription_count()>0;}));
+  auto goal=system.Send(3.5,.5); ASSERT_TRUE(goal);
+  ASSERT_TRUE(control->WaitUntilBlocked());
+  lunar_planning_msgs::msg::TrackingStatus status;
+  status.session_id.uuid=goal->get_goal_id(); status.segment_revision=1; status.state=status.FINAL_ALIGN;
+  publisher->publish(status);
+  states->Push({.position_m={.x=3.5,.y=.5}});
+  auto result=system.Result(goal);
+  EXPECT_EQ(result.wait_for(100ms),std::future_status::timeout);
+  EXPECT_EQ(system.Paths().size(),1U);
+  status.state=status.COMPLETED; publisher->publish(status);
+  ASSERT_EQ(result.wait_for(3s),std::future_status::ready);
+  EXPECT_EQ(result.get().code,rclcpp_action::ResultCode::SUCCEEDED);
+}
+}
+
+namespace lunar::incremental_navigation_ros {
+TEST(IncrementalNavigationNode, RollingEarlyTriggerUsesMatchingExecutionProgress) {
+  auto control = std::make_shared<FakeControl>();
+  RunningSystem system("tracking_rolling_progress", IncrementalNavigationNodeDependencies{
+    .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}}},
+    false, TimingOverrides{100, 500, 50, 60.0});
+  auto producer = rclcpp::Node::make_shared("rolling_progress_publisher");
+  auto publisher = producer->create_publisher<lunar_planning_msgs::msg::TrackingStatus>(
+      "/test/tracking_rolling_progress/tracking", 10);
+  ASSERT_TRUE(WaitFor([&]{return publisher->get_subscription_count()>0;}));
+  auto goal = system.Send(7.5,.5); ASSERT_TRUE(goal);
+  ASSERT_TRUE(WaitFor([&]{return !system.Paths().empty();}));
+  lunar_planning_msgs::msg::TrackingStatus status;
+  status.session_id.uuid=goal->get_goal_id(); status.segment_revision=99;
+  status.state=status.TRACKING; status.progress_m=6.5;
+  auto result=system.Result(goal);
+  publisher->publish(status);
+  EXPECT_EQ(result.wait_for(100ms), std::future_status::timeout);
+  EXPECT_EQ(system.Paths().size(), 1U);
+  status.segment_revision=1; publisher->publish(status);
+  ASSERT_TRUE(WaitFor([&]{return system.Paths().size()>=2;}));
+  EXPECT_EQ(system.Paths()[1].segment_revision, 2U);
+  system.Cancel(goal);
+}
+}
+
+namespace lunar::incremental_navigation_ros {
+TEST(IncrementalNavigationNode, RollingBusyUpdatesUseFreshPoseWithoutConcurrentSearches) {
+  auto control=std::make_shared<FakeControl>(); control->block_local_call=1U;
+  auto states=std::make_shared<StateQueue>();
+  auto latest_consumed=std::make_shared<std::atomic<bool>>(false);
+  RunningSystem system("tracking_rolling_busy", IncrementalNavigationNodeDependencies{
+    .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}},
+    .state_source=[states,latest_consumed] {
+      auto state=states->Take();
+      if (state && state->base_link_pose.position_m.x==.9) latest_consumed->store(true);
+      return state;
+    }});
+  auto goal=system.Send(7.5,.5); ASSERT_TRUE(goal);
+  ASSERT_TRUE(control->WaitUntilBlocked());
+  states->Push({.position_m={.x=.7,.y=.5}});
+  states->Push({.position_m={.x=.9,.y=.5}});
+  ASSERT_TRUE(WaitFor([&]{return latest_consumed->load();}));
+  EXPECT_EQ(control->completed_local_calls.load(),1);
+  EXPECT_EQ(control->active_local_calls.load(),1);
+  control->ReleaseSolver();
+  ASSERT_TRUE(WaitFor([&]{return system.Paths().size()>=3;}));
+  EXPECT_NEAR(system.Paths()[2].path.poses.front().pose.position.x,.9,1e-6);
+  EXPECT_EQ(control->peak_local_calls.load(),1);
+  system.Cancel(goal);
+}
+TEST(IncrementalNavigationNode, RollingDestructionStopsBlockedWorker) {
+  auto control=std::make_shared<FakeControl>(); control->block_local_call=1U;
+  {
+    RunningSystem system("tracking_rolling_destruct", IncrementalNavigationNodeDependencies{
+      .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
+      .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}}});
+    ASSERT_TRUE(system.Send(7.5,.5));
+    ASSERT_TRUE(control->WaitUntilBlocked());
+  }
+  EXPECT_EQ(control->active_local_calls.load(),0);
+  EXPECT_EQ(control->completed_local_calls.load(),2);
+}
+}

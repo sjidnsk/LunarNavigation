@@ -15,7 +15,7 @@ from lunar_planning_msgs.action import NavigateToPose
 from lunar_planning_msgs.msg import PathReference, TrackingStatus
 from diagnostic_msgs.msg import DiagnosticArray
 from .plant import Scene
-from .evidence import plan_found_with_active_reference, matching_stopped_completion
+from .evidence import summarize_rolling_events, plan_found_with_active_reference, matching_stopped_completion
 from .vehicle_sim import PREFIX, LATCHED
 
 
@@ -24,6 +24,7 @@ class Recorder(Node):
         super().__init__('incremental_controller_case_recorder')
         self.client = ActionClient(self, NavigateToPose, PREFIX + '/navigate_to_pose')
         self.plant = {}
+        self.events = []
         self.map_seen = False
         self.references = {}
         self.tracking = []
@@ -37,6 +38,7 @@ class Recorder(Node):
 
     def on_plant(self, msg):
         self.plant = json.loads(msg.data)
+        self.events.append(dict(t=time.monotonic(), kind="plant", **self.plant))
 
     def on_map(self, _):
         self.map_seen = True
@@ -44,11 +46,20 @@ class Recorder(Node):
     def on_reference(self, msg):
         if msg.state == PathReference.ACTIVE and msg.path.poses:
             key = (bytes(msg.session_id.uuid).hex(), msg.segment_revision)
+            length_m = sum(math.hypot(b.pose.position.x-a.pose.position.x, b.pose.position.y-a.pose.position.y)
+                           for a,b in zip(msg.path.poses, msg.path.poses[1:]))
+            self.events.append(dict(t=time.monotonic(), kind="reference", session=key[0], revision=key[1], final=msg.reaches_final_goal, length_m=length_m))
             self.references[key] = dict(session_id=key[0], segment_revision=key[1],
                                         reaches_final_goal=msg.reaches_final_goal,
-                                        pose_count=len(msg.path.poses))
+                                        pose_count=len(msg.path.poses),
+                                        points_xy=[[p.pose.position.x,p.pose.position.y] for p in msg.path.poses])
 
     def on_tracking(self, msg):
+        phases = ('WAITING', 'BRAKING', 'ALIGNING', 'TRACKING', 'FINAL_ALIGN', 'COMPLETED', 'FAILED')
+        self.events.append(dict(t=time.monotonic(), kind="tracking", session=bytes(msg.session_id.uuid).hex(),
+            revision=msg.segment_revision, speed=msg.linear_speed_mps, angular_speed=msg.angular_speed_radps,
+            phase=phases[msg.state] if msg.state < len(phases) else 'UNKNOWN',
+            direction=msg.direction, cross_track=msg.cross_track_m, progress=msg.progress_m, heading_error=msg.heading_error_rad))
         item = dict(session_id=bytes(msg.session_id.uuid).hex(), segment_revision=msg.segment_revision,
                     state=msg.state, direction=msg.direction, reason=msg.reason,
                     linear_speed_mps=msg.linear_speed_mps, angular_speed_radps=msg.angular_speed_radps)
@@ -66,6 +77,7 @@ class Recorder(Node):
     def on_diagnostics(self, msg):
         for status in msg.status:
             data = {v.key: v.value for v in status.values}
+            self.events.append(dict(t=time.monotonic(), kind="diagnostics", values=data))
             if data and (not self.diagnostics or data != self.diagnostics[-1]):
                 self.diagnostics.append(data)
 
@@ -133,7 +145,7 @@ def main(args=None):
         safe = bool(node.plant) and all(node.plant.get(k, 1) == 0 for k in
                     ('raw_command_limit_violations', 'raw_invalid_commands', 'collisions'))
         reverse = opts.case != 'reverse' or node.plant.get('max_actual_reverse', 0) > .05
-        rolling = opts.case != 'multiple_exits' or any(not r['reaches_final_goal'] for r in refs)
+        rolling = opts.case not in ('multiple_exits', 'rolling_straight') or any(not r['reaches_final_goal'] for r in refs)
         x, y, yaw = Scene(opts.case).goal
         distance = math.hypot(node.plant.get('x', math.inf)-x, node.plant.get('y', math.inf)-y)
         yaw_error = abs(math.remainder(node.plant.get('yaw', 0)-(yaw or 0), 2*math.pi)) if yaw is not None else None
@@ -151,6 +163,7 @@ def main(args=None):
                                  goal_geometry=geometry), goal_distance_m=distance, goal_yaw_error_rad=yaw_error,
                       plant=node.plant, references=refs, tracking_transitions=node.tracking,
                       navigation_feedback=node.feedback, diagnostics=node.diagnostics,
+                      events=node.events, rolling_summary=summarize_rolling_events(node.events),
                       boundaries=dict(native_Orin='NOT_RUN', vehicle='NOT_RUN'))
         output = Path(opts.output)
         output.parent.mkdir(parents=True, exist_ok=True)

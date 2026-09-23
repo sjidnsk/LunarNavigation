@@ -46,3 +46,35 @@ def test_completion_identity_and_phase_remain_required(change):
                 linear_speed_mps=0., angular_speed_radps=0.)
     item.update(change)
     assert not matching_stopped_completion(item, 'current', 3, REFS, 5)
+
+
+def test_moving_update_has_no_stop_and_deduplicates_feedback():
+    from lunar_incremental_controller_demo.evidence import summarize_rolling_events
+    events = [dict(t=0., kind='tracking', session='a', revision=1, speed=.1, phase='TRACKING'),
+              dict(t=.1, kind='reference', session='a', revision=2, final=False),
+              dict(t=.2, kind='tracking', session='a', revision=2, speed=.1, phase='TRACKING'),
+              dict(t=.3, kind='tracking', session='a', revision=2, speed=.1, phase='TRACKING')]
+    result = summarize_rolling_events(events)
+    assert result['moving_updates'] == 1
+    assert result['update_stops'] == 0
+    events.extend([dict(t=.4, kind='tracking', session='a', revision=2, speed=0., phase='BRAKING'),
+                   dict(t=.5, kind='tracking', session='a', revision=2, speed=0., phase='BRAKING')])
+    assert summarize_rolling_events(events)['update_stops'] == 1
+
+
+def test_old_session_and_final_alignment_are_not_update_stops():
+    from lunar_incremental_controller_demo.evidence import summarize_rolling_events
+    events = [dict(t=0., kind='tracking', session='old', revision=1, speed=.1, phase='TRACKING'),
+              dict(t=.1, kind='reference', session='new', revision=1, final=True),
+              dict(t=.2, kind='tracking', session='new', revision=1, speed=0., phase='FINAL_ALIGN')]
+    result=summarize_rolling_events(events)
+    assert result['moving_updates']==0
+    assert result['update_stops']==0
+
+
+def test_braking_at_final_endpoint_is_not_an_update_induced_stop():
+    from lunar_incremental_controller_demo.evidence import summarize_rolling_events
+    events = [dict(t=0.,kind='tracking',session='a',revision=1,speed=.1,phase='TRACKING'),
+              dict(t=.1,kind='reference',session='a',revision=2,final=True,length_m=.2),
+              dict(t=.2,kind='tracking',session='a',revision=2,speed=.1,phase='BRAKING',progress=.15)]
+    assert summarize_rolling_events(events)['update_stops']==0

@@ -109,3 +109,37 @@ simulation:
 
     with pytest.raises(ValueError, match=message):
         load_simulation_config(path)
+
+
+def test_rolling_defaults_and_disable_are_validated():
+    path = Path(__file__).parents[1] / 'config' / 'simulation.yaml'
+    assert load_simulation_config(path).rolling_replan_period_s == .5
+    assert load_simulation_config(path, {'rolling_replan_period_s': 0}).rolling_replan_period_s == 0
+    for name in ('rolling_replan_period_s', 'rolling_replan_distance_m'):
+        for value in (-1, float('nan'), float('inf')):
+            with pytest.raises(ValueError, match=name):
+                load_simulation_config(path, {name: value})
+
+
+@pytest.mark.parametrize('period', [0., .5])
+def test_launch_derives_controller_rolling_mode_from_period(tmp_path, monkeypatch, period):
+    import importlib.util
+    import yaml
+    from launch import LaunchContext
+    package = Path(__file__).parents[1]
+    spec = importlib.util.spec_from_file_location('tcp_rolling_launch', package / 'launch/obj_tcp.launch.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, 'get_package_share_directory', lambda _: str(package))
+    monkeypatch.setattr(module, 'Node', lambda **kw: kw)
+    config = yaml.safe_load((package / 'config/simulation.yaml').read_text())
+    config['simulation'].update(rolling_replan_period_s=period, map_directory=str(tmp_path), start_rviz=False, start_local_rviz=False)
+    path = tmp_path / 'simulation.yaml'
+    path.write_text(yaml.safe_dump(config))
+    context = LaunchContext()
+    context.launch_configurations.update(config=str(path), host='', port='', map_directory='', mode='', prefix='', start_rviz='', start_local_rviz='', platform_config='')
+    nodes = module.compose(context)
+    nav = next(n for n in nodes if n.get('name') == 'obj_tcp_navigation')['parameters'][0]
+    controller = next(n for n in nodes if n.get('name') == 'obj_tcp_executor')['parameters'][0]
+    assert nav['rolling_replan_period_s'] == period
+    assert controller['enable_rolling_updates'] == (period > 0)

@@ -31,6 +31,8 @@ set(LUNAR_INCREMENTAL_NAVIGATION_PRODUCTION_SOURCES
   src/local/request_local_start_patch.cpp
   src/local/phase_aware_path_simplifier.cpp
   src/session/planning_session_coordinator.cpp
+  src/session/planning_cycle.cpp
+  src/session/rolling_update_policy.cpp
   src/legged/legged_local_planner.cpp
   src/shared/search_control.cpp
   src/wheel/wheel_local_astar.cpp)
@@ -80,6 +82,9 @@ if(BUILD_TESTING)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_planning_contract_test
     test/planning_contract_test.cpp)
+  lunar_add_core_gtest(
+    lunar_incremental_navigation_core_rolling_update_policy_test
+    test/rolling_update_policy_test.cpp)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_persistent_elevation_map_test
     test/persistent_elevation_map_test.cpp)

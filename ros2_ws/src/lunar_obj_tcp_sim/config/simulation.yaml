@@ -13,6 +13,8 @@ simulation:
   sensor_offset_xyz_m: [0.591, 0.0, 1.0]
   observation_window_m: 64.0
   observation_rate_hz: 5.0
+  rolling_replan_period_s: 0.5
+  rolling_replan_distance_m: 1.0
   coarse_resolution_m: 1.0
   local_window_size_m: 64.0
   bridge_send_rate_hz: 20.0

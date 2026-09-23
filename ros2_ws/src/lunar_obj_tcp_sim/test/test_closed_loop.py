@@ -108,7 +108,9 @@ def test_formal_closed_loop_through_tcp(tmp_path,mode):
             for x,y,yaw in goals:
                 future=client.send_goal_async(NavigateToPose.Goal(target_x_m=x,target_y_m=y,has_target_yaw=True,target_yaw_rad=yaw))
                 spin_until(executor,future.done,5); handle=future.result(); assert handle.accepted
-                future=handle.get_result_async(); spin_until(executor,future.done,90 if mode=='obstacle' else 45)
+                # At 0.1 rad/s, travel-heading plus final-yaw alignment can exceed
+                # 45 s even for a short translation. Keep controller limits unchanged.
+                future=handle.get_result_async(); spin_until(executor,future.done,90)
                 result=future.result().result; results.append(result.reason_code)
                 assert result.outcome==0 and result.reason_code=='GOAL_REACHED'
                 if mode == 'nav':
@@ -140,6 +142,8 @@ def test_formal_closed_loop_through_tcp(tmp_path,mode):
                  'min_command_v':min(v for v,w in vehicle.commands),'max_feedback_v':max(abs(row[3]) for row in vehicle.trajectory),'observation':status,
                  'coarse_coverage':max([m.coverage_ratio for m in exploration] or [0]),
                  'exploration_final_reason':exploration[-1].reason_code if exploration else None,
+                 'moving_revisions':len({(bytes(t.session_id.uuid).hex(),t.segment_revision) for t in tracking if t.segment_revision>1 and abs(t.linear_speed_mps)>.01}),
+                 'active_reference_count':sum(r.state==r.ACTIVE for r in references),
                  'loopback_only':True,'remote_unreal':'NOT_RUN','log':str(output)}
         (tmp_path/'receipt.json').write_text(json.dumps(receipt,indent=2))
     except BaseException:

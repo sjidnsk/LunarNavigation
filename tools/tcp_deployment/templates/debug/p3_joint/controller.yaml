@@ -1,6 +1,7 @@
 lunar_pure_wheeled_controller:
   ros__parameters:
     input_mode: incremental_reference
+    enable_rolling_updates: true
     platform_config: /home/yanfa/P4/debug/p3_joint/wheel-p3.yaml
     odometry_topic: /P4/input/odometry
     tf_topic: /P4/input/map_to_odom

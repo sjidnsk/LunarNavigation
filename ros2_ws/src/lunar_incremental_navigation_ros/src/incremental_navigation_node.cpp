@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdint>
 #include <deque>
+#include <thread>
+#include <condition_variable>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -37,6 +39,7 @@
 #include <tf2_msgs/msg/tf_message.hpp>
 
 #include "lunar_incremental_navigation_core/global_route_planner.hpp"
+#include "lunar_incremental_navigation_core/rolling_update_policy.hpp"
 #include "lunar_incremental_navigation_core/legged_local_planner.hpp"
 #include "lunar_incremental_navigation_core/local_target_selector.hpp"
 #include "lunar_incremental_navigation_core/request_local_start_patch.hpp"
@@ -506,6 +509,16 @@ struct IncrementalNavigationNode::Impl final {
         factory ? factory(parameters.capability)
                 : RealSessionPorts(parameters.capability);
     tracking_feedback_enabled = node.declare_parameter<bool>("enable_tracking_feedback", false);
+    rolling_period_s = node.declare_parameter<double>("rolling_replan_period_s",
+        tracking_feedback_enabled && parameters.platform_type == core::PlatformType::kWheeled ? 0.5 : 0.0);
+    rolling_policy = std::make_unique<core::RollingUpdatePolicy>(rolling_period_s,
+        node.declare_parameter<double>("rolling_replan_distance_m", 1.0));
+    rolling_enabled = rolling_period_s > 0.;
+    if (rolling_enabled && (!tracking_feedback_enabled ||
+        core::CapabilityPlatform(parameters.capability) != core::PlatformType::kWheeled))
+      throw std::invalid_argument("rolling planning requires wheel platform and tracking feedback");
+    if (rolling_enabled) worker_ports = Instrument(std::move(ports), worker_metrics);
+
     coordinator = std::make_unique<core::PlanningSessionCoordinator>(
         parameters.capability, parameters.profile,
         core::PlanningSessionCoordinatorConfig{
@@ -516,7 +529,7 @@ struct IncrementalNavigationNode::Impl final {
             .local_window_size_m = parameters.local_window_size_m,
             .global_subdeadline = parameters.global_subdeadline,
             .require_execution_confirmation = tracking_feedback_enabled},
-        Instrument(std::move(ports)));
+        rolling_enabled ? core::PlanningSessionPorts{} : Instrument(std::move(ports), cycle_metrics));
 
     action_group = node.create_callback_group(
         rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -659,6 +672,7 @@ struct IncrementalNavigationNode::Impl final {
     cancel_client = node.create_client<action_msgs::srv::CancelGoal>(
         parameters.action_name + "/_action/cancel_goal");
 
+    if (rolling_enabled) worker_thread = std::thread([this] { WorkerLoop(); });
     planning_timer = node.create_wall_timer(
         10ms, [this] { PlanningTick(); }, planning_group);
     fine_derivation_timer = node.create_wall_timer(
@@ -669,42 +683,42 @@ struct IncrementalNavigationNode::Impl final {
   }
 
   [[nodiscard]] core::PlanningSessionPorts Instrument(
-      core::PlanningSessionPorts ports) {
+      core::PlanningSessionPorts ports, CycleMetrics& metrics) {
     core::PlanningSessionPorts wrapped;
     if (ports.plan_global) {
       wrapped.plan_global =
-          [this, function = std::move(ports.plan_global)](
+          [this, &metrics, function = std::move(ports.plan_global)](
               const core::GlobalGuidanceSnapshot& snapshot,
               const core::Point2 start, const core::Point2 goal,
               const core::SearchDeadline deadline,
               const core::StopToken& stop) {
             core::GlobalRouteResult result;
-            cycle_metrics.global_elapsed_ms = MeasureMilliseconds(
+            metrics.global_elapsed_ms = MeasureMilliseconds(
                 [&] { result = function(snapshot, start, goal, deadline, stop); });
-            cycle_metrics.global_route_reused = result.reused_cache;
-            cycle_metrics.global_statistics = result.statistics;
+            metrics.global_route_reused = result.reused_cache;
+            metrics.global_statistics = result.statistics;
             return result;
           };
     }
     wrapped.select_target = std::move(ports.select_target);
     if (ports.build_start_patch) {
       wrapped.build_start_patch =
-          [this, function = std::move(ports.build_start_patch)](
+          [this, &metrics, function = std::move(ports.build_start_patch)](
               std::shared_ptr<const core::FineTraversabilitySnapshot> fine,
               const core::SparseGridGeometry& local_window,
               const core::Pose2& p0,
               const core::PlatformCapability& capability,
               const core::TraversabilityProfile& profile) {
             core::StartPatchResult result;
-            cycle_metrics.start_patch_elapsed_ms = MeasureMilliseconds([&] {
+            metrics.start_patch_elapsed_ms = MeasureMilliseconds([&] {
               result = function(std::move(fine), local_window, p0, capability,
                                 profile);
             });
-            cycle_metrics.start_patch_assumed_cells = result.assumed_cells;
-            cycle_metrics.start_patch_radius_m =
+            metrics.start_patch_assumed_cells = result.assumed_cells;
+            metrics.start_patch_radius_m =
                 result.view ? result.view->start_patch_radius_m() : 0.0;
 #if defined(LUNAR_BUILD_DEMO)
-            if (debug_publisher && result.view) {
+            if (!rolling_enabled && debug_publisher && result.view) {
               debug_publisher->PublishStartPatch(
                   *result.view,
                   result.view->base()->hard_inflation_radius_m());
@@ -713,27 +727,27 @@ struct IncrementalNavigationNode::Impl final {
             return result;
           };
     }
-    const auto wrap_local = [this](auto function) {
-      return [this, function = std::move(function)](
+    const auto wrap_local = [this, &metrics](auto function) {
+      return [this, &metrics, function = std::move(function)](
                  const core::RequestLocalPlanningView& view,
                  const core::Pose2& start, const core::LocalTarget& target,
                  const core::SearchDeadline deadline,
                  const core::StopToken& stop) {
         core::LocalPlanResult result;
-        cycle_metrics.local_elapsed_ms = MeasureMilliseconds(
+        metrics.local_elapsed_ms = MeasureMilliseconds(
             [&] { result = function(view, start, target, deadline, stop); });
 #if defined(LUNAR_BUILD_DEMO)
-        if (debug_publisher) {
+        if (!rolling_enabled && debug_publisher) {
           debug_publisher->PublishLocalGoals(target, result, view.geometry().frame_id());
         }
 #endif
-        cycle_metrics.local_statistics = result.statistics;
-        cycle_metrics.postprocess_elapsed_ms =
+        metrics.local_statistics = result.statistics;
+        metrics.postprocess_elapsed_ms =
             std::chrono::duration<double, std::milli>(
                 result.postprocess_elapsed)
                 .count();
         const auto& path = result.path.empty() ? result.raw_path : result.path;
-        cycle_metrics.start_patch_used = std::any_of(
+        metrics.start_patch_used = std::any_of(
             path.begin(), path.end(), [](const core::PathPoint& point) {
               return point.phase == core::StartPhase::kStartPrefix;
             });
@@ -957,14 +971,6 @@ struct IncrementalNavigationNode::Impl final {
         return;
       }
     }
-    if (replan_pending) {
-      replan_pending = false;
-      if (active_goal && active_goal->is_active()) {
-        RunCycle(state.value_or(MissingState()),
-                 core::CycleTrigger::kContinue);
-        return;
-      }
-    }
     const core::SnapshotBundle bundle = CaptureBundle();
     if (state && bundle.fine) {
       exploration_map_publisher.PublishLocalFine(*bundle.fine, state->base_link_pose.position_m);
@@ -979,9 +985,17 @@ struct IncrementalNavigationNode::Impl final {
         PublishPath(*invalidated);
       }
       if (coordinator->state() == core::CoordinatorState::kReplanning) {
-        RunCycle(state.value_or(MissingState()), core::CycleTrigger::kContinue);
-        return;
+        replan_pending = true;
       }
+    }
+    if (tracking && active_reference && active_goal && tracking->session_id.uuid == active_goal->get_goal_id() &&
+        tracking->segment_revision == active_reference->segment_revision) {
+      if (std::isfinite(tracking->progress_m) && tracking->progress_m >= 0.0) {
+        tracking_remaining_m = std::max(0.0, PathLength(*active_reference) - tracking->progress_m);
+      }
+      execution_hold = tracking->state != lunar_planning_msgs::msg::TrackingStatus::TRACKING;
+      coordinator->SetFinalAlignment(rolling_enabled && execution_hold);
+      rolling_policy->SetFrozen(rolling_enabled && execution_hold);
     }
     // Apply pending fine evidence before accepting execution completion: a
     // collision invalidates the reference, so its queued feedback is stale.
@@ -1002,6 +1016,12 @@ struct IncrementalNavigationNode::Impl final {
       replan_pending = coordinator->state() == core::CoordinatorState::kReplanning;
       return;
     }
+    if (rolling_enabled) CollectWorkerResult(state.value_or(MissingState()));
+    if (replan_pending && !worker_busy && active_goal && active_goal->is_active()) {
+      replan_pending = false;
+      RunCycle(state.value_or(MissingState()), core::CycleTrigger::kContinue);
+      return;
+    }
     if (process_state && active_goal && active_goal->is_active()) {
       core::CycleTrigger trigger = core::CycleTrigger::kContinue;
       if (state && active_reference && bundle.fine) {
@@ -1016,6 +1036,12 @@ struct IncrementalNavigationNode::Impl final {
           coordinator->state() == core::CoordinatorState::kReplanning) {
         replan_pending = true;
       }
+    }
+    if (rolling_enabled && !worker_busy && !execution_hold && state && active_reference &&
+        active_goal && active_goal->is_active() && rolling_policy->ShouldStart(
+            SteadySeconds(), active_reference->segment_revision,
+            tracking_remaining_m.value_or(coordinator->remaining_path_m()))) {
+      RunCycle(*state, core::CycleTrigger::kContinue, true);
     }
   }
 
@@ -1080,6 +1106,8 @@ struct IncrementalNavigationNode::Impl final {
       static_cast<void>(PublishTerminal(handle, terminal));
       return;
     }
+    rolling_policy->Reset();
+    execution_hold = false;
     const core::StartSessionResult started = coordinator->Start(id, *converted.goal);
     if (!started.accepted || started.terminal) {
       static_cast<void>(PublishTerminal(
@@ -1150,23 +1178,122 @@ struct IncrementalNavigationNode::Impl final {
     }
   }
 
-  void RunCycle(const core::StateInput& state,
-                const core::CycleTrigger trigger) {
-    if (!active_goal || !active_goal->is_active()) {
+  static double SteadySeconds() {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  }
+
+  void RunCycle(const core::StateInput& state, core::CycleTrigger trigger, bool rolling = false) {
+    if (!active_goal || !active_goal->is_active()) return;
+    const auto started = std::chrono::steady_clock::now();
+    const auto bundle = CaptureBundle();
+    if (rolling_enabled) {
+      auto prepared = coordinator->PrepareCycle(state, bundle, trigger,
+          started + parameters.planning_hard_timeout, rolling);
+      if (prepared.request) {
+        if (worker_busy) {
+          // The old canceled search is still exiting. Capture fresh input next tick.
+          coordinator->StopPendingCycle();
+          replan_pending = true;
+        } else {
+          worker_busy = true;
+          rolling_policy->Started(SteadySeconds(), coordinator->active_segment_revision());
+          {
+            std::scoped_lock lock(worker_mutex);
+            worker_request = std::move(prepared.request);
+          }
+          worker_condition.notify_one();
+        }
+      }
+      if (prepared.immediate.path_reference || prepared.immediate.terminal)
+        PublishCycleOutput(std::move(prepared.immediate), bundle, std::chrono::nanoseconds::zero());
       return;
     }
     cycle_metrics = {};
-    const auto started = std::chrono::steady_clock::now();
-    const auto hard_deadline = started + parameters.planning_hard_timeout;
-    const core::SnapshotBundle bundle = CaptureBundle();
-    core::CycleOutput output = coordinator->PlanCycle(
-        state, bundle, trigger, hard_deadline);
-    const auto total_elapsed =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - started);
+    auto output = coordinator->PlanCycle(state, bundle, trigger, started + parameters.planning_hard_timeout);
+    PublishCycleOutput(std::move(output), bundle, std::chrono::steady_clock::now()-started);
+  }
+
+  struct WorkerResult {
+    core::CycleCandidate candidate;
+    core::SnapshotBundle bundle;
+    CycleMetrics metrics;
+    std::chrono::nanoseconds elapsed;
+    bool rolling;
+  };
+
+  void WorkerLoop() {
+    for (;;) {
+      core::CycleRequest request;
+      {
+        std::unique_lock lock(worker_mutex);
+        worker_condition.wait(lock, [this] { return worker_stopping || worker_request.has_value(); });
+        if (worker_stopping) return;
+        request = std::move(*worker_request);
+        worker_request.reset();
+      }
+      worker_metrics = {};
+      const auto started = std::chrono::steady_clock::now();
+      core::CycleCandidate candidate;
+      try {
+        candidate = core::ComputeCycle(request, worker_ports,
+            [] { return core::SteadyClock::now(); }, request.stop_token);
+      } catch (...) {
+        candidate.request_id = request.request_id;
+        candidate.session_id = request.session_id;
+        candidate.failure = core::SessionOutcome::kInternalError;
+        candidate.reason_code = "INTERNAL_ERROR";
+      }
+      WorkerResult result{std::move(candidate), request.snapshots, worker_metrics,
+                          std::chrono::steady_clock::now()-started, request.rolling};
+      {
+        std::scoped_lock lock(worker_mutex);
+        worker_result = std::move(result);
+      }
+    }
+  }
+
+  void CollectWorkerResult(const core::StateInput& state) {
+    std::optional<WorkerResult> result;
+    {
+      std::scoped_lock lock(worker_mutex);
+      result = std::exchange(worker_result, std::nullopt);
+    }
+    if (!result) return;
+    worker_busy = false;
+    rolling_policy->Finished();
+    cycle_metrics = result->metrics;
+    const auto request_id = result->candidate.request_id;
+    const auto session = result->candidate.session_id;
+    const auto reason = result->candidate.reason_code;
+    auto output = coordinator->ApplyCycle(std::move(result->candidate), state, CaptureBundle());
+    diagnostic_msgs::msg::DiagnosticArray diagnostic;
+    diagnostic.header.stamp = node.now();
+    auto& status = diagnostic.status.emplace_back();
+    status.name = "rolling_candidate";
+    status.message = "candidate disposition";
+    auto add = [&status](const std::string& key, const std::string& value) {
+      auto& field = status.values.emplace_back(); field.key = key; field.value = value;
+    };
+    add("session_id", SessionHex(session));
+    add("request_id", std::to_string(request_id));
+    add("trigger", result->rolling ? "ROLLING_PERIOD_OR_DISTANCE" : "REQUIRED_PLAN");
+    add("candidate_result", reason);
+    add("candidate_disposition", output.path_reference && output.path_reference->state == core::PathState::kActive
+        ? "ADOPTED" : (output.feedback.reason_code.empty() ? "DISCARDED"
+            : (active_reference && !output.terminal ? "RETAINED_ACTIVE" : "REJECTED")));
+    add("segment_revision", std::to_string(coordinator->active_segment_revision()));
+    add("compute_elapsed_ms", std::to_string(std::chrono::duration<double, std::milli>(result->elapsed).count()));
+    diagnostics_publisher->publish(diagnostic);
+    if (!output.feedback.reason_code.empty() || output.path_reference || output.terminal)
+      PublishCycleOutput(std::move(output), result->bundle, result->elapsed);
+  }
+
+  void PublishCycleOutput(core::CycleOutput output, const core::SnapshotBundle& bundle,
+                          std::chrono::nanoseconds total_elapsed) {
 #if defined(LUNAR_BUILD_DEMO)
     if (debug_publisher) {
-      debug_publisher->PublishSnapshots(bundle, state.base_link_pose.position_m);
+      if (active_reference && !active_reference->path.poses.empty())
+        debug_publisher->PublishSnapshots(bundle, {active_reference->path.poses.front().position_m.x, active_reference->path.poses.front().position_m.y});
     }
 #endif
     if (output.global_route) {
@@ -1202,8 +1329,10 @@ struct IncrementalNavigationNode::Impl final {
     path_publisher->publish(converted);
     local_path_publisher->publish(converted.path);
     last_reference = reference;
+    tracking_remaining_m.reset();
     if (reference.state == core::PathState::kActive) {
       active_reference = reference;
+      if (rolling_enabled) rolling_policy->Published(reference.segment_revision, coordinator->remaining_path_m());
     } else if (active_reference &&
                active_reference->session_id == reference.session_id &&
                active_reference->segment_revision ==
@@ -1443,6 +1572,15 @@ struct IncrementalNavigationNode::Impl final {
   }
 
   ~Impl() {
+    if (worker_thread.joinable()) {
+      static_cast<void>(coordinator->RequestStopCurrentCycle());
+      {
+        std::scoped_lock lock(worker_mutex);
+        worker_stopping = true;
+      }
+      worker_condition.notify_one();
+      worker_thread.join();
+    }
     // Goal-handle destruction auto-cancels unfinished goals. After context
     // shutdown, the server can no longer publish their results. Drop its owner
     // first so the handles' weak terminal callbacks cannot enter a dead server.
@@ -1457,6 +1595,18 @@ struct IncrementalNavigationNode::Impl final {
   std::optional<core::SnapshotBundle> test_snapshots;
   std::unique_ptr<core::PlanningSessionCoordinator> coordinator;
   CycleMetrics cycle_metrics;
+  CycleMetrics worker_metrics;
+  core::PlanningSessionPorts worker_ports;
+  std::unique_ptr<core::RollingUpdatePolicy> rolling_policy;
+  double rolling_period_s{};
+  bool rolling_enabled{}, execution_hold{}, worker_busy{};
+  std::optional<double> tracking_remaining_m;
+  std::mutex worker_mutex;
+  std::condition_variable worker_condition;
+  std::optional<core::CycleRequest> worker_request;
+  std::optional<WorkerResult> worker_result;
+  bool worker_stopping{};
+  std::thread worker_thread;
 
   rclcpp::CallbackGroup::SharedPtr action_group;
   rclcpp::CallbackGroup::SharedPtr map_group;

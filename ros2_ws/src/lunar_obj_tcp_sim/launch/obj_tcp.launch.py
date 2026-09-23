@@ -69,6 +69,8 @@ def compose(context):
         goal_yaw_tolerance_rad=config.goal_yaw_tolerance_rad,
         coarse_resolution_m=config.coarse_resolution_m,
         local_window_size_m=config.local_window_size_m,
+        rolling_replan_period_s=config.rolling_replan_period_s,
+        rolling_replan_distance_m=config.rolling_replan_distance_m,
         local_map_topic=prefix + "/grid_map", odometry_topic=prefix + "/odometry", tf_topic="/tf",
         action_name=prefix + "/navigate_to_pose", path_reference_topic=prefix + "/path_reference",
         local_path_topic=prefix + "/local_path", global_route_topic=prefix + "/global_route",
@@ -79,6 +81,7 @@ def compose(context):
     )
     controller = dict(
         common, input_mode="incremental_reference", platform_config=platform_config,
+        enable_rolling_updates=config.rolling_replan_period_s > 0,
         path_reference_topic=prefix + "/path_reference", tracking_status_topic=prefix + "/tracking_status",
         odometry_topic=prefix + "/odometry", tf_topic="/tf", command_topic=prefix + "/cmd_vel",
         execution_cancel_topic=prefix + "/execution_cancel",

@@ -54,6 +54,8 @@ class SimulationConfig:
     exploration_size_m: float = 300.0
     coverage_target: float = 1.0
     navigation_map_wait_timeout_s: float = 30.0
+    rolling_replan_period_s: float = 0.5
+    rolling_replan_distance_m: float = 1.0
 
 
 def _finite_positive(values: Mapping[str, float]) -> None:
@@ -86,6 +88,7 @@ def load_simulation_config(
             "scan_max_angular_radps", "scan_max_angular_accel_radps2",
             "scan_step_deg", "scan_reanchor_distance_m", "bootstrap_timeout_s",
             "navigation_map_wait_timeout_s", "exploration_size_m",
+            "rolling_replan_period_s", "rolling_replan_distance_m",
         ):
             if name in values:
                 values[name] = float(values[name])
@@ -145,6 +148,10 @@ def load_simulation_config(
         raise ValueError("observation_window_m must contain the sensor_range_m diameter")
     if not 0.0 < config.coverage_target <= 1.0:
         raise ValueError("coverage_target must be in (0, 1]")
+    for name in ('rolling_replan_period_s', 'rolling_replan_distance_m'):
+        value = getattr(config, name)
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f'{name} must be finite and nonnegative')
     if config.navigation_map_wait_timeout_s < 0.0:
         raise ValueError("navigation_map_wait_timeout_s must be nonnegative")
     from .kinematics import validate_steering_options, steering_options
