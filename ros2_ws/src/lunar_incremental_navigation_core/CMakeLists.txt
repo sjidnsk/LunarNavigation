@@ -79,6 +79,8 @@ if(BUILD_TESTING)
     lunar_enable_sanitizers(${target})
   endfunction()
 
+  lunar_add_core_gtest(lunar_incremental_navigation_core_influence_run_test test/influence_run_test.cpp)
+  target_include_directories(lunar_incremental_navigation_core_influence_run_test PRIVATE src)
   lunar_add_core_gtest(lunar_incremental_navigation_core_terrain_window_test test/terrain_window_test.cpp)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_boundary_distance_index_test
