@@ -648,3 +648,5 @@ ros2 run lunar_incremental_controller_demo run_case --case rolling_straight \
 当前证据与 Humble 栈条件见验证记录；未进行 Orin 或实车验证。
 
 2026-09-23 默认配置更新：上述 incremental 轮式闭环现默认开启滚动规划（0.5 s / 1 m）；省略周期参数即可启用。轮式导航启用执行反馈时默认使用 0.5 s，其他模式仍为 0；控制器仅在 incremental_reference 输入中默认启用。统一 launch 指定 `rolling_replan_period_s:=0.0` 会同时关闭两端。
+
+本部署分支的移动中持续规划配置、移植差异与验证结果见 [部署同步记录](docs/validation/2026-09-23-rolling-deployment-sync.md)。
