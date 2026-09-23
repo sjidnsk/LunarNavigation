@@ -12,6 +12,8 @@
 
 Humble 容器 `phase2-humble-gridmap:local`，Release，源只读，网络禁用，独立 build/install；栈上限 32 MiB（继承源功能验证中快照测试所需条件）。测试结果不代表原生 Orin、DDS 联调或真实车体通过。构建复现脚本为 artifact 根目录的 `validate-humble.sh`，参数为源码工作树路径和 `real`/`legged`/`tcp` 标签。
 
+> 后续更新：足式默认关闭的结论已由 [足式默认开启验证](2026-09-23-legged-rolling-default.md) 替代。以下保留首次同步的历史记录。
+
 ## 足式分支
 
 目标 `app/orin-legged-vehicle`，移植前 `dfa3d819`。

@@ -39,7 +39,7 @@ exploration:
   diagnostics_topic: /Car/T4/exploration/diagnostics
 
 navigation:
-  rolling_replan_period_s: 0.0
+  rolling_replan_period_s: 0.5
   rolling_replan_distance_m: 1.0
   enable_tracking_feedback: true
   goal_position_tolerance_m: 0.1

@@ -65,7 +65,7 @@ outputs:
     owner: lunar_incremental_navigation_ros
 
 # Rolling planning startup parameters (no interface/schema change):
-# rolling_replan_period_s=0.0, rolling_replan_distance_m=1.0.
+# rolling_replan_period_s=0.5, rolling_replan_distance_m=1.0.
 # The isolated demo derives controller enable_rolling_updates from period > 0;
-# requires wheel + incremental_reference + tracking feedback.
-# Default: 0.5 s for wheel with feedback; demo enables both ends by default.
+# requires wheel/legged + incremental_reference + tracking feedback.
+# Default: 0.5 s for wheel/legged with feedback; demo enables both ends by default.
