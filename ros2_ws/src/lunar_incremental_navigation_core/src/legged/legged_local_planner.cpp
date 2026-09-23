@@ -1,4 +1,5 @@
 #include "lunar_incremental_navigation_core/legged_local_planner.hpp"
+#include "local/request_cell_cache.hpp"
 
 #include "lunar_incremental_navigation_core/local_planning_window.hpp"
 #include "lunar_incremental_navigation_core/local_goal_region.hpp"
@@ -366,10 +367,10 @@ class SegmentCellSequence final {
 }
 
 [[nodiscard]] bool ElevationStepAndGapFeasible(
-    const ElevationSnapshot& elevation,
+    local::RequestCellCache& elevation,
     const std::span<const GridIndex> cells,
     const double maximum_step_m, const double maximum_gap_m,
-    const bool initial_support_assumed) noexcept {
+    const bool initial_support_assumed) {
   std::optional<ElevationRange> previous;
   std::size_t missing_cells = 0U;
   for (std::size_t index = 0U; index < cells.size(); ++index) {
@@ -540,8 +541,9 @@ void BuildMotionSummary(const LeggedCapability& capability,
   return WorkStatus::kReady;
 }
 
-class LeggedDirectedEdgeCache final {
+class LeggedEdgeEvaluator final {
  public:
+  explicit LeggedEdgeEvaluator(local::RequestCellCache& cells) : cells_(cells) {}
   [[nodiscard]] EdgeLookup Certify(
       const RequestLocalPlanningView& view, const LeggedCapability& capability,
       const LeggedMotionSummary& motion_summary,
@@ -555,38 +557,34 @@ class LeggedDirectedEdgeCache final {
     }
     const std::uint64_t key =
         (static_cast<std::uint64_t>(source_state) << 32U) |
-        (static_cast<std::uint64_t>(
-             CellOffset(view.geometry(), target_cell))
-         << 1U) |
+        (static_cast<std::uint64_t>(CellOffset(view.geometry(), target_cell)) << 1U) |
         static_cast<std::uint64_t>(target_is_lattice_point);
-    if (const auto found = entries_.find(key); found != entries_.end()) {
-      return {.certificate = found->second};
+    const auto& cached = recent_[CacheSlot(key)];
+    if (cached.valid && cached.key == key) {
+      return {.certificate = cached.certificate};
     }
-
     DirectedEdgeCertificate certificate;
     const GridIndex source_cell =
         CellFromOffset(view.geometry(), SearchCellOffset(source_state));
-    const LocalCellSource source_kind = view.Source(source_cell);
+    const LocalCellSource source_kind = cells_.Source(source_cell);
     const bool source_is_start_prefix =
         SearchPhase(source_state) == StartPhase::kStartPrefix;
     const bool source_assumed =
         source_kind == LocalCellSource::kStartAssumedFree;
-    const LocalCellSource target_kind = view.Source(target_cell);
+    const LocalCellSource target_kind = cells_.Source(target_cell);
     if ((source_kind != LocalCellSource::kEvidenceFree &&
          !(source_is_start_prefix && source_assumed)) ||
         (target_kind != LocalCellSource::kEvidenceFree &&
          !(source_is_start_prefix &&
            target_kind == LocalCellSource::kStartAssumedFree))) {
-      entries_.emplace(key, certificate);
-      return {.certificate = certificate};
+      return Remember(key, certificate);
     }
 
     const double dx = target_point.x - source_point.x;
     const double dy = target_point.y - source_point.y;
     const double distance = std::hypot(dx, dy);
     if (distance <= kGeometryTolerance) {
-      entries_.emplace(key, certificate);
-      return {.certificate = certificate};
+      return Remember(key, certificate);
     }
     const double endpoint_quantization_allowance =
         target_is_lattice_point
@@ -601,53 +599,62 @@ class LeggedDirectedEdgeCache final {
       return {.status = status};
     }
     if (!primitive_supports_edge) {
-      entries_.emplace(key, certificate);
-      return {.certificate = certificate};
+      return Remember(key, certificate);
     }
 
     const SegmentCellSequence cells =
         SegmentCells(view.geometry(), source_point, target_point);
     if (cells.empty()) {
-      entries_.emplace(key, certificate);
-      return {.certificate = certificate};
+      return Remember(key, certificate);
     }
     bool uses_assumed_support = false;
     for (const GridIndex cell : cells.Cells()) {
-      switch (view.Source(cell)) {
+      switch (cells_.Source(cell)) {
         case LocalCellSource::kEvidenceFree:
           break;
         case LocalCellSource::kStartAssumedFree:
           if (!source_is_start_prefix) {
-            entries_.emplace(key, certificate);
-            return {.certificate = certificate};
+            return Remember(key, certificate);
           }
           uses_assumed_support = true;
           break;
         case LocalCellSource::kUnknown:
         case LocalCellSource::kBlocked:
-          entries_.emplace(key, certificate);
-          return {.certificate = certificate};
+          return Remember(key, certificate);
       }
     }
     if (!uses_assumed_support && !ElevationStepAndGapFeasible(
-                                     *view.base()->elevation(), cells.Cells(),
+                                     cells_, cells.Cells(),
                                      capability.maximum_step_height_m,
                                      capability.maximum_gap_width_m, false)) {
-      entries_.emplace(key, certificate);
-      return {.certificate = certificate};
+      return Remember(key, certificate);
     }
 
     certificate.feasible = true;
     certificate.uses_assumed_support = uses_assumed_support;
     certificate.cost = SaturatingTerrainEdgeCost(
-        distance, view.TraversalCost(target_cell));
+        distance, cells_.TraversalCost(target_cell));
     certificate.arrival_yaw_rad = std::atan2(dy, dx);
-    entries_.emplace(key, certificate);
-    return {.certificate = certificate};
+    return Remember(key, certificate);
   }
 
  private:
-  std::unordered_map<std::uint64_t, DirectedEdgeCertificate> entries_;
+  // Adjacent exact goals can certify an edge in both terminal and neighbor
+  // evaluation. Bound reuse without allocating one hash node per search edge.
+  struct RecentEdge {
+    std::uint64_t key{};
+    DirectedEdgeCertificate certificate{};
+    bool valid{};
+  };
+  static std::size_t CacheSlot(std::uint64_t key) noexcept {
+    return (key ^ (key >> 32U)) & 63U;
+  }
+  EdgeLookup Remember(std::uint64_t key, DirectedEdgeCertificate certificate) {
+    recent_[CacheSlot(key)] = {key, certificate, true};
+    return {.certificate = certificate};
+  }
+  std::array<RecentEdge, 64> recent_{};
+  local::RequestCellCache& cells_;
 };
 
 [[nodiscard]] TerminalYawCertificate CertifyTerminalYaw(
@@ -724,7 +731,7 @@ class LeggedDirectedEdgeCache final {
     const RequestLocalPlanningView& view, const LeggedCapability& capability,
     const LeggedMotionSummary& motion_summary,
     const LeggedLocalPlannerConfig& config,
-    LeggedDirectedEdgeCache& edge_cache, const std::uint32_t source_state,
+    LeggedEdgeEvaluator& edges, const std::uint32_t source_state,
     const Point2 source_point, const double source_arrival_yaw,
     const LocalTarget& target, const GridIndex target_cell,
     const SearchDeadline deadline, const StopToken& stop,
@@ -774,7 +781,7 @@ class LeggedDirectedEdgeCache final {
     return {};
   }
 
-  const EdgeLookup edge = edge_cache.Certify(
+  const EdgeLookup edge = edges.Certify(
       view, capability, motion_summary, source_state, source_point,
       target_cell, target.center, target_is_lattice_point, deadline, stop,
       statistics);
@@ -863,7 +870,7 @@ class LeggedDirectedEdgeCache final {
     const RequestLocalPlanningView& view,
     const std::vector<RawVertex>& raw_vertices,
     const std::size_t protected_tail_vertices,
-    LeggedDirectedEdgeCache& edge_cache, const LeggedCapability& capability,
+    LeggedEdgeEvaluator& edges, const LeggedCapability& capability,
     const LeggedMotionSummary& motion_summary,
     const SearchDeadline deadline, const StopToken& stop,
     SearchStatistics& statistics) {
@@ -907,7 +914,7 @@ class LeggedDirectedEdgeCache final {
       result.status = WorkStatus::kInvalid;
       return result;
     }
-    const EdgeLookup shortcut = edge_cache.Certify(
+    const EdgeLookup shortcut = edges.Certify(
         view, capability, motion_summary, source.state, source_position,
         *candidate_cell, candidate_position, candidate.lattice_position,
         deadline, stop, statistics);
@@ -1008,6 +1015,7 @@ LocalPlanResult LeggedLocalPlanner::Plan(
   const LeggedMotionSummary motion_summary{
       .maximum_translation_m = maximum_translation_m_,
       .spin_deltas_rad = spin_deltas_rad_};
+  local::RequestCellCache cells(view);
   const StartPhase initial_phase =
       view.Source(*start_cell) == LocalCellSource::kStartAssumedFree
           ? StartPhase::kStartPrefix
@@ -1034,7 +1042,7 @@ LocalPlanResult LeggedLocalPlanner::Plan(
                       .sequence = sequence++});
   statistics.generated_states = 1U;
   statistics.open_peak = open.size();
-  LeggedDirectedEdgeCache edge_cache;
+  LeggedEdgeEvaluator edges(cells);
   std::unordered_map<std::uint32_t, TerminalCacheEntry> terminal_cache;
   std::optional<std::uint32_t> goal_state;
   TerminalCertificate goal_terminal;
@@ -1094,7 +1102,7 @@ LocalPlanResult LeggedLocalPlanner::Plan(
       if (!terminal_entry.evaluated) {
         WorkStatus terminal_status = WorkStatus::kReady;
         terminal_entry.certificate = CertifyTerminal(
-            view, capability_, motion_summary, config_, edge_cache,
+            view, capability_, motion_summary, config_, edges,
             current.state, current_point, current_arrival_yaw, terminal_target,
             terminal_cell, deadline, stop, statistics, terminal_status);
         if (terminal_status != WorkStatus::kReady) {
@@ -1130,7 +1138,7 @@ LocalPlanResult LeggedLocalPlanner::Plan(
         continue;
       }
       const auto next_phase =
-          view.AdvancePhase(SearchPhase(current.state), next_cell);
+          cells.AdvancePhase(SearchPhase(current.state), next_cell);
       if (!next_phase.has_value()) {
         continue;
       }
@@ -1148,7 +1156,7 @@ LocalPlanResult LeggedLocalPlanner::Plan(
           g_cost_[next_state]) {
         continue;
       }
-      const EdgeLookup edge = edge_cache.Certify(
+      const EdgeLookup edge = edges.Certify(
           view, capability_, motion_summary, current.state, current_point,
           next_cell, next_point, true, deadline, stop, statistics);
       if (edge.status != WorkStatus::kReady) {
@@ -1254,7 +1262,7 @@ LocalPlanResult LeggedLocalPlanner::Plan(
   const std::size_t protected_tail_vertices =
       protects_final_arrival && raw_vertices.size() > 1U ? 1U : 0U;
   SimplificationResult simplified = SimplifyLeggedPhaseAwarePath(
-      view, raw_vertices, protected_tail_vertices, edge_cache, capability_,
+      view, raw_vertices, protected_tail_vertices, edges, capability_,
       motion_summary, deadline, stop, statistics);
   if (simplified.status == WorkStatus::kCanceled) {
     return StoppedResult(simplified.status, statistics);

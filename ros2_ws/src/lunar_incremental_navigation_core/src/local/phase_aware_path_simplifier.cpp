@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "local/grid_supercover.hpp"
+#include "local/boundary_distance_index.hpp"
 
 namespace lunar::incremental_navigation {
 namespace {
@@ -24,31 +25,8 @@ namespace {
 
 // Local cell coordinates keep the distance comparison independent of world
 // offsets and resolution. No physical clearance threshold is introduced.
-struct Point {
-  long double x, y;
-};
-struct Segment {
-  Point a, b;
-};
-
-[[nodiscard]] long double PointDistanceSquared(Point p, Segment s) {
-  const long double dx = s.b.x - s.a.x, dy = s.b.y - s.a.y;
-  const long double length = dx * dx + dy * dy;
-  const long double t = length > 0
-      ? std::clamp(((p.x - s.a.x) * dx + (p.y - s.a.y) * dy) / length,
-                   0.0L, 1.0L)
-      : 0;
-  const long double ex = p.x - s.a.x - t * dx;
-  const long double ey = p.y - s.a.y - t * dy;
-  return ex * ex + ey * ey;
-}
-
-// LOS has excluded intersections. For disjoint segments, the minimum distance
-// is attained at an endpoint of at least one segment.
-[[nodiscard]] long double DistanceSquared(Segment a, Segment b) {
-  return std::min({PointDistanceSquared(a.a, b), PointDistanceSquared(a.b, b),
-                   PointDistanceSquared(b.a, a), PointDistanceSquared(b.b, a)});
-}
+using Point = local::BoundaryPoint;
+using Segment = local::BoundarySegment;
 
 // Per-call geometry of the current phase's allowed-cell union, including the
 // local-window boundary. This does not modify maps or their source semantics.
@@ -62,7 +40,8 @@ class PhaseGeometry final {
     const auto& geometry = view_.geometry();
     const auto lo = geometry.min_inclusive();
     const std::size_t width = geometry.width(), height = geometry.height();
-    std::vector<unsigned char> allowed(geometry.CellCount());
+    allowed_.assign(geometry.CellCount(), 0);
+    auto& allowed = allowed_;
     for (std::size_t y = 0; y < height; ++y) {
       if (Interrupted(control_)) return false;
       for (std::size_t x = 0; x < width; ++x) {
@@ -112,14 +91,19 @@ class PhaseGeometry final {
         }
       }
     }
-    return !Interrupted(control_);
+    return boundary_index_.Build(std::move(boundary_), control_);
   }
 
   [[nodiscard]] bool Legal(const PathPoint& a, const PathPoint& b) const {
     return local::VisitSupercoverCells(
         view_.geometry(), a.pose.position_m, b.pose.position_m,
         [&](GridIndex index) {
-          return !Interrupted(control_) && Allowed(view_, index, phase_);
+          if (Interrupted(control_)) return false;
+          if (allowed_.empty()) return Allowed(view_, index, phase_);
+          const auto lo = view_.geometry().min_inclusive();
+          return allowed_[static_cast<std::size_t>(index.y - lo.y) *
+                              view_.geometry().width() +
+                          static_cast<std::size_t>(index.x - lo.x)] != 0;
         });
   }
 
@@ -129,21 +113,8 @@ class PhaseGeometry final {
                                      const PathPoint& b) const {
     if (!Legal(a, b)) return -1;
     const Segment line{Convert(a.pose.position_m), Convert(b.pose.position_m)};
-    long double minimum = std::numeric_limits<long double>::infinity();
-    for (std::size_t i = 0; i < boundary_.size(); ++i) {
-      if (i % 64 == 0 && Interrupted(control_)) return -1;
-      const auto& edge = boundary_[i];
-      const long double dx = std::max({
-          0.0L, std::min(line.a.x, line.b.x) - std::max(edge.a.x, edge.b.x),
-          std::min(edge.a.x, edge.b.x) - std::max(line.a.x, line.b.x)});
-      const long double dy = std::max({
-          0.0L, std::min(line.a.y, line.b.y) - std::max(edge.a.y, edge.b.y),
-          std::min(edge.a.y, edge.b.y) - std::max(line.a.y, line.b.y)});
-      if (dx * dx + dy * dy < minimum) {
-        minimum = std::min(minimum, DistanceSquared(line, edge));
-      }
-    }
-    return minimum;
+    const auto nearest = boundary_index_.Query(line, control_);
+    return nearest.value_or(-1);
   }
 
  private:
@@ -161,6 +132,8 @@ class PhaseGeometry final {
   StartPhase phase_;
   const SearchControl& control_;
   std::vector<Segment> boundary_;
+  std::vector<unsigned char> allowed_;
+  local::BoundaryDistanceIndex boundary_index_;
 };
 
 [[nodiscard]] bool SameDirection(const PathPoint& a, const PathPoint& b,
