@@ -44,7 +44,7 @@ def generate_controller_launch(platform, launch_file):
     types.update({field.name: bool if field.name == 'allow_reverse' else float
                   for field in fields(TrackingPolicy)})
     types.update(control_rate_hz=float, odometry_timeout_s=float, tf_timeout_s=float,
-                 use_sim_time=bool)
+                 use_sim_time=bool, enable_rolling_updates=bool)
     arguments.update({name: _INHERIT for name in types})
 
     def launch_node(context):

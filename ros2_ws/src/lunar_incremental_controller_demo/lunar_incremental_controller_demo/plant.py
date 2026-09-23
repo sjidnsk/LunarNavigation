@@ -6,7 +6,7 @@ import math
 class Scene:
     GOALS = {'forward': (3.0, 0.0, None), 'reverse': (-3.0, 0.0, 0.0),
              'final_yaw': (3.0, 0.0, math.pi / 2), 'detour': (6.0, 0.0, None),
-             'multiple_exits': (12.0, 0.0, None), 'manual': (3.0, 0.0, None)}
+             'rolling_straight': (6.0, 0.0, None), 'multiple_exits': (12.0, 0.0, None), 'manual': (3.0, 0.0, None)}
 
     def __init__(self, name='forward'):
         if name not in self.GOALS:

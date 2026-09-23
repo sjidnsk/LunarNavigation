@@ -24,7 +24,7 @@ namespace {
 
 [[nodiscard]] std::shared_ptr<const FineTraversabilitySnapshot> MakeFine(
     const std::uint64_t revision = 1U,
-    const std::optional<GridIndex> blocked = std::nullopt) {
+    const std::optional<GridIndex> blocked = std::nullopt, const bool unknown = false) {
   PersistentElevationMap map;
   const GridGeometry geometry{.frame_id = "map",
                               .width = 8U,
@@ -50,7 +50,7 @@ namespace {
     }
   }
   if (blocked) {
-    states[TileCellOffset(*blocked)] = FineCellState::kBlocked;
+    states[TileCellOffset(*blocked)] = unknown ? FineCellState::kUnknown : FineCellState::kBlocked;
   }
   auto tile = std::make_shared<const FineTraversabilityTile>(
       std::move(states), std::move(costs));
@@ -1068,3 +1068,115 @@ TEST(PlanningSessionCoordinator, WaitingWakesOnMovementSmallerThanArrivalToleran
 
 }  // namespace
 }  // namespace lunar::incremental_navigation
+
+namespace lunar::incremental_navigation {
+TEST(RollingSession, FailedUpdateRetainsActiveReferenceAndLateResultsAreIgnored) {
+  FakePorts fake;
+  auto ports = fake.Bind();
+  PlanningSessionCoordinator c(Wheel(), {}, Config(), ports);
+  ASSERT_TRUE(c.Start(SessionId{{1U}}, FinalGoal{.target_x_m=3.5, .target_y_m=.5}).accepted);
+  SnapshotBundle bundle{.fine=MakeFine()};
+  ASSERT_TRUE(c.PlanCycle(At(.5,.5), bundle, CycleTrigger::kContinue, SearchDeadline::max()).path_reference);
+  for (auto status : {LocalPlanResult::Status::kNoPath, LocalPlanResult::Status::kTimeout}) {
+    fake.local_status = status;
+    auto p = c.PrepareCycle(At(1.,.5), bundle, CycleTrigger::kContinue, SearchDeadline::max(), true);
+    ASSERT_TRUE(p.request);
+    auto candidate = ComputeCycle(*p.request, ports, Config().now, p.request->stop_token);
+    auto result = c.ApplyCycle(std::move(candidate), At(1.,.5), bundle);
+    EXPECT_FALSE(result.terminal);
+    EXPECT_FALSE(result.path_reference);
+    EXPECT_EQ(c.active_segment_revision(), 1U);
+    EXPECT_EQ(c.state(), CoordinatorState::kExecuting);
+  }
+  fake.local_status = LocalPlanResult::Status::kPlanFound;
+  auto p = c.PrepareCycle(At(1.,.5), bundle, CycleTrigger::kContinue, SearchDeadline::max(), true);
+  ASSERT_TRUE(p.request);
+  auto candidate = ComputeCycle(*p.request, ports, Config().now, p.request->stop_token);
+  static_cast<void>(c.Cancel(CancelReason::kCanceled));
+  auto late = c.ApplyCycle(std::move(candidate), At(1.,.5), bundle);
+  EXPECT_FALSE(late.path_reference);
+  EXPECT_FALSE(late.terminal);
+}
+TEST(RollingSession, NewMapRevisionIsNotARejectionGate) {
+  FakePorts fake; auto ports = fake.Bind();
+  PlanningSessionCoordinator c(Wheel(), {}, Config(), ports);
+  ASSERT_TRUE(c.Start(SessionId{{1U}}, FinalGoal{.target_x_m=3.5, .target_y_m=.5}).accepted);
+  SnapshotBundle bundle{.fine=MakeFine()};
+  ASSERT_TRUE(c.PlanCycle(At(.5,.5), bundle, CycleTrigger::kContinue, SearchDeadline::max()).path_reference);
+  auto p = c.PrepareCycle(At(1.,.5), bundle, CycleTrigger::kContinue, SearchDeadline::max(), true);
+  ASSERT_TRUE(p.request);
+  auto candidate = ComputeCycle(*p.request, ports, Config().now, p.request->stop_token);
+  auto result = c.ApplyCycle(std::move(candidate), At(1.2,.5), SnapshotBundle{.fine=MakeFine(2)});
+  ASSERT_TRUE(result.path_reference);
+  EXPECT_EQ(result.path_reference->segment_revision, 2U);
+  EXPECT_EQ(result.path_reference->traversability_revision, 2U);
+}
+TEST(RollingSession, FinalAlignmentAndInvalidationRejectOutstandingCandidate) {
+  for (bool align : {true, false}) {
+    FakePorts fake; auto ports = fake.Bind();
+    PlanningSessionCoordinator c(Wheel(), {}, Config(), ports);
+    ASSERT_TRUE(c.Start(SessionId{{1U}}, FinalGoal{.target_x_m=3.5, .target_y_m=.5}).accepted);
+    SnapshotBundle bundle{.fine=MakeFine()};
+    ASSERT_TRUE(c.PlanCycle(At(.5,.5), bundle, CycleTrigger::kContinue, SearchDeadline::max()).path_reference);
+    auto p=c.PrepareCycle(At(1.,.5),bundle,CycleTrigger::kContinue,SearchDeadline::max(),true);
+    ASSERT_TRUE(p.request);
+    auto candidate=ComputeCycle(*p.request,ports,Config().now,p.request->stop_token);
+    if (align) c.SetFinalAlignment(true);
+    else ASSERT_TRUE(c.OnFineSnapshot(MakeFine(2,GridIndex{.x=2,.y=0})));
+    auto late=c.ApplyCycle(std::move(candidate),At(1.,.5),bundle);
+    EXPECT_FALSE(late.path_reference);
+    EXPECT_FALSE(late.terminal);
+  }
+}
+}
+
+namespace lunar::incremental_navigation {
+TEST(RollingSession, CandidateBlockedByNewEvidenceDoesNotReplaceOldReference) {
+  FakePorts fake; auto ports = fake.Bind();
+  PlanningSessionCoordinator c(Wheel(), {}, Config(), ports);
+  ASSERT_TRUE(c.Start(SessionId{{1U}}, FinalGoal{.target_x_m=3.5,.target_y_m=.5}).accepted);
+  SnapshotBundle bundle{.fine=MakeFine()};
+  ASSERT_TRUE(c.PlanCycle(At(.5,.5),bundle,CycleTrigger::kContinue,SearchDeadline::max()).path_reference);
+  auto p=c.PrepareCycle(At(1.,.5),bundle,CycleTrigger::kContinue,SearchDeadline::max(),true);
+  ASSERT_TRUE(p.request);
+  auto candidate=ComputeCycle(*p.request,ports,Config().now,p.request->stop_token);
+  auto blocked=c.ApplyCycle(std::move(candidate),At(1.,.5),SnapshotBundle{.fine=MakeFine(2,GridIndex{.x=2,.y=0})});
+  EXPECT_FALSE(blocked.path_reference);
+  EXPECT_EQ(blocked.feedback.reason_code,"CANDIDATE_PATH_BLOCKED");
+  EXPECT_EQ(c.active_segment_revision(),1U);
+}
+}
+
+namespace lunar::incremental_navigation {
+TEST(RollingSession, CandidateLosingKnownFreeEvidenceIsNotPublished) {
+  FakePorts fake; auto ports=fake.Bind();
+  PlanningSessionCoordinator c(Wheel(),{},Config(),ports);
+  ASSERT_TRUE(c.Start(SessionId{{1U}},FinalGoal{.target_x_m=3.5,.target_y_m=.5}).accepted);
+  SnapshotBundle bundle{.fine=MakeFine()};
+  ASSERT_TRUE(c.PlanCycle(At(.5,.5),bundle,CycleTrigger::kContinue,SearchDeadline::max()).path_reference);
+  auto p=c.PrepareCycle(At(1.,.5),bundle,CycleTrigger::kContinue,SearchDeadline::max(),true);
+  ASSERT_TRUE(p.request);
+  auto candidate=ComputeCycle(*p.request,ports,Config().now,p.request->stop_token);
+  auto result=c.ApplyCycle(std::move(candidate),At(1.,.5),SnapshotBundle{.fine=MakeFine(2,GridIndex{.x=2,.y=0},true)});
+  EXPECT_FALSE(result.path_reference);
+}
+}
+
+namespace lunar::incremental_navigation {
+TEST(RollingSession, LoopCandidateCannotSkipBlockedEarlyBranchDuringValidation) {
+  FakePorts fake; auto ports=fake.Bind();
+  PlanningSessionCoordinator c(Wheel(),{},Config(),ports);
+  ASSERT_TRUE(c.Start(SessionId{{1U}},FinalGoal{.target_x_m=3.5,.target_y_m=.95}).accepted);
+  SnapshotBundle bundle{.fine=MakeFine()};
+  ASSERT_TRUE(c.PlanCycle(At(.5,.95),bundle,CycleTrigger::kContinue,SearchDeadline::max()).path_reference);
+  auto p=c.PrepareCycle(At(.5,.95),bundle,CycleTrigger::kContinue,SearchDeadline::max(),true);
+  ASSERT_TRUE(p.request);
+  auto candidate=ComputeCycle(*p.request,ports,Config().now,p.request->stop_token);
+  candidate.local.path.clear();
+  for (Point2 point : {Point2{.5,.95},Point2{5.5,.95},Point2{5.5,5.5},Point2{.5,5.5},Point2{.5,1.05},Point2{5.5,1.05}})
+    candidate.local.path.push_back(PathPoint{.pose=Pose3{.position_m={point.x,point.y,0.}}});
+  auto result=c.ApplyCycle(std::move(candidate),At(.7,1.05),SnapshotBundle{.fine=MakeFine(2,GridIndex{.x=2,.y=0})});
+  EXPECT_FALSE(result.path_reference);
+  EXPECT_EQ(result.feedback.reason_code,"CANDIDATE_PATH_BLOCKED");
+}
+}
