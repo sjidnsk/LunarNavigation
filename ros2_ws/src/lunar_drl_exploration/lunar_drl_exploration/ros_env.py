@@ -15,6 +15,7 @@ from .config import GraphConfig
 from .decision import DecisionCore
 from .plant import KinematicPlant, GeometryFailure
 from .processes import OwnedProcesses
+from .stagnation import StagnationMonitor
 from .ros_messages import (InfrastructureError, MeasurementBuffer, RosNavigationAdapter,
                            NavigationResult, grid_message, odometry_message, ros_time, velocity_is_stopped)
 
@@ -56,7 +57,7 @@ def make_transition(observation,action,next_observation,privileged,next_privileg
 
 
 class RosExplorationEnv:
-    def __init__(self,config,env_id,*,domain_base=210,wall_timeout_s=120.):
+    def __init__(self,config,env_id,*,domain_base=210,wall_timeout_s=120.,training=False):
         self.config=config;self.env_id=int(env_id)
         self.namespace=f'/lunar_training/env_{self.env_id}'
         self.domain_id=domain_base+self.env_id
@@ -67,6 +68,13 @@ class RosExplorationEnv:
         self.episode_budget=config.curriculum_budgets[0]
         self.last_execution=None;self.episode_metadata={};self.static_scenes={}
         self._step_active=False
+        # Explicit construction mode prevents a training YAML from shortening
+        # frozen evaluation or affecting the observed-only deployment runtime.
+        self.stagnation=(StagnationMonitor(config.stagnation_window_steps,
+            config.stagnation_max_positions,config.stagnation_position_tolerance_m)
+            if training and config.stagnation_window_steps>0 else None)
+        self.truncation_reason=None
+        self._episode_truncated=False
 
     @property
     def owned_pids(self): return self.owned.pids
@@ -97,6 +105,8 @@ class RosExplorationEnv:
         self.core.history.tolerance_m=self.config.goal_position_tolerance_m
         self.buffer=MeasurementBuffer(terrain.origin,terrain.resolution_m)
         self._cancel.clear();self._closed=False;self.steps=0;self.last_execution=None
+        self.truncation_reason=None;self._episode_truncated=False
+        if self.stagnation is not None:self.stagnation.reset()
         self.report=None
         self.episode_id=uuid.uuid4().hex
         self._sim_ns=1_000_000_000;self._last_sensor_ns=0;self._latest_sensor_ns=0
@@ -145,9 +155,11 @@ class RosExplorationEnv:
         from tf2_msgs.msg import TFMessage
         from grid_map_msgs.msg import GridMap
         from rosgraph_msgs.msg import Clock
-        self.context=Context();rclpy.init(context=self.context,domain_id=self.domain_id)
+        self.context=Context();rclpy.init(context=self.context,domain_id=self.domain_id,
+            args=['--ros-args','--disable-external-lib-logs'])
         self.node=rclpy.create_node('drl_environment',namespace=self.namespace,context=self.context,
-            enable_rosout=False,parameter_overrides=[Parameter('use_sim_time',value=True)])
+            enable_rosout=False,cli_args=['--ros-args','--disable-external-lib-logs'],
+            parameter_overrides=[Parameter('use_sim_time',value=True)])
         from rclpy.executors import SingleThreadedExecutor
         self.executor=SingleThreadedExecutor(context=self.context);self.executor.add_node(self.node)
         ns=self.namespace
@@ -297,7 +309,7 @@ class RosExplorationEnv:
 
     def step(self,action_index,*,actor_version=None):
         if self._closed or self._step_active:raise RuntimeError('environment is closed or already stepping')
-        if self.terminated or self.steps>=self.episode_budget:raise RuntimeError('episode requires reset')
+        if self.terminated or self._episode_truncated or self.steps>=self.episode_budget:raise RuntimeError('episode requires reset')
         if self.plant.collision:raise GeometryFailure('collision episode requires reset')
         if not 0<=int(action_index)<len(self.observation.goals):raise ValueError('action outside frozen observation')
         action_index=int(action_index);goal=tuple(self.observation.goals[action_index])
@@ -315,11 +327,17 @@ class RosExplorationEnv:
             success=(not self.plant.collision and
                 self.reference.coverage_ratio(next_privileged.observed)>=self.config.success_coverage)
             final=(self._known_area,self.plant.distance_m,self.plant.turn_rad)
+            p=self.plant.pose
+            stagnated=False
+            if self.stagnation is not None:
+                stagnated=self.stagnation.observe((p.x,p.y),final[0]-before[0])
+            budget_hit=self.steps>=self.episode_budget
             transition=make_transition(observation,action_index,next_observation,privileged,next_privileged,
                 initial=before,final=final,completed=success,exhausted=report.completed,
-                budget_hit=self.steps>=self.episode_budget,
+                budget_hit=budget_hit or stagnated,
                 episode_id=self.episode_id,actor_version=version,completion_bonus=self.config.completion_bonus)
-            p=self.plant.pose
+            self._episode_truncated=transition.truncated
+            self.truncation_reason=('DECISION_BUDGET' if budget_hit else 'STAGNATION') if transition.truncated else None
             self.last_execution=ExecutionMetadata(goal,result.outcome,result.reason_code,result.last_segment_revision,
                 self.terrain.world_to_cell(*goal[:2]),self.terrain.world_to_cell(p.x,p.y),(p.x,p.y,p.yaw),
                 final[1]-before[1],final[2]-before[2],self.plant.simulation_s-sim,time.monotonic()-wall,
@@ -339,7 +357,12 @@ class RosExplorationEnv:
             'max_command_speed_mps':self._max_command_speed,'owned_pids':self.owned_pids,
             'completed':None if report is None else self.completed,
             'terminated':None if report is None else self.terminated,
-            'exhausted':None if report is None else report.exhausted}
+            'exhausted':None if report is None else report.exhausted,
+            'truncation_reason':self.truncation_reason,
+            'stagnation_enabled':self.stagnation is not None,
+            'stagnation_zero_gain_steps':self.stagnation.zero_gain_steps if self.stagnation else 0,
+            'stagnation_position_count':self.stagnation.position_count if self.stagnation else 0,
+            'stagnation_triggered':self.stagnation.triggered if self.stagnation else False}
 
     def cancel(self):
         """Thread-safe request; active step owns ROS cancel-and-stop pumping."""

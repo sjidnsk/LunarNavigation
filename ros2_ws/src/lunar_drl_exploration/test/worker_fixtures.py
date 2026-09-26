@@ -99,6 +99,14 @@ class OwnedChildEnv(ControlledEnv):
         if hasattr(self, 'children'): self.children.close()
 
 
+class TrainingModeEnv(ControlledEnv):
+    """Assert the real worker explicitly requests training collection semantics."""
+    def __init__(self, config, env_id, *, training=False, **kwargs):
+        if not training:
+            raise AssertionError('worker must explicitly select training mode')
+        super().__init__(config, env_id, **kwargs)
+
+
 def large_transport_collector(child, record, state, large_kind, entered, sent):
     from lunar_drl_exploration.collector import collector_main
     class LargePipe:

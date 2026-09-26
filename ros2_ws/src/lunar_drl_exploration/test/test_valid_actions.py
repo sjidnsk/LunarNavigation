@@ -53,10 +53,15 @@ def test_legacy_actor_cannot_be_relabelled_for_new_actions(tmp_path):
     assert not (tmp_path/'export.pt').exists()
 
 
-def test_fixed_small_curriculum_keeps_large_counts_small():
+@pytest.mark.parametrize('outside_repo', [False, True])
+def test_fixed_small_curriculum_keeps_large_counts_small(outside_repo, monkeypatch, tmp_path):
+    from pathlib import Path
     from lunar_drl_exploration.cli import parser, load_config
     from lunar_drl_exploration.training import Curriculum
-    c=load_config(parser().parse_args(['train','--config','config/drl_exploration_small.yaml']))
+    config_path=Path(__file__).resolve().parents[4]/'config'/'drl_exploration_small.yaml'
+    if outside_repo:
+        monkeypatch.chdir(tmp_path)
+    c=load_config(parser().parse_args(['train','--config',str(config_path)]))
     curriculum=Curriculum(c,np.random.default_rng(3))
     for i in range(30):
         spec=curriculum.next(i%8,100000)

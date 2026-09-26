@@ -64,3 +64,11 @@ def test_terminal_distinguishes_success_and_exhaustion(success,exhausted,label):
     r=record();r['environments'][0].update(completed=success,exhausted=exhausted,terminated=True)
     text='\n'.join(format_status(r,environments=1,warmup=1024))
     assert label in text
+
+
+def test_terminal_distinguishes_stagnation_from_budget_and_navigation():
+    r = record()
+    r['environments'][0].update(truncated=True, truncation_reason='STAGNATION')
+    text = '\n'.join(format_status(r, environments=1, warmup=1024))
+    assert '停滞截断' in text and '预算截断' not in text
+    assert '上次导航 到达目标' in text and '覆盖达标' not in text

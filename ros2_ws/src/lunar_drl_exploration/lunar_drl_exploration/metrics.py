@@ -5,16 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
-
-
-class ResourceLimitError(RuntimeError):
-    def __init__(self, reason, observed, limit):
-        self.reason, self.observed, self.limit = reason, observed, limit
-        super().__init__(f'{reason}: observed={observed}, limit={limit}')
-
-
-def artifact_bytes(path):
-    return sum(item.stat().st_size for item in Path(path).rglob('*') if item.is_file())
+from .artifacts import ResourceLimitError, artifact_bytes, append_bounded, _budget
 
 
 class MetricsWriter:
@@ -22,7 +13,10 @@ class MetricsWriter:
     def __init__(self, path, max_bytes=8*1024**2, *, total_max_bytes=20*1024**3):
         self.path=Path(path); self.max_bytes=int(max_bytes); self.total_max_bytes=total_max_bytes
         if self.max_bytes < 3: raise ValueError('metrics budget too small')
-        self.path.parent.mkdir(parents=True,exist_ok=True)
+        with _budget(self.path, self.total_max_bytes):
+            self._repair()
+
+    def _repair(self):
         if self.path.exists():
             # Read at most the cap; drop a leading fragment and malformed tail.
             with self.path.open('rb') as stream:
@@ -41,23 +35,8 @@ class MetricsWriter:
         if not isinstance(record,dict): raise ValueError('metric must be an object')
         line=(json.dumps(record,ensure_ascii=False,allow_nan=False,separators=(',',':'))+'\n').encode('utf-8')
         if len(line)>self.max_bytes: raise ValueError('metric record exceeds byte budget')
-        size=self.path.stat().st_size if self.path.exists() else 0
-        if size+len(line)>self.max_bytes:
-            # In-place bounded compaction: no unaccounted second metrics artifact.
-            data=self.path.read_bytes()
-            start=max(0,len(data)+len(line)-self.max_bytes)
-            if start: start=data.index(b'\n',start-1)+1
-            output=data[start:]+line
-            self._check_total(len(output)-size)
-            with self.path.open('wb') as stream: stream.write(output)
-        else:
-            self._check_total(len(line))
-            with self.path.open('ab') as stream: stream.write(line)
-
-    def _check_total(self, increase):
-        observed=artifact_bytes(self.path.parent)+increase
-        if observed>self.total_max_bytes:
-            raise ResourceLimitError('artifact metrics bytes',observed,self.total_max_bytes)
+        append_bounded(self.path, line, self.max_bytes, whole_lines=True,
+            local_total_max_bytes=self.total_max_bytes)
 
 
 class ResourceMonitor:

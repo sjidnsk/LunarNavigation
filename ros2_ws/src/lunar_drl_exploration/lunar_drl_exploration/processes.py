@@ -12,6 +12,7 @@ _LAUNCH = '''import ctypes,os,signal,sys
 parent=int(sys.argv[1])
 if ctypes.CDLL(None).prctl(1, signal.SIGKILL, 0, 0, 0): raise OSError('prctl PDEATHSIG')
 if os.getppid()!=parent: os._exit(125)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
 os.execvpe(sys.argv[2],sys.argv[2:],os.environ)
 '''
 

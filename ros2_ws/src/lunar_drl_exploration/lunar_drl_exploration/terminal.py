@@ -54,7 +54,8 @@ def format_status(record, *, environments, warmup, target=None, phase=None):
         state = states.get(status.get('state'), status.get('state', '等待启动'))
         if status.get('reason_code')=='COLLISION':state='碰撞终止'
         elif status.get('terminated'): state = '覆盖达标' if status.get('completed') else '耗尽未达标'
-        elif status.get('truncated'): state = '预算截断'
+        elif status.get('truncated'):
+            state = '停滞截断' if status.get('truncation_reason') == 'STAGNATION' else '预算截断'
         reason = status.get('reason_code')
         reason = reasons.get(reason, reason or '—')
         lines.append(f"E{env} {family} {number(status.get('extent_m'), 0)}m | {state} | 决策 {status.get('steps', 0)}/{status.get('budget', '—')} | {bar} {coverage}")

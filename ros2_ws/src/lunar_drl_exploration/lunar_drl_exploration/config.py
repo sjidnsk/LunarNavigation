@@ -159,6 +159,9 @@ class TrainingConfig:
     integration_step_s: float = .05
     observation_hz: float = 2.0
     goal_position_tolerance_m: float = .05
+    stagnation_window_steps: int = 0
+    stagnation_max_positions: int = 8
+    stagnation_position_tolerance_m: float = .25
     warmup: int = 1024
     update_ratio: float = .25
     max_update_credit: int = 32
@@ -175,6 +178,8 @@ class TrainingConfig:
     snapshot_max_bytes: int = 2 * 1024**3
     total_output_max_bytes: int = 20 * 1024**3
     metrics_max_bytes: int = 8 * 1024**2
+    artifact_root: str = ''
+    reward_diagnostics: bool = False
     save_interval_s: float = 1800.0
     output_dir: str = 'training-output/drl-metric-critic'
     system_reserve_bytes: int = 2 * 1024**3
@@ -182,6 +187,19 @@ class TrainingConfig:
 
     def __post_init__(self):
         boundaries = self.curriculum_transition_boundaries
+        if not isinstance(self.artifact_root, str):
+            raise ValueError('artifact_root must be a path string')
+        if type(self.reward_diagnostics) is not bool:
+            raise ValueError('reward_diagnostics must be boolean')
+        if type(self.stagnation_window_steps) is not int or self.stagnation_window_steps < 0:
+            raise ValueError('stagnation window must be a nonnegative integer')
+        if type(self.stagnation_max_positions) is not int or self.stagnation_max_positions <= 0:
+            raise ValueError('stagnation max positions must be a positive integer')
+        if (not np.isfinite(self.stagnation_position_tolerance_m) or
+                self.stagnation_position_tolerance_m <= 0):
+            raise ValueError('stagnation position tolerance must be positive and finite')
+        if self.stagnation_window_steps and not 0 < self.stagnation_max_positions < self.stagnation_window_steps:
+            raise ValueError('enabled stagnation window must exceed max positions')
         if not np.isfinite(self.completion_bonus) or self.completion_bonus < 0:
             raise ValueError('completion bonus must be finite and nonnegative')
         if not 0 < self.success_coverage <= 1:
@@ -257,6 +275,12 @@ def resume_semantics(config):
     if config.paired_scene_sequence:
         result['scene_sequence'] = dict(mode='paired_slot_episode_v1',
             seed=config.seed, environments=config.environments)
+    # Omitting disabled collection limits preserves legacy checkpoint identity.
+    if config.stagnation_window_steps:
+        result['training_stagnation'] = dict(mode='observed_no_gain_pose_window_v1',
+            window_steps=config.stagnation_window_steps,
+            max_positions=config.stagnation_max_positions,
+            position_tolerance_m=config.stagnation_position_tolerance_m)
     return result
 
 

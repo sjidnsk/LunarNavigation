@@ -246,3 +246,105 @@ def test_initialization_requires_measured_report_within_existing_four_scans(monk
         assert env.episode_metadata['initialization_turn_rad']==pytest.approx(ready_after*math.pi/2)
     assert all(g[:2]==(pose.x,pose.y) for g in goals)
     assert [g[2] for g in goals]==[pose.yaw+(i+1)*math.pi/2 for i in range(len(goals))]
+
+
+def stagnation_env(monkeypatch,*,training=True,window=4,positions=2,budget=512):
+    """Exercise real reset, graph, coverage and step; replace only native I/O."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from lunar_drl_exploration.config import TrainingConfig
+    from lunar_drl_exploration.ros_env import RosExplorationEnv
+    from lunar_drl_exploration.ros_messages import NavigationResult
+    from test_task_analysis import snapshot,task
+    config=replace(TrainingConfig(),stagnation_window_steps=window,
+        stagnation_max_positions=positions,stagnation_position_tolerance_m=.25)
+    env=RosExplorationEnv(config,0,training=training)
+    terrain=TerrainGrid.from_heights(np.zeros((12,12),np.float32),1.,(0.,0.),config.platform)
+    pose=Pose(3.5,3.5,0.)
+    state={'snapshot':snapshot(np.pad(np.ones((6,6),np.uint8),3),pose=pose)}
+    monkeypatch.setattr(env,'close',lambda:None)
+    monkeypatch.setattr(env,'_start_ros',lambda:setattr(env,'adapter',
+        SimpleNamespace(ready=True,velocity=(0.,0.),processed_stamp_ns=123)))
+    monkeypatch.setattr(env,'_wait',lambda predicate,*a,**k:predicate())
+    monkeypatch.setattr(env,'_snapshot',lambda:state['snapshot'])
+    monkeypatch.setattr(env,'_execute_goal',lambda goal:NavigationResult(0,'GOAL_REACHED',0))
+    env.episode_budget=budget
+    env.reset_scene(terrain,pose,task(0,0,12,12))
+    return env,state
+
+
+def test_training_stagnation_preserves_real_transition_reward_and_stops_step(monkeypatch):
+    env,_=stagnation_env(monkeypatch)
+    for _ in range(3): assert not env.step(0).truncated
+    last=env.step(0)
+    assert last.truncated and not last.terminated and last.reward==-.001
+    assert last.next_observation is env.observation
+    assert env.last_execution.reason_code=='GOAL_REACHED'
+    progress=env.progress()
+    assert progress['truncation_reason']=='STAGNATION'
+    assert progress['stagnation_zero_gain_steps']==4 and progress['stagnation_triggered']
+    assert not env.completed and not env.terminated
+    with pytest.raises(RuntimeError,match='requires reset'): env.step(0)
+
+
+@pytest.mark.parametrize('training,window', [(False,4),(True,0)])
+def test_evaluation_and_disabled_training_keep_the_full_decision_budget(monkeypatch,training,window):
+    env,_=stagnation_env(monkeypatch,training=training,window=window,budget=6)
+    for _ in range(5): assert not env.step(0).truncated
+    assert env.step(0).truncated
+    assert env.progress()['truncation_reason']=='DECISION_BUDGET'
+    assert not env.progress()['stagnation_triggered']
+
+
+def test_environment_gain_and_scene_reset_clear_stagnation(monkeypatch):
+    from dataclasses import replace
+    from test_task_analysis import snapshot
+    env,state=stagnation_env(monkeypatch)
+    for _ in range(3): assert not env.step(0).truncated
+    known=np.pad(np.ones((6,6),np.uint8),3);known[2,3]=1
+    state['snapshot']=replace(snapshot(np.pad(np.ones((6,6),np.uint8),3),
+        b=known,pose=env.plant.pose),revision=2)
+    gained=env.step(0)
+    assert gained.parts.new_area_m2==1. and not gained.truncated
+    assert env.progress()['stagnation_zero_gain_steps']==0
+    for _ in range(3): assert not env.step(0).truncated
+    assert env.step(0).truncated
+    env.reset_scene(env.terrain,env.plant.pose,env.task)
+    assert env.progress()['truncation_reason'] is None
+    assert env.progress()['stagnation_zero_gain_steps']==0
+    assert not env.step(0).truncated
+
+
+@pytest.mark.parametrize('terminal', ['success','exhausted'])
+def test_real_terminal_precedes_stagnation_and_retains_completion_bonus(monkeypatch,terminal):
+    from dataclasses import replace
+    from test_task_analysis import snapshot
+    env,state=stagnation_env(monkeypatch,window=4)
+    for _ in range(3): env.step(0)
+    if terminal=='success':
+        # The fourth action reaches true 99%; the terminal transition keeps its
+        # ordinary area reward and receives the existing one-time bonus.
+        known=np.ones((12,12),np.uint8);known[5,9]=0
+        state['snapshot']=replace(snapshot(np.pad(np.ones((6,6),np.uint8),3),
+            b=known,pose=env.plant.pose),revision=2)
+    else:
+        observe=env.core.observe
+        def exhausted(*args):
+            obs,report=observe(*args)
+            return obs,replace(report,exhausted=True)
+        monkeypatch.setattr(env.core,'observe',exhausted)
+    result=env.step(0)
+    assert result.terminated and not result.truncated
+    assert env.progress()['truncation_reason'] is None
+    assert result.reward==pytest.approx(6.069 if terminal=='success' else -.001)
+    if terminal=='success': assert env.progress()['stagnation_zero_gain_steps']==0
+    with pytest.raises(RuntimeError,match='requires reset'): env.step(0)
+
+
+def test_stagnation_uses_executed_xy_even_when_requested_targets_keep_changing(monkeypatch):
+    env,_=stagnation_env(monkeypatch,positions=1)
+    _,actions=np.unique(env.observation.goals[:,:2],axis=0,return_index=True)
+    assert len(actions)>=2
+    for action in [actions[0],actions[1],actions[0]]: assert not env.step(action).truncated
+    assert env.step(actions[1]).truncated
+    assert env.progress()['stagnation_position_count']==1

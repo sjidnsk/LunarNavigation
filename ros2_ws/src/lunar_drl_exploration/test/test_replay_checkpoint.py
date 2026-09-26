@@ -171,6 +171,7 @@ def capture_state(learner, config, replay, schedule, boundary):
         replay_rng=np.random.default_rng(91), curriculum_rng=np.random.default_rng(17),
         curriculum={'stage':1,'episodes':17,'scene_seed_counter':34},
         collector_state={'policy_rng':torch.Generator().manual_seed(83).get_state(),
+                         'actor_record':learner.actor_state(),
                          'actor_version':learner.updates,'next_episode_id':18},
         counters={'episodes_completed':17,'simulated_seconds':42.5})
 

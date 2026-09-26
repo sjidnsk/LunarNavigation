@@ -18,7 +18,10 @@ def collector_main(pipe, config_record, initial_state, *, domain_base=210,
     from .ipc import Duplex
     wake = threading.Event()
     numerical_threads(config_record['collector_threads'])
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    # The learner owns the STOP/ACK/checkpoint barrier. Process-group signals
+    # must not kill its transport or workers before that barrier completes.
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, signal.SIG_IGN)
     import torch
     from .config import ModelConfig
     from .model import Actor

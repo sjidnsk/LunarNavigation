@@ -170,11 +170,9 @@ def evaluate(config, actor_path, *, seeds, families, extents, budget, output=Non
 
 
 def _atomic_file(output, write):
-    # Reuse Task6's write-time old+temporary budget enforcement and fsync.
-    from .checkpoint import CheckpointManager
-    output = Path(output)
-    manager = CheckpointManager(output.parent)
-    manager._atomic(output.name, write)
+    # Discover the stage manifest for both reports and exported model weights.
+    from .artifacts import atomic_write
+    atomic_write(output, write, diagnostic=Path(output).suffix != '.pt')
 
 
 def export_actor(checkpoint, output):

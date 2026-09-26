@@ -14,10 +14,13 @@ def parser():
             cmd.add_argument('--sensor-range', type=float)
             cmd.add_argument('--sensor-fov', type=float)
         if name == 'train':
-            cmd.add_argument('--resume', action='store_true', help='restore output-dir/resume.pt; start new environment episodes')
+            continuation = cmd.add_mutually_exclusive_group()
+            continuation.add_argument('--resume', action='store_true', help='restore output-dir/resume.pt; start new environment episodes')
+            continuation.add_argument('--fork-from', type=Path,
+                help='trusted checkpoint for a new run; explicit stagnation, resource and diagnostic changes only')
             cmd.add_argument('--output-dir')
             cmd.add_argument('--device', default='cuda', choices=('cpu', 'cuda'))
-            cmd.add_argument('--max-transitions', type=int, help='new admissions this run; bounded finished drain may overshoot')
+            cmd.add_argument('--max-transitions', type=int, help='maximum new admissions this run, including dispatched work')
             cmd.add_argument('--probe', action='store_true', help='explicit finite diagnostic run; keeps full model/batch/physical backend')
             cmd.add_argument('--probe-warmup', type=int)
             cmd.add_argument('--probe-extent', type=float)
@@ -83,7 +86,7 @@ def main(argv=None):
         if args.probe and args.max_transitions is None:
             raise ValueError('--probe requires a finite --max-transitions')
         from .training import run_training
-        return run_training(config, resume=args.resume, device=args.device,
+        return run_training(config, resume=args.resume, fork_from=args.fork_from, device=args.device,
             max_transitions=args.max_transitions, domain_base=args.domain_base,
             probe_extent=args.probe_extent, probe_budget=args.probe_budget)
     if args.command == 'evaluate':

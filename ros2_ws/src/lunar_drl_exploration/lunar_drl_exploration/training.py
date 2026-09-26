@@ -1,6 +1,11 @@
 """Single learner owner of replay, exact update credit and continuation state."""
 
 
+def within_admission_budget(admitted, inflight, *, baseline, maximum):
+    """Reserve room for already granted actions before starting another one."""
+    return maximum is None or admitted - baseline + inflight < maximum
+
+
 def _merge_progress(status, progress):
     """Never attach an earlier episode's completion fields to reset progress."""
     if status.get('state') == 'RESETTING':
@@ -89,7 +94,7 @@ def initial_model_checksum(learner):
     return digest.hexdigest()
 
 
-def run_training(config, *, resume=False, device='cuda', max_transitions=None,
+def run_training(config, *, resume=False, fork_from=None, device='cuda', max_transitions=None,
                  domain_base=210, probe_extent=None, probe_budget=None,
                  env_factory='lunar_drl_exploration.ros_env:RosExplorationEnv'):
     """Run finite or continuous training; max_transitions counts this-run admissions.
@@ -119,6 +124,8 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
     from .replay import ReplayBuffer, loads_transport
     from .sac import SACLearner
     from .schedule import UpdateSchedule
+    if resume and fork_from is not None:
+        raise ValueError('resume and fork_from are mutually exclusive')
     if config.seed < 0: raise ValueError('training seed must be nonnegative')
     if max_transitions is not None and max_transitions <= 0:
         raise ValueError('max_transitions must be positive')
@@ -126,10 +133,13 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
         raise ValueError('isolated worker DDS domains must be within 0..232')
     if config.model.width != 128 or config.model.heads != 8 or config.model.layers != 6:
         raise ValueError('training requires full 128/8/6 graph model')
+    # Validate the source and empty destination before creating any run artifacts.
+    fork_state = TrainingState.fork_from(fork_from, config) if fork_from is not None else None
     torch.set_num_threads(config.learner_threads)
     random.seed(config.seed); np.random.seed(config.seed % 2**32); torch.manual_seed(config.seed)
     manager = CheckpointManager(config.output_dir, config.save_interval_s,
-        total_max_bytes=config.total_output_max_bytes, snapshot_max_bytes=config.snapshot_max_bytes)
+        total_max_bytes=config.total_output_max_bytes, snapshot_max_bytes=config.snapshot_max_bytes,
+        artifact_root=config.artifact_root)
     if not resume and (Path(config.output_dir) / 'resume.pt').exists():
         raise ValueError('resume.pt already exists; use --resume or a new output directory')
     learner = SACLearner(config.model, config.learning, device=device)
@@ -141,17 +151,29 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
     collector_state = dict(actor_record=learner.actor_state(), actor_version=0,
         policy_rng=torch.Generator().manual_seed(config.seed + 2).get_state(), sequences={})
     counters = dict(transitions=0, aborted=0, recoveries=0)
-    if resume:
-        restored = manager.load(config).restore(learner, config)
+    fork_provenance = None
+    if resume or fork_state is not None:
+        state = manager.load(config) if resume else fork_state
+        fork_provenance = state.record.get('fork')
+        restored = state.restore(learner, config)
         replay, schedule = restored.replay, restored.schedule
         replay_rng, curriculum_rng = restored.replay_rng, restored.curriculum_rng
         curriculum_state, collector_state, counters = restored.curriculum, restored.collector_state, restored.counters
+        # Release the loaded replay snapshot before the new capture; learned
+        # tensors/replay are now owned by the learner and restored buffer.
+        del state, restored
+    fork_state = None
     if collector_state['actor_record']['version'] != collector_state['actor_version']:
         raise ValueError('saved collector weights/publication identity disagree')
     curriculum = Curriculum(config, curriculum_rng, curriculum_state,
         probe_extent=probe_extent, probe_budget=probe_budget)
     ledger = AdmissionLedger(replay, schedule)
     ledger.last_admitted = dict(counters.get('last_admitted', {}))
+    diagnostics = None
+    if config.reward_diagnostics:
+        from .reward_diagnostics import RewardDiagnostics
+        diagnostics = RewardDiagnostics(config.environments, completion_bonus=config.completion_bonus,
+            success_coverage=config.success_coverage, state=counters.get('reward_diagnostics'))
     boundary = UpdateBoundary()
     metrics = MetricsWriter(Path(config.output_dir) / 'metrics.jsonl', config.metrics_max_bytes,
         total_max_bytes=config.total_output_max_bytes)
@@ -172,6 +194,8 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
         torch_path=torch.__file__, cuda_initialized=torch.cuda.is_initialized()), workers={},
         probe=dict(extent_m=probe_extent, budget=probe_budget, max_new_transitions=max_transitions),
         resume=resume, initial_model_checksum=initial_checksum)
+    if fork_provenance is not None:
+        observations['fork'] = fork_provenance
     # Bounded recent episode identities suffice for run auditing; counters remain cumulative.
     episode_ids = []
     barrier_pending = False
@@ -181,6 +205,8 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
     failure = None
     stop_reason = None
     last_metrics = started
+    last_summary = started
+    last_checkpoint_transitions = schedule.transitions if resume else None
     last_update = {}
     observed_publication = collector_state['actor_version']
     try:
@@ -190,12 +216,33 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
 
     def capture():
         counters['last_admitted'] = dict(ledger.last_admitted)
-        return TrainingState.capture(learner=learner, config=config, replay=replay,
+        if diagnostics is not None:
+            counters['reward_diagnostics'] = diagnostics.state_dict()
+        state = TrainingState.capture(learner=learner, config=config, replay=replay,
             schedule=schedule, boundary=boundary, replay_rng=replay_rng, curriculum_rng=curriculum_rng,
             curriculum=curriculum.state, collector_state=collector_state, counters=counters)
+        if fork_provenance is not None:
+            state.record['fork'] = fork_provenance
+        return state
+
+    def persist_diagnostics():
+        nonlocal last_summary
+        if diagnostics is None:
+            return
+        from .artifacts import atomic_json
+        boundary_record = dict(transitions=schedule.transitions, updates=schedule.updates,
+            last_checkpoint_transitions=last_checkpoint_transitions)
+        atomic_json(Path(config.output_dir)/'reward-summary.json',
+            dict(diagnostics.summary(), training_boundary=boundary_record), max_bytes=1024**2)
+        atomic_json(Path(config.output_dir)/'reward-cases.json',
+            dict(diagnostics.cases(), training_boundary=boundary_record), max_bytes=16*1024**2)
+        last_summary = time.monotonic()
 
     def save():
+        nonlocal last_checkpoint_transitions
         path = manager.save(capture())
+        last_checkpoint_transitions = schedule.transitions
+        persist_diagnostics()
         metrics.append(dict(event='checkpoint', transitions=schedule.transitions,
             updates=schedule.updates, actor_version=collector_state['actor_version'],
             unfinished_reservations=schedule.inflight, path=str(path)))
@@ -210,8 +257,9 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
             connection.send(dict(kind='STOP'))
 
     def record_run():
-        manager.write_run(config, owned_pids=[os.getpid(), process.pid] +
-            [pid for pids in env_owners.values() for pid in pids], code_revision=code_revision, extra=observations)
+        owned = [os.getpid(), process.pid] + [pid for pids in env_owners.values() for pid in pids]
+        manager.write_run(config, owned_pids=[pid for pid in owned if pid is not None],
+            code_revision=code_revision, extra=observations)
 
     def status_record():
         elapsed = max(time.monotonic() - started, 1e-9)
@@ -234,6 +282,7 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
     try:
         # An initial good checkpoint also protects a first-update infrastructure failure.
         if not resume: save()
+        if fork_from is not None: record_run()
         process.start(); child.close()
         connection = Duplex(connection, config.environments,
             publication_window=(config.max_update_credit + config.actor_publish_updates - 1) //
@@ -255,6 +304,8 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
                     scenes = loads_transport(message['payload'])
                     ledger.scene(env_id, scenes)
                     metadata = message['metadata']
+                    if diagnostics is not None:
+                        diagnostics.reset(env_id, 'RESET')
                     env_status[env_id] = dict(metadata, state='READY')
                     episode_ids.append(metadata['episode_id'])
                     del episode_ids[:-config.environments * 2]
@@ -291,6 +342,15 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
                     wall = message.get('execution', {}).get('wall_s', 0)
                     status['actual_rtf'] = message.get('execution', {}).get('simulation_s', 0) / wall if wall else None
                     if admitted:
+                        if diagnostics is not None:
+                            before_count = int(np.unpackbits(
+                                transition.privileged.observed & scene.packed_reference).sum())
+                            diagnostics.observe(env_id, transition,
+                                before_coverage=before_count/len(scene.reference_indices) if len(scene.reference_indices) else 0.,
+                                after_coverage=status['reference_coverage'],
+                                family=status.get('family', 'other'), extent_m=status.get('extent_m', 0.),
+                                execution=execution, truncation_reason=status.get('truncation_reason'),
+                                seed=status.get('seed'))
                         metrics.append(dict(status, event='transition', env=env_id, token=message['token'],
                             transitions=schedule.transitions, episode_id=transition.episode_id))
                     if max_transitions is not None and schedule.transitions-baseline >= max_transitions:
@@ -318,6 +378,8 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
                     print(f'Collector fatal: {failure}', file=sys.stderr, flush=True)
                     stop(failure)
                 elif kind == 'RECOVERY':
+                    if diagnostics is not None:
+                        diagnostics.reset(env_id, 'RECOVERY')
                     counters['recoveries'] = counters.get('recoveries', 0) + 1
                     terminal.event(f"E{env_id} 基础设施恢复，第 {message['attempt']} 次：{message['reason']}")
                     metrics.append(dict(message, event='recovery'))
@@ -345,6 +407,9 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
                 continue
             if not stopping and not barrier_pending:
                 for env_id, token in list(pending_requests.items()):
+                    if not within_admission_budget(schedule.transitions, schedule.inflight,
+                            baseline=baseline, maximum=max_transitions):
+                        break
                     if schedule.can_dispatch():
                         if env_id in reservations: raise RuntimeError('second reservation for environment')
                         schedule.reserve_dispatch(); reservations[env_id] = token
@@ -376,6 +441,8 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
                     record['resource_unavailable'] = str(exc)
                 except ResourceLimitError as exc: stop(str(exc))
                 metrics.append(record)
+                if time.monotonic() - last_summary >= 30:
+                    persist_diagnostics()
                 terminal.render(record, phase='保存并停止' if stopping else ('保存检查点' if barrier_pending else None))
                 last_metrics = time.monotonic()
         process.join(10)
@@ -384,6 +451,7 @@ def run_training(config, *, resume=False, device='cuda', max_transitions=None,
         observations['final']['stop_reason'] = failure or stop_reason or 'orderly stop'
         observations['final']['owned_children_closed'] = not process.is_alive()
         record_run()
+        persist_diagnostics()
         terminal.render(status_record(), phase='已停止（异常）' if failure else '已保存并停止', force=True)
         if failure: raise RuntimeError(failure)
         return dict(transitions=schedule.transitions, new_transitions=schedule.transitions-baseline,

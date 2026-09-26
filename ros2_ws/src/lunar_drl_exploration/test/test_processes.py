@@ -51,3 +51,18 @@ def test_close_reaps_owned_live_process_and_preserves_unowned():
         assert outsider.poll() is None
     finally:
         owner.close();outsider.terminate();outsider.wait(timeout=5)
+
+
+def test_owned_child_does_not_inherit_worker_ignored_sigterm():
+    owner = OwnedProcesses()
+    previous = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    try:
+        child = owner.spawn([sys.executable, '-c',
+            'import signal,sys; '
+            'sys.exit(0 if signal.getsignal(signal.SIGTERM)==signal.SIG_DFL else 42)'])
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+    try:
+        assert child.wait(timeout=5) == 0
+    finally:
+        owner.close()

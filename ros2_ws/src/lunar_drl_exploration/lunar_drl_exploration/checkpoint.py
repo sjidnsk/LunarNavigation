@@ -6,8 +6,6 @@ import json
 import os
 from pathlib import Path
 import random
-import shutil
-import tempfile
 import time
 
 import numpy as np
@@ -16,6 +14,7 @@ from .config import config_record, resume_semantics
 from .metrics import ResourceLimitError, artifact_bytes, live_hardware
 from .replay import ReplayBuffer, dumps_transport, loads_transport, snapshot_sample_count
 from .schedule import UpdateSchedule
+from .artifacts import BudgetWriter as _BudgetWriter, atomic_write, initialize_artifact_root, _safe_path
 
 SCHEMA='bounded_training_v1'
 
@@ -70,6 +69,50 @@ class TrainingState:
     record: dict
 
     @classmethod
+    def fork_from(cls, source, config):
+        """Read a trusted checkpoint into a new collection run, retaining its learner.
+
+        Only training stagnation limits and output resource settings may change. Existing replay remains
+        valid off-policy experience under the unchanged reward and task contract.
+        This operation neither creates the destination nor writes the source.
+        """
+        from .config import training_config_from_record
+        source = Path(source).resolve()
+        destination = Path(config.output_dir).resolve()
+        if source.parent == destination or source == (destination / 'resume.pt').resolve():
+            raise ValueError('fork source and destination must be different runs')
+        if destination.exists() and (not destination.is_dir() or any(destination.iterdir())):
+            raise ValueError('fork destination must be empty')
+        state = cls(torch.load(source, map_location='cpu', weights_only=False))
+        state.validate()
+        original = training_config_from_record(state.record['config'])
+        # Validate its original identity before replacing any metadata. A fork
+        # cannot make an incompatible or corrupt old checkpoint look current.
+        state.validate(original)
+        before, after = config_record(original), config_record(config)
+        fields = ('stagnation_window_steps', 'stagnation_max_positions',
+                  'stagnation_position_tolerance_m', 'artifact_root',
+                  'total_output_max_bytes', 'metrics_max_bytes', 'reward_diagnostics')
+        # A relocated installation does not alter the platform capability. Its
+        # values still compare exactly, matching resume_semantics' path exclusion.
+        before_identity, after_identity = [dict(record, platform={key: value
+            for key, value in record['platform'].items() if key != 'capability_path'})
+            for record in (before, after)]
+        different = sorted(key for key in before
+            if key not in (*fields, 'output_dir') and before_identity[key] != after_identity[key])
+        if different:
+            raise ValueError('incompatible fork configuration: ' + ', '.join(different))
+        state.record['fork'] = dict(source_checkpoint=str(source),
+            source_transitions=state.record['schedule']['transitions'],
+            source_updates=state.record['schedule']['updates'],
+            changes={key: dict(before=before[key], after=after[key])
+                for key in fields if before[key] != after[key]})
+        state.record['config'] = after
+        state.record['semantics'] = resume_semantics(config)
+        state.validate(config)
+        return state
+
+    @classmethod
     def capture(cls, *, learner, config, replay, schedule, boundary, replay_rng,
                 curriculum_rng, curriculum, collector_state, counters):
         boundary.require_safe()
@@ -118,8 +161,14 @@ class TrainingState:
         if (schedule.warmup != schedule_config['warmup'] or
                 schedule.ratio != type(schedule.ratio)(str(schedule_config['ratio']))):
             raise ValueError('checkpoint schedule config disagrees with semantics')
-        if canonical_model_config(record['learner']['model_config']) != semantics['model']:
+        if (canonical_model_config(record['learner']['model_config']) != semantics['model'] or
+                canonical_model_config(record['config']['model']) != semantics['model']):
             raise ValueError('checkpoint model config disagrees with semantics')
+        collector_actor = record['collector_state'].get('actor_record')
+        if (not isinstance(collector_actor, dict) or
+                not isinstance(collector_actor.get('model_config'), dict) or
+                canonical_model_config(collector_actor['model_config']) != semantics['model']):
+            raise ValueError('checkpoint collector model config missing or disagrees with semantics')
         for key, value in record['semantics']['learning'].items():
             if record['learner']['learning_config'].get(key) != value:
                 raise ValueError('checkpoint learning config disagrees with semantics')
@@ -161,35 +210,18 @@ class TrainingState:
             curriculum,collector_state,counters)
 
 
-class _BudgetWriter:
-    """Enforce simultaneous old+temporary bytes before each physical write."""
-    def __init__(self, stream, existing, limit, free):
-        self.stream=stream; self.existing=existing; self.limit=limit; self.free=free
-        self.extent=0; self.failure=None
-
-    def write(self, data):
-        if self.failure is not None: raise self.failure
-        end=self.stream.tell()+len(data)
-        extent=max(self.extent,end)
-        if self.existing+extent>self.limit:
-            self.failure=ResourceLimitError('artifact peak bytes',self.existing+extent,self.limit)
-            raise self.failure
-        if extent>self.free:
-            self.failure=ResourceLimitError('disk temporary bytes',extent,self.free)
-            raise self.failure
-        result=self.stream.write(data); self.extent=extent
-        return result
-
-    def __getattr__(self, name):
-        return getattr(self.stream,name)
-
-
 class CheckpointManager:
     def __init__(self, output_dir, interval_s=1800, *, total_max_bytes=20*1024**3,
-                 snapshot_max_bytes=2*1024**3, clock=time.monotonic):
+                 snapshot_max_bytes=2*1024**3, clock=time.monotonic, artifact_root=''):
         if interval_s<=0 or total_max_bytes<=0 or snapshot_max_bytes<=0:
             raise ValueError('positive checkpoint budgets required')
-        self.output_dir=Path(output_dir); self.output_dir.mkdir(parents=True,exist_ok=True)
+        self.output_dir=_safe_path(output_dir)
+        if artifact_root:
+            root, output = _safe_path(artifact_root), _safe_path(output_dir)
+            if not output.is_relative_to(root) or output == root:
+                raise ValueError('training output must be inside, not outside or equal to artifact root')
+            initialize_artifact_root(root, total_max_bytes)
+        self.output_dir.mkdir(parents=True,exist_ok=True)
         self.interval_s=interval_s; self.total_max_bytes=total_max_bytes
         self.snapshot_max_bytes=snapshot_max_bytes; self.clock=clock
         self.last_save=clock()
@@ -212,28 +244,10 @@ class CheckpointManager:
         self.request_save('SIGINT', stop=True)
 
     def _atomic(self, name, write):
-        existing=artifact_bytes(self.output_dir)
-        free=shutil.disk_usage(self.output_dir).free
-        temporary=None
-        try:
-            with tempfile.NamedTemporaryFile(mode='w+b',dir=self.output_dir,
-                    prefix='.'+name+'.',suffix='.tmp',delete=False) as stream:
-                temporary=Path(stream.name)
-                writer=_BudgetWriter(stream,existing,self.total_max_bytes,free)
-                try:
-                    write(writer)
-                except BaseException:
-                    # Torch ZIP finalization can mask a failing write. Preserve
-                    # the first observed budget error instead of its ZIP follow-up.
-                    if writer.failure is not None: raise writer.failure
-                    raise
-                stream.flush(); os.fsync(stream.fileno())
-            os.replace(temporary,self.output_dir/name)
-            descriptor=os.open(self.output_dir,os.O_RDONLY|os.O_DIRECTORY)
-            try: os.fsync(descriptor)
-            finally: os.close(descriptor)
-        finally:
-            if temporary is not None and temporary.exists(): temporary.unlink()
+        if Path(name).name != name:
+            raise ValueError('checkpoint artifact name must be a basename')
+        atomic_write(self.output_dir/name, write, diagnostic=Path(name).suffix != '.pt',
+            local_total_max_bytes=self.total_max_bytes)
 
     def save(self, state):
         state.validate()
