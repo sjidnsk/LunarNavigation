@@ -57,8 +57,8 @@ Files: training integration tests, operational profile, `docs/DRL开发入口.md
 - [x] Enforce dispatch budget before granting goals, so 2,048 admissions cannot overshoot.
 - [x] Review branch diff, run package source tests, build isolated Jazzy overlay, colcon tests and installed native smoke.
 - [x] Fresh independent code review; resolve important findings and retest affected paths.
-- [ ] Commit exact paths and fast-forward the clean DRL development line after confirming ancestry/ownership.
-- [ ] Launch one bounded small-scene training run from the existing trusted checkpoint; verify module paths, source identity, persisted initial checkpoint and live admissions.
+- [x] Commit exact paths and fast-forward the clean DRL development line after confirming ancestry/ownership.
+- [x] Launch one bounded small-scene training run from the existing trusted checkpoint; verify module paths, source identity, persisted initial checkpoint and live admissions.
 - [ ] Observe the finite run, record evidence and limitations without claiming convergence from a single run.
 
 ## Review focus
@@ -76,3 +76,7 @@ Files: training integration tests, operational profile, `docs/DRL开发入口.md
 - Ruling: preserve the original checkpoint as the immutable baseline; do not copy it into the phase root or prune historical outputs.
 
 - Verification: final colcon package 435 passed / 2 skipped (88.07 s), installed ROS 2 passed (15.66 s), 40 installed module hashes match; independent review clean after two stop-path fixes.
+
+- Integration: implementation commit `046ed473` fast-forwarded into clean `dev/drl-exploration`; tree identical. Started the bounded 60 m run at 2026-09-26T16:15:02Z, wrapper69666/learner69667; initial checkpoint and fork provenance present.
+
+- Startup evidence: 12 new admissions, learner updates 24296→24300, all 8 scenes at 60 m, 2.36 GiB total/115441 B diagnostic. The finite run continues in background; final budget completion and policy-effect evaluation remain pending.
