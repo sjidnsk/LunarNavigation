@@ -1,7 +1,9 @@
 # 强化学习统一开发入口
 
 2026-09-27后续按用户确认推进[一步/八步soft Retrace对照](validation/2026-09-27-drl-multistep-experiment.md)：
-专项`feat/drl-multistep`复用`.worktrees/drl-stagnation-budget`，先工程验证再有界训练及冻结评测。
+专项`feat/drl-multistep`复用`.worktrees/drl-stagnation-budget`；工程验证及两臂有界训练已完成。
+两臂均新增2048条/512更新；训练成功12次与11次，八步实际多步抽样占16.38%，尚无优势证据。
+19:16已在后台启动10回合冻结开发评测，关闭训练停滞截断；结果尚未验收，不持续轮询。
 默认仍为一步、tau=.005；本轮新增两臂快照各512MiB，与全部历史产物共用下述8GiB根。
 实施和结果状态以该记录为准，不把下面已关闭的Polyak阶段与本轮混为同一运行。
 
