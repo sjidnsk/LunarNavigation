@@ -4,11 +4,22 @@ Module imports are stdlib only. Each slot retains at most one observation and on
 finished transition. Static scene payloads are forwarded once and not archived.
 """
 import multiprocessing as mp
+import math
 import threading
 import os
 import pickle
 import signal
 import time
+
+
+def sample_behavior_action(weights, generator):
+    """One original multinomial draw plus its normalized joint log probability."""
+    import torch
+    action = int(torch.multinomial(weights, 1, generator=generator))
+    # Use the actual sampled weights, not a later Actor or a position marginal.
+    # Double accumulation avoids losing a small positive weight in the sum.
+    log_mu = math.log(float(weights[action])) - math.log(float(weights.sum(dtype=torch.float64)))
+    return action, log_mu
 
 
 def collector_main(pipe, config_record, initial_state, *, domain_base=210,
@@ -225,9 +236,9 @@ def collector_main(pipe, config_record, initial_state, *, domain_base=210,
                     with torch.inference_mode():
                         outputs = actor([slot['observation'] for _, slot in batch])
                         for (env_id, slot), output in zip(batch, outputs):
-                            action = int(torch.multinomial(output.probs, 1, generator=generator))
+                            action, log_mu = sample_behavior_action(output.probs, generator)
                             slot['pipe'].send(dict(kind='STEP', token=slot['token'], action=action,
-                                actor_version=actor_record['version']))
+                                actor_version=actor_record['version'], behavior_log_prob=log_mu))
                             slot['mode'] = 'ACTIVE'; slot['since'] = time.monotonic()
             if barrier_requested and all(slot['pending'] is None for slot in slots.values()):
                 emit('BARRIER', payload=snapshot())

@@ -1,6 +1,8 @@
 """Immutable, transport-independent policy and replay contracts."""
 
 from dataclasses import dataclass, field
+import math
+from numbers import Integral, Real
 from types import MappingProxyType
 from typing import Mapping
 
@@ -234,3 +236,24 @@ class Transition:
     truncated: bool
     episode_id: str
     actor_version: int
+    step_index: int | None = None
+    behavior_log_prob: float | None = None
+
+    def __post_init__(self):
+        # Missing together identifies legacy experience; never invent its mu.
+        if self.step_index is None and self.behavior_log_prob is None:
+            return
+        if (isinstance(self.step_index, (bool, np.bool_)) or
+                not isinstance(self.step_index, Integral) or self.step_index < 0):
+            raise ValueError('trace step_index must be a nonnegative integer')
+        if (isinstance(self.behavior_log_prob, (bool, np.bool_)) or
+                not isinstance(self.behavior_log_prob, Real)):
+            raise ValueError('trace behavior_log_prob must be finite and nonpositive')
+        try:
+            log_prob = float(self.behavior_log_prob)
+        except (OverflowError, ValueError) as error:
+            raise ValueError('trace behavior_log_prob must be finite and nonpositive') from error
+        if not math.isfinite(log_prob) or log_prob > 0:
+            raise ValueError('trace behavior_log_prob must be finite and nonpositive')
+        object.__setattr__(self, 'step_index', int(self.step_index))
+        object.__setattr__(self, 'behavior_log_prob', log_prob)

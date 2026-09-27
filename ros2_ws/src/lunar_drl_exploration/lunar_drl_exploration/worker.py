@@ -1,18 +1,45 @@
 """Torch-free spawn entry and responsive control for one synchronous environment."""
 import importlib
+import math
+from numbers import Integral, Real
 import os
 import queue
 import signal
 import sys
 import threading
 import time
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, is_dataclass, replace
 
 
 def numerical_threads(count):
     for name in ('OMP_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'MKL_NUM_THREADS',
                  'NUMEXPR_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS'):
         os.environ[name] = str(count)
+
+
+def step_with_behavior_metadata(env, command):
+    """Bind collector probability to the actual completed environment step."""
+    if 'behavior_log_prob' not in command:
+        # Legacy direct-worker callers did not observe a behavior distribution.
+        # Never invent its probability or a partly populated metadata pair.
+        transition = env.step(command['action'], actor_version=command['actor_version'])
+        return replace(transition, step_index=None, behavior_log_prob=None)
+    log_mu = command['behavior_log_prob']
+    if isinstance(log_mu, bool) or not isinstance(log_mu, Real) or not math.isfinite(log_mu) or log_mu > 0:
+        raise ValueError('behavior_log_prob must be finite and nonpositive')
+    step_index, episode_id = env.steps, env.episode_id
+    if isinstance(step_index, bool) or not isinstance(step_index, Integral) or step_index < 0:
+        raise ValueError('environment step_index must be a nonnegative integer')
+    if not isinstance(episode_id, str) or not episode_id:
+        raise ValueError('environment episode_id is missing')
+    transition = env.step(command['action'], actor_version=command['actor_version'])
+    if transition.action != command['action'] or transition.actor_version != command['actor_version']:
+        raise ValueError('finished transition does not match dispatched action/version')
+    if transition.episode_id != episode_id or env.episode_id != episode_id:
+        raise ValueError('episode changed while executing the sampled action')
+    if isinstance(env.steps, bool) or not isinstance(env.steps, Integral) or env.steps != step_index + 1:
+        raise ValueError('finished action did not advance exactly one episode step')
+    return replace(transition, step_index=int(step_index), behavior_log_prob=float(log_mu))
 
 
 def worker_main(pipe, config_record, env_id, *, domain_base=210,
@@ -51,7 +78,7 @@ def worker_main(pipe, config_record, env_id, *, domain_base=210,
                         initial_reference_coverage=env.reference.coverage_ratio(initial_state.observed)),
                     completed=env.completed,terminated=env.terminated,exhausted=bool(env.report.exhausted))
             else:
-                transition = env.step(command['action'], actor_version=command['actor_version'])
+                transition = step_with_behavior_metadata(env, command)
                 execution = env.last_execution
                 result = dict(kind='DONE', token=command['token'],
                     payload=dumps_transport(transition),

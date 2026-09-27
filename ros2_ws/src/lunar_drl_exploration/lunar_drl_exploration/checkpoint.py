@@ -73,13 +73,13 @@ class TrainingState:
         """Read a trusted checkpoint into a new collection run, retaining its learner.
 
         Collection forks allow stagnation limits and output resource settings.
-        The explicit paired-polyak experiment additionally allows Polyak, paired
-        scenes and a nonincreasing saved-replay budget. Existing learning state
+        Explicit paired experiments additionally allow their single learning
+        variable, paired scenes and a nonincreasing saved-replay budget. Learning state
         remains intact, including target weights and optimizer history.
         This operation neither creates the destination nor writes the source.
         """
         from .config import training_config_from_record
-        if experiment not in (None, 'paired-polyak'):
+        if experiment not in (None, 'paired-polyak', 'paired-multistep'):
             raise ValueError('unknown fork experiment: ' + str(experiment))
         source = Path(source).resolve()
         destination = Path(config.output_dir).resolve()
@@ -97,29 +97,34 @@ class TrainingState:
         fields = ('stagnation_window_steps', 'stagnation_max_positions',
                   'stagnation_position_tolerance_m', 'artifact_root',
                   'total_output_max_bytes', 'metrics_max_bytes', 'reward_diagnostics')
+        if experiment == 'paired-multistep':
+            # This comparison changes only the return horizon. Collection and
+            # output caps remain the source contract, unlike a collection fork.
+            fields = ()
         # A relocated installation does not alter the platform capability. Its
         # values still compare exactly, matching resume_semantics' path exclusion.
         before_identity, after_identity = [dict(record, platform={key: value
             for key, value in record['platform'].items() if key != 'capability_path'})
             for record in (before, after)]
         learning_changes = {}
-        if experiment == 'paired-polyak':
+        if experiment in ('paired-polyak', 'paired-multistep'):
+            learning_field = 'polyak' if experiment == 'paired-polyak' else 'return_steps'
             if config.paired_scene_sequence is not True:
-                raise ValueError('paired-polyak fork requires paired_scene_sequence=true')
+                raise ValueError(f'{experiment} fork requires paired_scene_sequence=true')
             if config.snapshot_max_bytes > original.snapshot_max_bytes:
-                raise ValueError('paired-polyak fork cannot increase snapshot_max_bytes')
+                raise ValueError(f'{experiment} fork cannot increase snapshot_max_bytes')
             fields += ('paired_scene_sequence', 'snapshot_max_bytes')
             different_learning = sorted(key for key in before['learning']
-                if key != 'polyak' and before['learning'][key] != after['learning'][key])
+                if key != learning_field and before['learning'][key] != after['learning'][key])
             if different_learning:
                 raise ValueError('incompatible fork configuration: ' + ', '.join(
                     'learning.' + key for key in different_learning))
-            if before['learning']['polyak'] != after['learning']['polyak']:
-                learning_changes['polyak'] = dict(before=before['learning']['polyak'],
-                    after=after['learning']['polyak'])
+            if before['learning'][learning_field] != after['learning'][learning_field]:
+                learning_changes[learning_field] = dict(before=before['learning'][learning_field],
+                    after=after['learning'][learning_field])
             for identity in (before_identity, after_identity):
                 identity['learning'] = {key: value for key, value in identity['learning'].items()
-                    if key != 'polyak'}
+                    if key != learning_field}
         different = sorted(key for key in before
             if key not in (*fields, 'output_dir') and before_identity[key] != after_identity[key])
         if different:
@@ -133,6 +138,12 @@ class TrainingState:
             state.record['fork']['experiment'] = experiment
         if learning_changes:
             state.record['fork']['changes']['learning'] = learning_changes
+        if experiment == 'paired-multistep':
+            # The source was validated before this explicit semantic migration.
+            # Weights, four optimizers, RNG and replay remain byte-for-byte owned
+            # source state; ordinary resume/load still compares return_steps.
+            state.record['learner']['learning_config'] = dict(
+                state.record['learner']['learning_config'], return_steps=config.learning.return_steps)
         state.record['config'] = after
         state.record['semantics'] = resume_semantics(config)
         state.validate(config)
@@ -169,7 +180,7 @@ class TrainingState:
             counters=dumps_transport(counters)))
 
     def validate(self, config=None):
-        from .config import canonical_model_config
+        from .config import canonical_model_config, canonical_learning_config
         record=self.record
         if record.get('schema') != SCHEMA: raise ValueError('training checkpoint schema mismatch')
         for key in ('semantics','config','learner','schedule','rng','replay',
@@ -177,6 +188,7 @@ class TrainingState:
             if key not in record: raise ValueError(f'checkpoint missing {key}')
         semantics = dict(record['semantics'])
         semantics['model'] = canonical_model_config(semantics['model'])
+        semantics['learning'] = canonical_learning_config(semantics['learning'])
         if config is not None:
             expected=resume_semantics(config)
             different=sorted(key for key in set(expected)|set(semantics)
@@ -195,8 +207,10 @@ class TrainingState:
                 not isinstance(collector_actor.get('model_config'), dict) or
                 canonical_model_config(collector_actor['model_config']) != semantics['model']):
             raise ValueError('checkpoint collector model config missing or disagrees with semantics')
-        for key, value in record['semantics']['learning'].items():
-            if record['learner']['learning_config'].get(key) != value:
+        learner_learning = canonical_learning_config(record['learner']['learning_config'])
+        recorded_learning = canonical_learning_config(record['config']['learning'])
+        for key, value in semantics['learning'].items():
+            if learner_learning.get(key) != value or recorded_learning.get(key) != value:
                 raise ValueError('checkpoint learning config disagrees with semantics')
         if record['learner'].get('updates') != schedule.updates:
             raise ValueError('checkpoint learner/schedule counters disagree')

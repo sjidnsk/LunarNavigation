@@ -131,8 +131,11 @@ class LearningConfig:
     initial_alpha: float = 5e-5
     maximum_alpha: float = 1e-4
     target_entropy_factor: float = 0.10
+    return_steps: int = 1
 
     def __post_init__(self):
+        if type(self.return_steps) is not int or not 1 <= self.return_steps <= 8:
+            raise ValueError('return_steps must be an integer in [1,8]')
         if self.batch_size != 64 or not 0 < self.microbatch_size <= self.batch_size:
             raise ValueError("effective batch is 64; microbatch must be in [1,64]")
         if not 0 < self.gamma <= 1:
@@ -141,6 +144,15 @@ class LearningConfig:
                 0 < self.polyak <= 1 and self.learning_rate > 0 and
                 self.target_entropy_factor >= 0):
             raise ValueError("invalid SAC optimization settings")
+
+
+def canonical_learning_config(record):
+    """Legacy learner and replay semantics used one-step targets."""
+    result = dict(record)
+    result.setdefault('return_steps', 1)
+    if type(result['return_steps']) is not int or not 1 <= result['return_steps'] <= 8:
+        raise ValueError('learning config return_steps must be an integer in [1,8]')
+    return result
 
 
 @dataclass(frozen=True)

@@ -1,5 +1,10 @@
 # 强化学习统一开发入口
 
+2026-09-27后续按用户确认推进[一步/八步soft Retrace对照](validation/2026-09-27-drl-multistep-experiment.md)：
+专项`feat/drl-multistep`复用`.worktrees/drl-stagnation-budget`，先工程验证再有界训练及冻结评测。
+默认仍为一步、tau=.005；本轮新增两臂快照各512MiB，与全部历史产物共用下述8GiB根。
+实施和结果状态以该记录为准，不把下面已关闭的Polyak阶段与本轮混为同一运行。
+
 本轮小场景恢复入口：`config/drl_exploration_recovery.yaml` 配合
 `scripts/drl/run_bounded.py`，共同存储根总额8 GiB、诊断128 MiB。
 60 m月面/洞穴、每回合512步、最多2048条新增入库；原学习目标与已有状态保留。

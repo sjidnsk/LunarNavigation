@@ -5,7 +5,8 @@ import math
 import numpy as np
 import torch
 from .batch import pack_observations, pack_privileged
-from .config import ModelConfig, LearningConfig, canonical_model_config
+from .config import ModelConfig, LearningConfig, canonical_model_config, canonical_learning_config
+from .contracts import Transition
 from .model import Actor, Critic, segment_sum
 
 
@@ -21,6 +22,34 @@ def policy_loss(probs, log_probs, q1, q2, alpha, groups, count):
 def temperature_loss(log_alpha, entropy, target_entropy):
     # Gradient descent reduces alpha when entropy exceeds its target.
     return (log_alpha * (entropy - target_entropy).detach()).mean()
+
+
+@torch.no_grad()
+def retrace_coefficients(log_pi, log_mu):
+    """Lambda=1 importance correction for the actual sampled joint action."""
+    return (log_pi - log_mu).clamp(max=0).exp()
+
+
+@torch.no_grad()
+def soft_retrace_target(rewards, discounts, next_values, next_q, coefficients):
+    """Detached finite soft Retrace for one sequence of at most eight steps.
+
+    ``next_values[i]`` is E_pi[min(target Q) - alpha log pi] at s_(i+1).
+    The last two arrays contain only the m-1 sampled successor actions:
+    raw min(target Q) and min(1, pi / mu), with no extra entropy subtraction.
+    ``discounts`` already masks true termination, but not time truncation.
+    """
+    length = rewards.numel()
+    if (not 1 <= length <= 8 or any(t.ndim != 1 for t in
+            (rewards, discounts, next_values, next_q, coefficients)) or
+            discounts.numel() != length or next_values.numel() != length or
+            next_q.numel() != length - 1 or coefficients.numel() != length - 1):
+        raise ValueError('invalid soft Retrace sequence tensor shapes')
+    result = rewards[-1] + discounts[-1] * next_values[-1]
+    for i in range(length - 2, -1, -1):
+        result = rewards[i] + discounts[i] * (
+            next_values[i] + coefficients[i] * (result - next_q[i]))
+    return result
 
 
 @torch.no_grad()
@@ -101,21 +130,114 @@ class SACLearner:
             targets[torch.tensor(active, device=self.device)] += self.learning_config.gamma * values
         return targets
 
+    def _sequences(self, samples):
+        """Validate before optimizer changes; replay owns full state adjacency."""
+        sequences = []
+        for sample in samples:
+            sequence = (sample,) if isinstance(sample, Transition) else sample
+            if (not isinstance(sequence, tuple) or
+                    not 1 <= len(sequence) <= self.learning_config.return_steps or
+                    any(not isinstance(t, Transition) for t in sequence)):
+                raise ValueError('invalid replay sequence length or entries')
+            if any(not 0 <= t.action < len(t.observation.action_nodes) for t in sequence):
+                raise ValueError('replay action must index the frozen valid action list')
+            if len(sequence) > 1:
+                if any(t.step_index is None or t.behavior_log_prob is None for t in sequence):
+                    raise ValueError('multi-step sequence requires behavior metadata')
+                for previous, following in zip(sequence, sequence[1:]):
+                    if (previous.terminated or previous.truncated or
+                            previous.episode_id != following.episode_id or
+                            previous.step_index + 1 != following.step_index or
+                            previous.privileged.scene_id != following.privileged.scene_id):
+                        raise ValueError('replay sequence crosses an episode or step boundary')
+            sequences.append(sequence)
+        return sequences
+
+    @torch.no_grad()
+    def retrace_targets(self, sequences, scenes):
+        """Return one target and coefficient mass per anchor, without graph retention.
+
+        Only graph *references* are flattened; every target forward contains at
+        most microbatch_size states. Actor, alpha and target Q stay unchanged
+        throughout the critic phase. Legacy singleton sequences use exact TD.
+        """
+        sequences = self._sequences(sequences)
+        if not sequences:
+            raise ValueError('soft Retrace requires a nonempty sequence batch')
+        size = self.learning_config.microbatch_size
+        if all(len(sequence) == 1 for sequence in sequences):
+            anchors = [sequence[0] for sequence in sequences]
+            targets = torch.cat([self.td_targets(anchors[i:i + size], scenes)
+                                 for i in range(0, len(anchors), size)])
+            return targets, torch.ones_like(targets)
+
+        transitions, requests, ranges = [], [], []
+        for sequence in sequences:
+            start = len(transitions)
+            transitions.extend(sequence)
+            ranges.append((start, len(transitions)))
+            for i, transition in enumerate(sequence):
+                if transition.terminated:
+                    continue
+                if len(transition.next_observation.action_nodes) == 0:
+                    raise ValueError('nonterminal successor requires valid actions')
+                following = sequence[i + 1] if i + 1 < len(sequence) else None
+                requests.append((start + i, transition.next_observation,
+                    transition.next_privileged, following))
+        rewards = torch.tensor([t.reward for t in transitions], device=self.device)
+        discounts = rewards.new_tensor([self.learning_config.gamma * (not t.terminated)
+                                        for t in transitions])
+        values, selected, coefficients = (torch.zeros_like(rewards) for _ in range(3))
+        for offset in range(0, len(requests), size):
+            chunk = requests[offset:offset + size]
+            observations = [request[1] for request in chunk]
+            batch = pack_observations(observations, self.device)
+            truth = pack_privileged(observations, [request[2] for request in chunk], scenes, self.device)
+            policy = self.actor.forward_packed(batch)
+            minimum = torch.minimum(self.target1.forward_packed(batch, truth),
+                                    self.target2.forward_packed(batch, truth))
+            soft = segment_sum(policy.probs * (minimum - self.alpha * policy.log_probs),
+                               batch.action_groups, batch.size)
+            destinations = torch.tensor([request[0] for request in chunk], device=self.device)
+            values[destinations] = soft
+            # No action is sampled at the final bootstrap state. Its dummy
+            # gather is discarded; only interior states enter the correction.
+            indices = torch.tensor(np.cumsum((0,) + batch.action_counts[:-1]) +
+                [request[3].action if request[3] is not None else 0 for request in chunk],
+                device=self.device)
+            log_mu = policy.log_probs.new_tensor([
+                request[3].behavior_log_prob if request[3] is not None else 0. for request in chunk])
+            selected[destinations] = minimum[indices]
+            coefficients[destinations] = retrace_coefficients(policy.log_probs[indices], log_mu)
+        targets, masses = [], []
+        for start, stop in ranges:
+            correction = coefficients[start:stop - 1]
+            targets.append(soft_retrace_target(rewards[start:stop], discounts[start:stop],
+                values[start:stop], selected[start:stop - 1], correction))
+            masses.append(1 + correction.cumprod(0).sum())
+        return torch.stack(targets), torch.stack(masses)
+
     def update(self, transitions, scenes):
         config = self.learning_config
         if len(transitions) != config.batch_size:
             raise ValueError("a complete update requires 64 transitions")
-        if any(not 0 <= t.action < len(t.observation.action_nodes) for t in transitions):
-            raise ValueError("replay action must index the frozen valid action list")
+        sequences = self._sequences(transitions)
+        transitions = [sequence[0] for sequence in sequences]
         chunks = [transitions[i:i+config.microbatch_size]
                   for i in range(0,len(transitions),config.microbatch_size)]
         # Scalar diagnostics stay on-device until the single final transfer.
         metrics = torch.zeros(13, device=self.device)
+        coefficient_mass = torch.zeros((), device=self.device)
         self.q1_optimizer.zero_grad(set_to_none=True)
         self.q2_optimizer.zero_grad(set_to_none=True)
-        for chunk in chunks:
+        for offset, chunk in zip(range(0, len(transitions), config.microbatch_size), chunks):
             weight = len(chunk) / len(transitions)
-            targets = self.td_targets(chunk, scenes)
+            if config.return_steps == 1:
+                targets = self.td_targets(chunk, scenes)
+                coefficient_mass += len(chunk)
+            else:
+                targets, masses = self.retrace_targets(sequences[offset:offset + len(chunk)], scenes)
+                coefficient_mass += masses.sum()
             batch = pack_observations([t.observation for t in chunk], self.device)
             truth = pack_privileged([t.observation for t in chunk], [t.privileged for t in chunk], scenes, self.device)
             indices = torch.tensor(np.cumsum((0,) + batch.action_counts[:-1]) +
@@ -168,12 +290,15 @@ class SACLearner:
                 for target_p, source_p in zip(target.parameters(), source.parameters()):
                     target_p.lerp_(source_p, config.polyak)
         self.updates += 1
-        values = torch.cat((metrics, self.alpha.reshape(1))).detach().cpu().tolist()
+        values = torch.cat((metrics, self.alpha.reshape(1), coefficient_mass.reshape(1))).detach().cpu().tolist()
         return dict(zip(('critic1_loss','critic2_loss','actor_loss','alpha_loss','entropy','target_mean',
                         'position_entropy','heading_conditional_entropy','position_max_probability',
                         'raw_score_span','score_saturation_fraction','raw_score_gradient_abs_mean',
-                        'raw_score_gradient_abs_max','alpha'), values),
-                    updates=self.updates, batch_size=len(transitions))
+                        'raw_score_gradient_abs_max','alpha','trace_coefficient_mass_sum'), values),
+                    updates=self.updates, batch_size=len(transitions), trace_samples=len(sequences),
+                    trace_length_sum=sum(map(len, sequences)),
+                    trace_multi_count=sum(len(sequence) > 1 for sequence in sequences),
+                    trace_legacy_count=sum(sequence[0].behavior_log_prob is None for sequence in sequences))
 
     def actor_state(self):
         return {'schema':'task_graph_v3', 'model_config':asdict(self.model_config),
@@ -193,7 +318,7 @@ class SACLearner:
         if (state['schema'] != 'candidate_graph_sac_v2' or
                 canonical_model_config(state['model_config']) != asdict(self.model_config)):
             raise ValueError("incompatible learner model schema")
-        saved, current = dict(state['learning_config']), asdict(self.learning_config)
+        saved, current = canonical_learning_config(state['learning_config']), asdict(self.learning_config)
         for name in ('microbatch_size', 'learning_rate', 'polyak', 'initial_alpha'):
             saved.pop(name)
             current.pop(name)

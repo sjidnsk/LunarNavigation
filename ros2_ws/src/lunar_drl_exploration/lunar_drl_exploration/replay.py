@@ -173,6 +173,25 @@ def _objects(root):
     return found
 
 
+def _same_content(left, right):
+    """Exact immutable boundary equality, including separately decoded arrays."""
+    if left is right:
+        return True
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, np.ndarray):
+        return left.dtype == right.dtype and np.array_equal(left, right)
+    if is_dataclass(left):
+        return all(_same_content(getattr(left, field.name), getattr(right, field.name))
+                   for field in fields(left))
+    if isinstance(left, Mapping):
+        return (left.keys() == right.keys() and
+                all(_same_content(value, right[key]) for key, value in left.items()))
+    if isinstance(left, (tuple, list)):
+        return len(left) == len(right) and all(_same_content(a, b) for a, b in zip(left, right))
+    return bool(left == right)
+
+
 class _Ledger:
     def __init__(self):
         self.items = {}; self.bytes = 0; self.buffer_bytes = 0
@@ -212,8 +231,9 @@ class ReplayBuffer:
             raise ValueError('positive replay byte budget required')
         self.max_bytes = int(max_bytes)
         self._entries = {}; self._first = self._next = 0; self._scenes = {}; self._refs = {}; self._scene_keys = {}
+        self._sequence_index = {}
         self._ledger = _Ledger()
-        self._entry_bytes = self._refcount_bytes = 0
+        self._entry_bytes = self._refcount_bytes = self._sequence_bytes = 0
 
     @property
     def bytes_used(self):
@@ -221,9 +241,9 @@ class ReplayBuffer:
             return 0  # Empty baseline dictionaries retain no entry capacity.
         tables = sum(sys.getsizeof(table) for table in
                      (self._entries, self._scenes, self._refs,
-                      self._scene_keys, self._ledger.items))
+                      self._scene_keys, self._sequence_index, self._ledger.items))
         return (self._ledger.bytes + self._ledger.membership_bytes + tables +
-                self._entry_bytes + self._refcount_bytes)
+                self._entry_bytes + self._refcount_bytes + self._sequence_bytes)
 
     @property
     def buffer_bytes(self):
@@ -243,6 +263,9 @@ class ReplayBuffer:
     def add(self, transition, scenes):
         if not isinstance(transition, Transition):
             raise TypeError('only finished Transition records enter replay')
+        if (transition.step_index is not None and
+                (transition.episode_id, transition.step_index) in self._sequence_index):
+            raise ValueError('duplicate episode step in replay')
         if not (math.isfinite(transition.reward) and
                 0 <= transition.action < len(transition.observation.goals)):
             raise ValueError('invalid finished transition')
@@ -302,6 +325,10 @@ class ReplayBuffer:
         entry = (transition, ids, keys)
         self._entries[self._next] = entry
         self._entry_bytes += self._entry_size(self._next, entry)
+        if transition.step_index is not None:
+            key = (transition.episode_id, transition.step_index)
+            self._sequence_index[key] = self._next
+            self._sequence_bytes += self._sequence_size(key, self._next)
         self._next += 1
 
     @staticmethod
@@ -309,10 +336,20 @@ class ReplayBuffer:
         # Membership tuple/ID integers live in the ledger's per-root charge.
         return sys.getsizeof(key) + sys.getsizeof(entry) + sys.getsizeof(entry[1])
 
+    @staticmethod
+    def _sequence_size(key, entry_id):
+        # The key's episode/step objects already belong to the transition ledger.
+        # Charge the new tuple and conservatively charge its entry-ID reference.
+        return sys.getsizeof(key) + sys.getsizeof(entry_id)
+
     def evict_oldest(self):
         entry = self._entries.pop(self._first)
         self._entry_bytes -= self._entry_size(self._first, entry)
         transition, ids, keys = entry
+        if transition.step_index is not None:
+            key = (transition.episode_id, transition.step_index)
+            entry_id = self._sequence_index.pop(key)
+            self._sequence_bytes -= self._sequence_size(key, entry_id)
         self._first += 1
         self._ledger.release(keys)
         for key in ids:
@@ -325,6 +362,7 @@ class ReplayBuffer:
                 self._refcount_bytes += sys.getsizeof(self._refs[key])
         if not self._entries:
             self._entries = {}; self._scenes = {}; self._refs = {}; self._scene_keys = {}
+            self._sequence_index = {}
 
     def sample(self, batch_size, rng):
         if not self._entries or batch_size <= 0:
@@ -333,6 +371,39 @@ class ReplayBuffer:
         # constrained restore retained fewer than 64 complete transitions.
         indices = rng.integers(0, len(self._entries), size=batch_size)
         return [self._entries[self._first + int(index)][0] for index in indices]
+
+    def sample_sequences(self, batch_size, rng, max_steps):
+        """Uniform original anchors followed by available same-episode steps.
+
+        Returned tuples only reference stored immutable transitions. Index upkeep
+        is independent of the requested horizon, so both training arms have the
+        same replay ownership and byte-budget eviction rules.
+        """
+        if (isinstance(max_steps, (bool, np.bool_)) or
+                not isinstance(max_steps, (int, np.integer)) or not 1 <= max_steps <= 8):
+            raise ValueError('integer sequence horizon from 1 through 8 required')
+        anchors = self.sample(batch_size, rng)
+        result = []
+        for anchor in anchors:
+            sequence = [anchor]
+            while len(sequence) < max_steps:
+                previous = sequence[-1]
+                if previous.step_index is None or previous.terminated or previous.truncated:
+                    break
+                key = (previous.episode_id, previous.step_index + 1)
+                entry_id = self._sequence_index.get(key)
+                if entry_id is None:
+                    break
+                following = self._entries[entry_id][0]
+                if not (previous.privileged.scene_id == previous.next_privileged.scene_id ==
+                        following.privileged.scene_id == following.next_privileged.scene_id):
+                    break
+                if not (_same_content(previous.next_observation, following.observation) and
+                        _same_content(previous.next_privileged, following.privileged)):
+                    break
+                sequence.append(following)
+            result.append(tuple(sequence))
+        return result
 
     def snapshot(self, max_bytes=2 * 1024**3, *, require_sample=False):
         selected = ReplayBuffer(max(1, max_bytes))

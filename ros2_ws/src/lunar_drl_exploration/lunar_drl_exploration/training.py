@@ -137,14 +137,18 @@ def state_checksum(record):
 
 
 def initial_training_identity(learner, *, replay, schedule, replay_rng, curriculum_rng,
-                              curriculum_state, collector_state, counters, source_replay_sha256):
-    """Read-only identity of restored paired state, except the tested Polyak rate."""
+                              curriculum_state, collector_state, counters, source_replay_sha256,
+                              excluded_learning_fields=('polyak',)):
+    """Read-only identity except the explicitly tested learning variable."""
     import random
     import numpy as np
     import torch
     state = learner.state_dict()
     state['learning_config'] = dict(state['learning_config'])
-    del state['learning_config']['polyak']
+    if tuple(excluded_learning_fields) not in (('polyak',), ('return_steps',)):
+        raise ValueError('paired identity must exclude exactly its one tested learning variable')
+    for field in excluded_learning_fields:
+        del state['learning_config'][field]
     rng = dict(python=random.getstate(), numpy=np.random.get_state(),
                torch_cpu=torch.get_rng_state(),
                torch_cuda=torch.cuda.get_rng_state_all() if learner.device.type == 'cuda' else [],
@@ -154,7 +158,7 @@ def initial_training_identity(learner, *, replay, schedule, replay_rng, curricul
         curriculum_sha256=state_checksum(curriculum_state),
         counters_sha256=state_checksum(counters),
         source_replay_sha256=source_replay_sha256, replay_count=len(replay),
-        schedule=schedule.state_dict(), excluded_learning_fields=['polyak'])
+        schedule=schedule.state_dict(), excluded_learning_fields=list(excluded_learning_fields))
 
 
 def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, device='cuda', max_transitions=None,
@@ -237,8 +241,13 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     restored_checksum = initial_model_checksum(learner) if config.paired_scene_sequence else None
     initial_identity = (initial_training_identity(learner, replay=replay, schedule=schedule,
         replay_rng=replay_rng, curriculum_rng=curriculum_rng, curriculum_state=curriculum_state,
-        collector_state=collector_state, counters=counters, source_replay_sha256=source_replay_sha256)
+        collector_state=collector_state, counters=counters, source_replay_sha256=source_replay_sha256,
+        excluded_learning_fields=(('return_steps',) if
+            (fork_provenance or {}).get('experiment') == 'paired-multistep' else ('polyak',)))
         if config.paired_scene_sequence else None)
+    trace_keys = ('trace_samples', 'trace_length_sum', 'trace_multi_count',
+                  'trace_legacy_count', 'trace_coefficient_mass_sum')
+    trace_totals = dict(counters.get('trace_totals', {key: 0 for key in trace_keys}))
     if collector_state['actor_record']['version'] != collector_state['actor_version']:
         raise ValueError('saved collector weights/publication identity disagree')
     curriculum = Curriculum(config, curriculum_rng, curriculum_state,
@@ -293,6 +302,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
 
     def capture():
         counters['last_admitted'] = dict(ledger.last_admitted)
+        counters['trace_totals'] = dict(trace_totals)
         if diagnostics is not None:
             counters['reward_diagnostics'] = diagnostics.state_dict()
         state = TrainingState.capture(learner=learner, config=config, replay=replay,
@@ -347,7 +357,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             inflight=schedule.inflight, actor_version=observed_publication,
             replay_count=len(replay), replay_bytes=replay.bytes_used,
             save_in_s=max(0., config.save_interval_s-(time.monotonic()-manager.last_save)),
-            environments=env_status, learning=last_update,
+            environments=env_status, learning=last_update, trace_totals=dict(trace_totals),
             gpu_memory=(dict(allocated_bytes=torch.cuda.memory_allocated(learner.device),
                 reserved_bytes=torch.cuda.memory_reserved(learner.device),
                 peak_allocated_bytes=torch.cuda.max_memory_allocated(learner.device))
@@ -496,8 +506,15 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             if not stopping and not barrier_pending and schedule.can_update:
                 with boundary.update():
                     before_update = time.monotonic()
-                    last_update = learner.update(replay.sample(config.learning.batch_size, replay_rng), replay.scenes)
+                    if config.learning.return_steps == 1:
+                        batch = replay.sample(config.learning.batch_size, replay_rng)
+                    else:
+                        batch = replay.sample_sequences(config.learning.batch_size, replay_rng,
+                            max_steps=config.learning.return_steps)
+                    last_update = learner.update(batch, replay.scenes)
                     schedule.updated()
+                    for key in trace_keys:
+                        trace_totals[key] += last_update[key]
                     last_update['wall_s'] = time.monotonic() - before_update
                 if schedule.updates % config.actor_publish_updates == 0:
                     connection.send(dict(kind='PUBLISH', payload=pickle.dumps(learner.actor_state(), protocol=5)))
