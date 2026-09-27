@@ -94,7 +94,70 @@ def initial_model_checksum(learner):
     return digest.hexdigest()
 
 
-def run_training(config, *, resume=False, fork_from=None, device='cuda', max_transitions=None,
+def state_checksum(record):
+    """Content identity for nested training state, independent of storage IDs."""
+    import hashlib
+    import numpy as np
+    import torch
+    digest = hashlib.sha256()
+
+    def token(value):
+        value = value if isinstance(value, bytes) else str(value).encode('utf-8')
+        digest.update(str(len(value)).encode('ascii') + b':' + value)
+
+    def visit(value):
+        token(type(value).__name__)
+        if isinstance(value, dict):
+            token(len(value))
+            for key in sorted(value, key=lambda item: (type(item).__name__, repr(item))):
+                visit(key)
+                visit(value[key])
+        elif isinstance(value, (list, tuple)):
+            token(len(value))
+            for item in value:
+                visit(item)
+        elif isinstance(value, torch.Tensor):
+            tensor = value.detach().cpu().contiguous()
+            token(tensor.dtype)
+            token(tuple(tensor.shape))
+            token(tensor.numpy().tobytes())
+        elif isinstance(value, np.ndarray):
+            token(value.dtype.str)
+            token(value.shape)
+            token(value.tobytes())
+        elif isinstance(value, bytes):
+            token(value)
+        elif value is None or isinstance(value, (str, int, float, bool, np.generic)):
+            token(repr(value))
+        else:
+            raise TypeError(f'unsupported training identity value: {type(value).__name__}')
+
+    visit(record)
+    return digest.hexdigest()
+
+
+def initial_training_identity(learner, *, replay, schedule, replay_rng, curriculum_rng,
+                              curriculum_state, collector_state, counters, source_replay_sha256):
+    """Read-only identity of restored paired state, except the tested Polyak rate."""
+    import random
+    import numpy as np
+    import torch
+    state = learner.state_dict()
+    state['learning_config'] = dict(state['learning_config'])
+    del state['learning_config']['polyak']
+    rng = dict(python=random.getstate(), numpy=np.random.get_state(),
+               torch_cpu=torch.get_rng_state(),
+               torch_cuda=torch.cuda.get_rng_state_all() if learner.device.type == 'cuda' else [],
+               replay=replay_rng.bit_generator.state, curriculum=curriculum_rng.bit_generator.state)
+    return dict(schema='paired_initial_state_v1', learner_sha256=state_checksum(state),
+        rng_sha256=state_checksum(rng), collector_sha256=state_checksum(collector_state),
+        curriculum_sha256=state_checksum(curriculum_state),
+        counters_sha256=state_checksum(counters),
+        source_replay_sha256=source_replay_sha256, replay_count=len(replay),
+        schedule=schedule.state_dict(), excluded_learning_fields=['polyak'])
+
+
+def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, device='cuda', max_transitions=None,
                  domain_base=210, probe_extent=None, probe_budget=None,
                  env_factory='lunar_drl_exploration.ros_env:RosExplorationEnv'):
     """Run finite or continuous training; max_transitions counts this-run admissions.
@@ -126,6 +189,8 @@ def run_training(config, *, resume=False, fork_from=None, device='cuda', max_tra
     from .schedule import UpdateSchedule
     if resume and fork_from is not None:
         raise ValueError('resume and fork_from are mutually exclusive')
+    if fork_experiment is not None and (fork_from is None or resume):
+        raise ValueError('fork experiment requires an explicit new fork')
     if config.seed < 0: raise ValueError('training seed must be nonnegative')
     if max_transitions is not None and max_transitions <= 0:
         raise ValueError('max_transitions must be positive')
@@ -134,7 +199,8 @@ def run_training(config, *, resume=False, fork_from=None, device='cuda', max_tra
     if config.model.width != 128 or config.model.heads != 8 or config.model.layers != 6:
         raise ValueError('training requires full 128/8/6 graph model')
     # Validate the source and empty destination before creating any run artifacts.
-    fork_state = TrainingState.fork_from(fork_from, config) if fork_from is not None else None
+    fork_state = (TrainingState.fork_from(fork_from, config, experiment=fork_experiment)
+                  if fork_from is not None else None)
     torch.set_num_threads(config.learner_threads)
     random.seed(config.seed); np.random.seed(config.seed % 2**32); torch.manual_seed(config.seed)
     manager = CheckpointManager(config.output_dir, config.save_interval_s,
@@ -143,6 +209,7 @@ def run_training(config, *, resume=False, fork_from=None, device='cuda', max_tra
     if not resume and (Path(config.output_dir) / 'resume.pt').exists():
         raise ValueError('resume.pt already exists; use --resume or a new output directory')
     learner = SACLearner(config.model, config.learning, device=device)
+    # The legacy multi-stage runner compares this random-initialization lineage.
     initial_checksum = initial_model_checksum(learner) if config.paired_scene_sequence else None
     replay = ReplayBuffer(config.replay_max_bytes)
     schedule = UpdateSchedule(config.warmup, config.update_ratio, config.max_update_credit)
@@ -152,9 +219,13 @@ def run_training(config, *, resume=False, fork_from=None, device='cuda', max_tra
         policy_rng=torch.Generator().manual_seed(config.seed + 2).get_state(), sequences={})
     counters = dict(transitions=0, aborted=0, recoveries=0)
     fork_provenance = None
+    source_replay_sha256 = None
     if resume or fork_state is not None:
         state = manager.load(config) if resume else fork_state
         fork_provenance = state.record.get('fork')
+        if config.paired_scene_sequence:
+            import hashlib
+            source_replay_sha256 = hashlib.sha256(state.record['replay']).hexdigest()
         restored = state.restore(learner, config)
         replay, schedule = restored.replay, restored.schedule
         replay_rng, curriculum_rng = restored.replay_rng, restored.curriculum_rng
@@ -163,6 +234,11 @@ def run_training(config, *, resume=False, fork_from=None, device='cuda', max_tra
         # tensors/replay are now owned by the learner and restored buffer.
         del state, restored
     fork_state = None
+    restored_checksum = initial_model_checksum(learner) if config.paired_scene_sequence else None
+    initial_identity = (initial_training_identity(learner, replay=replay, schedule=schedule,
+        replay_rng=replay_rng, curriculum_rng=curriculum_rng, curriculum_state=curriculum_state,
+        collector_state=collector_state, counters=counters, source_replay_sha256=source_replay_sha256)
+        if config.paired_scene_sequence else None)
     if collector_state['actor_record']['version'] != collector_state['actor_version']:
         raise ValueError('saved collector weights/publication identity disagree')
     curriculum = Curriculum(config, curriculum_rng, curriculum_state,
@@ -193,7 +269,8 @@ def run_training(config, *, resume=False, fork_from=None, device='cuda', max_tra
         numeric_threads=torch.get_num_threads(), package_path=__file__,
         torch_path=torch.__file__, cuda_initialized=torch.cuda.is_initialized()), workers={},
         probe=dict(extent_m=probe_extent, budget=probe_budget, max_new_transitions=max_transitions),
-        resume=resume, initial_model_checksum=initial_checksum)
+        resume=resume, initial_model_checksum=initial_checksum,
+        restored_model_checksum=restored_checksum, initial_state_identity=initial_identity)
     if fork_provenance is not None:
         observations['fork'] = fork_provenance
     # Bounded recent episode identities suffice for run auditing; counters remain cumulative.

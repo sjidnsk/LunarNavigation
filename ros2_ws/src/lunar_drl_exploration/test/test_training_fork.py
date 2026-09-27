@@ -219,3 +219,175 @@ def test_training_fork_continues_progress_in_new_run_and_can_resume(tmp_path):
     resumed = run_training(changed, resume=True, max_transitions=1, **kwargs)
     assert resumed['transitions'] > result['transitions']
     assert json.loads((destination / 'run.json').read_text())['observations']['fork'] == provenance
+
+
+@pytest.mark.parametrize('polyak', [.005, .02])
+def test_paired_polyak_fork_restores_exact_state_without_resynchronizing_targets(
+        learned_checkpoint, tmp_path, polyak):
+    import random
+    import torch
+    from lunar_drl_exploration.checkpoint import CheckpointManager, TrainingState
+    from lunar_drl_exploration.replay import loads_transport
+    from lunar_drl_exploration.sac import SACLearner
+    config, source, original = learned_checkpoint
+    digest = hashlib.sha256(source.read_bytes()).digest()
+    changed = replace(config, output_dir=str(tmp_path / 'paired'),
+        learning=replace(config.learning, polyak=polyak), paired_scene_sequence=True,
+        snapshot_max_bytes=1024**3, stagnation_window_steps=32)
+    fork = TrainingState.fork_from(source, changed, experiment='paired-polyak')
+    for key in ('learner', 'replay', 'schedule', 'rng', 'curriculum', 'collector_state', 'counters'):
+        assert_state_equal(original.record[key], fork.record[key])
+    # A real updated source has distinct targets. Synchronizing them would erase
+    # the common starting condition and introduce a second intervention.
+    assert any(not torch.equal(value, original.record['learner']['q1'][key])
+        for key, value in original.record['learner']['target1'].items())
+    CheckpointManager(changed.output_dir).save(fork)
+    saved = CheckpointManager(changed.output_dir).load(changed)
+    restored = SACLearner(changed.model, changed.learning)
+    progress = saved.restore(restored, changed)
+    expected_learner = dict(original.record['learner'],
+        learning_config=dict(original.record['learner']['learning_config'], polyak=polyak))
+    assert_state_equal(expected_learner, restored.state_dict())
+    assert_state_equal(original.record['schedule'], progress.schedule.state_dict())
+    assert len(progress.replay) == 1 and set(progress.replay.scenes) == {'s'}
+    assert progress.replay.sample(1, np.random.default_rng(3))[0].reward == .1
+    assert progress.replay_rng.bit_generator.state == loads_transport(original.record['rng']['replay'])
+    assert progress.curriculum_rng.bit_generator.state == loads_transport(original.record['rng']['curriculum'])
+    assert_state_equal(original.record['collector_state'], progress.collector_state)
+    assert progress.curriculum == loads_transport(original.record['curriculum'])
+    assert progress.counters == loads_transport(original.record['counters'])
+    assert random.getstate() == original.record['rng']['python']
+    np.testing.assert_equal(np.random.get_state(), loads_transport(original.record['rng']['numpy']))
+    torch.testing.assert_close(torch.get_rng_state(), original.record['rng']['torch_cpu'], rtol=0, atol=0)
+    changes = {
+        'stagnation_window_steps': {'before': 0, 'after': 32},
+        'paired_scene_sequence': {'before': False, 'after': True},
+        'snapshot_max_bytes': {'before': 2 * 1024**3, 'after': 1024**3},
+    }
+    if polyak == .02:
+        changes['learning'] = {'polyak': {'before': .005, 'after': .02}}
+    provenance = saved.record['fork']
+    assert provenance['experiment'] == 'paired-polyak'
+    assert provenance['changes'] == changes
+    assert (provenance['source_transitions'], provenance['source_updates']) == (7, 1)
+    assert hashlib.sha256(source.read_bytes()).digest() == digest
+    CheckpointManager(config.output_dir).load(config)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('gamma', .99), ('learning_rate', 3e-5), ('microbatch_size', 8),
+    ('initial_alpha', 4e-5), ('maximum_alpha', 2e-4),
+    ('target_entropy_factor', .2),
+])
+def test_paired_polyak_rejects_other_learning_changes(learned_checkpoint, tmp_path, field, value):
+    from lunar_drl_exploration.checkpoint import TrainingState
+    config, source, _ = learned_checkpoint
+    changed = replace(config, output_dir=str(tmp_path / 'paired'), paired_scene_sequence=True,
+        learning=replace(config.learning, polyak=.02, **{field: value}))
+    with pytest.raises(ValueError, match=r'fork.*learning\.' + field):
+        TrainingState.fork_from(source, changed, experiment='paired-polyak')
+    assert not Path(changed.output_dir).exists()
+
+
+@pytest.mark.parametrize('changes,field', [
+    ({'paired_scene_sequence': False}, 'paired_scene_sequence'),
+    ({'paired_scene_sequence': 1}, 'paired_scene_sequence'),
+    ({'snapshot_max_bytes': 3 * 1024**3}, 'snapshot_max_bytes'),
+    ({'seed': 11}, 'seed'), ({'environments': 1}, 'environments'),
+    ({'completion_bonus': 3.}, 'completion_bonus'),
+    ({'replay_max_bytes': 1024**3}, 'replay_max_bytes'),
+])
+def test_paired_polyak_rejects_unpaired_or_unrelated_changes(learned_checkpoint, tmp_path, changes, field):
+    from lunar_drl_exploration.checkpoint import TrainingState
+    config, source, _ = learned_checkpoint
+    changed = replace(replace(config, paired_scene_sequence=True,
+        output_dir=str(tmp_path / 'paired')), **changes)
+    with pytest.raises(ValueError, match='fork.*' + field):
+        TrainingState.fork_from(source, changed, experiment='paired-polyak')
+    assert not Path(changed.output_dir).exists()
+
+
+def test_unknown_fork_experiment_is_rejected_before_source_load(tmp_path):
+    from lunar_drl_exploration.checkpoint import TrainingState
+    config = replace(TrainingConfig(), output_dir=str(tmp_path / 'paired'))
+    with pytest.raises(ValueError, match='fork experiment'):
+        TrainingState.fork_from(tmp_path / 'missing.pt', config, experiment='arbitrary-tuning')
+
+
+def test_paired_polyak_validates_source_before_changing_identity(learned_checkpoint, tmp_path):
+    import torch
+    from lunar_drl_exploration.checkpoint import TrainingState
+    config, _, original = learned_checkpoint
+    corrupt = tmp_path / 'corrupt.pt'
+    original.record['semantics']['reward'] = 'unrecognized reward'
+    torch.save(original.record, corrupt)
+    changed = replace(config, output_dir=str(tmp_path / 'paired'), paired_scene_sequence=True,
+        learning=replace(config.learning, polyak=.02))
+    with pytest.raises(ValueError, match='reward'):
+        TrainingState.fork_from(corrupt, changed, experiment='paired-polyak')
+
+
+@pytest.mark.parametrize('destination_kind', ['nonempty', 'source_alias'])
+def test_paired_polyak_cannot_overwrite_existing_or_source_run(learned_checkpoint, tmp_path, destination_kind):
+    from lunar_drl_exploration.checkpoint import TrainingState
+    config, source, _ = learned_checkpoint
+    destination = tmp_path / 'paired'
+    if destination_kind == 'source_alias':
+        destination.symlink_to(source.parent, target_is_directory=True)
+        error = 'different runs'
+    else:
+        destination.mkdir()
+        (destination / 'keep').write_text('preserve')
+        error = 'empty'
+    digest = hashlib.sha256(source.read_bytes()).digest()
+    with pytest.raises(ValueError, match=error):
+        TrainingState.fork_from(source, replace(config, output_dir=str(destination),
+            paired_scene_sequence=True), experiment='paired-polyak')
+    assert hashlib.sha256(source.read_bytes()).digest() == digest
+    if destination_kind == 'nonempty':
+        assert (destination / 'keep').read_text() == 'preserve'
+
+
+def test_collection_fork_still_rejects_polyak_changes(learned_checkpoint, tmp_path):
+    from lunar_drl_exploration.checkpoint import TrainingState
+    config, source, _ = learned_checkpoint
+    with pytest.raises(ValueError, match='fork.*learning'):
+        TrainingState.fork_from(source, replace(config, output_dir=str(tmp_path / 'fork'),
+            learning=replace(config.learning, polyak=.02)))
+
+
+def test_cli_paired_polyak_requires_explicit_fork_source():
+    from lunar_drl_exploration.cli import load_config, parser
+    args = parser().parse_args(['train', '--fork-from', '/saved/resume.pt',
+        '--fork-experiment', 'paired-polyak'])
+    assert args.fork_experiment == 'paired-polyak'
+    for options in ([], ['--resume']):
+        with pytest.raises(ValueError, match='fork-experiment.*fork-from'):
+            load_config(parser().parse_args(['train', '--fork-experiment', 'paired-polyak', *options]))
+    with pytest.raises(SystemExit):
+        parser().parse_args(['train', '--fork-from', '/saved/resume.pt',
+            '--fork-experiment', 'arbitrary-tuning'])
+
+
+def test_cli_paired_polyak_applies_experiment_validation_before_starting_workers(tmp_path):
+    import torch
+    from lunar_drl_exploration.checkpoint import CheckpointManager, UpdateBoundary
+    from lunar_drl_exploration.cli import main
+    from lunar_drl_exploration.config import config_record
+    from lunar_drl_exploration.replay import ReplayBuffer
+    from lunar_drl_exploration.sac import SACLearner
+    from lunar_drl_exploration.schedule import UpdateSchedule
+    from test_replay_checkpoint import capture_state
+    torch.set_num_threads(1)
+    config = replace(TrainingConfig(), output_dir=str(tmp_path / 'source'))
+    source = CheckpointManager(config.output_dir).save(capture_state(
+        SACLearner(config.model, config.learning), config, ReplayBuffer(1000000),
+        UpdateSchedule(), UpdateBoundary()))
+    changed = replace(config, output_dir=str(tmp_path / 'paired'), paired_scene_sequence=True,
+        learning=replace(config.learning, gamma=.99, polyak=.02))
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps(config_record(changed)))
+    with pytest.raises(ValueError, match=r'fork.*learning\.gamma'):
+        main(['train', '--config', str(path), '--fork-from', str(source),
+            '--fork-experiment', 'paired-polyak', '--device', 'cpu', '--max-transitions', '1'])
+    assert not Path(changed.output_dir).exists()

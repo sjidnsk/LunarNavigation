@@ -69,14 +69,18 @@ class TrainingState:
     record: dict
 
     @classmethod
-    def fork_from(cls, source, config):
+    def fork_from(cls, source, config, *, experiment=None):
         """Read a trusted checkpoint into a new collection run, retaining its learner.
 
-        Only training stagnation limits and output resource settings may change. Existing replay remains
-        valid off-policy experience under the unchanged reward and task contract.
+        Collection forks allow stagnation limits and output resource settings.
+        The explicit paired-polyak experiment additionally allows Polyak, paired
+        scenes and a nonincreasing saved-replay budget. Existing learning state
+        remains intact, including target weights and optimizer history.
         This operation neither creates the destination nor writes the source.
         """
         from .config import training_config_from_record
+        if experiment not in (None, 'paired-polyak'):
+            raise ValueError('unknown fork experiment: ' + str(experiment))
         source = Path(source).resolve()
         destination = Path(config.output_dir).resolve()
         if source.parent == destination or source == (destination / 'resume.pt').resolve():
@@ -98,6 +102,24 @@ class TrainingState:
         before_identity, after_identity = [dict(record, platform={key: value
             for key, value in record['platform'].items() if key != 'capability_path'})
             for record in (before, after)]
+        learning_changes = {}
+        if experiment == 'paired-polyak':
+            if config.paired_scene_sequence is not True:
+                raise ValueError('paired-polyak fork requires paired_scene_sequence=true')
+            if config.snapshot_max_bytes > original.snapshot_max_bytes:
+                raise ValueError('paired-polyak fork cannot increase snapshot_max_bytes')
+            fields += ('paired_scene_sequence', 'snapshot_max_bytes')
+            different_learning = sorted(key for key in before['learning']
+                if key != 'polyak' and before['learning'][key] != after['learning'][key])
+            if different_learning:
+                raise ValueError('incompatible fork configuration: ' + ', '.join(
+                    'learning.' + key for key in different_learning))
+            if before['learning']['polyak'] != after['learning']['polyak']:
+                learning_changes['polyak'] = dict(before=before['learning']['polyak'],
+                    after=after['learning']['polyak'])
+            for identity in (before_identity, after_identity):
+                identity['learning'] = {key: value for key, value in identity['learning'].items()
+                    if key != 'polyak'}
         different = sorted(key for key in before
             if key not in (*fields, 'output_dir') and before_identity[key] != after_identity[key])
         if different:
@@ -107,6 +129,10 @@ class TrainingState:
             source_updates=state.record['schedule']['updates'],
             changes={key: dict(before=before[key], after=after[key])
                 for key in fields if before[key] != after[key]})
+        if experiment is not None:
+            state.record['fork']['experiment'] = experiment
+        if learning_changes:
+            state.record['fork']['changes']['learning'] = learning_changes
         state.record['config'] = after
         state.record['semantics'] = resume_semantics(config)
         state.validate(config)

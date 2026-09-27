@@ -18,6 +18,8 @@ def parser():
             continuation.add_argument('--resume', action='store_true', help='restore output-dir/resume.pt; start new environment episodes')
             continuation.add_argument('--fork-from', type=Path,
                 help='trusted checkpoint for a new run; explicit stagnation, resource and diagnostic changes only')
+            cmd.add_argument('--fork-experiment', choices=('paired-polyak',),
+                help='requires --fork-from; additionally allow Polyak, paired scenes and a smaller snapshot budget')
             cmd.add_argument('--output-dir')
             cmd.add_argument('--device', default='cuda', choices=('cpu', 'cuda'))
             cmd.add_argument('--max-transitions', type=int, help='maximum new admissions this run, including dispatched work')
@@ -63,6 +65,8 @@ def load_config(args):
     if args.sensor_fov is not None:
         config = replace(config, sensor=replace(config.sensor, fov_deg=args.sensor_fov))
     if args.command == 'train':
+        if args.fork_experiment is not None and args.fork_from is None:
+            raise ValueError('--fork-experiment requires --fork-from')
         overrides = any(getattr(args, key) is not None for key in ('probe_warmup', 'probe_extent', 'probe_budget'))
         if overrides and not args.probe: raise ValueError('probe overrides require --probe')
         if args.max_transitions is not None and args.max_transitions <= 0: raise ValueError('positive --max-transitions required')
@@ -86,7 +90,8 @@ def main(argv=None):
         if args.probe and args.max_transitions is None:
             raise ValueError('--probe requires a finite --max-transitions')
         from .training import run_training
-        return run_training(config, resume=args.resume, fork_from=args.fork_from, device=args.device,
+        return run_training(config, resume=args.resume, fork_from=args.fork_from,
+            fork_experiment=args.fork_experiment, device=args.device,
             max_transitions=args.max_transitions, domain_base=args.domain_base,
             probe_extent=args.probe_extent, probe_budget=args.probe_budget)
     if args.command == 'evaluate':
