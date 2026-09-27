@@ -6,6 +6,11 @@
 操作和恢复参数见[操作指令](操作指令.md)，执行证据见
 [有界恢复记录](validation/2026-09-27-drl-bounded-recovery.md)。
 
+首轮2,048条已正常结束，保存边界100,260条/24,808次更新。
+4图冻结对照完成数2/4→3/4，困难洞穴仍停在98.572%。第二轮于北京时间2026-09-27 11:34
+启动，60 m、最多新增2,048条，运行中最终效果未定。循环现场评分与回放审计见
+[冻结初筛记录](validation/2026-09-27-drl-frozen-screen.md)。训练完成与循环解决是不同验收项。
+
 2026-09-26 新增独立修复入口：`fix/drl-stagnation-budget` /
 `.worktrees/drl-stagnation-budget`，实现用户确认的“保持学习式解决、允许训练截断长期停滞回合”。
 采用128步无新增且少数实际站位重复的训练采集限制，正式评估默认关闭；可用 `--fork-from`
@@ -20,9 +25,11 @@
 
 - 分支：`dev/drl-exploration`（由原 `feat/drl-exploration-redesign` 改名，保留提交历史）。
 - 工作树：`/home/kai/WS/lunar-navigation/lunar-runtime/.worktrees/drl-exploration-redesign`。
-- 构建、安装、日志：`/home/kai/.cache/lunar-drl-redesign/jazzy/`。
+- 本轮构建、安装、日志：`/home/kai/.cache/lunar-drl-stagnation/jazzy/`；操作前设置
+  `DRL_CACHE`为该路径。旧`lunar-drl-redesign/jazzy`缓存不作为本轮恢复的安装证据。
 - Python 依赖：`/home/kai/.cache/lunar-drl-training/venv/bin/python`。这里的 training 只是共享依赖目录名称，不表示使用旧训练分支。
-- 模型、回放、指标、实验结果：本工作树的 `training-output/<实验名>/`，已被 Git 忽略。
+- 本轮模型、回放、指标、实验结果：`/home/kai/CodexDownloads/lunar_navigation/drl-small-recovery-20260926/`，
+  共用8 GiB总额/128 MiB诊断上限；历史`training-output/`保留为只读来源。
 
 复用现有工作树，避免复制大模型或破坏已有构建路径。目录中的 redesign 是保留的物理路径，不再表示另一条活动开发线。
 

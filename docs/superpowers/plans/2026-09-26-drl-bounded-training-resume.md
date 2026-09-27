@@ -59,7 +59,7 @@ Files: training integration tests, operational profile, `docs/DRL开发入口.md
 - [x] Fresh independent code review; resolve important findings and retest affected paths.
 - [x] Commit exact paths and fast-forward the clean DRL development line after confirming ancestry/ownership.
 - [x] Launch one bounded small-scene training run from the existing trusted checkpoint; verify module paths, source identity, persisted initial checkpoint and live admissions.
-- [ ] Observe the finite run, record evidence and limitations without claiming convergence from a single run.
+- [x] Observe the finite run, record evidence and limitations without claiming convergence from a single run.
 
 ## Review focus
 
@@ -80,3 +80,10 @@ Files: training integration tests, operational profile, `docs/DRL开发入口.md
 - Integration: implementation commit `046ed473` fast-forwarded into clean `dev/drl-exploration`; tree identical. Started the bounded 60 m run at 2026-09-26T16:15:02Z, wrapper69666/learner69667; initial checkpoint and fork provenance present.
 
 - Startup evidence: 12 new admissions, learner updates 24296→24300, all 8 scenes at 60 m, 2.36 GiB total/115441 B diagnostic. The finite run continues in background; final budget completion and policy-effect evaluation remain pending.
+
+- Completion follow-up (2026-09-27): exit 0 at 2026-09-26T18:01:40Z; exactly 2,048 new admissions, saved transitions 100,260 and updates 24,808. Ten completed episodes (8 cave, 2 moon), eight unfinished episodes at the global budget stop; no episode truncation/collision. A retained cave trajectory still contains 73 zero-gain decisions almost entirely between two positions. The finite training requirement is complete; policy improvement is not inferred from training totals.
+- User approved the next frozen screen: both Actor versions 24,296 and 24,808, four matched 60 m scenes (cave/moon × seeds 2026092701/2026092702), 512 decisions each, evaluation stagnation disabled. Separate domains 228/230, same committed implementation/configuration. At most one 16 MiB loop transition per arm, shared existing artifact budget. Detailed evidence and the conditional next decision belong to `docs/validation/2026-09-27-drl-frozen-screen.md`.
+
+- Frozen screen completed: both arms exit 0, four matched cases each, Actor hashes unchanged; completion 2/4→3/4, no old-success regression, collision/error zero. Total decisions 1306→819. Difficult cave remains at 98.572% with an AB loop, so this is a development screen improvement, not loop resolution or generalization proof.
+- Separate sampled-policy diagnostic: the same latest Actor in the difficult cave exhausted 512 decisions at 97.3795%, max zero-gain run 369. No model update or action override; excluded from the four-map comparison. All evaluation children closed before resuming.
+- Conditional continuation gate passed; launched one additional <=2048-transition run at 2026-09-27T03:34:21Z, wrapper244581/learner244582. Resume from 100260 transitions / 24808 updates, same 60 m / 512-step collection and all learner/reward settings. Archive `evaluation/phase1-summary.json` preserves phase-one totals and exit evidence without another full checkpoint copy. Phase-two final outcome remains pending.
