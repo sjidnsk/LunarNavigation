@@ -1,6 +1,6 @@
 """Exact enumerated discrete SAC with one optimizer step per effective batch."""
 import copy
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import math
 import numpy as np
 import torch
@@ -10,13 +10,73 @@ from .contracts import Transition
 from .model import Actor, Critic, segment_sum
 
 
-def soft_values(probs, log_probs, q1, q2, alpha, groups, count):
-    return segment_sum(probs * (torch.minimum(q1, q2) - alpha * log_probs), groups, count)
+def soft_values(probs, log_probs, q1, q2, alpha, groups, count, *, entropy_bonus=None):
+    if entropy_bonus is None:
+        # Preserve the legacy joint path, including its arithmetic order.
+        return segment_sum(probs * (torch.minimum(q1, q2) - alpha * log_probs), groups, count)
+    return segment_sum(probs * (torch.minimum(q1, q2) + entropy_bonus), groups, count)
 
 
-def policy_loss(probs, log_probs, q1, q2, alpha, groups, count):
+def policy_loss(probs, log_probs, q1, q2, alpha, groups, count, *, entropy_bonus=None):
     return -soft_values(probs, log_probs, q1.detach(), q2.detach(),
-                        alpha, groups, count).mean()
+                        alpha, groups, count, entropy_bonus=entropy_bonus).mean()
+
+
+@dataclass
+class PolicyEntropies:
+    """Action-aligned log factors and state-aligned entropies/reference targets."""
+    position_log_probs: torch.Tensor
+    heading_log_probs: torch.Tensor
+    position_entropy: torch.Tensor
+    heading_entropy: torch.Tensor
+    position_target: torch.Tensor
+    heading_target: torch.Tensor
+
+
+def policy_entropies(policy, batch, position_factor=.1, heading_factor=.1):
+    """Decompose a joint policy without probability clamping or actor changes.
+
+    Packed action nodes are global graph indices. Only nodes with valid actions
+    contribute. A stable segment logsumexp keeps log p(position) differentiable
+    even when its probability underflows. Target factors multiply entropies of
+    the uniform *joint-action* reference: w(position)=heading_count/action_count.
+    Equal target factors therefore sum to the legacy factor * log(action_count),
+    including ragged legal heading sets, independently of the current policy.
+    """
+    logp, probs = policy.log_probs, policy.probs
+    nodes, groups, count = batch.action_nodes, batch.action_groups, batch.size
+    node_count = len(batch.graph.features)
+    heading_counts = segment_sum(torch.ones_like(probs), nodes, node_count)
+    maxima = logp.new_full((node_count,), -torch.inf).scatter_reduce_(
+        0, nodes, logp.detach(), reduce='amax', include_self=True)
+    maxima = torch.where(heading_counts > 0, maxima, 0.)
+    total = segment_sum((logp - maxima[nodes]).exp(), nodes, node_count)
+    # Empty graph nodes never enter an action, but must still have finite log
+    # values/backward derivatives. Nonempty totals are >= 1 after centering.
+    total = torch.where(heading_counts > 0, total, 1.)
+    position_logp = (maxima + total.log())[nodes]
+    action_counts = segment_sum(torch.ones_like(probs), groups, count)
+    # With one legal position p(position)=1 exactly. Avoid roundoff-generated
+    # entropy and temperature updates for a component that has no choice.
+    position_logp = torch.where(heading_counts[nodes] == action_counts[groups],
+                               torch.zeros_like(position_logp), position_logp)
+    heading_logp = logp - position_logp
+    position_entropy = -segment_sum(probs * position_logp, groups, count)
+    heading_entropy = -segment_sum(probs * heading_logp, groups, count)
+    log_heading_counts = heading_counts[nodes].log()
+    log_action_counts = action_counts[groups].log()
+    position_target = position_factor * segment_sum(
+        (log_action_counts - log_heading_counts) / action_counts[groups], groups, count)
+    heading_target = heading_factor * segment_sum(
+        log_heading_counts / action_counts[groups], groups, count)
+    return PolicyEntropies(position_logp, heading_logp, position_entropy, heading_entropy,
+                           position_target, heading_target)
+
+
+def factorized_entropy_bonus(entropies, alpha_position, alpha_heading):
+    """Per-action entropy bonus shared by actor and all bootstrap targets."""
+    return (-alpha_position * entropies.position_log_probs -
+            alpha_heading * entropies.heading_log_probs)
 
 
 def temperature_loss(log_alpha, entropy, target_entropy):
@@ -53,7 +113,7 @@ def soft_retrace_target(rewards, discounts, next_values, next_q, coefficients):
 
 
 @torch.no_grad()
-def policy_diagnostics(policy, batch, bound):
+def policy_diagnostics(policy, batch, bound, entropies=None):
     """State-averaged diagnostics; raw gradients include effective-batch scaling.
 
     Saturation means |tanh(centered_score / C)| >= .95 (zero for C=0).
@@ -79,7 +139,10 @@ def policy_diagnostics(policy, batch, bound):
     gradient = raw.grad.abs()
     gradient_mean = (segment_sum(gradient, groups, size) / counts).mean()
     gradient_max = gradient.amax() if gradient.numel() else raw.new_zeros(())
-    return torch.stack((position_entropy.mean(), (joint_entropy-position_entropy).mean(),
+    heading_entropy = joint_entropy-position_entropy
+    if entropies is not None:
+        position_entropy, heading_entropy = entropies.position_entropy, entropies.heading_entropy
+    return torch.stack((position_entropy.mean(), heading_entropy.mean(),
         position_max.mean(), spans.mean(), saturation.mean(), gradient_mean, gradient_max))
 
 
@@ -105,12 +168,41 @@ class SACLearner:
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=learning_config.learning_rate)
         self.q1_optimizer = torch.optim.Adam(self.q1.parameters(), lr=learning_config.learning_rate)
         self.q2_optimizer = torch.optim.Adam(self.q2.parameters(), lr=learning_config.learning_rate)
-        self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=learning_config.learning_rate)
+        self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=self.temperature_learning_rate)
+        if learning_config.entropy_mode == 'position_heading':
+            self.log_alpha_heading = self.log_alpha.detach().clone().requires_grad_()
+            self.heading_alpha_optimizer = torch.optim.Adam(
+                [self.log_alpha_heading], lr=self.temperature_learning_rate)
         self.updates = 0
 
     @property
     def alpha(self):
         return self.log_alpha.detach().exp()
+
+    @property
+    def alpha_position(self):
+        return self.alpha
+
+    @property
+    def alpha_heading(self):
+        if self.learning_config.entropy_mode == 'joint':
+            return self.alpha
+        return self.log_alpha_heading.detach().exp()
+
+    @property
+    def temperature_learning_rate(self):
+        configured = self.learning_config.temperature_learning_rate
+        return self.learning_config.learning_rate if configured is None else configured
+
+    def entropy_bonus(self, policy, batch):
+        """Public per-action bonus for evaluation; joint keeps its original form."""
+        if self.learning_config.entropy_mode == 'joint':
+            return -self.alpha * policy.log_probs
+        return factorized_entropy_bonus(policy_entropies(policy, batch),
+                                        self.alpha_position, self.alpha_heading)
+
+    def _split_entropy_bonus(self, policy, batch):
+        return self.entropy_bonus(policy, batch) if self.learning_config.entropy_mode == 'position_heading' else None
 
     @torch.no_grad()
     def td_targets(self, transitions, scenes):
@@ -126,7 +218,8 @@ class SACLearner:
             policy = self.actor.forward_packed(batch)
             values = soft_values(policy.probs, policy.log_probs,
                 self.target1.forward_packed(batch, truth), self.target2.forward_packed(batch, truth),
-                self.alpha, batch.action_groups, batch.size)
+                self.alpha, batch.action_groups, batch.size,
+                entropy_bonus=self._split_entropy_bonus(policy, batch))
             targets[torch.tensor(active, device=self.device)] += self.learning_config.gamma * values
         return targets
 
@@ -196,8 +289,8 @@ class SACLearner:
             policy = self.actor.forward_packed(batch)
             minimum = torch.minimum(self.target1.forward_packed(batch, truth),
                                     self.target2.forward_packed(batch, truth))
-            soft = segment_sum(policy.probs * (minimum - self.alpha * policy.log_probs),
-                               batch.action_groups, batch.size)
+            soft = soft_values(policy.probs, policy.log_probs, minimum, minimum, self.alpha,
+                batch.action_groups, batch.size, entropy_bonus=self._split_entropy_bonus(policy, batch))
             destinations = torch.tensor([request[0] for request in chunk], device=self.device)
             values[destinations] = soft
             # No action is sampled at the final bootstrap state. Its dummy
@@ -258,7 +351,12 @@ class SACLearner:
         self.q2_optimizer.zero_grad(set_to_none=True)
         self.actor_optimizer.zero_grad(set_to_none=True)
         self.alpha_optimizer.zero_grad(set_to_none=True)
+        split_entropy = config.entropy_mode == 'position_heading'
+        if split_entropy:
+            self.heading_alpha_optimizer.zero_grad(set_to_none=True)
         entropy_gap = torch.zeros((), device=self.device)
+        heading_entropy_gap = torch.zeros((), device=self.device)
+        entropy_targets = torch.zeros(2, device=self.device)
         for chunk in chunks:
             weight = len(chunk) / len(transitions)
             batch = pack_observations([t.observation for t in chunk], self.device)
@@ -267,34 +365,53 @@ class SACLearner:
                 q1, q2 = self.q1.forward_packed(batch, truth), self.q2.forward_packed(batch, truth)
             policy = self.actor.forward_packed(batch)
             policy.raw_logits.retain_grad()
+            entropies = policy_entropies(policy, batch,
+                config.position_target_entropy_factor if split_entropy else config.target_entropy_factor,
+                config.heading_target_entropy_factor if split_entropy else config.target_entropy_factor)
+            bonus = factorized_entropy_bonus(entropies, self.alpha_position, self.alpha_heading) if split_entropy else None
             loss = policy_loss(policy.probs, policy.log_probs, q1, q2, self.alpha,
-                               batch.action_groups, batch.size)
+                               batch.action_groups, batch.size, entropy_bonus=bonus)
             (loss * weight).backward()
             entropy = -segment_sum(policy.probs.detach() * policy.log_probs.detach(), batch.action_groups, batch.size)
             target_entropy = torch.tensor(np.log(batch.action_counts) * config.target_entropy_factor,
                                           dtype=entropy.dtype, device=self.device)
-            entropy_gap += (entropy-target_entropy).mean() * weight
+            if split_entropy:
+                entropy_gap += (entropies.position_entropy.detach()-entropies.position_target).mean() * weight
+                heading_entropy_gap += (entropies.heading_entropy.detach()-entropies.heading_target).mean() * weight
+            else:
+                entropy_gap += (entropy-target_entropy).mean() * weight
+            entropy_targets += torch.stack((entropies.position_target.mean(),
+                entropies.heading_target.mean())) * weight
             metrics[2] += loss.detach() * weight
             metrics[4] += entropy.mean() * weight
-            diagnostics = policy_diagnostics(policy, batch, self.model_config.actor_score_bound)
+            diagnostics = policy_diagnostics(policy, batch, self.model_config.actor_score_bound,
+                                             entropies if split_entropy else None)
             metrics[6:12] += diagnostics[:6] * weight
             metrics[12] = torch.maximum(metrics[12], diagnostics[6])
         self.actor_optimizer.step()
         alpha_loss = temperature_loss(self.log_alpha, entropy_gap, 0.0)
+        if split_entropy:
+            alpha_loss = alpha_loss + temperature_loss(self.log_alpha_heading, heading_entropy_gap, 0.0)
         alpha_loss.backward()
         self.alpha_optimizer.step()
+        if split_entropy:
+            self.heading_alpha_optimizer.step()
         metrics[3] = alpha_loss.detach()
         with torch.no_grad():
             self.log_alpha.clamp_(max=math.log(config.maximum_alpha))
+            if split_entropy:
+                self.log_alpha_heading.clamp_(max=math.log(config.maximum_alpha))
             for target, source in ((self.target1,self.q1),(self.target2,self.q2)):
                 for target_p, source_p in zip(target.parameters(), source.parameters()):
                     target_p.lerp_(source_p, config.polyak)
         self.updates += 1
-        values = torch.cat((metrics, self.alpha.reshape(1), coefficient_mass.reshape(1))).detach().cpu().tolist()
+        values = torch.cat((metrics, self.alpha.reshape(1), coefficient_mass.reshape(1),
+            self.alpha_position.reshape(1), self.alpha_heading.reshape(1), entropy_targets)).detach().cpu().tolist()
         return dict(zip(('critic1_loss','critic2_loss','actor_loss','alpha_loss','entropy','target_mean',
                         'position_entropy','heading_conditional_entropy','position_max_probability',
                         'raw_score_span','score_saturation_fraction','raw_score_gradient_abs_mean',
-                        'raw_score_gradient_abs_max','alpha','trace_coefficient_mass_sum'), values),
+                        'raw_score_gradient_abs_max','alpha','trace_coefficient_mass_sum',
+                        'alpha_position','alpha_heading','position_entropy_target','heading_entropy_target'), values),
                     updates=self.updates, batch_size=len(transitions), trace_samples=len(sequences),
                     trace_length_sum=sum(map(len, sequences)),
                     trace_multi_count=sum(len(sequence) > 1 for sequence in sequences),
@@ -312,28 +429,46 @@ class SACLearner:
         for name in ('actor','q1','q2','target1','target2','actor_optimizer',
                      'q1_optimizer','q2_optimizer','alpha_optimizer'):
             result[name] = getattr(self,name).state_dict()
+        if self.learning_config.entropy_mode == 'position_heading':
+            result['log_alpha_heading'] = self.log_alpha_heading.detach().clone()
+            result['heading_alpha_optimizer'] = self.heading_alpha_optimizer.state_dict()
         return copy.deepcopy(result)
 
     def load_state_dict(self, state):
         if (state['schema'] != 'candidate_graph_sac_v2' or
                 canonical_model_config(state['model_config']) != asdict(self.model_config)):
             raise ValueError("incompatible learner model schema")
-        saved, current = canonical_learning_config(state['learning_config']), asdict(self.learning_config)
-        for name in ('microbatch_size', 'learning_rate', 'polyak', 'initial_alpha'):
+        try:
+            saved = canonical_learning_config(state['learning_config'])
+        except ValueError as error:
+            raise ValueError('incompatible SAC semantics') from error
+        current = asdict(self.learning_config)
+        for name in ('microbatch_size', 'learning_rate', 'polyak', 'initial_alpha', 'temperature_learning_rate'):
             saved.pop(name)
             current.pop(name)
         if saved != current:
             raise ValueError("incompatible SAC semantics")
+        split_entropy = self.learning_config.entropy_mode == 'position_heading'
+        if split_entropy and any(key not in state for key in ('log_alpha_heading','heading_alpha_optimizer')):
+            raise ValueError('split entropy checkpoint requires heading temperature and optimizer state')
         # Optimizer load can retain references to input tensors; own the checkpoint.
         state = copy.deepcopy(state)
         for name in ('actor','q1','q2','target1','target2','actor_optimizer',
                      'q1_optimizer','q2_optimizer','alpha_optimizer'):
             getattr(self,name).load_state_dict(state[name])
+        if split_entropy:
+            self.heading_alpha_optimizer.load_state_dict(state['heading_alpha_optimizer'])
         # Loading Adam restores parameter-group metadata as well as history.
         # Preserve saved moments/steps, but apply the caller's continuation rate.
-        for optimizer in (self.actor_optimizer, self.q1_optimizer,
-                          self.q2_optimizer, self.alpha_optimizer):
+        for optimizer in (self.actor_optimizer, self.q1_optimizer, self.q2_optimizer):
             for group in optimizer.param_groups:
                 group['lr'] = self.learning_config.learning_rate
-        with torch.no_grad(): self.log_alpha.copy_(state['log_alpha'])
+        temperature_optimizers = (self.alpha_optimizer, self.heading_alpha_optimizer) if split_entropy else (self.alpha_optimizer,)
+        for optimizer in temperature_optimizers:
+            for group in optimizer.param_groups:
+                group['lr'] = self.temperature_learning_rate
+        with torch.no_grad():
+            self.log_alpha.copy_(state['log_alpha'])
+            if split_entropy:
+                self.log_alpha_heading.copy_(state['log_alpha_heading'])
         self.updates = int(state['updates'])

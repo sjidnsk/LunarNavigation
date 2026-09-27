@@ -145,8 +145,15 @@ def initial_training_identity(learner, *, replay, schedule, replay_rng, curricul
     import torch
     state = learner.state_dict()
     state['learning_config'] = dict(state['learning_config'])
-    if tuple(excluded_learning_fields) not in (('polyak',), ('return_steps',)):
-        raise ValueError('paired identity must exclude exactly its one tested learning variable')
+    if tuple(excluded_learning_fields) not in ((), ('polyak',), ('return_steps',), ('entropy_mode',)):
+        raise ValueError('paired identity may exclude only its one tested learning variable')
+    if tuple(excluded_learning_fields) == ('entropy_mode',):
+        if state['learning_config']['entropy_mode'] == 'position_heading':
+            for duplicate, source in (('log_alpha_heading', 'log_alpha'),
+                    ('heading_alpha_optimizer', 'alpha_optimizer')):
+                if state_checksum(state[duplicate]) != state_checksum(state[source]):
+                    raise ValueError('paired initial entropy temperature histories must be identical')
+                del state[duplicate]
     for field in excluded_learning_fields:
         del state['learning_config'][field]
     rng = dict(python=random.getstate(), numpy=np.random.get_state(),
@@ -242,8 +249,11 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     initial_identity = (initial_training_identity(learner, replay=replay, schedule=schedule,
         replay_rng=replay_rng, curriculum_rng=curriculum_rng, curriculum_state=curriculum_state,
         collector_state=collector_state, counters=counters, source_replay_sha256=source_replay_sha256,
-        excluded_learning_fields=(('return_steps',) if
-            (fork_provenance or {}).get('experiment') == 'paired-multistep' else ('polyak',)))
+        # Paired normalization applies only to a fresh fork. After learning,
+        # independent temperatures legitimately diverge and must both be hashed.
+        excluded_learning_fields=() if resume else {'paired-multistep': ('return_steps',),
+            'paired-entropy': ('entropy_mode',)}.get(
+                (fork_provenance or {}).get('experiment'), ('polyak',)))
         if config.paired_scene_sequence else None)
     trace_keys = ('trace_samples', 'trace_length_sum', 'trace_multi_count',
                   'trace_legacy_count', 'trace_coefficient_mass_sum')

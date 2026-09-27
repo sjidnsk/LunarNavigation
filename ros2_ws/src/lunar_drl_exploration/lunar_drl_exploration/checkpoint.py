@@ -79,7 +79,7 @@ class TrainingState:
         This operation neither creates the destination nor writes the source.
         """
         from .config import training_config_from_record
-        if experiment not in (None, 'paired-polyak', 'paired-multistep'):
+        if experiment not in (None, 'paired-polyak', 'paired-multistep', 'paired-entropy'):
             raise ValueError('unknown fork experiment: ' + str(experiment))
         source = Path(source).resolve()
         destination = Path(config.output_dir).resolve()
@@ -97,7 +97,7 @@ class TrainingState:
         fields = ('stagnation_window_steps', 'stagnation_max_positions',
                   'stagnation_position_tolerance_m', 'artifact_root',
                   'total_output_max_bytes', 'metrics_max_bytes', 'reward_diagnostics')
-        if experiment == 'paired-multistep':
+        if experiment in ('paired-multistep', 'paired-entropy'):
             # This comparison changes only the return horizon. Collection and
             # output caps remain the source contract, unlike a collection fork.
             fields = ()
@@ -107,24 +107,30 @@ class TrainingState:
             for key, value in record['platform'].items() if key != 'capability_path'})
             for record in (before, after)]
         learning_changes = {}
-        if experiment in ('paired-polyak', 'paired-multistep'):
-            learning_field = 'polyak' if experiment == 'paired-polyak' else 'return_steps'
+        if experiment in ('paired-polyak', 'paired-multistep', 'paired-entropy'):
+            learning_fields = {'paired-polyak': ('polyak',),
+                'paired-multistep': ('return_steps',),
+                'paired-entropy': ('entropy_mode', 'temperature_learning_rate')}[experiment]
+            if experiment == 'paired-entropy' and (original.learning.entropy_mode != 'joint'
+                    or original.learning.return_steps != 1 or config.learning.return_steps != 1):
+                raise ValueError('paired-entropy requires a joint one-step source and learning.return_steps=1')
             if config.paired_scene_sequence is not True:
                 raise ValueError(f'{experiment} fork requires paired_scene_sequence=true')
             if config.snapshot_max_bytes > original.snapshot_max_bytes:
                 raise ValueError(f'{experiment} fork cannot increase snapshot_max_bytes')
             fields += ('paired_scene_sequence', 'snapshot_max_bytes')
             different_learning = sorted(key for key in before['learning']
-                if key != learning_field and before['learning'][key] != after['learning'][key])
+                if key not in learning_fields and before['learning'][key] != after['learning'][key])
             if different_learning:
                 raise ValueError('incompatible fork configuration: ' + ', '.join(
                     'learning.' + key for key in different_learning))
-            if before['learning'][learning_field] != after['learning'][learning_field]:
-                learning_changes[learning_field] = dict(before=before['learning'][learning_field],
-                    after=after['learning'][learning_field])
+            for learning_field in learning_fields:
+                if before['learning'][learning_field] != after['learning'][learning_field]:
+                    learning_changes[learning_field] = dict(before=before['learning'][learning_field],
+                        after=after['learning'][learning_field])
             for identity in (before_identity, after_identity):
                 identity['learning'] = {key: value for key, value in identity['learning'].items()
-                    if key != learning_field}
+                    if key not in learning_fields}
         different = sorted(key for key in before
             if key not in (*fields, 'output_dir') and before_identity[key] != after_identity[key])
         if different:
@@ -144,6 +150,15 @@ class TrainingState:
             # source state; ordinary resume/load still compares return_steps.
             state.record['learner']['learning_config'] = dict(
                 state.record['learner']['learning_config'], return_steps=config.learning.return_steps)
+        if experiment == 'paired-entropy':
+            # Fork alone authorizes changing the entropy objective. Both split
+            # temperatures inherit the actual source value and Adam history;
+            # initial_alpha must never silently reset a trained temperature.
+            learner = state.record['learner']
+            learner['learning_config'] = dict(after['learning'])
+            if config.learning.entropy_mode == 'position_heading':
+                learner['log_alpha_heading'] = learner['log_alpha'].clone()
+                learner['heading_alpha_optimizer'] = copy.deepcopy(learner['alpha_optimizer'])
         state.record['config'] = after
         state.record['semantics'] = resume_semantics(config)
         state.validate(config)
@@ -189,6 +204,9 @@ class TrainingState:
         semantics = dict(record['semantics'])
         semantics['model'] = canonical_model_config(semantics['model'])
         semantics['learning'] = canonical_learning_config(semantics['learning'])
+        # Optimization cadence is not an experience/target semantic, including
+        # when canonicalization supplied the absent legacy default.
+        semantics['learning'].pop('temperature_learning_rate', None)
         if config is not None:
             expected=resume_semantics(config)
             different=sorted(key for key in set(expected)|set(semantics)
@@ -212,6 +230,18 @@ class TrainingState:
         for key, value in semantics['learning'].items():
             if learner_learning.get(key) != value or recorded_learning.get(key) != value:
                 raise ValueError('checkpoint learning config disagrees with semantics')
+        split = learner_learning['entropy_mode'] == 'position_heading'
+        temperature_keys = ('log_alpha_heading', 'heading_alpha_optimizer')
+        if split:
+            if any(key not in record['learner'] for key in temperature_keys):
+                raise ValueError('checkpoint independent entropy temperature state is missing')
+            heading = record['learner']['log_alpha_heading']
+            if not isinstance(heading, torch.Tensor) or heading.numel() != 1 or not torch.isfinite(heading).all():
+                raise ValueError('checkpoint heading entropy temperature is not finite scalar')
+            if not isinstance(record['learner']['heading_alpha_optimizer'], dict):
+                raise ValueError('checkpoint heading temperature optimizer is invalid')
+        elif any(key in record['learner'] for key in temperature_keys):
+            raise ValueError('joint entropy checkpoint cannot contain independent temperature state')
         if record['learner'].get('updates') != schedule.updates:
             raise ValueError('checkpoint learner/schedule counters disagree')
         if record['collector_state']['actor_version']>schedule.updates:

@@ -18,7 +18,7 @@ def parser():
             continuation.add_argument('--resume', action='store_true', help='restore output-dir/resume.pt; start new environment episodes')
             continuation.add_argument('--fork-from', type=Path,
                 help='trusted checkpoint for a new run; explicit stagnation, resource and diagnostic changes only')
-            cmd.add_argument('--fork-experiment', choices=('paired-polyak', 'paired-multistep'),
+            cmd.add_argument('--fork-experiment', choices=('paired-polyak', 'paired-multistep', 'paired-entropy'),
                 help='requires --fork-from; allow only the named learning variable, paired scenes and a smaller snapshot budget')
             cmd.add_argument('--output-dir')
             cmd.add_argument('--device', default='cuda', choices=('cpu', 'cuda'))

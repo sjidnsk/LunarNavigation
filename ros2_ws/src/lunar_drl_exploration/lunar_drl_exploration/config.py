@@ -132,8 +132,22 @@ class LearningConfig:
     maximum_alpha: float = 1e-4
     target_entropy_factor: float = 0.10
     return_steps: int = 1
+    entropy_mode: str = 'joint'
+    position_target_entropy_factor: float = 0.10
+    heading_target_entropy_factor: float = 0.10
+    temperature_learning_rate: float | None = None
 
     def __post_init__(self):
+        if self.entropy_mode not in ('joint', 'position_heading'):
+            raise ValueError('entropy_mode must be joint or position_heading')
+        optimization = (self.learning_rate, self.gamma, self.polyak, self.initial_alpha,
+            self.maximum_alpha, self.target_entropy_factor, self.position_target_entropy_factor,
+            self.heading_target_entropy_factor)
+        if not all(np.isfinite(value) for value in optimization):
+            raise ValueError('SAC optimization settings must be finite')
+        if self.temperature_learning_rate is not None and not (
+                np.isfinite(self.temperature_learning_rate) and self.temperature_learning_rate > 0):
+            raise ValueError('temperature_learning_rate must be finite and positive or None')
         if type(self.return_steps) is not int or not 1 <= self.return_steps <= 8:
             raise ValueError('return_steps must be an integer in [1,8]')
         if self.batch_size != 64 or not 0 < self.microbatch_size <= self.batch_size:
@@ -142,16 +156,29 @@ class LearningConfig:
             raise ValueError("task reward requires 0 < gamma <= 1")
         if not (0 < self.initial_alpha <= self.maximum_alpha and
                 0 < self.polyak <= 1 and self.learning_rate > 0 and
-                self.target_entropy_factor >= 0):
+                self.target_entropy_factor >= 0 and self.position_target_entropy_factor >= 0 and
+                self.heading_target_entropy_factor >= 0):
             raise ValueError("invalid SAC optimization settings")
 
 
 def canonical_learning_config(record):
-    """Legacy learner and replay semantics used one-step targets."""
+    """Legacy learner/replay records use one-step targets and joint entropy."""
     result = dict(record)
     result.setdefault('return_steps', 1)
-    if type(result['return_steps']) is not int or not 1 <= result['return_steps'] <= 8:
-        raise ValueError('learning config return_steps must be an integer in [1,8]')
+    result.setdefault('entropy_mode', 'joint')
+    result.setdefault('position_target_entropy_factor', 0.10)
+    result.setdefault('heading_target_entropy_factor', 0.10)
+    result.setdefault('temperature_learning_rate', None)
+    # Replay semantics omit optimizer controls. If initial_alpha is absent, its
+    # default must not constrain the recorded cap. Use the cap as a validation-
+    # only witness (0 < cap <= cap); never insert this control into the record.
+    validation = dict(result)
+    if 'initial_alpha' not in validation and 'maximum_alpha' in validation:
+        validation['initial_alpha'] = validation['maximum_alpha']
+    try:
+        LearningConfig(**validation)
+    except TypeError as error:
+        raise ValueError('invalid learning config fields') from error
     return result
 
 
@@ -262,7 +289,8 @@ def resume_semantics(config):
     """Full replay continuation only. Actor-only loads use actor schema/model shape."""
     record = config_record(config)
     learning = {key: value for key, value in record['learning'].items()
-                if key not in ('microbatch_size','learning_rate','polyak','initial_alpha')}
+                if key not in ('microbatch_size','learning_rate','polyak','initial_alpha',
+                               'temperature_learning_rate')}
     platform = {key: value for key, value in record['platform'].items()
                 if key != 'capability_path'}
     result = dict(model=record['model'], learning=learning,

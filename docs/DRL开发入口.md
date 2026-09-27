@@ -1,5 +1,11 @@
 # 强化学习统一开发入口
 
+当前专项：用户已确认[位置与朝向独立熵对照](validation/2026-09-27-drl-independent-entropy.md)，
+分支`feat/drl-factorized-entropy`，工作树`.worktrees/drl-factorized-entropy`。
+采用原25320完整起点、一步回报及相同预算；默认joint路径和部署决策保持兼容。
+两臂共同使用温度学习率.003，唯一臂间变量为联合/独立熵控制；不能与旧实验直接作因果比较。
+训练状态以原共用产物根`evaluation/phase5-entropy-manifest.json`为准，冻结效果尚未验证。
+
 2026-09-27后续按用户确认推进[一步/八步soft Retrace对照](validation/2026-09-27-drl-multistep-experiment.md)：
 专项`feat/drl-multistep`复用`.worktrees/drl-stagnation-budget`；工程验证及两臂有界训练已完成。
 两臂均新增2048条/512更新；训练成功12次与11次，八步实际多步抽样占16.38%，尚无优势证据。
