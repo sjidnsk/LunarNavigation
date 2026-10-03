@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python/NumPy/SciPy、PyTorch 离散 SAC、现有 C++ 原生可见性、隔离 ROS 2 Jazzy、标准库阶段控制和终端面板。
 
-**Spec:** [已认可的设计](../specs/2026-10-03-drl-task-frontier.md)。用户认可日期2026-10-04；实施计划待用户审阅。
+**Spec:** [已认可的设计](../specs/2026-10-03-drl-task-frontier.md)。用户于2026-10-04批准设计、实施计划及子代理执行；任务1基础工程已通过本机Jazzy验证（[证据与冷构建限制](../../validation/2026-10-04-drl-task-frontier.md)）；尚未实现后续新收益或启动完整训练。
 
 ## Global Constraints
 

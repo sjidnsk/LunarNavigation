@@ -136,8 +136,12 @@ class LearningConfig:
     position_target_entropy_factor: float = 0.10
     heading_target_entropy_factor: float = 0.10
     temperature_learning_rate: float | None = None
+    position_aux_weight: float = 0.0
 
     def __post_init__(self):
+        if (type(self.position_aux_weight) not in (int, float) or
+                self.position_aux_weight != 0.0):
+            raise ValueError('position_aux_weight must be 0.0 for task-frontier retraining')
         if self.entropy_mode not in ('joint', 'position_heading'):
             raise ValueError('entropy_mode must be joint or position_heading')
         optimization = (self.learning_rate, self.gamma, self.polyak, self.initial_alpha,
@@ -169,6 +173,7 @@ def canonical_learning_config(record):
     result.setdefault('position_target_entropy_factor', 0.10)
     result.setdefault('heading_target_entropy_factor', 0.10)
     result.setdefault('temperature_learning_rate', None)
+    result.setdefault('position_aux_weight', 0.0)
     # Replay semantics omit optimizer controls. If initial_alpha is absent, its
     # default must not constrain the recorded cap. Use the cap as a validation-
     # only witness (0 < cap <= cap); never insert this control into the record.
