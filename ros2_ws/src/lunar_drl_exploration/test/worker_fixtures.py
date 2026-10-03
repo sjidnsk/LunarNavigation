@@ -8,7 +8,7 @@ from lunar_drl_exploration.contracts import (
 
 
 def observation():
-    features = np.zeros((2, 19)); features[1, 0] = .1; features[1, 4] = .5
+    features = np.zeros((2, 27)); features[1, 0] = .1; features[1, 4] = .5
     return DecisionObservation(np.arange(2), [[0, 0], [1, 0]], features,
         [[0, 1]], [1], 0, [[0, 0], [2, 0], [2, 2]], np.ones(8),
         [0, 1], [0, 0], [[0, 0, 0], [1, 0, 0]], 'measured', 1)

@@ -8,6 +8,9 @@ from .history import HEADINGS
 from .sensor import direct_witnesses, directional_visibility
 from .task_analysis import measured_workspace
 from .metric_graph import MetricGrid, greedy_spanner
+from .frontiers import FrontierSnapshot, build_frontiers, directional_frontier_counts
+from .feature_schema import (NODE_FEATURE_DIM, IN_GAIN_SLICE, OUT_GAIN_SLICE,
+                             HISTORY_SLICE, IN_GAIN_SCALE, OUT_GAIN_SCALE)
 
 def _stable_ids(cells):
     # Signed world lattice coordinates packed losslessly into a 64-bit identity.
@@ -46,11 +49,18 @@ class GraphBuilder:
         self._lattice_origin = None
         self.unrepresented_interfaces = np.empty((0, 2), np.int64)
 
-    def build(self, snapshot, report, history, task, sensor, velocity):
+    def build(self, snapshot, report, history, task, sensor, velocity, *,
+              frontiers: FrontierSnapshot | None = None):
         if report.revision != snapshot.revision:
             raise ValueError("task report does not match snapshot revision")
         w = self.workspace or measured_workspace(snapshot, task, sensor)
         self.workspace = None
+        if frontiers is None:
+            frontiers = build_frontiers(snapshot, w, task)
+        if (frontiers.epoch != snapshot.epoch or frontiers.revision != snapshot.revision
+                or frontiers.resolution_m != snapshot.resolution_m
+                or frontiers.task_id != task.task_id):
+            raise ValueError("frontiers do not match task snapshot")
         identity = (snapshot.epoch, snapshot.resolution_m)
         lattice_origin = np.asarray(snapshot.origin[:2], dtype=float)
         same_lattice = False
@@ -144,31 +154,34 @@ class GraphBuilder:
         ids=np.r_[_stable_ids(world_cells),np.int64(-(2**63))]
         if np.any(ids[:-1] == ids[-1]):
             raise ValueError("world lattice collides with actual anchor identity")
-        feature = np.zeros((len(points), 19), np.float32)
+        feature = np.zeros((len(points), NODE_FEATURE_DIM), np.float32)
         feature[:, :2] = (points - actual) / 10.0
         feature[:, 2] = _inside(points, task.polygon)
-        feature[:, 11:] = history.action_bits(points, sensor)
+        feature[:, HISTORY_SLICE] = history.action_bits(points, sensor)
+        feature[:, IN_GAIN_SLICE] = directional_frontier_counts(
+            frontiers.inside, w, points, sensor, resolution) / IN_GAIN_SCALE
+        feature[:, OUT_GAIN_SLICE] = directional_frontier_counts(
+            frontiers.outside, w, points, sensor, resolution) / OUT_GAIN_SCALE
+        # The old unknown-interface certificates define observation turns;
+        # FREE-side domain gains cannot replace these cross-boundary chances.
+        pending_visible = np.zeros(8, bool)
         fronts = report.frontier_cells - shift
         if len(fronts):
             tree = cKDTree(fronts)
-            source_cells = np.floor(
-                (points - np.array(w.origin)) / snapshot.resolution_m
-            ).astype(np.int64)
+            source_cells = np.floor((actual - np.array(w.origin)) / resolution).astype(np.int64)
             radius = sensor.range_m / snapshot.resolution_m
-            for i, source in enumerate(source_cells):
-                candidates = tree.query_ball_point(source, radius + 1e-10)
-                if not candidates:
-                    continue
+            candidates = tree.query_ball_point(source_cells, radius + 1e-10)
+            if candidates:
                 targets = fronts[candidates]
                 visible = directional_visibility(
                     w.intrinsic,
-                    source,
+                    source_cells,
                     targets,
                     radius,
                     HEADINGS + sensor.offset_yaw_rad,
                     math.radians(sensor.fov_deg),
                 )
-                feature[i, 3:11] = visible.sum(axis=0) / 100.0
+                pending_visible = visible.any(axis=0)
         # A fallback native cell at the actual XY is already represented by
         # the exact floating-point anchor; roundoff must not duplicate 8 actions.
         action_positions = [current] + sorted(boundary)
@@ -185,7 +198,7 @@ class GraphBuilder:
         headings = np.tile(np.arange(8), len(action_positions))
         moving = action_nodes != current
         valid = moving | ((yaw_error > yaw_tolerance + 1e-9) &
-                          (feature[current, 3 + headings] > 0))
+                          pending_visible[headings])
         action_nodes, yaws = action_nodes[valid], yaws[valid]
         goals = np.column_stack((points[action_nodes], yaws))
         return DecisionObservation(

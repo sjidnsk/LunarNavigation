@@ -10,6 +10,7 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 from .batch import pack_observations, pack_privileged
 from .config import ModelConfig
+from .feature_schema import NODE_FEATURE_DIM, ACTION_FEATURE_DIM
 
 
 def segment_sum(values, groups, count):
@@ -113,12 +114,12 @@ class MeasuredEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         width = config.width
-        self.graph = GraphEncoder(19, config)
+        self.graph = GraphEncoder(NODE_FEATURE_DIM, config)
         self.read = CurrentRead(config)
         self.polygon = PolygonEncoder(width)
         self.platform = nn.Linear(8, width)
         self.context = nn.Sequential(nn.Linear(width * 4, width), nn.GELU())
-        self.action = nn.Sequential(nn.Linear(6, width), nn.GELU())
+        self.action = nn.Sequential(nn.Linear(ACTION_FEATURE_DIM, width), nn.GELU())
 
     def forward(self, batch):
         nodes = self.graph(batch.graph)

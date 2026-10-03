@@ -1,11 +1,15 @@
 """Frozen measured FREE-side frontiers and shared, classification-safe removal."""
 from dataclasses import dataclass
 import hashlib
+import math
 from typing import TYPE_CHECKING
 import numpy as np
-from .contracts import MapSnapshot, TaskSpec, freeze_array
+from .contracts import MapSnapshot, SensorSpec, TaskSpec, freeze_array
 from .geometry import lattice_coordinates, lattice_displacement, pack_cell_ids
 from .maps import FREE
+from .history import HEADINGS
+from .sensor import directional_visibility, validate_sensor
+from scipy.spatial import cKDTree
 
 if TYPE_CHECKING:
     from .task_analysis import MeasuredWorkspace
@@ -100,6 +104,49 @@ def build_frontiers(snapshot: MapSnapshot, workspace: 'MeasuredWorkspace',
                             task.task_id, digest, snapshot.revision,
                             domain_frontiers(True), domain_frontiers(False),
                             known_ids, free_ids)
+
+
+def directional_frontier_counts(frontiers: FrontierSet, workspace: 'MeasuredWorkspace',
+                                positions: np.ndarray, sensor: SensorSpec,
+                                resolution_m: float) -> np.ndarray:
+    """Count each FREE center once when it and any same-domain demand are seen.
+
+    Stable signed demand IDs use the workspace's retained lattice offset.
+    The spatial query only limits targets to the native fan's bounding square;
+    native directional membership decides range, beam support and occlusion.
+    """
+    validate_sensor(sensor)
+    if not math.isfinite(resolution_m) or resolution_m <= 0:
+        raise ValueError("positive finite map resolution required")
+    positions = np.asarray(positions, np.float64).reshape(-1, 2)
+    result = np.zeros((len(positions), 8), np.int64)
+    if not len(frontiers.cell_ids) or not len(positions):
+        return result
+    w = workspace
+    if w.lattice_offset is None:
+        raise ValueError("workspace requires a stable lattice offset")
+    shift = np.asarray(w.bounds[:2], np.int64) + w.lattice_offset
+    ids = frontiers.demand_ids
+    demand_cells = np.column_stack((ids >> 32, (ids << 32) >> 32)) - shift
+    centers = np.floor((frontiers.centers-w.origin)/resolution_m).astype(np.int64)
+    sources = np.floor((positions-w.origin)/resolution_m).astype(np.int64)
+    tree = cKDTree(centers)
+    radius = sensor.range_m/resolution_m
+    for i, source in enumerate(sources):
+        candidates = np.asarray(tree.query_ball_point(source, math.ceil(radius), p=np.inf),
+                                np.int64)
+        if not len(candidates):
+            continue
+        rows = np.concatenate([np.arange(frontiers.demand_offsets[j],
+                                         frontiers.demand_offsets[j+1]) for j in candidates])
+        offsets = np.r_[0, np.cumsum(np.diff(frontiers.demand_offsets)[candidates])]
+        seen = directional_visibility(w.intrinsic, source,
+            np.vstack((centers[candidates], demand_cells[rows])), radius,
+            HEADINGS+sensor.offset_yaw_rad, math.radians(sensor.fov_deg))
+        center_seen = seen[:len(candidates)]
+        demand_seen = np.logical_or.reduceat(seen[len(candidates):], offsets[:-1], axis=0)
+        result[i] = np.count_nonzero(center_seen & demand_seen, axis=0)
+    return result
 
 
 def count_removed(before: FrontierSnapshot, after: FrontierSnapshot, *, domain: str) -> int:

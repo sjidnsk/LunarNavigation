@@ -17,7 +17,7 @@ def test_actual_fractional_anchor_frozen_and_zero_gain_transit():
     s = snapshot(m, pose=actual, origin=origin)
     t = task(origin[0], origin[1], origin[0] + 9, origin[1] + 9)
     obs, report = DecisionCore(t, SensorSpec(range_m=3)).observe(s, (0.0, 0.0))
-    assert obs.features.shape[1] == 19 and obs.context.shape == (8,)
+    assert obs.features.shape[1] == 27 and obs.context.shape == (8,)
     assert len(obs.goals) == 8 * len(np.unique(obs.action_nodes))
     anchors = obs.goals[obs.action_nodes == obs.current_index]
     assert len(anchors) == 0 and anchors.dtype == np.float64
@@ -84,7 +84,8 @@ def test_directional_utilities_match_sensor_hits_and_disappear_after_measurement
     core = DecisionCore(task(0, 0, 23, 19), sensor)
     obs, report = core.observe(s, (0.1, 0.2))
     w = core.analyzer.workspace
-    front = set(map(tuple, report.frontier_cells - np.array(w.bounds[:2])))
+    fronts = core.frontiers
+    offset = np.array(w.bounds[:2]) + w.lattice_offset
     for index in range(len(obs.positions)):
         xy = obs.goals[obs.action_nodes == index, :2]
         xy = xy[0] if len(xy) else obs.positions[index].astype(float)
@@ -96,10 +97,15 @@ def test_directional_utilities_match_sensor_hits_and_disappear_after_measurement
                 Pose(*xy, heading * np.pi / 4),
                 sensor,
             )
-            expected = (
-                sum((int(x), int(y)) in front for y, x in zip(rows, cols)) / 100.0
-            )
-            assert np.isclose(obs.features[index, 3 + heading], expected)
+            visible = set(zip(cols, rows))
+            for start, domain in [(3, fronts.inside), (11, fronts.outside)]:
+                count = 0
+                for j, center in enumerate(domain.centers):
+                    cell = tuple(np.floor((center-w.origin)/s.resolution_m).astype(int))
+                    ids = domain.demand_ids[domain.demand_offsets[j]:domain.demand_offsets[j+1]]
+                    demands = np.column_stack((ids >> 32, (ids << 32) >> 32))-offset
+                    count += cell in visible and any(tuple(d) in visible for d in demands)
+                assert np.isclose(obs.features[index, start + heading], count/100.)
     filled = snapshot(np.ones((19, 23), np.uint8), pose=s.pose)
     after, done = core.observe(replace(filled, revision=2), (0, 0))
     assert done.exhausted and np.all(after.features[:, 3:11] == 0)
@@ -286,9 +292,9 @@ def test_first_executed_observation_survives_first_snapshot_and_epoch_clears_his
     core = DecisionCore(task(0, 0, 9, 9), SensorSpec())
     core.record_observation(Pose(3.71, 4.5, np.pi / 2), np.array([[3, 4]]))
     first, _ = core.observe(s, (0, 0))
-    assert first.features[first.current_index, 13] == 1
+    assert first.features[first.current_index, 21] == 1
     second, _ = core.observe(replace(s, epoch="new"), (0, 0))
-    assert second.features[:, 11:].sum() == 0
+    assert second.features[:, 19:].sum() == 0
 
 
 def test_scene_generator_descriptor_survives_terrain_to_privileged_handoff():
@@ -349,7 +355,7 @@ def test_adjacent_point_two_metre_stances_retain_unique_optical_opportunity():
     assert not report.exhausted
     assert any(np.allclose(g[:2],[.9,.7]) for g in o.goals)
     witness=np.flatnonzero(np.linalg.norm(o.positions-[.9,.7],axis=1)<1e-6)
-    assert o.features[witness,3:11].max()>0
+    assert np.all(o.features[witness,3:11] == 0)  # pending turn geometry survives zero FREE-side gain
     assert len(np.unique(np.round(o.goals,12),axis=0))==len(o.goals)
 
 

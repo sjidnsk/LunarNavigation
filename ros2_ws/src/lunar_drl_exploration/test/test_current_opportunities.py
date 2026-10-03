@@ -42,7 +42,7 @@ def test_current_outside_stance_can_observe_task_across_nontraversable_band():
     assert report.available and not report.completed
     assert len(report.frontier_cells) > 0
     assert np.all(report.witnesses[:, 0] < 8)
-    assert observation.features[:, 3:11].max() > 0
+    assert np.all(observation.features[:, 3:11] == 0)  # no same-domain FREE task center
 
 
 def test_observation_consumes_frontier_without_changing_measured_area():

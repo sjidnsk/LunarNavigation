@@ -13,7 +13,7 @@ from lunar_drl_exploration.replay import ReplayBuffer, dumps_transport, loads_tr
 
 def observation(revision=0):
     return DecisionObservation(np.arange(2), np.array([[0,0],[1,0]]),
-        np.zeros((2,19)), np.array([[0,1]]), np.ones(1), 0,
+        np.zeros((2,27)), np.array([[0,1]]), np.ones(1), 0,
         np.array([[0,0],[2,0],[2,2],[0,2]]), np.zeros(8),
         np.array([0,1]), np.zeros(2), np.array([[0,0,0],[1,0,0]]), 'e', revision)
 
@@ -376,7 +376,7 @@ def test_shared_array_backing_bytes_are_charged_once_even_for_distinct_views():
     object.__setattr__(b,'features',a.features.view())
     shared=ReplayBuffer(1000000); shared.add(transition(a,b),{'s':scene()})
     independent=ReplayBuffer(1000000); independent.add(transition(),{'s':scene()})
-    assert independent.buffer_bytes-shared.buffer_bytes==152  # 2 nodes * 19 floats * 4 bytes
+    assert independent.buffer_bytes-shared.buffer_bytes==216  # 2 nodes * 27 floats * 4 bytes
     restored=ReplayBuffer.from_snapshot(shared.snapshot(1000000),1000000)
     assert restored.buffer_bytes==shared.buffer_bytes
 

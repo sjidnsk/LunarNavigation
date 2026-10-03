@@ -16,7 +16,7 @@ torch.set_num_threads(2)
 def observation(n=7, locations=3, seed=1):
     rng = np.random.default_rng(seed)
     positions = rng.normal(size=(n, 2)).astype(np.float32)
-    features = rng.normal(size=(n, 19)).astype(np.float32)
+    features = rng.normal(size=(n, 27)).astype(np.float32)
     features[:, :2] = (positions - positions[0]) / 10
     edges = np.column_stack((np.arange(n-1), np.arange(1, n)))
     nodes = np.repeat(np.arange(min(n, locations)), 8)
@@ -225,10 +225,10 @@ def test_executed_optical_history_aligns_with_packed_vehicle_actions(mount_yaw):
     obs, _ = core.observe(snapshot(m, pose=pose))
     current = obs.action_nodes == obs.current_index
     packed = pack_observations([obs], 'cpu')
-    visited = packed.action_features[current, 5].numpy()
+    visited = packed.action_features[current, 6].numpy()
     np.testing.assert_array_equal(visited, [1, 0, 0, 0, 0, 0, 0])
-    np.testing.assert_array_equal(obs.features[obs.current_index, 11:], [1, 0, 0, 0, 0, 0, 0, 0])
-    assert obs.features.shape[1] == 19 and packed.action_features.shape[1] == 6
+    np.testing.assert_array_equal(obs.features[obs.current_index, 19:], [1, 0, 0, 0, 0, 0, 0, 0])
+    assert obs.features.shape[1] == 27 and packed.action_features.shape[1] == 7
 
 
 def test_optical_history_reprojects_when_mount_configuration_changes():
@@ -244,6 +244,6 @@ def test_optical_history_reprojects_when_mount_configuration_changes():
     core.analyzer.sensor = core.sensor
     m = np.zeros((8, 8), np.uint8); m[2:5, 2:5] = 1
     obs, _ = core.observe(snapshot(m, pose=Pose(3.5, 3.5, np.pi)))
-    visited = pack_observations([obs], 'cpu').action_features[obs.action_nodes == obs.current_index, 5]
+    visited = pack_observations([obs], 'cpu').action_features[obs.action_nodes == obs.current_index, 6]
     np.testing.assert_array_equal(visited.numpy(), [1, 0, 0, 0, 0, 0, 0])
     np.testing.assert_array_equal(core.history.bits([[3.5, 3.5]])[0], [0, 0, 1, 0, 0, 0, 0, 0])

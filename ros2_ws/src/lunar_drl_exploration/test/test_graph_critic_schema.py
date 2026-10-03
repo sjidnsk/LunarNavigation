@@ -33,8 +33,8 @@ def test_incomplete_graph_reports_unavailable_not_exhausted(monkeypatch):
     from test_task_analysis import snapshot,task
     core=DecisionCore(task(0,0,8,8),SensorSpec(range_m=2))
     original=core.builder.build
-    def build(*args):
-        result=original(*args)
+    def build(*args, **kwargs):
+        result=original(*args, **kwargs)
         core.builder.unrepresented_interfaces=np.array([[4,4]])
         return result
     monkeypatch.setattr(core.builder,'build',build)

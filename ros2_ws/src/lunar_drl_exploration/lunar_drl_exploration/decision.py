@@ -41,7 +41,8 @@ class DecisionCore:
         report = self.analyzer.update(snapshot)
         self.builder.workspace = self.analyzer.workspace
         observation = self.builder.build(
-            snapshot, report, self.history, self.task, self.sensor, velocity
+            snapshot, report, self.history, self.task, self.sensor, velocity,
+            frontiers=self.frontiers,
         )
         if len(self.builder.unrepresented_interfaces) and not report.completed:
             report = replace(report, available=False, exhausted=False,

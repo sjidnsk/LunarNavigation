@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 import numpy as np
+from .feature_schema import NODE_FEATURE_DIM
 
 
 def freeze_array(value, *, dtype=None) -> np.ndarray:
@@ -118,7 +119,7 @@ class DecisionObservation:
     goals: np.ndarray
     epoch: str
     revision: int
-    schema: str = "task_graph_v3"
+    schema: str = "task_graph_v4"
 
     def __post_init__(self):
         for name, dtype in (("node_ids", np.int64), ("positions", np.float32),
@@ -127,8 +128,8 @@ class DecisionObservation:
                             ("context", np.float32), ("action_nodes", np.int64),
                             ("action_yaws", np.float32), ("goals", np.float64)):
             object.__setattr__(self, name, freeze_array(getattr(self, name), dtype=dtype))
-        if self.features.ndim != 2 or self.features.shape[1] != 19:
-            raise ValueError("features must contain 19 scalars per graph node")
+        if self.features.ndim != 2 or self.features.shape[1] != NODE_FEATURE_DIM:
+            raise ValueError(f"features must contain {NODE_FEATURE_DIM} scalars per graph node")
         if self.context.shape != (8,):
             raise ValueError("context must contain 8 platform/sensor scalars")
         if self.node_ids.shape != (self.features.shape[0],):

@@ -6,6 +6,7 @@ an ephemeral batch; no scene or GPU graph cache survives replay eviction.
 from dataclasses import dataclass
 import numpy as np
 import torch
+from .feature_schema import IN_GAIN_SLICE, OUT_GAIN_SLICE, HISTORY_SLICE
 
 
 @dataclass
@@ -85,7 +86,9 @@ def pack_observations(observations, device):
         # Explicit position, world heading and direction-specific gain/history.
         action_features.append(np.column_stack((o.features[o.action_nodes, :2],
             np.cos(o.action_yaws), np.sin(o.action_yaws),
-            o.features[o.action_nodes, 3 + heading], o.features[o.action_nodes, 11 + heading])))
+            o.features[o.action_nodes, IN_GAIN_SLICE.start + heading],
+            o.features[o.action_nodes, OUT_GAIN_SLICE.start + heading],
+            o.features[o.action_nodes, HISTORY_SLICE.start + heading])))
     return ObservationBatch(graph, _tensor(polygons, device),
         torch.as_tensor(np.repeat(np.arange(len(observations)), [len(p) for p in polygons]),
                         dtype=torch.long, device=device),

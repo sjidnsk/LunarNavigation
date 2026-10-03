@@ -100,7 +100,7 @@ export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 
 ### Task 3: 分区收益输入与合法转向
 
-**Files:** 创建 `P/feature_schema.py`、`T/test_frontier_features.py`；修改 `P/graph.py`、`decision.py`、`contracts.py`、`batch.py`、`model.py` 和现有图/模型fixtures。
+**Files:** 创建 `P/feature_schema.py`、`T/test_frontier_features.py`；修改 `P/frontiers.py`、`graph.py`、`decision.py`、`contracts.py`、`batch.py`、`model.py`、`task_analysis.py` 和现有图/模型fixtures。
 
 **Interfaces:**
 - `NODE_FEATURE_DIM=27`、`ACTION_FEATURE_DIM=7`；`IN_GAIN_SLICE=slice(3,11)`、`OUT_GAIN_SLICE=slice(11,19)`、`HISTORY_SLICE=slice(19,27)`；两个输入尺度100。
@@ -108,11 +108,13 @@ export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 - `GraphBuilder.build(..., *, frontiers: FrontierSnapshot | None=None)`；None仅在独立调用时从相同workspace构造，Core传已冻结值。
 - 每个动作7列固定为相对XY、cos/sin、任务内收益、任务外收益、方向历史；原地转向使用独立旧pending接口可见矩阵。
 
-- [ ] 写失败测试：区外站位内收益为正/外通道独立；中心可见但需求被BLOCKED遮挡/FOV排除时0；两个需求只看到一个计1；8朝向不串列，真实历史位于19:27。
-- [ ] 按上述接口实现计数和27/7维构造；复用原生可见性，不引入新的近似射线。
-- [ ] 分离旧pending可见矩阵和新收益矩阵；写 `test_external_frontiers_do_not_create_task_turn`、`test_cross_boundary_pending_turn_survives_zero_inside_frontiers`。
-- [ ] 更新pack_observations和MeasuredEncoder尺寸/动作列；固定一组人工输入验证批处理、Actor/Q输出与动作一一对齐。
-- [ ] 跑新测试和 `T/test_current_opportunities.py`、`test_graph_decision.py`、`test_valid_actions.py`、`test_metric_graph.py`、`test_model.py`；全通过后精确提交。
+- [x] 写失败测试：区外站位内收益为正/外通道独立；中心可见但需求被BLOCKED遮挡/FOV排除时0；两个需求只看到一个计1；8朝向不串列，真实历史位于19:27。
+- [x] 按上述接口实现计数和27/7维构造；复用原生可见性，不引入新的近似射线。
+- [x] 分离旧pending可见矩阵和新收益矩阵；写 `test_external_frontiers_do_not_create_task_turn`、`test_cross_boundary_pending_turn_survives_zero_inside_frontiers`。
+- [x] 更新pack_observations和MeasuredEncoder尺寸/动作列；固定一组人工输入验证批处理、Actor/Q输出与动作一一对齐。
+- [x] 跑新测试和 `T/test_current_opportunities.py`、`test_graph_decision.py`、`test_valid_actions.py`、`test_metric_graph.py`、`test_model.py`；全通过后精确提交。
+
+Task3已实现并自审，等待控制器独立审查；允许独立workspace复用snapshot的稳定lattice phase/offset。最终聚焦含包级暴露的两处旧fixture：80 passed；完整包一次661 passed/2 failed/2 skipped后，仅修复这两处fixture并在对应完整文件聚焦通过。详细RED/GREEN及边界见 `docs/validation/2026-10-04-drl-task-frontier.md`。
 
 ### Task 4: 全动作奖励和Critic候选预计消除
 

@@ -92,3 +92,31 @@ bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest ros2_ws/s
 审查复现 resolution=0.2、origin=0.02469135781 加256格时，独立量化相位分别落在舍入边界两侧，错误清空K并拒绝前沿比较。本轮改为相对保留的首次原始origin判断整数位移（绝对容差1e-10格）；复用原坐标身份，工作区携带同一phase/offset。独立前沿快照不再精确比较各自相位；容差判断后对齐必要的整数格ID偏移，覆盖相位跨0/分辨率边界。
 
 先写回归：3 failed in 0.26s，修复后3 passed in 0.22s。增加±1e-16原点案例；临时绕过ID重对齐导致1 failed、2 passed（0.17s），证明独立比较没有只放宽身份而忽略ID。恢复源码后运行test_cumulative_coverage、test_frontier_sets、test_frontier_removal、test_task_analysis、test_graph_decision五文件：67 passed in 2.94s，退出0。日志在原Task 2目录的fix1-red.log、fix1-green.log、fix1-mutation-rebase.log、fix1-focused.log。本轮按控制器范围未重复包级测试；前述646通过是修复前提交的历史证据。无训练/评测；原验证边界继续有效。
+
+## Task 3：分区收益输入与合法转向
+
+起点 `1aeff4e6b9bdcd2efb83962a16429f7978071b4a`。新增统一特征列定义：节点27维，前三列相对XY/任务内标识；任务内收益 `3:11`、任务外收益 `11:19` 各为8方向FREE前沿中心数量除100；真实执行方向历史 `19:27`。每动作7列为相对XY、cos/sin、任务内收益、任务外收益、方向历史。DecisionObservation默认 `task_graph_v4`，批处理、Actor/Q共用MeasuredEncoder同步27/7维。
+
+`directional_frontier_counts` 返回int64[N,8]，只有FREE中心与至少一个冻结同域需求均可见时记1；两个需求仅见一个仍计一个中心，需求可见但中心不可见为0。空间索引按原生fan方形包络保守裁剪，实际range/FOV/遮挡继续使用原生directional_visibility，不引入近似射线或bearing过滤。区外站位可以有任务内收益，任务外通道独立。
+
+DecisionCore将analyzer已冻结FrontierSnapshot交给GraphBuilder，独立build才使用同workspace构造。原有unknown pending接口/见证证书继续负责几何补点与合法原地扫描，和新收益分离。区外前沿不产生任务扫描；任务内FREE前沿为空但跨边界pending仍可见时保留扫描。零收益通行和回退保持既有几何规则。
+
+控制器批准补充 `measured_workspace(...,coverage=None)` 的稳定lattice phase/offset：从snapshot初始origin调用共享helper，coverage分支仍保留原身份。曾复现origin_x=-1e-16经workspace平移丢精度，独立量化把遮挡需求错配到可见阻挡，错误返回8个1。计数器现在只复用workspace的稳定offset，不引入另一套ID量化；±1e-16独立GraphBuilder/可见性回归通过。
+
+### RED / GREEN及最终证据
+
+- 初始新文件执行：8 failed in 0.95s，失败为缺计数接口、旧19维/default v3、区外通道缺失以及跨边界pending误作任务内收益；实现后8 passed in 0.89s。
+- 补充lattice RED：1 failed、1 passed、10 deselected in 0.23s；修复后新文件12 passed in 0.95s。最初仅正收益的lattice夹具没有抓住错配，随后加强为BLOCKED需求才得到有效RED。
+- 移除中心可见门控和ANY需求改ALL的两次临时变异，各导致对应测试1 failed；均已恢复源码。
+- 新文件加原计划六文件：61 passed in 7.14s。覆盖实际历史位19:27、固定人工7列、Actor/Q在动作重排后输出与动作对应、全8方向native观测oracle和±整数滚动offset。
+- 一次完整DRL包：661 passed、2 failed、2 skipped in 130.46s。两失败仅为旧fixtures：GraphBuilder猴补漏透传新增frontiers关键字、off-axis pending扫描仍期望正任务内FREE前沿收益。更新这两处fixtures后，完整对应文件加原聚焦集合：80 passed in 7.22s，退出0。生产源码没有因这两项失败再变更；按修改覆盖原则未再次执行全包。两skip仍是显式开启的实际ROS动作闭环参数。
+
+最终聚焦命令：
+
+```bash
+bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest ros2_ws/src/lunar_drl_exploration/test/test_frontier_features.py ros2_ws/src/lunar_drl_exploration/test/test_current_opportunities.py ros2_ws/src/lunar_drl_exploration/test/test_graph_decision.py ros2_ws/src/lunar_drl_exploration/test/test_valid_actions.py ros2_ws/src/lunar_drl_exploration/test/test_metric_graph.py ros2_ws/src/lunar_drl_exploration/test/test_model.py ros2_ws/src/lunar_drl_exploration/test/test_graph_critic_schema.py ros2_ws/src/lunar_drl_exploration/test/test_task_analysis.py -q
+```
+
+完整包命令沿用前述专项启动器与整个test目录。外部证据 `/home/kai/.cache/lunar-drl-task-frontier/task-3/`：red.log、green-first.log、lattice-red.log、green.log、focused-final.log、mutation-center-gate.log、mutation-all-demands.log、full-suite.log、focused-after-package.log、imports.log。显式UTF-8核验、git diff --check通过。导入确认本工作树源码、专项Jazzy native/generated msgs、既有venv；旧overlay与模型未改。
+
+此任务仅为特征/合法动作层通过，等待控制器独立审查。Task4实际奖励/Critic预计消除、Task5发布/恢复schema尚待完成，sac/runtime发布元数据仍属旧v3阶段，当前中间提交不能当作新语义checkpoint发布或训练入口。冷构建修复延后Task8；无正式训练、冻结评测、合并、推送或PR。Humble、Orin、DDS、实际ROS动作闭环、传感器与实车均NOT_RUN。

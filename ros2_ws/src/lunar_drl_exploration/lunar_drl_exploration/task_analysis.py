@@ -11,7 +11,7 @@ from scipy.ndimage import binary_dilation, label, maximum_filter
 from .contracts import TaskReport
 from .coverage import CoverageHistory
 from .frontiers import build_frontiers
-from .geometry import polygon_mask, world_to_cell
+from .geometry import lattice_coordinates, polygon_mask, world_to_cell
 from .maps import FREE, BLOCKED, UNKNOWN
 from .sensor import (
     direct_witnesses,
@@ -95,6 +95,10 @@ def measured_workspace(snapshot, task, sensor, coverage=None):
         if available
         else np.zeros(native_components.shape, bool)
     )
+    if coverage is None:
+        lattice_origin, lattice_offset = lattice_coordinates(snapshot.origin, resolution)
+    else:
+        lattice_origin, lattice_offset = coverage.coordinate_identity[2], coverage.cell_offset
     return MeasuredWorkspace(
         bounds,
         origin,
@@ -104,8 +108,8 @@ def measured_workspace(snapshot, task, sensor, coverage=None):
         reachable,
         polygon_mask(reachable.shape, origin, resolution, task.polygon),
         available,
-        None if coverage is None else coverage.coordinate_identity[2],
-        None if coverage is None else coverage.cell_offset,
+        lattice_origin,
+        lattice_offset,
     )
 
 

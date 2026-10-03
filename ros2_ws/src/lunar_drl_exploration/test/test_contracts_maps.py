@@ -95,7 +95,7 @@ def test_decision_observation_freezes_action_indices_and_world_goals_at_construc
     observation = DecisionObservation(
         node_ids=node_ids,
         positions=np.zeros((2, 2), dtype=np.float32),
-        features=np.zeros((2, 19), dtype=np.float32),
+        features=np.zeros((2, 27), dtype=np.float32),
         edges=np.array([[0, 1]], dtype=np.int64),
         edge_lengths=np.array([1.0], dtype=np.float32),
         current_index=0,
@@ -126,7 +126,7 @@ def test_action_nodes_address_graph_nodes_not_goal_rows():
     # Comparing action node indices to goal rows rejects a valid one-action
     # decision on a 200-node graph and destroys action/world-goal identity.
     common = dict(node_ids=np.arange(200), positions=np.zeros((200, 2)),
-                  features=np.zeros((200, 19)), edges=np.empty((0, 2)),
+                  features=np.zeros((200, 27)), edges=np.empty((0, 2)),
                   edge_lengths=np.empty(0), current_index=0,
                   polygon=np.zeros((3, 2)), context=np.zeros(8),
                   action_yaws=np.array([0.0]), goals=np.array([[3., 4., .5]]),

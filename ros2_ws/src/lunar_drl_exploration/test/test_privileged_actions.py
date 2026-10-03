@@ -12,7 +12,7 @@ from lunar_drl_exploration.sensor import SensorModel
 def observation_at(points, yaws):
     points=np.asarray(points,float);yaws=np.asarray(yaws,float)
     nodes=np.repeat(np.arange(len(points)),len(yaws));headings=np.tile(yaws,len(points))
-    f=np.zeros((len(points),19),np.float32);f[:,:2]=(points-points[0])/10
+    f=np.zeros((len(points),27),np.float32);f[:,:2]=(points-points[0])/10
     return DecisionObservation(np.arange(len(points)),points,f,np.empty((0,2),int),np.empty(0),0,
         np.array([[0,0],[1,0],[1,1],[0,1]]),np.zeros(8),nodes,headings,
         np.column_stack((points[nodes],headings)),'fixture',1)

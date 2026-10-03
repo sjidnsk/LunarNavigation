@@ -267,7 +267,8 @@ def test_off_axis_pending_contact_is_an_actual_beam_hit_without_losing_demand():
     assert report.available and not report.exhausted
     _assert_real_center_witnesses(s, report, sensor)
     assert len(report.frontier_cells) > 0
-    assert observation.features[observation.current_index, 3:11].max() > 0
+    assert np.all(observation.features[observation.current_index, 3:11] == 0)
+    assert np.any(observation.action_nodes == observation.current_index)
     # Measuring the now-valid first interface must expose the original demand,
     # not permanently filter it out as a workaround for the old P1 finding.
     b[5, 3] = 1
