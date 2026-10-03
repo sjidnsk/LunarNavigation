@@ -98,3 +98,10 @@ class TrainingTerminal:
         self.stream.flush()
         self.rows = len(lines) if inplace else 0
         self.last_print = now
+
+
+def format_stage_status(record, *, stage):
+    """Absolute new-run counts; independent warmup is stage zero."""
+    target_t, target_u = 1024 + 8192 * stage, 2048 * stage
+    return [f"任务前沿阶段 {stage}/10 | 转移 {record['transitions']:,}/{target_t:,} | 更新 {record['updates']:,}/{target_u:,}",
+            f"待执行更新额度 {number(record['credit'], 2)} | 探索奖励=任务内消除数量/50；面积零收益独立统计"]

@@ -17,10 +17,10 @@ _TRUNCATION_REASONS = ('STAGNATION', 'DECISION_BUDGET', 'OTHER')
 _OUTCOMES = ('success', 'truncated', 'terminated_other', 'interrupted')
 _WINDOW = 128
 _CASE_SLOTS = 8  # Eight success plus eight stagnation cases; no shared eviction.
-_SCHEMA = 'bounded_reward_diagnostics_v1'
+_SCHEMA = 'bounded_frontier_reward_diagnostics_v2'
 _STEP_FIELDS = frozenset(('actor_version', 'before_coverage', 'after_coverage',
-    'new_area_m2', 'distance_m', 'turn_rad', 'reward', 'area_reward', 'distance_reward',
-    'turn_reward', 'step_reward', 'completion_reward', 'wall_s', 'simulation_s',
+    'new_area_m2', 'distance_m', 'turn_rad', 'reward', 'exploration_reward', 'motion_reward',
+    'removed_frontiers_in', 'removed_frontiers_out', 'step_reward', 'completion_reward', 'wall_s', 'simulation_s',
     'terminated', 'truncated', 'success', 'truncation_reason', 'collision',
     'actual_x', 'actual_y', 'goal_x', 'goal_y', 'action'))
 _EPISODE_FIELDS = frozenset(('episode_id', 'env_id', 'family', 'extent_m', 'seed',
@@ -51,10 +51,10 @@ def _versions(record, version):
 def _stats():
     return dict(admitted=0, positive_gain=0, zero_gain=0,
         positive_gain_negative_reward=0, reward_sum=0., new_area_m2=0.,
-        distance_m=0., turn_rad=0., wall_s=0., simulation_s=0., zero_gain_wall_s=0.,
+        removed_frontiers_in=0, removed_frontiers_out=0, distance_m=0., turn_rad=0., wall_s=0., simulation_s=0., zero_gain_wall_s=0.,
         success=0, terminated_other=0, truncated=0, collisions=0,
         truncation_reasons={reason: 0 for reason in _TRUNCATION_REASONS},
-        reward_components=dict(area=0., distance=0., turn=0., step=0., completion=0.),
+        reward_components=dict(exploration=0., motion=0., step=0., completion=0.),
         reward_residual_sum=0., reward_mismatch_count=0,
         actor_version_min=None, actor_version_max=None)
 
@@ -131,14 +131,16 @@ class RewardDiagnostics:
         collision = execution.get('reason_code') == 'COLLISION' or bool(execution.get('geometry_failure', False))
         success = terminated and not collision and after >= self.success_coverage
         reason = (truncation_reason if truncation_reason in _TRUNCATION_REASONS else 'OTHER') if truncated else None
-        components = dict(area=area / 100., distance=-.002 * distance,
-            turn=-.005 * turn / math.pi, step=-.001,
+        removed_in = _integer(transition.parts.removed_frontiers_in, 'removed_frontiers_in')
+        removed_out = _integer(transition.parts.removed_frontiers_out, 'removed_frontiers_out')
+        components = dict(exploration=removed_in / 50.,
+            motion=-.002 * distance - .005 * turn / math.pi, step=-.001,
             completion=self.completion_bonus if success else 0.)
         residual = reward - sum(components.values())
         row = dict(actor_version=version, before_coverage=before, after_coverage=after,
             new_area_m2=area, distance_m=distance, turn_rad=turn, reward=reward,
-            area_reward=components['area'], distance_reward=components['distance'],
-            turn_reward=components['turn'], step_reward=components['step'],
+            exploration_reward=components['exploration'], motion_reward=components['motion'],
+            removed_frontiers_in=removed_in, removed_frontiers_out=removed_out, step_reward=components['step'],
             completion_reward=components['completion'], wall_s=wall, simulation_s=simulation,
             terminated=terminated, truncated=truncated, success=success,
             truncation_reason=reason, collision=collision)
@@ -169,6 +171,7 @@ class RewardDiagnostics:
             stats['zero_gain'] += int(area <= 0.)
             stats['positive_gain_negative_reward'] += int(area > 0. and reward < 0.)
             for key, value in (('reward_sum', reward), ('new_area_m2', area),
+                    ('removed_frontiers_in', removed_in), ('removed_frontiers_out', removed_out),
                     ('distance_m', distance), ('turn_rad', turn), ('wall_s', wall),
                     ('simulation_s', simulation), ('zero_gain_wall_s', wall if area <= 0. else 0.)):
                 stats[key] += value
@@ -225,7 +228,7 @@ class RewardDiagnostics:
         result['size_bucket_extent_m'] = dict(small='<=80', medium='>80 and <=150', large='>150')
         result['late_return_scope'] = ('observed reward sums for actions starting at >=95% coverage; '
             'not a frozen-policy return; success, truncation and interrupted segments stay separate')
-        result['zero_gain_scope'] = 'zero gain includes useful transit and is not a loop classification'
+        result['zero_gain_scope'] = 'zero gain means actual new_area_m2 <= 0; includes useful transit; not frontier reward or a loop classification'
         active_tail = _tail()
         for active in self._state['active']:
             if active is not None:

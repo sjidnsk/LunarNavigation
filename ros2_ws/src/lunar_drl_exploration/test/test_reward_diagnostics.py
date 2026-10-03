@@ -13,15 +13,15 @@ def diagnostics(environments=2, **kwargs):
     return importlib.import_module(name).RewardDiagnostics(environments, **kwargs)
 
 
-def transition(episode='one', *, area=0., distance=2., turn=math.pi,
+def transition(episode='one', *, area=0., removed=0, outside=0, distance=2., turn=math.pi,
                reward=None, terminated=False, truncated=False, actor=10):
     if reward is None:
-        reward = area / 100. - .002 * distance - .005 * turn / math.pi - .001
+        reward = removed / 50. - .002 * distance - .005 * turn / math.pi - .001
         if terminated:
             reward += 5.
     return SimpleNamespace(episode_id=episode, actor_version=actor, reward=reward,
         terminated=terminated, truncated=truncated,
-        parts=SimpleNamespace(new_area_m2=area, distance_m=distance, turn_rad=turn))
+        parts=SimpleNamespace(new_area_m2=area, distance_m=distance, turn_rad=turn, removed_frontiers_in=removed, removed_frontiers_out=outside))
 
 
 def observe(diag, item=None, **kwargs):
@@ -33,15 +33,14 @@ def observe(diag, item=None, **kwargs):
 
 def test_reward_accounting_uses_before_coverage_and_keeps_components():
     d = diagnostics()
-    observe(d, transition(area=.4), before_coverage=.799, after_coverage=.81)
+    observe(d, transition(area=.4, removed=0), before_coverage=.799, after_coverage=.81)
     s = d.summary()
     assert s['totals']['admitted'] == 1
     assert s['totals']['positive_gain'] == 1
     assert s['totals']['positive_gain_negative_reward'] == 1
-    assert s['totals']['reward_sum'] == pytest.approx(-.006)
+    assert s['totals']['reward_sum'] == pytest.approx(-.01)
     components = s['totals']['reward_components']
-    assert components == pytest.approx(dict(area=.004, distance=-.004, turn=-.005,
-                                           step=-.001, completion=0.))
+    assert components == pytest.approx(dict(exploration=0., motion=-.009, step=-.001, completion=0.))
     assert sum(components.values()) == pytest.approx(s['totals']['reward_sum'])
     assert s['by_coverage']['below_80']['admitted'] == 1
     assert s['by_coverage']['80_to_95']['admitted'] == 0
@@ -58,7 +57,7 @@ def test_success_tail_and_truncated_tail_are_separate_and_actor_range_is_visible
     tails = summary['late_episode_segments']
     assert tails['success']['segments'] == 1
     assert tails['success']['steps'] == 2
-    assert tails['success']['reward_sum'] == pytest.approx(4.99)
+    assert tails['success']['reward_sum'] == pytest.approx(4.98)
     assert tails['success']['actor_version_min'] == 10
     assert tails['success']['actor_version_max'] == 14
     assert tails['truncated']['segments'] == 1
@@ -192,3 +191,17 @@ def test_invalid_metadata_does_not_partially_mutate_counts(overrides):
     with pytest.raises(ValueError):
         observe(d, **overrides)
     assert d.summary()['totals']['admitted'] == 0
+
+
+def test_frontier_reward_uses_integer_removals_and_area_zero_stays_area_zero():
+    d = diagnostics()
+    observe(d, transition(area=0., removed=5, outside=99))
+    totals = d.summary()['totals']
+    assert totals['zero_gain'] == 1
+    assert totals['removed_frontiers_in'] == 5
+    assert totals['removed_frontiers_out'] == 99
+    assert totals['reward_components'] == pytest.approx(dict(exploration=.1, motion=-.009, step=-.001, completion=0.))
+    assert totals['reward_sum'] == pytest.approx(.09)
+    assert totals['reward_mismatch_count'] == 0
+    observe(d, transition(area=3., removed=0, outside=500))
+    assert d.summary()['totals']['reward_components']['exploration'] == .1

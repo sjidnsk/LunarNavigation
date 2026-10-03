@@ -211,3 +211,31 @@ bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest -q ros2_w
 结果 `108 passed in 175.36s`。随后新增fractional实际中断/API非法预算断言，并在自审时收紧每次update前的signal flag检查；完整DRL包使用同一wrapper运行整个`ros2_ws/src/lunar_drl_exploration/test`：`739 passed, 2 skipped in 276.33s`，退出0。两skip为显式启用的真实ROS闭环参数。包级启动后补了上述一行signal检查，最终版本使用同一wrapper单独运行`test_stage_credit_drain.py`：`28 passed in 139.71s`（`task6-final.log`），无警告；不把包级结果冒称该最后一行修改的再次全包测试。
 
 所有外部日志位于 `/home/kai/.cache/lunar-drl-task-frontier/task6-*.log`：red、core-green、signal、focused、package、final、imports。现场导入证据仍为专项源码、新Jazzy graph/terrain native与lunar_planning_msgs、既有依赖venv；未混入旧overlay。阶段评测唯一性属Task7，未声称已验证。正式训练/冻结评测、真实ROS动作、Humble、Orin、DDS、传感器、实车NOT_RUN；未合并、推送或PR。UTF-8逐文件读取、Python源码编译和`git diff --check`通过。状态：实现完成，等待控制器独立审查。
+
+## Task7 控制、provenance、固定探针与持久曲线
+
+实现源位于 `scripts/drl/task_frontier/`。控制器批准将原计划脚本职责拆出 `fixed_probes.py`、`eval_case.py`、`train_live.py`，完整文件边界已在plan更新。所有生产行为仍等待Task8与独立审阅。固定20case从历史原始JSON冻结精确浮点及顺序；历史记录没有新provenance，绝不作为严格缓存复用。
+
+- 独立warmup `(1024,0)`，stage10 `(82944,20480)`；绝对新计数，无108452/26856扣减；满trans但有整数credit时使用`--resume --max-transitions 0`。阶段Actor记录checkpoint SHA sidecar。
+- 单根锁、owned目录marker、完整manifest/exit、PID/starttime/run/command核验；`q`仅detach，Ctrl+C由控制器向自己的子进程组发SIGINT。信号handler不写文件以避免重入artifact锁；日志写入异常也请求child保存停止并drain pipe。
+- 每个旧case通过原`phase12_python`/旧loader运行；新case通过明确new overlay。运行时哈希覆盖eval/ros_env/reference/native、完整Python包、导航可执行文件和控制脚本。对每case核对Actor、语义、有效config摘要、精确参数、实际terrain/reference、导航/sensor/polygon/初始pose配对、terminal、0error、0退出码，成功为无碰撞99%。新旧pairing_config_digest只读核验一致，均为`d541b75040f7fadc94f54fac6984408f981eb664a63e9bb1feae5cb5811f486c`；这不替代真实同图运行证明。
+- 实测probe通过现有env_factory在spawn worker内安装，只包围正常一次observe；保存完整native planes、实际history、K/workspace、调用前GraphBuilder保留状态，offline rebuild严格逐字节匹配图/节点/27D/动作/goals，并核对privileged动作。使用当前transport中性dict/数值数组，无native类型whitelist扩展。固定集至多6例，缺类别写index；集合冻结后不覆盖。
+- 数值学习100-update分桶保留count/sum/sum_sq/min/max，滚动日志遗漏不补造；双温度/目标差/上限占比；Q数值明确来自固定probe。固定动作CSV保留概率/位置概率/Q1/Q2/minQ/Actor-Q排序/内外gain/history/出入动作；PNG显示top-Actor的Q排名、top-Q的Actor排名而非无意义全动作平均排名。完整20图才进入覆盖/成功/面积零收益/循环/区外连续步/退出返回曲线。另存exploration/motion/step/completion奖励拆分，outside消除无探索奖励。
+- 持久路径为owned root下`curves/{learning,fixed,evaluation,reward}.{csv,png}`，UTF-8 CSV与headless PNG。固定probe hash与checkpoint/Actor SHA写在评分CSV中。
+
+Task7命令证据与完整RED/GREEN日志在本机`.cache/lunar-drl-task-frontier/task-7-*.log`及任务report。首次RED为13个缺失controller/dashboard实现断言；奖励迁移RED为2个旧面积单位/缺数量字段断言；probe/curves新增RED为2个缺失模块断言。完整DRL包763通过/2显式ROS opt-in跳过，耗时251.05秒。其后新增stage screen/partial/config-drift回归与initial-pose边界修正，最终指定范围62通过（其中Task7 26项），耗时4.23秒。完整包只运行一次；后续小范围修正运行覆盖测试。受控spawn证明正常observe计数1、实测probe1、worker未加载torch；原生ROS传感器数据、真实native副作用对照与Humble/Orin/实车仍NOT_RUN。
+
+运行入口（Task8审查通过后父控制器执行）：
+
+```bash
+bash scripts/drl/task_frontier/run.sh prepare
+bash scripts/drl/task_frontier/run.sh start
+bash scripts/drl/task_frontier/run.sh monitor
+bash scripts/drl/task_frontier/run.sh stop
+bash scripts/drl/task_frontier/run.sh resume
+bash scripts/drl/task_frontier/run.sh status
+```
+
+`prepare`仅创建独占managed产物目录与配置/cases，不启动训练。`start/resume`要求managed下`review-gate.json`的source_commit和config_sha匹配，`native_smoke`及`independent_audit`均为`status=passed`且绑定同commit；仅最终审阅方记录该门禁。运行顺序先严格旧baseline，后warmup及10阶段；训练正式启动权限已经给出。独立监控可在gnome-terminal中打开上述monitor命令；关闭终端不影响后台控制器。Task8小规模真实训练验证可直接经`run.sh python train_live.py train ... --probe --max-transitions ...`调用，设置`DRL_ROOT`和`DRL_RUN_ID`到该smoke专属目录；未冻结probe索引可由`fixed_probes.freeze_index`在验证完成后固定。
+
+Task7最终检查：`git diff --check`、UTF-8逐文件解码、全部专项Python `py_compile`、`bash -n run.sh`通过。实际初始pose在`reset_scene`入参捕获，防止把初始化扫描后pose误标为初始值；该边界由spawn fixture覆盖。owned identity拒绝有效config漂移，运行前重新核对冻结cases原始来源。原`evaluation.py`复用已获父控制器明确裁定，文件保持原实现；其指定回归已包含在最终62通过中。最终真实Jazzy/native/CUDA和旧20图baseline仍须Task8/整分支审阅，未由本结果代替。

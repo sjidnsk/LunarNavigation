@@ -165,7 +165,7 @@ Task3已实现并自审，等待控制器独立审查；允许独立workspace复
 
 ### Task 7: 多阶段控制、同图缓存和三类曲线
 
-**Files:** 创建 `config/drl_task_frontier.yaml`、`scripts/drl/task_frontier/{run.sh,controller.py,dashboard.py,curves.py,plot_curves.py}`、`T/test_task_frontier_controller.py`；修改 `P/reward_diagnostics.py`、`terminal.py`、`evaluation.py`。
+**Files:** 创建 `config/drl_task_frontier.yaml`、`scripts/drl/task_frontier/{run.sh,controller.py,dashboard.py,curves.py,plot_curves.py,fixed_probes.py,eval_case.py,train_live.py}`、`T/test_task_frontier_controller.py`；修改 `P/reward_diagnostics.py`、`terminal.py`、`T/test_reward_diagnostics.py`；复用 `P/evaluation.py` 的真实面积/terminal定义。
 
 **Interfaces:**
 - `stage_target(stage: int) -> tuple[int,int]` 返回 `(1024+8192*stage,2048*stage)`；stage0为独立warmup。
@@ -174,12 +174,16 @@ Task3已实现并自审，等待控制器独立审查；允许独立workspace复
 - 固定20cases：index=0…9，seed=2026100100+index，每seed月表+洞穴，extent=50.+index*50./9.，决策512。从旧baseline-summary原始JSON冻结实际数值与顺序到cases.json，并与旧continue.py表达式核对；不四舍五入重建地形。
 - baseline使用旧 `phase12_python` 和保留actor-26856.pt，新模型使用本轮overlay；同种子/extent/sensor/navigation/referenceID配对，旧schema不进入新loader。
 
-- [ ] 写并实现controller预算测试：不再减旧108452/26856；预热不足可恢复；trans已满但updates不足必须先drain；缓存错SHA/语义/scene或19/20条不能跳过。
-- [ ] 从旧已接受的终端/曲线脚本复制功能到可提交脚本（旧文件保留），移除硬编码旧基数、外部工作树导入和旧奖励单位，启动入口显式选择新overlay。
-- [ ] 配置写全Global Constraints；baseline单独调用旧wrapper，不把新RewardParts/schema强加给旧model。
-- [ ] 记录三类曲线：数值学习（loss/Q/target/双温度/熵/目标差/上限占比）、固定状态动作排序和内外收益、固定20图覆盖/成功/面积零收益/循环/区外连续步/退出返回；另加奖励拆分。使用固定实测snapshot重新构造新特征，避免旧19维向量补零。
-- [ ] 测试真实new_area=0定义在新奖励下保持；诊断三部分reward之和加完成项等于transition.reward，outside消除无探索项。
-- [ ] 验证小窗口终端布局、训练/评测/暂停/恢复/错误状态，三类曲线输出UTF-8 CSV+PNG；跑新测试及 `T/test_reward_diagnostics.py`、`test_terminal.py`、`test_stagnation.py`、`test_evaluation.py`；精确提交。
+- [x] 写并实现controller预算测试：不再减旧108452/26856；预热不足可恢复；trans已满但updates不足必须先drain；缓存错SHA/语义/scene或19/20条不能跳过。
+- [x] 从旧已接受的终端/曲线脚本复制功能到可提交脚本（旧文件保留），移除硬编码旧基数、外部工作树导入和旧奖励单位，启动入口显式选择新overlay。
+- [x] 配置写全Global Constraints；baseline单独调用旧wrapper，不把新RewardParts/schema强加给旧model。
+- [x] 记录三类曲线：数值学习（loss/Q/target/双温度/熵/目标差/上限占比）、固定状态动作排序和内外收益、固定20图覆盖/成功/面积零收益/循环/区外连续步/退出返回；另加奖励拆分。使用固定实测snapshot重新构造新特征，避免旧19维向量补零。
+- [x] 测试真实new_area=0定义在新奖励下保持；诊断三部分reward之和加完成项等于transition.reward，outside消除无探索项。
+- [x] 验证小窗口终端布局、训练/评测/暂停/恢复/错误状态，三类曲线输出UTF-8 CSV+PNG；跑新测试及 `T/test_reward_diagnostics.py`、`test_terminal.py`、`test_stagnation.py`、`test_evaluation.py`；精确提交。
+
+**Task7实现说明（控制器已批准模块边界细化）：** `fixed_probes.py` 专管中性实测捕获/离线精确重建/冻结；`eval_case.py` 专管旧新wrapper单例遥测和provenance；`train_live.py` 通过现有 `env_factory` 在spawn worker安装捕获，不新增训练插件机制。共享 `controller.validate_evaluation` 缓存契约。固定集至多6例，实际inside/boundary/outside各2槽，warmup后冻结；未出现的类别明确缺测。只使用正常observe，实际方向历史/累计K/pre-GraphBuilder状态均保留，Actor与privileged输入边界独立。评测已有 `new_area_m2` 几何统计及训练停滞关闭行为正确，未为了触及文件而改动原 evaluator；区外连续步/出入由独立单例遥测补全。
+
+**Task7状态：** 代码与聚焦测试已完成，完整包回归及独立审查状态见 validation。Task7仅运行单元/受控进程fixture与旧wrapper只读身份查询；真实原生采集、CUDA、20例旧baseline、正式warmup/训练均由Task8/最终门禁继续。已授权的启动无需再次询问用户。
 
 ### Task 8: 原生验证、阶段训练和文档交付
 
