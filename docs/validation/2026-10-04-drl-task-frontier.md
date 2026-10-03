@@ -257,7 +257,7 @@ DRL完整新overlay测试778 passed/2显式ROS opt-in skipped，256.31s；随后
 
 0.5s采样同时PSS峰值3.773GiB，最低MemAvailable13.371GiB；learner allocator峰值allocated589.25MiB/reserved1376MiB，driverGPU与allocator分开记录。包括真实learner/collector/8worker、8原生navigation及8wheel controller，plant/sensor运行在worker内。保存/中断/恢复均覆盖，三个监测尾记录owned活进程为空；采样峰值是下界，短命进程/瞬态峰值可能漏测，不能由checkpoint cap推长期RAM保证。
 
-两份实际捕获probe逐字节offline重建、持久hash复核与真实Actor/双Q评分通过，98动作行；实际类别只有outside，inside/boundary明确missing，未补造。capture-disabled/enabled独立正常ROS reset/step均5次observe、同命令goal/knownarea，但完整snapshot/时序/物理轨迹hash不相等，整体对照inconclusive。另在实际正常observe边界核验capture_before/finish的coverage/last-area/history/GraphBuilder状态不变、underlying observe一次、额外poll/sensor consumption0；该纯读证据不能证明不同运行的完整轨迹相等。完整输入/输出相等的早期假设已撤回。learning/fixed/reward/evaluation四类PNG已实际视觉检查；learning单采样不可见minor通过marker与较小标题修复，同CSV重新渲染；evaluation明确NO VERIFIED DATA YET。
+两份实际捕获probe逐字节offline重建、持久hash复核与真实Actor/双Q评分通过，98动作行；实际类别只有outside，inside/boundary明确missing，未补造。capture-disabled/enabled独立正常ROS reset/step均5次observe、同命令goal/knownarea，但完整snapshot/时序/物理轨迹hash不相等，整体对照inconclusive。另在实际正常observe边界核验capture_before/finish的coverage/last-area/history/GraphBuilder状态不变、underlying普通original observe一次。external harness的`extra_poll_calls=0`为字面记录，并非独立仪器计数；无额外消耗结论由capture helper纯读源码、实际capture前后core状态/传感器stamp-count tuple未变联合支持，不能据此声称完整物理轨迹确定性。完整输入/输出相等的早期假设已撤回。learning/fixed/reward/evaluation四类PNG已实际视觉检查；learning单采样不可见minor通过marker与较小标题修复，同CSV重新渲染；evaluation明确NO VERIFIED DATA YET。
 
 原生产baseline、warmup1024、stage1–10与每阶段严格20图效果仍NOT_RUN，启动由父控制器在Task8和整分支独立审阅后执行，无需再次用户批准。Humble/Orin/实车NOT_RUN；本证据不证明探索能力提升、收敛或车辆安全。旧checkpoint/overlay/工作树/回放HTTP服务未修改。
 
@@ -310,3 +310,27 @@ Ruling: Task8 capture side-effect acceptance uses the matched actual first norma
 Ruling: Amendment to Task8 capture comparison — complete first-snapshot hashes also differ across independent ROS runs, so do not accept or report fully matched input/output snapshots; accept only actual single-boundary read-only pre/post core-state equality, exactly-one underlying observe and zero extra poll/sensor-consumption calls, with matching measured pose/tiles/goals/features/history reported as partial correspondence — cost if wrong is unmeasured timing/metadata effects outside the single boundary; explicitly preserve whole-run and full-hash inconclusive results and forbid broader determinism claims. This supersedes the earlier assumption of fully matched first snapshot, not the no-extra-observe requirement.
 
 Task1 deferred minors已解决：活动入口改为本frontier专项；冷构建链接由build.sh自动核验创建。Task8绘图单采样minor已解决。纯读capture核验仍不排除跨真实ROS时序的性能影响；完整物理轨迹比较不作为相等证据。长期10阶段稳定性/完整baseline效果与实车边界保持NOT_RUN。
+
+
+## Task8 fix round 1/5 — colcon参数缩写绕过I1
+
+FIX_BASE `fa5e4d68`。完整读取独立task-8-review.md：I1成立，本机colcon argparse接受`--build-bas /foreign/build`与`--install-bas=/foreign/install`，会覆盖脚本先写的owned输出默认值。原精确名称检查无法挡住它。只修复build_cache.py/test_build_cache.py及本验证证据，没有native/SAC/运行算法变动。M1 diagnostic默认device作为父控制器deferred minor保留，未混入本Importantfix loop。
+
+validator在写任何cache前拒绝受保护长选项的全部前缀（即便下游会认为ambiguous也拒绝）及equals形式；保护build/install/log、base-paths/paths、merge-install，且拒绝整个packages选择族及其前缀。不会调用真实colcon去试foreign构建。测试使用本机`/usr/bin/python3`真实colcon parser（初始化config path，只parse_args，不执行verb或创建log），先独立证明八个build/install/base-paths/paths缩写split/equals值确实改变effective字段，再运行真实build.sh要求失败且cache不存在。真实package-selection缩写bool也先证明被解析后拒绝；额外package-regex/skip、merge/log前缀验证拒绝。既有cold symlink/正常入口/增量/所有权冲突回归继续通过。
+
+RED命令：
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 /home/kai/.cache/lunar-drl-training/venv/bin/python -m pytest ros2_ws/src/lunar_drl_exploration/test/test_build_cache.py -q
+```
+真实`task-8-fix1-red.log`：`14 failed, 5 passed in 1.56s`，失败均为本机parser接受的override仍被入口放行（或package/output保护前缀放行）。相同命令GREEN日志`task-8-fix1-green.log`：`19 passed in 1.40s`。日志在`/home/kai/.cache/lunar-drl-task-frontier/`，没有重跑778套件或任何ROS/CUDA smoke。
+
+受影响正式build入口仍可正常增量：
+```bash
+DRL_CACHE=/home/kai/.cache/lunar-drl-task-frontier/jazzy-task8-20261004 DRL_BUILD_JOBS=2 bash scripts/drl/build.sh --symlink-install
+DRL_CACHE=/home/kai/.cache/lunar-drl-task-frontier/jazzy-task8-normal-20261004 DRL_BUILD_JOBS=2 bash scripts/drl/build.sh
+```
+结果两个matching旧owned cache各六包成功，详见`task8/build-fix1-incremental.log`、`task8/build-fix1-normal-incremental.log`；该证据为改变的buildCLI本轮验证，不称新的coldcache或新的原生SAC smoke。实际首次cold/native训练仍是先前记录的源tree/commit。
+
+本轮还校正capture证据措辞：`extra_poll_calls=0`不是独立instrumentedcounter；只有pure-read helper源码、实际pre/post corestate/sensor tuple与一次ordinaryoriginalobserve的联合支持。完整input/output hash/wholetrajectory仍inconclusive，actualoutside2/98rows及inside/boundary缺测不变。M1保留给finalwholebranch minor ledger。
+
+本轮合法增量实际结果：symlink六包1.80s、normal六包1.43s；对应变更脚本与测试hash记录task8/runtime-code-equivalence.json。实际nativeCUDA仍归属9cdc5a3b，没有在本轮HEAD重跑。

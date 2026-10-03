@@ -22,9 +22,14 @@ def main():
     source = Path(sys.argv[1]).resolve(strict=True)
     cache_arg = sys.argv[2]
     args = sys.argv[3:]
-    forbidden = ('--build-base', '--install-base', '--log-base', '--base-paths',
-                 '--merge-install', '--packages-ignore', '--packages-select', '--packages-up-to')
-    if any(arg.split('=', 1)[0] in forbidden for arg in args):
+    protected = ('--build-base', '--install-base', '--log-base', '--base-paths',
+                 '--paths', '--merge-install', '--packages-')
+    # argparse accepts unambiguous long-option abbreviations, including =value.
+    # Reject even ambiguous protected prefixes before creating any cache path;
+    # every package-selection extension also changes the owned dependency set.
+    options = [arg.split('=', 1)[0] for arg in args if arg.startswith('--') and len(arg) > 2]
+    if any(option.startswith('--packages-') or
+           any(name.startswith(option) for name in protected) for option in options):
         raise ValueError('output/source/package override refused; choose a new DRL_CACHE')
     cache = owned_directory(cache_arg)
     fd = os.open(cache / '.drl-build.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)

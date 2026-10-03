@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import pytest
 
 ROOT = Path(__file__).resolve().parents[4]
 
@@ -80,3 +81,72 @@ def test_output_override_is_rejected_before_writing(tmp_path):
         result = run_build(tmp_path, cache, option, '/foreign')
         assert result.returncode != 0
         assert not (cache / 'colcon-called').exists()
+
+
+def parsed_colcon_overrides(tmp_path, arguments):
+    """Installed parser only: never create a log or invoke a build verb."""
+    script = '''
+import json, sys
+from pathlib import Path
+from colcon_core.location import set_default_config_path
+from colcon_core.command import (create_parser, get_verb_extensions,
+    create_subparser, add_parsers_without_arguments, add_parser_arguments)
+set_default_config_path(path=Path(sys.argv[2]))
+parser=create_parser()
+verbs=get_verb_extensions(group_name='colcon_core.verb')
+subparser=create_subparser(parser,'colcon',verbs,attribute='verb_name')
+add_parsers_without_arguments(parser,subparser,verbs,attribute='verb_name')
+known,_=parser.parse_known_args(['build'])
+add_parser_arguments(known.verb_parser,known.verb_extension)
+args=parser.parse_args(['--log-base','/owned/log','build',
+    '--base-paths','/owned/src','--packages-up-to','lunar_drl_exploration',
+    '--build-base','/owned/build','--install-base','/owned/install',
+    *json.loads(sys.argv[1])])
+print(json.dumps({key:getattr(args,key) for key in
+    ('build_base','install_base','base_paths','paths','packages_select_build_failed')}))
+'''
+    result = subprocess.run(['/usr/bin/python3', '-c', script, json.dumps(arguments),
+                             str(tmp_path / 'parser-config')], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / 'parser-config').exists()
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize('option,field,value', [
+    ('--build-bas', 'build_base', '/foreign/build'),
+    ('--install-bas', 'install_base', '/foreign/install'),
+    ('--base-pat', 'base_paths', ['/foreign/src']),
+    ('--path', 'paths', ['/foreign/src']),
+])
+@pytest.mark.parametrize('equals', [False, True])
+def test_real_parser_abbreviated_override_refused_by_entry(tmp_path, option, field, value, equals):
+    text = value[0] if isinstance(value, list) else value
+    arguments = [option + '=' + text] if equals else [option, text]
+    assert parsed_colcon_overrides(tmp_path, arguments)[field] == value
+    cache = tmp_path / 'cache'
+    result = run_build(tmp_path, cache, *arguments)
+    assert result.returncode != 0, 'installed colcon would override the owned path'
+    assert 'override refused' in result.stderr
+    assert not cache.exists()
+
+
+def test_real_parser_abbreviated_package_selection_refused(tmp_path):
+    arguments = ['--packages-select-build-faile']
+    assert parsed_colcon_overrides(tmp_path, arguments)['packages_select_build_failed'] is True
+    cache = tmp_path / 'cache'
+    result = run_build(tmp_path, cache, *arguments)
+    assert result.returncode != 0
+    assert 'override refused' in result.stderr
+    assert not cache.exists()
+
+
+@pytest.mark.parametrize('option', [
+    '--packages-up-to-rege=foreign', '--packages-skip=foreign',
+    '--packages-ignore-rege=foreign', '--merge-ins', '--log-bas=/foreign/log',
+])
+def test_protected_package_and_output_prefixes_refused_before_cache(tmp_path, option):
+    cache = tmp_path / 'cache'
+    result = run_build(tmp_path, cache, option)
+    assert result.returncode != 0
+    assert 'override refused' in result.stderr
+    assert not cache.exists()
