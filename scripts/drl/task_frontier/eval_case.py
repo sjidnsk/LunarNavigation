@@ -95,12 +95,43 @@ class DomainMetrics:
                     task_exits=self.exits,task_returns=self.returns)
 
 
+def observed_env_class(base,telemetry,domain,proof,current,capture):
+    from lunar_drl_exploration.config import config_record
+    from lunar_drl_exploration.graph import _inside
+    class ObservedEnv(base):
+        def reset_scene(self,terrain,pose,task,*,descriptor=None):
+            self.probe_initial_pose=[pose.x,pose.y,pose.yaw]
+            return super().reset_scene(terrain,pose,task,descriptor=descriptor)
+        def reset(self,seed,family,extent,*,episode_budget=None):
+            telemetry.update(phase='初始化地图')
+            obs,state=super().reset(seed,family,extent,episode_budget=episode_budget)
+            proof.update(terrain_id=self.terrain.terrain_id,reference_id=self.reference.reference_id,
+                actual_schema=obs.schema,episode_metadata=dict(self.episode_metadata),
+                polygon_digest=digest(self.task.polygon.tolist()),initial_pose=self.probe_initial_pose,
+                sensor=config_record(self.config.sensor),platform=config_record(self.config.platform))
+            proof['pairing_digest']=digest(dict(config_pair=current['pairing_config_digest'],polygon_digest=proof['polygon_digest'],
+                                               initial_pose=proof['initial_pose']))
+            domain.previous=bool(_inside(obs.positions[obs.current_index:obs.current_index+1],self.task.polygon)[0])
+            if capture:capture.bind(self,obs,state,0)
+            telemetry.update(phase='准备决策',coverage=self.reference.coverage_ratio(state.observed))
+            return obs,state
+        def step(self,action):
+            telemetry.update(phase='执行动作')
+            transition=super().step(action)
+            obs=transition.next_observation
+            domain.observe(bool(_inside(obs.positions[obs.current_index:obs.current_index+1],self.task.polygon)[0]))
+            step=telemetry.state['step']+1
+            if capture:capture.bind(self,obs,transition.next_privileged,step)
+            telemetry.update(phase='准备决策',step=step,coverage=self.reference.coverage_ratio(transition.next_privileged.observed),
+                             zero=telemetry.state['zero']+1 if transition.parts.new_area_m2<=0 else 0)
+            return transition
+    return ObservedEnv
+
+
 def evaluate_case(request,output):
     from lunar_drl_exploration import ros_env
     from lunar_drl_exploration.cli import load_config, parser
     from lunar_drl_exploration.evaluation import evaluate
-    from lunar_drl_exploration.config import config_record
-    from lunar_drl_exploration.graph import _inside
     config=load_config(parser().parse_args(['evaluate','--config',request['config'],'--actor',request['actor']]))
     # Explicitly disable the collection-only limiter in the effective evaluation record.
     config=replace(config,stagnation_window_steps=0)
@@ -120,33 +151,7 @@ def evaluate_case(request,output):
         from fixed_probes import ProbeCapture
         capture=ProbeCapture(probe_root,dict(proof,phase='evaluation'));capture.install()
     base=ros_env.RosExplorationEnv
-    class ObservedEnv(base):
-        def reset_scene(self,terrain,pose,task,*,descriptor=None):
-            self.probe_initial_pose=[pose.x,pose.y,pose.yaw]
-            return super().reset_scene(terrain,pose,task,descriptor=descriptor)
-        def reset(self,seed,family,extent,*,episode_budget=None):
-            telemetry.update(phase='初始化地图')
-            obs,state=super().reset(seed,family,extent,episode_budget=episode_budget)
-            proof.update(terrain_id=self.terrain.terrain_id,reference_id=self.reference.reference_id,
-                actual_schema=obs.schema,episode_metadata=dict(self.episode_metadata),
-                polygon_digest=digest(self.task.polygon.tolist()),initial_pose=self.probe_initial_pose,
-                sensor=config_record(self.config.sensor),platform=config_record(self.config.platform))
-            proof['pairing_digest']=digest(dict(config_pair=current['pairing_config_digest'],polygon_digest=proof['polygon_digest'],
-                                               initial_pose=proof['initial_pose']))
-            domain.previous=bool(_inside(obs.positions[obs.current_index:obs.current_index+1],obs.polygon)[0])
-            if capture:capture.bind(self,obs,state,0)
-            telemetry.update(phase='准备决策',coverage=self.reference.coverage_ratio(state.observed))
-            return obs,state
-        def step(self,action):
-            telemetry.update(phase='执行动作')
-            transition=super().step(action)
-            obs=transition.next_observation
-            domain.observe(bool(_inside(obs.positions[obs.current_index:obs.current_index+1],obs.polygon)[0]))
-            step=telemetry.state['step']+1
-            if capture:capture.bind(self,obs,transition.next_privileged,step)
-            telemetry.update(phase='准备决策',step=step,coverage=self.reference.coverage_ratio(transition.next_privileged.observed),
-                             zero=telemetry.state['zero']+1 if transition.parts.new_area_m2<=0 else 0)
-            return transition
+    ObservedEnv=observed_env_class(base,telemetry,domain,proof,current,capture)
     ros_env.RosExplorationEnv=ObservedEnv
     telemetry.start()
     try:

@@ -413,10 +413,14 @@ class Controller:
         try:
             self.record()
             self.schedule()
+            from selection import StageSelection
+            selection=StageSelection(self.root)
+            selection.verify()
             freeze_cases(LEGACY/'artifacts/baseline-summary.json',self.root/'cases.json')
             self.announce_ready(ready_fd,startup_token,lock_fd)
             baseline = self.screen('baseline', LEGACY/'artifacts/actor-26856.pt')
             if baseline is None: return
+            selection.start(baseline)
             for stage in range(11):
                 target_t, target_u = stage_target(stage)
                 self.record(stage=stage, phase='warmup' if stage==0 else 'training',
@@ -427,7 +431,9 @@ class Controller:
                     if stage:
                         actor=self.root/f'stage{stage}.pt'
                         if not actor.exists():raise ValueError('advanced checkpoint without preserved stage Actor')
-                        if self.screen(f'stage{stage}',actor,baseline) is None:return
+                        result=self.screen(f'stage{stage}',actor,baseline)
+                        if result is None:return
+                        selection.complete(result,actor)
                     continue
                 remaining = next_training(stage, schedule)
                 if remaining is not None:
@@ -451,18 +457,12 @@ class Controller:
                     exported=torch.load(actor,map_location='cpu',weights_only=True)
                     if exported['version']!=target_u or any(not torch.equal(v,exported['state_dict'][key]) for key,v in checkpoint_actor.items()):
                         raise ValueError('saved stage Actor differs from checkpoint')
-                if self.screen(f'stage{stage}', actor, baseline) is None: return
+                result=self.screen(f'stage{stage}', actor, baseline)
+                if result is None:return
+                selection.complete(result,actor)
                 recorder.fixed_checkpoint(self.root/'run/resume.pt', actor)
-            summaries=[read(self.root/f'{label}-summary.json') for label in ['baseline',*[f'stage{i}' for i in range(1,11)]]]
-            def score(result):
-                rows=result['cases']
-                return (sum(row['completed'] for row in rows),
-                        -sum(not row['completed'] and row['max_zero_gain_run']>=128 and row['zero_gain_two_point_loop_steps']>0 for row in rows),
-                        sum(row['final_coverage'] for row in rows))
-            best=max(summaries,key=score)
-            write(self.root/'comparison.json',dict(status='finished',summaries=summaries,best_label=best['label'],
-                tie_rule='retain earlier',scope='fixed development cases; no independent holdout or vehicle claim'))
-            write(self.root/'selection.json',dict(best_label=best['label'],actor_sha=best['actor_sha'],score=score(best)))
+            selected=selection.verify()
+            if selected['status']!='finished':raise ValueError('incomplete stage selection')
             self.record(status='finished', phase='complete', exit_code=0)
         except Exception as exc:
             self.record(status='failed', phase='error', error=f'{type(exc).__name__}: {exc}', exit_code=1)

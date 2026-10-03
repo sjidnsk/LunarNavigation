@@ -189,13 +189,13 @@ Task3已实现并自审，等待控制器独立审查；允许独立workspace复
 
 **Files:** 修改 `docs/DRL开发入口.md`、`docs/操作指令.md`、包README、本spec/plan及 `docs/validation/2026-10-04-drl-task-frontier.md`。产物全部写输出根。
 
-**Interfaces:** run.sh负责start/resume/monitor；manifest与exit.json是运行状态证据，finished比较报告仅在20个terminal完整后生成。
+**Interfaces:** run.sh负责start/resume/monitor；manifest与exit.json是运行状态证据；每阶段严格20个terminal完成后即时更新comparison/selection，十阶段未全部完成时保持unfinished。
 
 - [ ] 重建新专用overlay，运行包内完整Python测试；相关同名ROS测试包分别运行。检查diff --check及UTF-8，记录确切通过/skip/NOT_RUN。
 - [ ] 执行 `LUNAR_DRL_RUN_ROS=1 /home/kai/.cache/lunar-drl-training/venv/bin/python -m pytest ros2_ws/src/lunar_drl_exploration/test/test_ros_native_execution.py -q`；用真实月表/洞穴小预算完成一次新特征→奖励→SAC更新→Ctrl+C→resume→精确正常drain烟测，烟测独立输出，不混入正式计数。
 - [ ] 全专项新鲜代码审阅，修复阻止正确性的发现并重跑受影响测试。旧26856/source SHA与旧overlay保持。
 - [ ] 固定cases/config/code/schema摘要；验证或补齐旧26856完整20图基线。基线完成再启动独立warmup1024，之后阶段1，正常结束核对9216/2048/credit0/inflight0和最终Actor版本。
-- [ ] 阶段1评测20/20后进入阶段2…10。每阶段完整训练和完整评测才能选优；沿用旧screen评分元组：完成数、负的长期面积零收益循环失败数、覆盖总和；相同分数保持先前checkpoint，不新增路程决胜规则。实际路程继续作为独立效率指标报告。26856保留独立基线，不因新奖励总分不同直接比较。
+- [ ] 阶段1评测20/20后进入阶段2…10。每阶段完整训练和完整评测才能选优；沿用旧screen评分元组：完成数、负的长期面积零收益循环失败数、覆盖总和；相同分数保持先前checkpoint，不新增路程决胜规则。实际路程继续作为独立效率指标报告。26856保留独立基线，不因新奖励总分不同直接比较。每阶段进入下一批更新前独立维护best-new.pt完整可恢复SAC快照；用既有budget/atomic流式复制，不在内存复制第二份replay。selection绑定Actor/完整checkpoint SHA与双语义，恢复核验、处理中断promotion；run/resume.pt仍是继续训练来源，最多一份额外完整最佳新快照。
 - [ ] 每次状态报告核对进程树、manifest/exit、checkpoint/输出新鲜度和GPU，分别说明训练推进与能力是否改善；故障保留日志与最后有效checkpoint，未完评测不标finished或best。
 - [ ] 更新文档实现/公式/命令/参数/证据/效果与剩余边界，验证完整10阶段最终比较或明确中断事实；Humble/Orin/实车仍NOT_RUN。只精确提交源码与文档，不合并/推送。
 

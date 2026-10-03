@@ -3,13 +3,13 @@ import os
 from pathlib import Path
 
 
-def smoke_snapshot(path,event,**fields):
+def smoke_snapshot(path,event,*,cuda_enabled=False,**fields):
     """Read actual learner allocator/RNG without consuming any random numbers."""
     import hashlib,json,time,torch
     def sha(value):return hashlib.sha256(value.cpu().numpy().tobytes()).hexdigest()
     row=dict(event=event,pid=os.getpid(),ts=time.time(),torch_cpu_rng_sha256=sha(torch.get_rng_state()),
-        torch_cuda_rng_sha256=[sha(value) for value in torch.cuda.get_rng_state_all()] if torch.cuda.is_initialized() else [],**fields)
-    if torch.cuda.is_initialized():
+        torch_cuda_rng_sha256=[sha(value) for value in torch.cuda.get_rng_state_all()] if cuda_enabled and torch.cuda.is_initialized() else [],**fields)
+    if cuda_enabled and torch.cuda.is_initialized():
         row['cuda']=dict(device=torch.cuda.current_device(),allocated_bytes=torch.cuda.memory_allocated(),
             reserved_bytes=torch.cuda.memory_reserved(),peak_allocated_bytes=torch.cuda.max_memory_allocated(),
             peak_reserved_bytes=torch.cuda.max_memory_reserved())
@@ -26,24 +26,25 @@ def install_smoke_telemetry():
     methods=[(SACLearner,'__init__'),(SACLearner,'update'),(TrainingState,'restore'),(CheckpointManager,'save')]
     original={key:getattr(*key) for key in methods}
     def init(self,*args,**kwargs):
-        if str(kwargs.get('device','cuda')).startswith('cuda'):
+        if str(kwargs.get('device','cpu')).startswith('cuda'):
             torch.cuda.init();torch.cuda.reset_peak_memory_stats()
         result=original[(SACLearner,'__init__')](self,*args,**kwargs)
-        smoke_snapshot(path,'model-created',updates=self.updates,model=vars(self.model_config),learning=vars(self.learning_config))
+        smoke_snapshot(path,'model-created',cuda_enabled=self.device.type=='cuda',updates=self.updates,model=vars(self.model_config),learning=vars(self.learning_config))
         return result
     def update(self,*args,**kwargs):
         result=original[(SACLearner,'update')](self,*args,**kwargs)
-        smoke_snapshot(path,'update',updates=self.updates)
+        smoke_snapshot(path,'update',cuda_enabled=self.device.type=='cuda',updates=self.updates)
         return result
     def restore(self,*args,**kwargs):
         result=original[(TrainingState,'restore')](self,*args,**kwargs)
         rng=self.record['rng']
         sha=lambda value:hashlib.sha256(value.cpu().numpy().tobytes()).hexdigest()
-        smoke_snapshot(path,'restored',updates=self.record['schedule']['updates'],transitions=self.record['schedule']['transitions'],
+        smoke_snapshot(path,'restored',cuda_enabled=(args[0] if args else kwargs['learner']).device.type=='cuda',updates=self.record['schedule']['updates'],transitions=self.record['schedule']['transitions'],
             saved_torch_cpu_rng_sha256=sha(rng['torch_cpu']),saved_torch_cuda_rng_sha256=[sha(value) for value in rng['torch_cuda']])
         return result
     def save(self,state,*args,**kwargs):
         fields={key:state.record['schedule'][key] for key in ('updates','transitions')}
+        fields['cuda_enabled']=bool(state.record['rng']['torch_cuda'])
         smoke_snapshot(path,'save-before',**fields)
         result=original[(CheckpointManager,'save')](self,state,*args,**kwargs)
         smoke_snapshot(path,'save-after',**fields)

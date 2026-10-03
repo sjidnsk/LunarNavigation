@@ -334,3 +334,37 @@ DRL_CACHE=/home/kai/.cache/lunar-drl-task-frontier/jazzy-task8-normal-20261004 D
 本轮还校正capture证据措辞：`extra_poll_calls=0`不是独立instrumentedcounter；只有pure-read helper源码、实际pre/post corestate/sensor tuple与一次ordinaryoriginalobserve的联合支持。完整input/output hash/wholetrajectory仍inconclusive，actualoutside2/98rows及inside/boundary缺测不变。M1保留给finalwholebranch minor ledger。
 
 本轮合法增量实际结果：symlink六包1.80s、normal六包1.43s；对应变更脚本与测试hash记录task8/runtime-code-equivalence.json。实际nativeCUDA仍归属9cdc5a3b，没有在本轮HEAD重跑。
+
+
+## 最终整体验证修复波：I1 / I2 / M1（2026-10-04）
+
+BASE `ddd8d42d`。本波只修复域诊断世界米坐标、阶段最佳新完整checkpoint的保存/恢复生命周期，以及opt-in telemetry省略device时的CPU透明性。SAC、奖励、GraphBuilder、训练信用调度、native代码与正式配置未修改。原生CUDA实际运行仍归属`9cdc5a3b`，不能称为在本波HEAD重新执行。
+
+I1：ObservedEnv reset/step使用`self.task.polygon`与actual world position；ProbeCapture使用保存bundle的task.world polygon，边界距离和sensor range均为米。把ObservedEnv工厂提取出来用于真实GraphBuilder输出的hook接线测试；测试覆盖原点/平移、inside/边界（含边界线上）/outside、100m边界与10m量程、实际退出/返回序列。curves固定分数的inside/exit/return已直接使用GraphBuilder inside特征，无错误polygon调用，无需更改。Actor输入与特征无变化。
+
+I2：严格完整20terminal后，controller调用StageSelection，再进入下一阶段更新。保留独立baseline/overall best与best-new，按既有元组比较，同分不换。`best-new.pt`是一份额外完整可恢复SAC checkpoint；源run/resume继续按阶段覆盖。完整TrainingState校验与Actor张量/版本/schema/语义/阶段计数绑定后，以1MiB流式复制和既有budget atomic_write替换；校验载入的完整state在复制前释放，不复制第二份replay进RAM。`selection.json`是提交记录，小型pending intent协调checkpoint替换和metadata写入；恢复先校验已完成阶段summary/Actor/SHA和选择分数，重放可恢复pending，证据不一致拒绝继续。comparison可从selection重建，十阶段齐全前unfinished。保留一份额外完整最佳快照，原子临时峰值仍计入预算。
+
+M1：省略device按SACLearner的CPU默认，CPU hook不调用CUDA查询/init/allocator/RNG；显式CUDA路径继续显式启用遥测。默认关闭保持原方法。过去显式CUDA烟测的证明归属保持原执行源码，没有再次初始化GPU或跑原生动作。
+
+针对性RED：初始新增接口缺失/旧CPU行为日志`final-fix/red.log`；首次GREEN修正了测试夹具误给1条而真实SAC要求64条的fixture错误，非算法问题。`verify-red.py`以finally恢复原文件，逐项临时复现旧缺陷：世界坐标8 failed/2 passed，旧controller未按阶段写selection为1 failed，旧CPU默认为1 failed。最终GREEN/受影响验证：
+
+```bash
+DRL_CACHE=/home/kai/.cache/lunar-drl-task-frontier/jazzy-task8-20261004 \
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 bash scripts/drl/task_frontier/run.sh python -m pytest \
+  ros2_ws/src/lunar_drl_exploration/test/test_frontier_final_fixes.py \
+  ros2_ws/src/lunar_drl_exploration/test/test_task_frontier_controller.py \
+  ros2_ws/src/lunar_drl_exploration/test/test_smoke_telemetry.py \
+  ros2_ws/src/lunar_drl_exploration/test/test_replay_checkpoint.py \
+  ros2_ws/src/lunar_drl_exploration/test/test_artifact_budget.py \
+  ros2_ws/src/lunar_drl_exploration/test/test_evaluation.py \
+  --basetemp=/home/kai/CodexDownloads/lunar_navigation/drl-task-frontier-20261003/final-fix/pytest -q
+```
+
+结果`103 passed in 20.29s`（退出0），日志`final-fix/affected-suite.log`。真实小模型执行一次64batch SAC更新，产生Adam与双温度状态后保存全量replay checkpoint，fixture显式设置控制阶段计数；不是实际2048次训练。覆盖baseline强于所有new、早期最佳/后期退化、tie、元组优先级、partial/error/错误语义/Actor绑定拒绝、run/resume覆写后best仍可restore、copy/selection/comparison故障、第二次promotion原子替换前后恢复、丢失未保留source拒绝，以及受控Controller十阶段精确累计与重新启动不回退。原生transport/长训练替换为受控fixture；恢复对象为真实SACLearner/TrainingState，不是Actor-only payload。
+
+两份既有实际probe只读load/hash并重新GraphBuilder构建，完整observation对齐通过：probe_set_hash `af07491a1bddf25ef00f84730e4bc89ab368d2bf01bc472e1c6901174a13be0e`。actual world polygon距离分别16.58084044280717m、17.76167383135667m，量程10m，均outside且feature_inside=0。原生inside/boundary仍缺测，不能把合成测试算作native类别覆盖，也不能断言此前分类错误就是缺测原因。证据`final-fix/measured-probes-verification.json`，原probe及index未改。
+
+本波命令、原始日志、probe核验、源hash与小型checkpoint夹具保留在`/home/kai/CodexDownloads/lunar_navigation/drl-task-frontier-20261003/final-fix/`。`task8/runtime-code-equivalence.json`区分未变核心training/native源码与改变的controller、域diagnostic、CPU opt-in telemetry；新selection模块没有旧原生执行证明。103项为本波本机Jazzy wrapper下的CPU/离线针对验证，不是新的778全套、ROS执行、CUDA/八槽smoke。正式managed仍仅config/cases/identity，未签gate/启动baseline/warmup/十阶段。原先pure-read局部证据、全轨迹inconclusive、采样PSS下界、长期内存/收敛未证实，以及Humble/Orin/DDS/传感器/实车NOT_RUN边界全部保留。
+
+
+103项完成后的自审发现pending直接unlink可能与曲线线程的budget目录扫描交错，收尾改用现有atomic_json写null，所有写入（包括清空intent）继续持有同一artifact锁。清空记录故障注入RED `red-journal-clear.log`为1 failed；修复后只运行受影响新回归文件：`test_frontier_final_fixes.py -q --basetemp=.../final-fix/journal-pytest`，`journal-focused-green.log`为`30 passed in 11.85s`。没有重跑前述103整组；其余生产源码在103后未变。这是保存生命周期收尾，不修改核心training/native算法或正式配置。

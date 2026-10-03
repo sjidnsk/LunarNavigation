@@ -176,11 +176,12 @@ def load_probes(root):
     return index,result
 
 
-def state_category(observation,sensor_range):
+def state_category(observation,sensor_range,world_polygon):
     from lunar_drl_exploration.graph import _inside
     point=observation.positions[observation.current_index].astype(float)
-    if not _inside(point[None,:],observation.polygon)[0]:return 'outside'
-    polygon=observation.polygon.astype(float);edges=np.roll(polygon,-1,axis=0)-polygon
+    polygon=np.asarray(world_polygon,dtype=float)
+    if not _inside(point[None,:],polygon)[0]:return 'outside'
+    edges=np.roll(polygon,-1,axis=0)-polygon
     length=(edges*edges).sum(axis=1)
     ratio=np.divide(((point-polygon)*edges).sum(axis=1),length,out=np.zeros_like(length),where=length>0)
     closest=polygon+np.clip(ratio,0,1)[:,None]*edges
@@ -209,7 +210,7 @@ class ProbeCapture:
         captured,bundle=pending
         validate_exact_alignment(observation,captured)
         if (self.root/'index.json').exists():return None
-        category=state_category(observation,bundle['sensor']['range_m'])
+        category=state_category(observation,bundle['sensor']['range_m'],bundle['task']['polygon'])
         entries=[read(path) for path in self.root.glob('probe-*.json')]
         if len(entries)>=6 or sum(r['provenance'].get('category')==category for r in entries)>=2:return None
         provenance=dict(self.provenance,episode_metadata=plain(env.episode_metadata),

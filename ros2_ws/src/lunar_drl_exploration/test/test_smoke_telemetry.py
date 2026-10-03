@@ -67,3 +67,22 @@ def test_enabled_real_update_keeps_return_state_and_rng(tmp_path, monkeypatch):
         assert [json.loads(s)['event'] for s in path.read_text().splitlines()][:2] == ['model-created', 'update']
     finally:
         undo()
+
+
+def test_enabled_omitted_device_makes_no_cuda_calls(tmp_path, monkeypatch):
+    from lunar_drl_exploration.sac import SACLearner
+    from lunar_drl_exploration.config import ModelConfig
+    entry=load_entry()
+    # Warm lazy optimizer imports before prohibiting CUDA telemetry calls.
+    SACLearner(ModelConfig(width=16,heads=2,layers=1))
+    def forbidden(*args,**kwargs):raise AssertionError('CUDA called for omitted CPU default')
+    for name in ('init','is_initialized','reset_peak_memory_stats','get_rng_state_all','current_device',
+                 'memory_allocated','memory_reserved','max_memory_allocated','max_memory_reserved'):
+        monkeypatch.setattr(torch.cuda,name,forbidden)
+    monkeypatch.setenv('DRL_SMOKE_TELEMETRY',str(tmp_path/'telemetry.jsonl'))
+    undo=entry.install_smoke_telemetry()
+    try:
+        learner=SACLearner(ModelConfig(width=16,heads=2,layers=1))
+        assert learner.device.type=='cpu'
+        assert json.loads((tmp_path/'telemetry.jsonl').read_text())['torch_cuda_rng_sha256']==[]
+    finally:undo()
