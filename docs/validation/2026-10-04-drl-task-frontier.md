@@ -1,6 +1,6 @@
-# 任务内外前沿收益：任务1基础工程验证
+# 任务内外前沿收益：任务1基础工程与任务2前沿原语验证
 
-日期：2026-10-04。用户已批准设计、实施计划及子代理执行。本记录仅确认双熵依赖和固定零位置辅助权重的基础工程；新的前沿特征、奖励、Critic预测和训练尚未实现或启动。
+日期：2026-10-04。用户已批准设计、实施计划及子代理执行。本记录确认双熵基础工程和任务2实测前沿/消除原语；新的图特征、奖励接线、Critic预测和训练尚未实现或启动。
 
 ## 来源与隔离
 
@@ -59,3 +59,29 @@ bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest ros2_ws/s
 ## 验证边界
 
 这是基础工程通过，不是新前沿收益已完成或模型改善。只运行任务测试（包含既有测试夹具的有界合成更新），没有正式训练或冻结评测。新前沿奖励、真实环境短训练/恢复、月表/洞穴烟测与完整阶段：NOT_RUN。Humble、Orin、DDS部署、传感器和实车：NOT_RUN。
+
+## Task 2：实测前沿与共享消除定义
+
+起点 `26c805d70d4a36c57b40c7ae81664bc3cba9ef59`，实现者完成后由控制器独立审查。新增不可变 `FrontierSet` CSR与 `FrontierSnapshot`，由累计有效 K 和当前实测 intrinsic FREE 生成8邻域内外需求。中心和需求均按同域任务掩码分类，边界属于任务内；当前地图不裁区外，前沿不依赖可达连通性。旧未知接口、见证证书、图布局、奖励及模型schema保持原语义。
+
+`count_removed` 要求旧前沿不再存在、全部冻结旧同域需求已有效观测、旧中心仍在当前 `free_ids`；区外独立计数，新增前沿不冲销旧消除。相同revision返回0，旧revision或epoch/resolution/phase/task/polygon身份不符拒绝。该函数无状态，后续动作消费者必须推进动作前冻结快照；重复调用同一不同revision快照对仍是同一计数，不承担全局去重。
+
+控制器预检发现旧 CoverageHistory 对绝对origin变化清空K，不满足已批准的稳定世界格定义。本任务按修订把 K 存在固定相位的packed-bit世界tile，原点平移时重投影 `mask`/`bounds`；公开 `identity` 仍为当前 `(epoch,resolution,origin)`，新增 `coordinate_identity` 用于面积报告和方向历史连续性。整数origin旧回归改为保留35格，并验证 `RosExplorationEnv._privileged` 投影仍保留35格。非整数相位/epoch/resolution改变清空历史。coverage/frontiers共享相位算法（容差1e-10格），FREE/需求ID为有符号世界格打包，中心保留实际米坐标。
+
+### RED / GREEN 与变异验证
+
+- 新模块未实现时，两测试文件首次收集均因 `lunar_drl_exploration.frontiers` 不存在而失败（2 errors，0.21s），符合该任务指定RED入口。
+- 原点回归先执行：3 failed、6 passed（0.36s）；失败为旧测试保留35格断言及两个同栅格平移重复面积断言，属于真实行为缺口。
+- 首次实现后22 passed（0.36s）；补充ID、实际中心、不可变/非法CSR和机会证书回归后最终聚焦42 passed（0.57s）。
+- 实际临时变异：ALL需求改为ANY、移除当前FREE中心门控，各导致1项对应断言失败（其余10项通过）。最初ALL→ANY变异被“旧front仍存在”门控挡住而未失败，因此补充了丢失front条目但旧需求尚未全部解决的冻结快照测试；最终两个变异均被捕获，源码已恢复。
+- 工具阶段曾出现一次patch重复目标校验拒绝（无文件写入）及两次只读路径探测错误（不存在的 `src/lunar_drl_exploration` / `snapshot.py`），已纠正；不属于测试失败。
+
+聚焦命令：
+
+```bash
+bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest ros2_ws/src/lunar_drl_exploration/test/test_frontier_sets.py ros2_ws/src/lunar_drl_exploration/test/test_frontier_removal.py ros2_ws/src/lunar_drl_exploration/test/test_cumulative_coverage.py ros2_ws/src/lunar_drl_exploration/test/test_task_analysis.py -q
+```
+
+完整DRL包使用前文同一启动器和包级命令：646 passed、2 skipped in 121.29s，退出0；两项skip仍是 `test_ros_native_execution.py::test_native_cold_start_spin_adjacent_arrival_and_frozen_transition` 的显式ROS闭环参数。没有启动学习任务或评测。源码UTF-8及 `git diff --check` 验证通过。外部日志位于 `/home/kai/.cache/lunar-drl-task-frontier/task-2/`：`red-frontiers.log`、`red-coverage.log`、`green-first.log`、`focused.log`、`mutation-demand-all.log`、`mutation-free-center.log`、`full-suite.log`。
+
+本任务是实测前沿/消除原语及覆盖连续性通过；方向可见性特征、实际奖励接线、Critic虚拟观测、schema升级、训练/评测均属于后续任务。没有更改传感器或原生地图分类规则，没有重建/修改旧overlay与模型。Humble、Orin、DDS、实车仍为NOT_RUN。

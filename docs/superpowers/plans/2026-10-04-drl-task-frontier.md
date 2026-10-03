@@ -79,7 +79,11 @@ export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 
 ### Task 2: 实测自由侧前沿与消除原语
 
-**Files:** 创建 `P/frontiers.py`、`T/test_frontier_sets.py`、`T/test_frontier_removal.py`；修改 `P/task_analysis.py`、`decision.py`。
+状态：实现者完成，独立审查由控制器执行；当前验证见 `docs/validation/2026-10-04-drl-task-frontier.md`。
+
+**Files:** 创建 `P/frontiers.py`、`T/test_frontier_sets.py`、`T/test_frontier_removal.py`；修改 `P/task_analysis.py`、`P/decision.py`、`P/coverage.py`、`P/geometry.py`、`T/test_cumulative_coverage.py`。
+
+2026-10-04 控制器预检修订：同 epoch/resolution/栅格相位的整数 XY origin 移动保留累计 K、任务面积与物理方向历史；非整数相位、epoch 或 resolution 变化才清空。`CoverageHistory.identity` 保留当前 origin 以兼容真值投影，另设稳定 `coordinate_identity`。原整数 origin 重置测试按批准语义改为保留35格；补充负坐标跨tile、同revision平移、当前分类退化/丢失和区外新增观测回归。几何相位计算由 coverage/frontiers 共用。
 
 **Interfaces:**
 - 不可变 `FrontierSet(cell_ids: int64[N], centers: float64[N,2], demand_offsets: int64[N+1], demand_ids: int64[M])`，需求使用CSR；每个前沿至少一个需求，所有数组冻结。cell_ids/demand_ids由同一有符号世界栅格坐标打包函数生成；centers保留真实世界格中心，不能用打包ID反推米坐标。
@@ -88,11 +92,11 @@ export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
 - `count_removed(before: FrontierSnapshot, after: FrontierSnapshot, *, domain: str) -> int`，domain只接受inside/outside；要求全部旧需求已known、旧front不再存在、中心FREE分类未漂移，身份不一致拒绝比较。
 - `TaskAnalyzer.frontiers` 和只读 `DecisionCore.frontiers` 暴露当前冻结值；旧TaskReport.frontier_cells/witnesses保持原含义。
 
-- [ ] 写上述两个测试文件；断言FREE侧、BLOCKED非前沿、8邻格、边界中心、内外未知支持严格归属、每front去重；首次运行应因新模块缺失失败。
-- [ ] 实现build_frontiers和稳定世界格身份；实测地图不裁任务外，不由隐藏地图补分类。
-- [ ] 写并实现消除测试：部分需求0、全部需求1、新front数量增加不冲销旧消除、只观测区外0、同revision重复0、滚动窗口不删K、负坐标/整数origin移动等价、epoch/resolution/polygon变化拒绝、FREE重分类不获奖。
-- [ ] 将frontiers接到现有analyzer/core，不更换pending/witness计算。跑新测试及 `T/test_task_analysis.py`、`test_cumulative_coverage.py`。
-- [ ] 精确暂存并提交本任务，验证UTF-8和diff --check。
+- [x] 写上述两个测试文件；断言FREE侧、BLOCKED非前沿、8邻格、边界中心、内外未知支持严格归属、每front去重；首次运行应因新模块缺失失败。
+- [x] 实现build_frontiers和稳定世界格身份；实测地图不裁任务外，不由隐藏地图补分类。
+- [x] 写并实现消除测试：部分需求0、全部需求1、新front数量增加不冲销旧消除、只观测区外0、同revision重复0、滚动窗口不删K、负坐标/整数origin移动等价、epoch/resolution/polygon变化拒绝、FREE重分类不获奖。
+- [x] 将frontiers接到现有analyzer/core，不更换pending/witness计算。跑新测试及 `T/test_task_analysis.py`、`test_cumulative_coverage.py`。
+- [x] 精确暂存并提交本任务，验证UTF-8和diff --check。
 
 ### Task 3: 分区收益输入与合法转向
 

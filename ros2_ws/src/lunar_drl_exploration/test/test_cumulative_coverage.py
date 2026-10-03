@@ -98,4 +98,59 @@ def test_training_projection_inference_pause_epoch_and_new_task_agree():
     env._apply_known(changed);assert env._known_area==35
     assert np.unpackbits(env._privileged().observed,bitorder='little').sum()==35
     shifted=replace(changed,origin=(100.,100.,0.),revision=1)
-    env._apply_known(shifted);assert env._known_area==0
+    env._apply_known(shifted);assert env._known_area==35
+    assert np.unpackbits(env._privileged().observed,bitorder='little').sum()==35
+
+
+def shifted_snapshot(cells, *, origin, resolution=.2, revision=1):
+    """World lattice cells projected to native tiles, including negative tiles."""
+    from lunar_drl_exploration.maps import PolicyMapTile
+    phase = (.05, .15)
+    offset = np.rint((np.asarray(origin[:2])-phase)/resolution).astype(int)
+    arrays = {}
+    for x, y, value in cells:
+        ix, iy = np.array([x, y])-offset
+        key = (int(ix//256), int(iy//256))
+        a = arrays.setdefault(key, np.zeros((256,256),np.uint8))
+        a[iy%256,ix%256] = value
+    tiles = {key: PolicyMapTile(a,a,a,np.zeros(65536),np.full(65536,np.nan))
+             for key,a in arrays.items()}
+    base = snapshot(np.ones((1,1),np.uint8), resolution=resolution, origin=origin)
+    return replace(base, tiles=tiles, revision=revision)
+
+
+@pytest.mark.parametrize('revision', [1, 2])
+def test_same_lattice_shift_keeps_world_union_area_projection_and_direction(revision):
+    from lunar_drl_exploration.decision import DecisionCore
+    t = task(-60,-60,60,60); c = DecisionCore(t, SensorSpec(range_m=.2))
+    cells = [(-257,-1,1), (-1,0,1), (0,0,1), (256,1,2)]
+    first = shifted_snapshot(cells, origin=(.05,.15,0.))
+    c.consume(first); report = c.analyzer.update(first)
+    c.record_observation(Pose(.15,.25,0), [[0,0]])
+    moved = shifted_snapshot(cells, origin=(-51.35,51.35,0.), revision=revision)
+    c.consume(moved); after = c.analyzer.update(moved)
+    assert after.known_area_m2 == pytest.approx(4*.2**2)
+    assert after.new_area_m2 == 0
+    assert c.coverage.identity == ('test', .2, moved.origin)
+    assert c.history.bits([[.15,.25]])[0,0] == 1
+    # Current native local coordinates: world cells minus (-257,256).
+    projected = c.coverage.mask((0,-257,514,-254))
+    assert np.argwhere(projected).tolist() == [[0,0],[1,256],[1,257],[2,513]]
+    assert c.coverage.bounds == (0,-257,514,-254)
+    # Regress/drop old current evidence and observe a truly new outside cell.
+    outside = shifted_snapshot([(400,400,1),(-1,0,2)], origin=moved.origin, revision=revision+1)
+    c.consume(outside); r = c.analyzer.update(outside)
+    assert r.known_area_m2 == report.known_area_m2 and r.new_area_m2 == 0
+    assert c.coverage.mask((0,-257,514,-254)).sum() == 4
+
+
+@pytest.mark.parametrize('change', [dict(epoch='new'),dict(resolution_m=.1),
+                                     dict(origin=(.15,.15,0.))])
+def test_real_lattice_identity_change_resets_cumulative_and_direction(change):
+    from lunar_drl_exploration.decision import DecisionCore
+    c = DecisionCore(task(-60,-60,60,60), SensorSpec(range_m=.2))
+    first = shifted_snapshot([(0,0,1)], origin=(.05,.15,0.))
+    c.consume(first); c.record_observation(Pose(.15,.25,0), [[0,0]])
+    c.consume(replace(first, tiles={}, **change))
+    assert c.coverage.known_area_m2 == 0
+    assert not np.any(c.history.bits([[.15,.25]]))

@@ -20,12 +20,16 @@ class DecisionCore:
     @property
     def coverage(self):return self.analyzer.coverage
 
+    @property
+    def frontiers(self):
+        return self.analyzer.frontiers
+
     def consume(self,snapshot):
-        identity=(snapshot.epoch,snapshot.resolution_m,tuple(snapshot.origin))
+        self.coverage.consume(snapshot)
+        identity = self.coverage.coordinate_identity
         if self._epoch is not None and self._epoch != identity:
             self.history.clear()
         self._epoch = identity
-        self.coverage.consume(snapshot)
 
     def observe(self, snapshot, velocity=(0.0, 0.0)):
         self.consume(snapshot)

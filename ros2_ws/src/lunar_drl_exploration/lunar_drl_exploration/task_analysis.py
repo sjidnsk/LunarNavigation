@@ -10,6 +10,7 @@ import numpy as np
 from scipy.ndimage import binary_dilation, label, maximum_filter
 from .contracts import TaskReport
 from .coverage import CoverageHistory
+from .frontiers import build_frontiers
 from .geometry import polygon_mask, world_to_cell
 from .maps import FREE, BLOCKED, UNKNOWN
 from .sensor import (
@@ -115,15 +116,17 @@ class TaskAnalyzer:
         self._epoch = None
         self._known_area = 0.0
         self.workspace = None
+        self.frontiers = None
         self.coverage = CoverageHistory(task)
 
     def update(self, snapshot):
         self.coverage.consume(snapshot)
         w = measured_workspace(snapshot, self.task, self.sensor, self.coverage)
         self.workspace = w
+        self.frontiers = build_frontiers(snapshot, w, self.task)
         area = self.coverage.known_area_m2
-        previous = self._known_area if self._epoch == self.coverage.identity else 0.0
-        self._epoch, self._known_area = self.coverage.identity, area
+        previous = self._known_area if self._epoch == self.coverage.coordinate_identity else 0.0
+        self._epoch, self._known_area = self.coverage.coordinate_identity, area
         empty = np.empty((0, 2), np.int64)
         if not w.available:
             return TaskReport(area, max(0.0, area-previous), empty, empty, False,
