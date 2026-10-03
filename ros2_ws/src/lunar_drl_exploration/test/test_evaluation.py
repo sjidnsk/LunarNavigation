@@ -63,7 +63,7 @@ def test_frozen_evaluation_json_keeps_reference_areas_and_failure_measurements(t
             next_state = PrivilegedState('scene', np.array([131 if self.seed == 2 else self.state.observed[0]], np.uint8))
             self.last_execution = SimpleNamespace(reason_code='GOAL_REACHED')
             return Transition(observation(), action, 0., observation(), self.state,
-                next_state, RewardParts(1. if self.seed == 2 else 0., 0., 0.),
+                next_state, RewardParts(1. if self.seed == 2 else 0., 0., 0., 0, 0),
                 False, self.seed != 2, 'episode', 17)
         def close(self): pass
 

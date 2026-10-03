@@ -154,13 +154,17 @@ class PrivilegedActionContext:
     support_offsets: np.ndarray
     support_indices: np.ndarray
     support_distances: np.ndarray
-    gains: np.ndarray
+    removed_frontiers: np.ndarray
 
     def __post_init__(self):
+        counts = np.asarray(self.removed_frontiers)
+        if (counts.size and (counts.dtype.kind not in 'iu' or np.any(counts < 0)
+                            or np.any(counts > np.iinfo(np.int64).max))):
+            raise ValueError("removed_frontiers must contain nonnegative integer counts")
         for name, dtype in (("positions", np.float64), ("action_positions", np.int64),
                             ("action_yaws", np.float64),
                             ("support_offsets", np.int64), ("support_indices", np.int64),
-                            ("support_distances", np.float32), ("gains", np.float32)):
+                            ("support_distances", np.float32), ("removed_frontiers", np.int64)):
             object.__setattr__(self, name, freeze_array(getattr(self, name), dtype=dtype))
         n = len(self.positions)
         if self.positions.shape != (n, 2) or not np.isfinite(self.positions).all():
@@ -168,11 +172,11 @@ class PrivilegedActionContext:
         if n and len(np.unique(self.positions, axis=0)) != n:
             raise ValueError("candidate positions must be unique")
         if (self.action_positions.ndim != 1 or self.action_yaws.shape != self.action_positions.shape or
-                self.gains.shape != self.action_positions.shape or not np.isfinite(self.action_yaws).all()):
-            raise ValueError("candidate action mapping, yaws and gains must align")
+                self.removed_frontiers.shape != self.action_positions.shape or not np.isfinite(self.action_yaws).all()):
+            raise ValueError("candidate action mapping, yaws and removed frontier counts must align")
         if (np.any(self.action_positions < 0) or np.any(self.action_positions >= n) or
-                not np.isfinite(self.gains).all() or np.any(self.gains < 0)):
-            raise ValueError("invalid candidate action mapping or gain")
+                not np.isfinite(self.removed_frontiers).all() or np.any(self.removed_frontiers < 0)):
+            raise ValueError("invalid candidate action mapping or removed frontier count")
         if (self.support_offsets.shape != (n + 1,) or self.support_offsets[0] != 0 or
                 np.any(np.diff(self.support_offsets) <= 0) or
                 self.support_offsets[-1] != len(self.support_indices) or
@@ -222,6 +226,15 @@ class RewardParts:
     new_area_m2: float
     distance_m: float
     turn_rad: float
+    removed_frontiers_in: int
+    removed_frontiers_out: int
+
+    def __post_init__(self):
+        for name in ('removed_frontiers_in', 'removed_frontiers_out'):
+            value = getattr(self, name)
+            if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value < 0:
+                raise ValueError(f'{name} must be a nonnegative integer')
+            object.__setattr__(self, name, int(value))
 
 
 @dataclass(frozen=True)

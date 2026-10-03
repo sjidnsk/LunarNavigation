@@ -30,9 +30,9 @@ def transition(obs=None, nxt=None, key='s'):
     def state(value):
         positions, inverse=np.unique(value.goals[:,:2],axis=0,return_inverse=True)
         actions=PrivilegedActionContext(positions,inverse,value.goals[:,2],np.arange(len(positions)+1),
-            np.arange(len(positions))%2,np.ones(len(positions)),np.ones(len(value.goals)))
+            np.arange(len(positions))%2,np.ones(len(positions)),np.ones(len(value.goals), np.int64))
         return PrivilegedState(key, np.array([3], np.uint8), actions)
-    return Transition(obs, 0, .1, nxt, state(obs), state(nxt), RewardParts(10,0,0),
+    return Transition(obs, 0, .1, nxt, state(obs), state(nxt), RewardParts(10,0,0,5,0),
                       False, False, 'episode', 0)
 
 

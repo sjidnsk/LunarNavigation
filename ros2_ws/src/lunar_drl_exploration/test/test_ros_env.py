@@ -50,6 +50,7 @@ def test_transition_whole_action_baseline_and_final_budget_state():
     obs,report=DecisionCore(task,SensorSpec()).observe(snap)
     priv=PrivilegedState('scene',np.array([3],np.uint8))
     t=make_transition(obs,0,obs,priv,priv,initial=(1.,2.,3.),final=(5.,12.,3.+math.pi),
+        removed_frontiers_in=2,removed_frontiers_out=0,
         completed=False,budget_hit=True,episode_id='e',actor_version=7)
     assert t.reward == .04-.02-.005-.001
     assert t.parts.distance_m==10
@@ -98,8 +99,9 @@ def test_native_no_path_and_timeout_with_final_state_remain_transitions(monkeypa
     monkeypatch.setattr(env,'_snapshot',lambda:full)
     monkeypatch.setattr(env,'_execute_goal',lambda goal:NavigationResult(0,'GOAL_REACHED',0))
     result=env.step(0)
-    # 143 known minus the original 6x6: 107 m² gain + 2 bonus - .001.
-    assert result.terminated and result.reward == pytest.approx(3.069)
+    # Keep actual 107 m² diagnostic; exploration reward comes from removed fronts.
+    assert result.parts.new_area_m2 == 107.
+    assert result.terminated and result.reward == pytest.approx(result.parts.removed_frontiers_in/50 + 2. - .001)
     assert env.completed and not env.report.exhausted
     with pytest.raises(RuntimeError,match='requires reset'):env.step(0)
 
@@ -119,6 +121,7 @@ def test_completion_bonus_only_on_success_with_whole_action_costs(
     obs=observation();priv=state(obs=obs)
     result=make_transition(obs,0,obs,priv,priv,initial=(0.,0.,0.),
         final=(100.,10.,math.pi),completed=completed,budget_hit=budget_hit,
+        removed_frontiers_in=50,removed_frontiers_out=0,
         episode_id='completion',actor_version=0,completion_bonus=bonus)
     assert result.reward == pytest.approx(want)
     assert result.terminated == terminated and result.truncated == truncated
@@ -152,6 +155,7 @@ def test_exhaustion_below_target_terminates_without_success_bonus():
     from test_model import observation,state
     obs=observation();priv=state(obs=obs)
     result=make_transition(obs,0,obs,priv,priv,initial=(0.,0.,0.),final=(0.,10.,0.),
+        removed_frontiers_in=0,removed_frontiers_out=0,
         completed=False,exhausted=True,budget_hit=True,episode_id='below-target',
         actor_version=0,completion_bonus=5.)
     assert result.terminated and not result.truncated
@@ -306,6 +310,7 @@ def test_environment_gain_and_scene_reset_clear_stagnation(monkeypatch):
         b=known,pose=env.plant.pose),revision=2)
     gained=env.step(0)
     assert gained.parts.new_area_m2==1. and not gained.truncated
+    assert gained.parts.removed_frontiers_in==0 and gained.reward==-.001
     assert env.progress()['stagnation_zero_gain_steps']==0
     for _ in range(3): assert not env.step(0).truncated
     assert env.step(0).truncated
@@ -323,7 +328,7 @@ def test_real_terminal_precedes_stagnation_and_retains_completion_bonus(monkeypa
     for _ in range(3): env.step(0)
     if terminal=='success':
         # The fourth action reaches true 99%; the terminal transition keeps its
-        # ordinary area reward and receives the existing one-time bonus.
+        # ordinary frontier reward and receives the existing one-time bonus.
         known=np.ones((12,12),np.uint8);known[5,9]=0
         state['snapshot']=replace(snapshot(np.pad(np.ones((6,6),np.uint8),3),
             b=known,pose=env.plant.pose),revision=2)
@@ -336,7 +341,8 @@ def test_real_terminal_precedes_stagnation_and_retains_completion_bonus(monkeypa
     result=env.step(0)
     assert result.terminated and not result.truncated
     assert env.progress()['truncation_reason'] is None
-    assert result.reward==pytest.approx(6.069 if terminal=='success' else -.001)
+    assert result.reward==pytest.approx(result.parts.removed_frontiers_in/50 +
+        (5. if terminal=='success' else 0.) - .001)
     if terminal=='success': assert env.progress()['stagnation_zero_gain_steps']==0
     with pytest.raises(RuntimeError,match='requires reset'): env.step(0)
 

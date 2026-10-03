@@ -188,7 +188,7 @@ class Critic(nn.Module):
                                   len(privileged.query_positions)) / totals.clamp_min(1e-12)
         queries = torch.cat((local_truth, self.query_geometry(privileged.query_positions)), dim=-1)
         return self.head(torch.cat((actions, global_truth[batch.action_groups],
-            queries[privileged.action_queries], privileged.gains[:, None]), dim=-1)).squeeze(-1)
+            queries[privileged.action_queries], privileged.expected_removed_frontiers[:, None]), dim=-1)).squeeze(-1)
 
     def forward(self, observations, states, scene_registry):
         device = next(self.parameters()).device

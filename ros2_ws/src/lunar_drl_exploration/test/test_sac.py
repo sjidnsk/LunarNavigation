@@ -21,7 +21,7 @@ def transitions():
             next_obs=replace(next_obs, action_nodes=np.empty(0,int),
                 action_yaws=np.empty(0),goals=np.empty((0,3)))
         result.append(Transition(obs, i%len(obs.goals), (i-30)/100., next_obs,
-            state(obs=obs),state(full=i%2==0,obs=next_obs),RewardParts(0,0,0),terminal,i%7==0 and not terminal,'e',0))
+            state(obs=obs),state(full=i%2==0,obs=next_obs),RewardParts(0,0,0,0,0),terminal,i%7==0 and not terminal,'e',0))
     return result
 
 

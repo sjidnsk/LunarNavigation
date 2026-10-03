@@ -127,11 +127,13 @@ Task3已实现并自审，等待控制器独立审查；允许独立workspace复
 - `PrivilegedActionContext.gains` 替换为原始计数 `removed_frontiers`；PrivilegedBatch中的 `expected_removed_frontiers` 除50，只归一化一次。
 - `predict_removed(before: FrontierSnapshot, terrain: TerrainGrid, pose: Pose, sensor: SensorSpec) -> int`：虚拟reveal仅接受finite heights且intrinsic!=UNKNOWN，调用Task 2同一消除原语。
 
-- [ ] 写失败奖励测试：消除3、移动10m、转pi、未完成得到 `3/50-.02-.005-.001`；只观测外部得到无正探索项；完成仅加一次5；无碰撞且99%判据保留。
-- [ ] step()在执行前冻结core.frontiers，在最终地图ACK/core.observe后结算；真实距离/转角仍从整段累计差取得，停滞继续按真实面积。
-- [ ] 写候选测试：两需求只命中一个，预计0；无有限高度或未分类命中0；有效一次真值观测后的真实消除数等于预测；endpoint预测不要求等于沿途奖励。
-- [ ] 实现predict_removed并替换旧面积gains；端点truth只流入Critic，Actor输入与候选集合不随隐藏真值改变。
-- [ ] 跑新测试及 `T/test_ros_env.py`、`test_privileged_actions.py`、`test_graph_critic_schema.py`、`test_coverage_completion.py`；精确提交。
+- [x] 写失败奖励测试：消除3、移动10m、转pi、未完成得到 `3/50-.02-.005-.001`；只观测外部得到无正探索项；完成仅加一次5；无碰撞且99%判据保留。
+- [x] step()在执行前冻结core.frontiers，在最终地图ACK/core.observe后结算；真实距离/转角仍从整段累计差取得，停滞继续按真实面积。
+- [x] 写候选测试：两需求只命中一个，预计0；无有限高度或未分类命中0；有效一次真值观测后的真实消除数等于预测；endpoint预测不要求等于沿途奖励。
+- [x] 实现predict_removed并替换旧面积gains；端点truth只流入Critic，Actor输入与候选集合不随隐藏真值改变。
+- [x] 跑新测试及 `T/test_ros_env.py`、`test_privileged_actions.py`、`test_graph_critic_schema.py`、`test_coverage_completion.py`；精确提交。
+
+状态：Task4实现及本机隔离Jazzy包测试完成，等待控制器独立审查。687 passed、2 skipped（133.11s）；实际ROS动作闭环两参数未启用。详见验证文档Task4段；发布/恢复语义继续由Task5处理。
 
 ### Task 5: 学习、replay、发布和恢复语义一致
 

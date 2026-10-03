@@ -12,6 +12,7 @@ import uuid
 import numpy as np
 from .contracts import Pose, PrivilegedState, RewardParts, Transition
 from .config import GraphConfig
+from .frontiers import count_removed
 from .decision import DecisionCore
 from .plant import KinematicPlant, GeometryFailure
 from .processes import OwnedProcesses
@@ -43,12 +44,13 @@ class ExecutionMetadata:
 
 
 def make_transition(observation,action,next_observation,privileged,next_privileged,*,
-                    initial,final,completed,budget_hit,episode_id,actor_version,completion_bonus=0.,exhausted=False):
+                    initial,final,removed_frontiers_in: int,removed_frontiers_out: int,
+                    completed,budget_hit,episode_id,actor_version,completion_bonus=0.,exhausted=False):
     area,distance,turn=(float(b-a) for a,b in zip(initial,final))
     if area < -1e-8 or distance < -1e-8 or turn < -1e-8:
         raise InfrastructureError('nonmonotonic whole-action accounting')
-    parts=RewardParts(area,distance,turn)
-    reward=area/100.-.02*distance/10.-.005*turn/math.pi-.001
+    parts=RewardParts(area,distance,turn,removed_frontiers_in,removed_frontiers_out)
+    reward=parts.removed_frontiers_in/50.-.02*distance/10.-.005*turn/math.pi-.001
     if completed:
         reward += completion_bonus
     terminated=bool(completed or exhausted)
@@ -293,7 +295,7 @@ class RosExplorationEnv:
         x,y=map(int,rounded);h,w=self.terrain.shape
         mask=self.core.coverage.mask((x,y,x+w,y+h))
         return self.privileged_builder.build(self.observation if observation is None else observation,
-                                             self.reference.pack(mask))
+                                             self.reference.pack(mask), frontiers=self.core.frontiers)
 
     @property
     def completed(self):
@@ -314,6 +316,7 @@ class RosExplorationEnv:
         if not 0<=int(action_index)<len(self.observation.goals):raise ValueError('action outside frozen observation')
         action_index=int(action_index);goal=tuple(self.observation.goals[action_index])
         before=(self._known_area,self.plant.distance_m,self.plant.turn_rad)
+        before_frontiers=self.core.frontiers
         sim=self.plant.simulation_s;wall=time.monotonic();version=self.actor_version if actor_version is None else int(actor_version)
         if version<0:raise ValueError("actor_version must be nonnegative")
         observation,privileged=self.observation,self.privileged
@@ -333,7 +336,10 @@ class RosExplorationEnv:
                 stagnated=self.stagnation.observe((p.x,p.y),final[0]-before[0])
             budget_hit=self.steps>=self.episode_budget
             transition=make_transition(observation,action_index,next_observation,privileged,next_privileged,
-                initial=before,final=final,completed=success,exhausted=report.completed,
+                initial=before,final=final,
+                removed_frontiers_in=count_removed(before_frontiers,self.core.frontiers,domain="inside"),
+                removed_frontiers_out=count_removed(before_frontiers,self.core.frontiers,domain="outside"),
+                completed=success,exhausted=report.completed,
                 budget_hit=budget_hit or stagnated,
                 episode_id=self.episode_id,actor_version=version,completion_bonus=self.config.completion_bonus)
             self._episode_truncated=transition.truncated

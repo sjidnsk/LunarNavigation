@@ -44,7 +44,7 @@ class PrivilegedBatch:
     support_nodes: torch.Tensor
     support_geometry: torch.Tensor
     action_queries: torch.Tensor
-    gains: torch.Tensor
+    expected_removed_frontiers: torch.Tensor
 
 
 def _tensor(arrays, device, dtype=torch.float32):
@@ -105,7 +105,7 @@ def pack_privileged(observations, states, scene_registry, device):
     features, edges, lengths = [], [], []
     query_positions, query_groups = [], []
     support_query, support_nodes, support_geometry = [], [], []
-    action_queries, gains = [], []
+    action_queries, expected_removed_frontiers = [], []
     node_offset = query_offset = 0
     for group, (observation, state) in enumerate(zip(observations, states)):
         scene = scene_registry[state.scene_id]
@@ -140,7 +140,7 @@ def pack_privileged(observations, states, scene_registry, device):
         delta = (scene.positions[context.support_indices] - context.positions[repeated]) / 10.
         support_geometry.append(np.column_stack((delta, context.support_distances / 10.)).astype(np.float32))
         action_queries.append(context.action_positions + query_offset)
-        gains.append(context.gains / 100.)
+        expected_removed_frontiers.append(context.removed_frontiers / 50.)
         node_offset += len(scene.positions)
         query_offset += len(context.positions)
     graph = _graph(features, edges, lengths, None, device)
@@ -151,4 +151,4 @@ def pack_privileged(observations, states, scene_registry, device):
         return torch.empty(shape, dtype=dtype, device=device)
     return PrivilegedBatch(graph, cat(query_positions, columns=2), cat(query_groups, dtype=torch.long),
         cat(support_query, dtype=torch.long), cat(support_nodes, dtype=torch.long),
-        cat(support_geometry, columns=3), cat(action_queries, dtype=torch.long), cat(gains))
+        cat(support_geometry, columns=3), cat(action_queries, dtype=torch.long), cat(expected_removed_frontiers))

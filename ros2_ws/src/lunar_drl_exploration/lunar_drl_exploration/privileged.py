@@ -1,16 +1,23 @@
 """Training-owned truth skeleton and frozen candidate descriptors.
 
 This module is never needed by the online decision path. Terrain and temporary
-ray results stay with the environment; replay owns only scalar gains and sparse
+ray results stay with the environment; replay owns only raw removal counts and sparse
 read-only query supports. Truth does not add or remove measured actions.
 """
+from dataclasses import replace
+from typing import TYPE_CHECKING
 import numpy as np
 from scipy.spatial import cKDTree
 from .config import GraphConfig
-from .contracts import PrivilegedScene, PrivilegedState, PrivilegedActionContext, Pose
-from .geometry import polygon_mask
+from .contracts import PrivilegedScene, PrivilegedState, PrivilegedActionContext, Pose, SensorSpec
+from .geometry import lattice_displacement, pack_cell_ids
+from .frontiers import FrontierSet, FrontierSnapshot, count_removed
+from .maps import FREE, UNKNOWN
 from .metric_graph import MetricGrid, greedy_spanner
 from .sensor import visible_cells
+
+if TYPE_CHECKING:
+    from .scene import TerrainGrid
 
 
 def build_truth(terrain, reference, config=None):
@@ -48,6 +55,41 @@ def build_truth(terrain, reference, config=None):
         indices, reference.packed_mask, tuple(reference.shape), descriptor)
 
 
+def predict_removed(before: FrontierSnapshot, terrain: 'TerrainGrid', pose: Pose,
+                    sensor: SensorSpec) -> int:
+    """Predict old inside-front removal from one endpoint truth observation.
+
+    The virtual snapshot projects onto old centers only: new fronts cannot
+    cancel old removals. Remaining demands are still unknown after the reveal.
+    This intentionally differs from the real action's accumulated route reward.
+    """
+    if terrain.resolution_m != before.resolution_m:
+        raise ValueError('native/reference resolution mismatch')
+    offset = lattice_displacement(terrain.origin, before.lattice_origin, before.resolution_m)
+    if offset is None:
+        raise ValueError('native/reference lattice mismatch')
+    rows, cols = visible_cells(terrain.intrinsic, terrain.origin,
+                               terrain.resolution_m, pose, sensor)
+    classes = terrain.intrinsic[rows, cols]
+    valid = np.isfinite(terrain.heights[rows, cols]) & (classes != UNKNOWN)
+    hits = pack_cell_ids(cols[valid]+offset[0], rows[valid]+offset[1])
+    known = np.union1d(before.known_ids, hits)
+    free = np.union1d(np.setdiff1d(before.free_ids, hits), hits[classes[valid] == FREE])
+
+    def remaining(old):
+        unknown = ~np.isin(old.demand_ids, known)
+        counts = (np.add.reduceat(unknown.astype(np.int64), old.demand_offsets[:-1])
+                  if len(old.cell_ids) else np.empty(0, np.int64))
+        kept = (counts > 0) & np.isin(old.cell_ids, free)
+        demand_kept = unknown & np.repeat(kept, np.diff(old.demand_offsets))
+        return FrontierSet(old.cell_ids[kept], old.centers[kept],
+                           np.r_[0, np.cumsum(counts[kept])], old.demand_ids[demand_kept])
+
+    after = replace(before, revision=before.revision+1, known_ids=known, free_ids=free,
+                    inside=remaining(before.inside), outside=remaining(before.outside))
+    return count_removed(before, after, domain='inside')
+
+
 class PrivilegedBuilder:
     """One environment's truth geometry; state-dependent descriptors never cache K."""
     def __init__(self, terrain, scene, task, sensor, config=None):
@@ -56,12 +98,9 @@ class PrivilegedBuilder:
         self.grid = MetricGrid(terrain.navigation == 1, terrain.resolution_m)
         self.cells = np.floor((scene.positions.astype(float) - terrain.origin[:2]) /
                               terrain.resolution_m).astype(np.int64)
-        self.target = polygon_mask(terrain.shape, terrain.origin, terrain.resolution_m,
-                                   task.polygon)
-        self.target &= np.isfinite(terrain.heights) & (terrain.intrinsic != 0)
 
-    def build(self, observation, observed):
-        """Freeze all current actions against their exact pre-action observed bits."""
+    def build(self, observation, observed, *, frontiers: FrontierSnapshot):
+        """Freeze current actions against the measured pre-action frontier snapshot."""
         positions, inverse = np.unique(observation.goals[:, :2], axis=0, return_inverse=True)
         offsets = [0]
         supports, support_distances = [], []
@@ -86,13 +125,8 @@ class PrivilegedBuilder:
             support_distances.extend(distance[selected].tolist())
             offsets.append(len(supports))
         observed = np.asarray(observed, dtype=np.uint8)
-        gains = np.empty(len(observation.goals), np.float32)
-        for i, goal in enumerate(observation.goals):
-            rows, cols = visible_cells(terrain.intrinsic, terrain.origin, resolution,
-                                        Pose(*goal), self.sensor)
-            indices = rows * terrain.shape[1] + cols
-            known = ((observed[indices // 8] >> (indices % 8)) & 1).astype(bool)
-            gains[i] = np.count_nonzero(self.target[rows, cols] & ~known) * resolution**2
+        removed = np.asarray([predict_removed(frontiers, terrain, Pose(*goal), self.sensor)
+                              for goal in observation.goals], dtype=np.int64)
         actions = PrivilegedActionContext(positions, inverse, observation.goals[:, 2], np.asarray(offsets),
-            np.asarray(supports, np.int64), np.asarray(support_distances, np.float32), gains)
+            np.asarray(supports, np.int64), np.asarray(support_distances, np.float32), removed)
         return PrivilegedState(self.scene.scene_id, observed, actions)

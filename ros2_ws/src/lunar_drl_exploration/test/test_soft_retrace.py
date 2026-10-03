@@ -75,7 +75,7 @@ def sequence(length, *, episode='e', terminal=False, truncated=False, legacy=Fal
         metadata = {} if legacy else dict(step_index=j,
             behavior_log_prob=-math.log(len(observations[j].action_nodes)))
         result.append(Transition(observations[j], j % len(observations[j].action_nodes),
-            (j - 2) / 10, observations[j + 1], states[j], states[j + 1], RewardParts(0, 0, 0),
+            (j - 2) / 10, observations[j + 1], states[j], states[j + 1], RewardParts(0, 0, 0, 0, 0),
             terminal and j == length - 1, truncated and j == length - 1, episode, j // 2, **metadata))
     return tuple(result)
 

@@ -37,7 +37,7 @@ class ControlledEnv:
         self.reference = SimpleNamespace(coverage_ratio=lambda bits: 0.)
         positions, inverse = np.unique(self.obs.goals[:, :2], axis=0, return_inverse=True)
         context = PrivilegedActionContext(positions, inverse, self.obs.goals[:,2], np.arange(len(positions)+1),
-            np.arange(len(positions)) % 2, np.ones(len(positions)), np.ones(len(self.obs.goals)))
+            np.arange(len(positions)) % 2, np.ones(len(positions)), np.ones(len(self.obs.goals), np.int64))
         self.state = PrivilegedState(self.episode_id, [0], context)
         scene = PrivilegedScene(self.episode_id, [[0, 0], [1, 0]], [[0, 1]], [1],
             [0, 1, 2], [0, 1], [3], (1, 2), {})
@@ -61,7 +61,7 @@ class ControlledEnv:
                 raise RuntimeError('controlled infrastructure failure')
             self.steps += 1
             return Transition(self.obs, action_index, -.001, self.obs,
-                self.state, self.state, RewardParts(0., 0., 0.), False,
+                self.state, self.state, RewardParts(0., 0., 0., 0, 0), False,
                 self.steps >= self.budget, self.episode_id, actor_version)
         finally:
             self.active = False

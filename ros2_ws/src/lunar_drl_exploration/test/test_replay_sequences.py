@@ -113,7 +113,7 @@ def test_sequences_stop_at_missing_or_inconsistent_boundary(boundary):
     elif boundary == 'privileged':
         following = replace(following, privileged=replace(following.privileged, observed=np.array([7])))
     elif boundary == 'actions':
-        context = replace(following.privileged.actions, gains=np.array([2., 1.]))
+        context = replace(following.privileged.actions, removed_frontiers=np.array([2, 1]))
         following = replace(following, privileged=replace(following.privileged, actions=context))
     else:
         following = replace(following, step_index=None, behavior_log_prob=None)

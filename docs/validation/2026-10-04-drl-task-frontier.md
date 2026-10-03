@@ -120,3 +120,33 @@ bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest ros2_ws/s
 完整包命令沿用前述专项启动器与整个test目录。外部证据 `/home/kai/.cache/lunar-drl-task-frontier/task-3/`：red.log、green-first.log、lattice-red.log、green.log、focused-final.log、mutation-center-gate.log、mutation-all-demands.log、full-suite.log、focused-after-package.log、imports.log。显式UTF-8核验、git diff --check通过。导入确认本工作树源码、专项Jazzy native/generated msgs、既有venv；旧overlay与模型未改。
 
 此任务仅为特征/合法动作层通过，等待控制器独立审查。Task4实际奖励/Critic预计消除、Task5发布/恢复schema尚待完成，sac/runtime发布元数据仍属旧v3阶段，当前中间提交不能当作新语义checkpoint发布或训练入口。冷构建修复延后Task8；无正式训练、冻结评测、合并、推送或PR。Humble、Orin、DDS、实际ROS动作闭环、传感器与实车均NOT_RUN。
+
+
+## Task 4：全动作奖励和Critic终点预计消除
+
+起点 `39f6fa45811ec4eaee4c36382c2444e650b3bc75`。`RewardParts` 新增必填非负整数 `removed_frontiers_in/out`，实际面积、距离、绝对转角继续保留。`make_transition` 无旧面积回退：任务内消除/50，减整段实际距离/转角和每步成本，成功时加原配置完成奖金（默认5）；外部消除只诊断。`step` 在执行前冻结不可变 `core.frontiers`，最终地图ACK及 `core.observe` 后调用同一 `count_removed`；停滞仍按真实面积，成功仍无碰撞且reference coverage≥99%，禁止终止后再次step领奖。
+
+训练专用 `predict_removed` 对终点姿态作一次真值原生观测，只将有限高度且intrinsic非UNKNOWN命中加入已知格，更新有效命中旧中心的当前FREE/BLOCKED分类。虚拟后快照revision+1，只投影旧冻结前沿中心，CSR保留仍未知的同域需求；新前沿不会抵消旧消除，因此本投影无需新增中心。最终仍调用共享消除原语，要求ALL旧同域需求解决、旧front消失、旧中心当前FREE。该投影方式经控制器确认，没有把真值导入部署frontiers模块。
+
+`PrivilegedActionContext.removed_frontiers` 为不可变int64原始计数；`PrivilegedBatch.expected_removed_frontiers` 仅打包时除50，Critic读取该列。Actor 27/7维、内外可见ANY需求计数/100、候选集合沿用Task3；真值差异仅改变Critic计数。终点预测和整段沿途收益有意不同，测试证明两侧各一次观测可消除1，而任一端点单独预测0。
+
+生产修改保持批准的 contracts/ros_env/privileged/batch/model 五文件。必填字段变化同步既有model、replay、SAC、worker、evaluation等测试fixtures，已向控制器说明；没有扩大生产文件范围。
+
+### RED / GREEN及最终证据
+
+- 新两文件实现前 `20 failed in 0.96s`：缺计数合同、旧step无计数字段、predict_removed不存在。首次实现后17通过、3失败来自测试误改TerrainGrid只读数组，改用测试自有copy后解决。
+- 首轮六文件62通过、1失败来自旧面积收益单调递减断言。前沿ALL需求语义下东侧需求先解决，会使西侧下一次可消除从5升到8，已用明确前后计数回归替换旧假设。
+- 受影响13文件：`178 passed in 14.37s`，退出0。包含任务指定6文件及model、cumulative_coverage、replay_checkpoint、replay_sequences、sac、soft_retrace、evaluation。
+- 最终新增区外真实step和下一动作重复revision回归，以及新增面积1/消除0仍重置停滞断言：新两文件加test_ros_env，`54 passed in 1.71s`，退出0。
+- 一次完整DRL包：`687 passed, 2 skipped in 133.11s (0:02:13)`，退出0。无失败与警告；两skip为 `test_ros_native_execution.py::test_native_cold_start_spin_adjacent_arrival_and_frozen_transition` 的真实ROS闭环参数。
+
+聚焦与全包均使用 `/home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest`。新两文件RED命令及最终全包命令：
+
+```bash
+bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest ros2_ws/src/lunar_drl_exploration/test/test_frontier_reward.py ros2_ws/src/lunar_drl_exploration/test/test_frontier_privileged.py -q
+bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest ros2_ws/src/lunar_drl_exploration/test -q
+```
+
+原生有效观测oracle、非有限/UNKNOWN、有效BLOCKED需求、中心重分类、负/分数原点及±1e-16、区外站位、只归一化一次、隐藏真值与Actor隔离、整段冻结/ACK/一次完成奖金均有测试。外部日志 `/home/kai/.cache/lunar-drl-task-frontier/task-4/`：red.log、green-first.log、focused-first.log、focused.log、focused-final.log、full-suite.log、imports.log。UTF-8读取及git diff --check通过。
+
+导入确认当前专项源码、专项Jazzy native/generated messages和既有venv。旧overlay/checkpoint/replay未修改。正式训练、冻结评测、真实ROS闭环、Humble、Orin、DDS部署和实车：NOT_RUN。发布及resume元数据仍待Task5，不能用此中间提交混用旧checkpoint。没有合并、推送或PR；等待控制器独立审查。

@@ -33,7 +33,7 @@ def scene(n=9):
         np.packbits(np.ones(n*2, np.uint8), bitorder='little'), (2,n), {})
 
 
-def action_context(obs, truth_nodes=9, gain=1.):
+def action_context(obs, truth_nodes=9, gain=1):
     if not len(obs.goals):
         return PrivilegedActionContext(np.empty((0,2)), np.empty(0,int), np.empty(0), np.array([0]),
             np.empty(0,int), np.empty(0), np.empty(0))
@@ -43,7 +43,7 @@ def action_context(obs, truth_nodes=9, gain=1.):
         supports, np.linspace(.1, 1., len(positions)), np.full(len(obs.goals), gain))
 
 
-def state(n=9, full=False, obs=None, gain=1.):
+def state(n=9, full=False, obs=None, gain=1):
     obs = observation() if obs is None else obs
     return PrivilegedState('s', np.packbits(np.full(n*2, full, np.uint8), bitorder='little'),
                            action_context(obs, n, gain))
@@ -151,7 +151,7 @@ def test_critic_candidate_queries_are_permutation_local_and_gain_sensitive():
                            goals=obs.goals[order])
     shuffled = replace(base, actions=replace(base.actions,
         action_positions=base.actions.action_positions[order], action_yaws=base.actions.action_yaws[order],
-        gains=base.actions.gains[order]))
+        removed_frontiers=base.actions.removed_frontiers[order]))
     with torch.no_grad():
         q = critic([obs], [base], {'s':truth})[0]
         torch.testing.assert_close(critic([shuffled_obs], [shuffled], {'s':truth})[0], q[order])
@@ -159,9 +159,9 @@ def test_critic_candidate_queries_are_permutation_local_and_gain_sensitive():
             np.vstack((base.actions.positions, [99., 99.])), base.actions.action_positions, base.actions.action_yaws,
             np.r_[base.actions.support_offsets, base.actions.support_offsets[-1] + 1],
             np.r_[base.actions.support_indices, 0], np.r_[base.actions.support_distances, 1.],
-            base.actions.gains))
+            base.actions.removed_frontiers))
         torch.testing.assert_close(critic([obs], [extra], {'s':truth})[0], q)
-        richer = replace(base, actions=replace(base.actions, gains=base.actions.gains + 100.))
+        richer = replace(base, actions=replace(base.actions, removed_frontiers=base.actions.removed_frontiers + 100))
         assert not torch.allclose(critic([obs], [richer], {'s':truth})[0], q)
         torch.testing.assert_close(actor([obs])[0].logits, actor([obs])[0].logits, atol=0, rtol=0)
 
@@ -169,7 +169,7 @@ def test_critic_candidate_queries_are_permutation_local_and_gain_sensitive():
 def test_critic_local_support_and_gain_receive_gradients():
     critic = Critic(ModelConfig()).train()
     obs, truth = observation(), scene()
-    critic([obs], [state(obs=obs, gain=1.)], {'s':truth})[0].sum().backward()
+    critic([obs], [state(obs=obs, gain=1)], {'s':truth})[0].sum().backward()
     assert critic.support_geometry[0].weight.grad.abs().sum() > 0
     assert critic.head[0].weight.grad[:, -1].abs().sum() > 0
 
