@@ -21,6 +21,18 @@ def module(name):
     return result
 
 
+def test_owned_run_binds_explicit_runtime_cache(tmp_path,monkeypatch):
+    c=module('controller')
+    root=tmp_path/'run'
+    cache=tmp_path/'fresh-cache'
+    monkeypatch.setenv('DRL_CACHE',str(cache))
+    owned=c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
+    assert owned['runtime_cache']==str(cache.resolve())
+    assert c.identity(root)['runtime_cache']==str(cache.resolve())
+    monkeypatch.setenv('DRL_CACHE',str(tmp_path/'foreign-cache'))
+    with pytest.raises(ValueError,match='runtime cache'):c.identity(root)
+
+
 def test_budget_resumes_partial_warmup_and_drains_before_screen():
     c = module('controller')
     assert c.stage_target(0) == (1024, 0)

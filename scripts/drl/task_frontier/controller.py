@@ -127,7 +127,13 @@ def identity(root):
         raise ValueError('unowned artifact directory')
     if digest(read(Path(root)/'config.json')) != value.get('config_digest'):
         raise ValueError('owned effective config changed')
+    if value.get('runtime_cache') != runtime_cache():
+        raise ValueError('owned runtime cache changed or missing')
     return value
+
+
+def runtime_cache():
+    return str(Path(os.environ.get('DRL_CACHE','/home/kai/.cache/lunar-drl-task-frontier/jazzy')).resolve())
 
 
 @contextmanager
@@ -269,7 +275,7 @@ def prepare(root, config_path):
     from lunar_drl_exploration.config import training_config_from_record
     effective = training_config_from_record(record)
     value = dict(schema='task_frontier_run_v1', root=str(root), run_id=uuid.uuid4().hex,
-                 semantic_id=digest(resume_semantics(effective)), config_digest=digest(record))
+                 semantic_id=digest(resume_semantics(effective)), config_digest=digest(record),runtime_cache=runtime_cache())
     write(root/'identity.json', value)
     write(root/'config.json', record)
     freeze_cases(LEGACY/'artifacts/baseline-summary.json', root/'cases.json')
