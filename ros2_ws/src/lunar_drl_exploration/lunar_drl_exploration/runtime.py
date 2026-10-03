@@ -8,21 +8,40 @@ from .ros_messages import InfrastructureError, RosNavigationAdapter, velocity_is
 class ActorPolicy:
     """Actor-only artifact loader. Full training checkpoints are not deployment inputs."""
     @classmethod
-    def load(cls,path):
+    def from_record(cls, record):
+        """Validate the complete publication before constructing or replacing a policy."""
         import torch
         from .model import Actor
-        from .config import ModelConfig
-        record=torch.load(path,map_location='cpu',weights_only=True)
-        if record.get('schema')!='task_graph_v3' or set(record)!={'schema','model_config','version','state_dict'}:
-            raise ValueError('expected task_graph_v3 actor_state Actor-only artifact')
-        actor=Actor(ModelConfig(**record['model_config']))
-        actor.load_state_dict(record['state_dict'],strict=True);actor.eval()
+        from .config import ModelConfig, canonical_model_config
+        from .feature_schema import OBSERVATION_SCHEMA, require_frontier_semantics
+        if (record.get('schema') != OBSERVATION_SCHEMA or
+                set(record) != {'schema', 'frontier_semantics', 'model_config', 'version', 'state_dict'}):
+            raise ValueError(f'expected {OBSERVATION_SCHEMA} actor_state Actor-only artifact')
+        require_frontier_semantics(record)
+        if type(record['version']) is not int or record['version'] < 0:
+            raise ValueError('Actor version must be a nonnegative completed-update integer')
+        model_config = ModelConfig(**canonical_model_config(record['model_config']))
+        actor = Actor(model_config)
+        try:
+            actor.load_state_dict(record['state_dict'], strict=True)
+        except RuntimeError as error:
+            raise ValueError('incompatible Actor weight schema') from error
+        if any(not torch.isfinite(value).all() for value in actor.state_dict().values()):
+            raise ValueError('Actor weights must be finite')
+        actor.eval()
         return cls(actor)
+
+    @classmethod
+    def load(cls, path):
+        import torch
+        return cls.from_record(torch.load(path, map_location='cpu', weights_only=True))
 
     def __init__(self,actor):self.actor=actor
 
     def __call__(self,observation):
         import torch
+        from .feature_schema import require_observation_identity
+        require_observation_identity(observation)
         with torch.inference_mode():return int(self.actor([observation])[0].probs.argmax())
 
 

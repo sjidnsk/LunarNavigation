@@ -1,13 +1,14 @@
 """Protocol changes are explicit; old production checkpoints are never rewritten."""
 import pytest
+from lunar_drl_exploration.feature_schema import frontier_semantics
 from lunar_drl_exploration.config import TrainingConfig,resume_semantics
 
 
 def test_full_resume_identifies_new_geometry_and_privileged_contract():
     semantics=resume_semantics(TrainingConfig())
-    assert semantics['observation_schema']=='task_graph_v3'
+    assert semantics['observation_schema']=='task_graph_v4'
     assert semantics['action_schema']=='local_metric_pose_v3'
-    assert semantics['privileged_schema']=='candidate_truth_v1'
+    assert semantics['privileged_schema']=='candidate_frontier_truth_v2'
     assert semantics['graph_geometry']=={'coverage_radius_m':2.,'connection_limit_m':8.,'stretch':1.2,
         'base_order':'clearance_desc_yx_v1'}
 
@@ -19,11 +20,11 @@ def test_actor_only_version_rejects_legacy_despite_unchanged_weight_shapes(tmp_p
     from lunar_drl_exploration.runtime import ActorPolicy
     from lunar_drl_exploration.config import ModelConfig
     config=ModelConfig(width=16,heads=4,layers=1)
-    artifact=dict(schema='task_graph_v3',model_config=asdict(config),version=0,state_dict=Actor(config).state_dict())
+    artifact=dict(schema='task_graph_v4', frontier_semantics=frontier_semantics(),model_config=asdict(config),version=0,state_dict=Actor(config).state_dict())
     path=tmp_path/'actor.pt';torch.save(artifact,path)
     assert ActorPolicy.load(path).actor.config==config
     artifact['schema']='task_graph_v2';torch.save(artifact,path)
-    with pytest.raises(ValueError,match='task_graph_v3'):ActorPolicy.load(path)
+    with pytest.raises(ValueError,match='task_graph_v4'):ActorPolicy.load(path)
 
 
 def test_incomplete_graph_reports_unavailable_not_exhausted(monkeypatch):

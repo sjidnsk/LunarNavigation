@@ -69,7 +69,7 @@ def test_checkpoint_rejects_horizon_identity_mismatch(learned_checkpoint, locati
     _, _, state = learned_checkpoint
     key = 'learning_config' if location == 'learner' else 'learning'
     state.record[location][key]['return_steps'] = 8
-    with pytest.raises(ValueError, match='learning config'):
+    with pytest.raises(ValueError, match='learning'):
         state.validate()
 
 

@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import sys
 import numpy as np
+from lunar_drl_exploration.feature_schema import frontier_semantics
 from lunar_drl_exploration.contracts import Pose,SensorSpec
 from lunar_drl_exploration.ros_messages import NavigationResult
 from test_task_analysis import snapshot,task
@@ -65,10 +66,10 @@ def test_actor_artifact_load_never_constructs_critic(tmp_path,monkeypatch):
     def forbidden(*a,**k):raise AssertionError('Critic instantiated')
     monkeypatch.setattr(model,'Critic',forbidden)
     path=tmp_path/'actor.pt'
-    torch.save({'schema':'task_graph_v3','model_config':cfg.__dict__,'state_dict':actor.state_dict(),'version':4},path)
+    torch.save({'schema':'task_graph_v4','frontier_semantics':frontier_semantics(),'model_config':cfg.__dict__,'state_dict':actor.state_dict(),'version':4},path)
     policy=ActorPolicy.load(path)
     assert isinstance(policy.actor,model.Actor)
-    torch.save({'schema':'task_graph_v3','model_config':cfg.__dict__,'state_dict':actor.state_dict(),'version':4,'critic':{}},path)
+    torch.save({'schema':'task_graph_v4','frontier_semantics':frontier_semantics(),'model_config':cfg.__dict__,'state_dict':actor.state_dict(),'version':4,'critic':{}},path)
     with pytest.raises(ValueError):ActorPolicy.load(path)
 
 

@@ -177,25 +177,23 @@ def _atomic_file(output, write):
 
 def export_actor(checkpoint, output):
     import torch
+    from .feature_schema import OBSERVATION_SCHEMA, frontier_semantics
     # Full checkpoints are explicitly trusted local continuation artifacts.
     record = torch.load(checkpoint, map_location='cpu', weights_only=False)
     if record.get('schema') == 'bounded_training_v1':
         from .checkpoint import TrainingState
         TrainingState(record).validate()
-        if record['semantics'].get('action_schema') != 'local_metric_pose_v3':
-            raise ValueError('incompatible legacy action semantics; train a new policy')
         source = record['learner']
-        actor = dict(schema='task_graph_v3', model_config=source['model_config'],
+        actor = dict(schema=OBSERVATION_SCHEMA, frontier_semantics=frontier_semantics(),
+            model_config=source['model_config'],
             version=source['updates'], state_dict=source['actor'])
-    elif record.get('schema') == 'task_graph_v3': actor = record
+    elif record.get('schema') == OBSERVATION_SCHEMA: actor = record
     else: raise ValueError('unsupported checkpoint/Actor schema; no old GRU migration')
     # Same loader's exact shape/schema checks, before replacing an existing file.
-    from .model import Actor
-    from .config import ModelConfig, canonical_model_config
-    if set(actor) != {'schema', 'model_config', 'version', 'state_dict'}:
-        raise ValueError('invalid actor_state artifact keys')
+    from .runtime import ActorPolicy
+    from .config import canonical_model_config
+    ActorPolicy.from_record(actor)
     actor = dict(actor, model_config=canonical_model_config(actor['model_config']))
-    Actor(ModelConfig(**actor['model_config'])).load_state_dict(actor['state_dict'], strict=True)
     _atomic_file(output, lambda stream: torch.save(actor, stream))
     print(json.dumps(dict(actor=str(output), source=str(checkpoint), version=actor['version'],
         evaluated_best=False)), flush=True)

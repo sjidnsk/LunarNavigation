@@ -138,3 +138,15 @@ class Duplex:
         if any(thread.is_alive() for thread in self.threads):
             raise RuntimeError('IPC I/O owner failed to join after socket shutdown')
         if flush and undelivered: raise BrokenPipeError('IPC closed before reliable messages drained')
+
+
+def load_actor_publication(payload):
+    """Decode a trusted local publication and validate all identity before replacement.
+
+    Imports stay lazy so IPC and collector module imports remain Torch-free.
+    """
+    import pickle
+    from .runtime import ActorPolicy
+    record = pickle.loads(payload)
+    policy = ActorPolicy.from_record(record)
+    return record, policy.actor

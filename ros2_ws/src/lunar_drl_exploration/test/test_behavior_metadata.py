@@ -7,6 +7,7 @@ import pickle
 import time
 
 import pytest
+from lunar_drl_exploration.feature_schema import frontier_semantics
 
 from worker_fixtures import ControlledEnv
 
@@ -195,7 +196,7 @@ def test_collector_preserves_sample_probability_across_inflight_publication(tmp_
     model_config = ModelConfig(width=16, heads=4, layers=1)
     actor = Actor(model_config).eval()
     with torch.inference_mode():old_weights = actor([observation()])[0].probs.clone()
-    old_record = dict(schema='task_graph_v3', model_config=config_record(model_config), version=7,
+    old_record = dict(schema='task_graph_v4', frontier_semantics=frontier_semantics(), model_config=config_record(model_config), version=7,
                       state_dict={key:value.clone() for key,value in actor.state_dict().items()})
     with torch.no_grad():actor.head[-1].weight.mul_(-4.)
     with torch.inference_mode():new_weights = actor([observation()])[0].probs.clone()

@@ -2,6 +2,7 @@ import importlib.util
 import multiprocessing as mp
 import time
 import pytest
+from lunar_drl_exploration.feature_schema import frontier_semantics
 from lunar_drl_exploration.config import TrainingConfig, config_record
 from lunar_drl_exploration.replay import loads_transport
 
@@ -157,7 +158,7 @@ def test_collector_recovery_is_bounded_and_reports_every_unfinished_reservation(
     from lunar_drl_exploration.collector import collector_main
     from lunar_drl_exploration.model import Actor
     from lunar_drl_exploration.config import config_record, ModelConfig
-    actor = dict(schema='task_graph_v3', model_config=config_record(ModelConfig()),
+    actor = dict(schema='task_graph_v4', frontier_semantics=frontier_semantics(), model_config=config_record(ModelConfig()),
         version=0, state_dict=Actor().state_dict())
     parent, child = mp.get_context('spawn').Pipe()
     process = mp.get_context('spawn').Process(target=collector_main,
@@ -230,7 +231,7 @@ def test_large_bidirectional_actor_publication_and_stop_drain_without_external_r
     from lunar_drl_exploration.schedule import UpdateSchedule
     from lunar_drl_exploration.training import AdmissionLedger
     torch.set_num_threads(1)
-    actor = dict(schema='task_graph_v3', model_config=config_record(ModelConfig()),
+    actor = dict(schema='task_graph_v4', frontier_semantics=frontier_semantics(), model_config=config_record(ModelConfig()),
         version=0, state_dict=Actor().state_dict())
     state = pickle.dumps(dict(actor_record=actor, actor_version=0, policy_rng=torch.get_rng_state()))
     publication = dict(actor, version=16)
@@ -323,7 +324,7 @@ def test_currently_queued_grants_batch_and_queued_stop_or_barrier_prevents_infer
     from lunar_drl_exploration.config import ModelConfig
     from lunar_drl_exploration.model import Actor
     torch.set_num_threads(1)
-    actor = dict(schema='task_graph_v3', model_config=config_record(ModelConfig()), version=0,
+    actor = dict(schema='task_graph_v4', frontier_semantics=frontier_semantics(), model_config=config_record(ModelConfig()), version=0,
         state_dict=Actor().state_dict())
     rng_state = torch.get_rng_state()
     state = pickle.dumps(dict(actor_record=actor, actor_version=0, policy_rng=rng_state))

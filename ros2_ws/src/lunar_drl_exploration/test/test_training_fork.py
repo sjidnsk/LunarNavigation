@@ -124,7 +124,7 @@ def test_checkpoint_validates_every_recorded_model_identity(learned_checkpoint, 
             'model_config': dict(state.record['learner']['model_config'], actor_score_bound=10.)}
     else:
         state.record['collector_state'].pop('actor_record', None)
-    with pytest.raises(ValueError, match='model config'):
+    with pytest.raises(ValueError, match='model'):
         state.validate()
 
 

@@ -47,7 +47,7 @@ def test_transition_rejects_partial_or_invalid_trace_metadata(metadata):
         replace(transition(), **metadata)
 
 
-def test_legacy_transport_without_new_fields_restores_as_one_step():
+def test_current_transport_without_optional_trace_fields_restores_as_one_step():
     record = pickle.loads(dumps_transport(transition()))
     for node in record['nodes']:
         if node[0] == 'contract' and node[1] == 'Transition':
@@ -60,15 +60,15 @@ def test_legacy_transport_without_new_fields_restores_as_one_step():
                for trace in replay.sample_sequences(64, np.random.default_rng(3), 8))
     saved = replay.snapshot(100_000)
     assert len(saved) <= 100_000
-    # An actual old bounded_replay_v1 payload also lacks both contract fields.
+    # Old replay envelopes remain incompatible even with current tensor shapes.
     snapshot_record = pickle.loads(saved[16:])
     for node in snapshot_record['nodes']:
         if node[0] == 'contract' and node[1] == 'Transition':
             node[2].pop('step_index', None)
             node[2].pop('behavior_log_prob', None)
     legacy_snapshot = b'LDRLRP2\0' + (1).to_bytes(8, 'little') + pickle.dumps(snapshot_record, protocol=5)
-    again = ReplayBuffer.from_snapshot(legacy_snapshot)
-    assert len(again.sample_sequences(1, np.random.default_rng(3), 8)[0]) == 1
+    with pytest.raises(ValueError, match="schema"):
+        ReplayBuffer.from_snapshot(legacy_snapshot)
 
 
 @pytest.mark.parametrize('max_steps', [1, 3, 8])

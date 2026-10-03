@@ -1,5 +1,7 @@
 """Exact enumerated discrete SAC with one optimizer step per effective batch."""
 import copy
+from .feature_schema import (OBSERVATION_SCHEMA, LEARNER_SCHEMA,
+                             frontier_semantics, require_frontier_semantics)
 from dataclasses import asdict, dataclass
 import math
 import numpy as np
@@ -418,12 +420,12 @@ class SACLearner:
                     trace_legacy_count=sum(sequence[0].behavior_log_prob is None for sequence in sequences))
 
     def actor_state(self):
-        return {'schema':'task_graph_v3', 'model_config':asdict(self.model_config),
+        return {'schema':OBSERVATION_SCHEMA, 'frontier_semantics':frontier_semantics(), 'model_config':asdict(self.model_config),
                 'version':self.updates,
                 'state_dict':{k:v.detach().cpu().clone() for k,v in self.actor.state_dict().items()}}
 
     def state_dict(self):
-        result = {'schema':'candidate_graph_sac_v2', 'model_config':asdict(self.model_config),
+        result = {'schema':LEARNER_SCHEMA, 'frontier_semantics':frontier_semantics(), 'model_config':asdict(self.model_config),
                   'learning_config':asdict(self.learning_config), 'updates':self.updates,
                   'log_alpha':self.log_alpha.detach().clone()}
         for name in ('actor','q1','q2','target1','target2','actor_optimizer',
@@ -435,7 +437,8 @@ class SACLearner:
         return copy.deepcopy(result)
 
     def load_state_dict(self, state):
-        if (state['schema'] != 'candidate_graph_sac_v2' or
+        require_frontier_semantics(state)
+        if (state.get('schema') != LEARNER_SCHEMA or
                 canonical_model_config(state['model_config']) != asdict(self.model_config)):
             raise ValueError("incompatible learner model schema")
         try:

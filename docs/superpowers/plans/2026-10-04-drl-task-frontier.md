@@ -137,15 +137,17 @@ Task3已实现并自审，等待控制器独立审查；允许独立workspace复
 
 ### Task 5: 学习、replay、发布和恢复语义一致
 
-**Files:** 修改 `P/config.py`、`sac.py`、`checkpoint.py`、`replay.py`、`collector.py`、`ipc.py`、`runtime.py`、`evaluation.py`、`feature_schema.py`；创建 `T/test_frontier_identity.py` 并更新相应现有fixtures。
+**Files:** 修改 `P/config.py`、`sac.py`、`checkpoint.py`、`replay.py`、`collector.py`、`ipc.py`、`runtime.py`、`evaluation.py`、`feature_schema.py`、`contracts.py`（控制器补充：DecisionObservation默认/校验及privileged schema）；创建 `T/test_frontier_identity.py` 并更新相应现有fixtures。
 
 **Interfaces:** feature_schema提供新三个schema及 `FRONTIER_SEMANTICS`，固定前沿/归属/FOV/尺度/奖励公式标识；resume_semantics包含全部标识。新actor_state、导出、runtime和collector发布使用v4；外层bounded_training_v1可保留但旧内部语义必须拒绝。
 
-- [ ] 写失败测试：旧19维Actor、旧面积privileged、旧replay/checkpoint、仅尺寸相同但奖励语义不符都拒绝；校验失败不得替换现有有效文件。
-- [ ] 更新所有schema检查和传输冻结；新字段经dumps_transport/loads_transport、replay保存加载保持数值/单位。
-- [ ] 从零创建learner、target、optimizer、温度、replay、RNG和0计数，证明target初始等于新Q且优化器空；无源checkpoint读入。
-- [ ] 验证一个真实SAC update后save/restore逐项一致：模型/target、Adam、双温度、RNG、replay/schedule；导出Actor在相同新输入上与learner Actor一致。
-- [ ] 跑新测试及 `T/test_replay_checkpoint.py`、`test_runtime.py`、`test_training_identity.py`、`test_collector.py`、`test_sac.py`、`test_evaluation.py`；精确提交。
+- [x] 写失败测试：旧19维Actor、旧面积privileged、旧replay/checkpoint、仅尺寸相同但奖励语义不符都拒绝；校验失败不得替换现有有效文件。
+- [x] 更新所有schema检查和传输冻结；新字段经dumps_transport/loads_transport、replay保存加载保持数值/单位。
+- [x] 从零创建learner、target、optimizer、温度、replay、RNG和0计数，证明target初始等于新Q且优化器空；无源checkpoint读入。
+- [x] 验证一个真实SAC update后save/restore逐项一致：模型/target、Adam、双温度、RNG、replay/schedule；导出Actor在相同新输入上与learner Actor一致。
+- [x] 跑新测试及 `T/test_replay_checkpoint.py`、`test_runtime.py`、`test_training_identity.py`、`test_collector.py`、`test_sac.py`、`test_evaluation.py`；精确提交。
+
+**Task5状态：** 实现完成，等待控制器独立审查。统一三schema与完整FRONTIER_SEMANTICS；save/load/export无调用方config也严格校验，save-only解码后逐条admission/evict而不保留额外完整ledger，restore一次解码复用实际replay。补充同27维错schema构造/transport/replay/runtime回归，旧19维Actor、面积privileged、旧envelope和内部错奖励均拒绝，失败保留有效目标文件。更新Actor fixtures及fork拒绝错误信息断言。验证证据见 `docs/validation/2026-10-04-drl-task-frontier.md` Task5；不把序列化snapshot上限当作RSS/PSS峰值证明，Task8仍需实际smoke测量。
 
 ### Task 6: 正常阶段补完更新，Ctrl+C恢复信用
 

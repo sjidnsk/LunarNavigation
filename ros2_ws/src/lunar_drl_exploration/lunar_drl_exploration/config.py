@@ -9,6 +9,8 @@ from types import MappingProxyType
 from typing import Mapping
 
 from .contracts import Pose, SensorSpec
+from .feature_schema import (OBSERVATION_SCHEMA, PRIVILEGED_SCHEMA, LEARNER_SCHEMA,
+                             frontier_semantics, FRONTIER_SEMANTICS)
 
 
 @dataclass(frozen=True)
@@ -26,7 +28,7 @@ class GraphConfig:
         if not (0 < self.coverage_radius_m < self.connection_limit_m and self.stretch >= 1.0):
             raise ValueError("positive graph radius/connection length and stretch >= 1 required")
         if self.position_unit_m != 10.0 or self.frontier_unit_cells != 100.0:
-            raise ValueError("task_graph_v3 fixes position and frontier normalization")
+            raise ValueError("task_graph_v4 fixes position and frontier normalization")
         if not np.isfinite(self.history_tolerance_m) or self.history_tolerance_m <= 0:
             raise ValueError("positive history tolerance required")
 
@@ -291,7 +293,7 @@ def config_record(value):
 
 
 def resume_semantics(config):
-    """Full replay continuation only. Actor-only loads use actor schema/model shape."""
+    """Full replay continuation, including count units and experience meanings."""
     record = config_record(config)
     learning = {key: value for key, value in record['learning'].items()
                 if key not in ('microbatch_size','learning_rate','polyak','initial_alpha',
@@ -299,14 +301,15 @@ def resume_semantics(config):
     platform = {key: value for key, value in record['platform'].items()
                 if key != 'capability_path'}
     result = dict(model=record['model'], learning=learning,
-        observation_schema='task_graph_v3', action_schema='local_metric_pose_v3',
-        privileged_schema='candidate_truth_v1',
+        observation_schema=OBSERVATION_SCHEMA, action_schema='local_metric_pose_v3',
+        privileged_schema=PRIVILEGED_SCHEMA, learner_schema=LEARNER_SCHEMA,
+        frontier_semantics=frontier_semantics(),
         graph_geometry=dict(coverage_radius_m=2.,connection_limit_m=8.,stretch=1.2,
             base_order='clearance_desc_yx_v1'),
         observation_model='finite_center_tip_prefix_v1', generator_version=5,
         observation_origin='actual_pose_optical_offset',
         effective_measurement='classified_center_native_3x3_no_hidden_neighbors_v1',
-        reward='delta_area/100-.02*distance/10-.005*absolute_turn/pi-.001+completion_bonus*coverage_success_v3',
+        reward=FRONTIER_SEMANTICS['reward_formula'],
         completion_bonus=config.completion_bonus,
         success_coverage=config.success_coverage,
         termination='truth_coverage_or_current_opportunity_exhaustion_v1',
@@ -320,7 +323,7 @@ def resume_semantics(config):
     if config.paired_scene_sequence:
         result['scene_sequence'] = dict(mode='paired_slot_episode_v1',
             seed=config.seed, environments=config.environments)
-    # Omitting disabled collection limits preserves legacy checkpoint identity.
+    # Disabled collection limits add no collection constraint.
     if config.stagnation_window_steps:
         result['training_stagnation'] = dict(mode='observed_no_gain_pose_window_v1',
             window_steps=config.stagnation_window_steps,

@@ -101,7 +101,7 @@ def test_eviction_snapshot_is_bounded_and_has_no_dangling_scene():
     assert len(restored) == 1 and set(restored.scenes) == {'8'}
     item = restored.sample(64, np.random.default_rng(1))[0]
     assert item.privileged.scene_id == '8' and not item.observation.features.flags.writeable
-    tiny = ReplayBuffer.from_snapshot(limited.snapshot(512), max_bytes=budget)
+    tiny = ReplayBuffer.from_snapshot(limited.snapshot(4096), max_bytes=budget)
     assert len(tiny) == 0 and not tiny.scenes
     with pytest.raises(ValueError, match='exceed'): ReplayBuffer(1).add(transition(), {'s':scene()})
 
@@ -436,7 +436,7 @@ def test_saturated_credit_requires_saved_sample_and_failure_keeps_last_checkpoin
     assert schedule.credit==32 and not schedule.can_dispatch()
     assert (tmp_path/'resume.pt').read_bytes()==original
     # A published or manually corrupted payload must not bypass the capture guard.
-    bad=TrainingState(dict(valid.record,replay=ReplayBuffer(1000000).snapshot(512)))
+    bad=TrainingState(dict(valid.record,replay=ReplayBuffer(1000000).snapshot(4096)))
     with pytest.raises(ValueError,match='sample'): manager.save(bad)
     assert (tmp_path/'resume.pt').read_bytes()==original
     target=SACLearner(config.model,config.learning)
@@ -475,7 +475,7 @@ def test_one_entry_budget_releases_old_table_capacity_and_preserves_newest():
     assert replay.bytes_used==0 and replay.scene_refcounts=={}
 
 
-def test_save_load_inspect_only_envelope_restore_materializes_contracts_once(tmp_path,monkeypatch):
+def test_save_load_validate_replay_and_restore_materializes_contracts_once(tmp_path,monkeypatch):
     pytest.importorskip('torch')
     from lunar_drl_exploration.config import TrainingConfig,ModelConfig
     from lunar_drl_exploration.sac import SACLearner
@@ -494,6 +494,7 @@ def test_save_load_inspect_only_envelope_restore_materializes_contracts_once(tmp
         original(self)
     monkeypatch.setattr(DecisionObservation,'__post_init__',observe_materialization)
     manager.save(state); loaded=manager.load(config)
-    assert constructed==[], 'save/load must not reconstruct the full replay just to count samples'
+    assert constructed==[0,1,0,1], 'save/load must validate actual replay meanings before acceptance'
+    constructed.clear()
     restored=loaded.restore(SACLearner(config.model,config.learning),config)
     assert sorted(constructed)==[0,1] and len(restored.replay)==1

@@ -14,6 +14,7 @@ from .config import config_record, resume_semantics
 from .metrics import ResourceLimitError, artifact_bytes, live_hardware
 from .replay import ReplayBuffer, dumps_transport, loads_transport, snapshot_sample_count
 from .schedule import UpdateSchedule
+from .feature_schema import LEARNER_SCHEMA, require_frontier_semantics
 from .artifacts import BudgetWriter as _BudgetWriter, atomic_write, initialize_artifact_root, _safe_path
 
 SCHEMA='bounded_training_v1'
@@ -194,13 +195,21 @@ class TrainingState:
             curriculum=dumps_transport(curriculum),collector_state=copy.deepcopy(collector_state),
             counters=dumps_transport(counters)))
 
-    def validate(self, config=None):
-        from .config import canonical_model_config, canonical_learning_config
+    def validate(self, config=None, *, materialize_replay=False):
+        from .config import (canonical_model_config, canonical_learning_config,
+                             training_config_from_record)
         record=self.record
         if record.get('schema') != SCHEMA: raise ValueError('training checkpoint schema mismatch')
         for key in ('semantics','config','learner','schedule','rng','replay',
                     'curriculum','collector_state','counters'):
             if key not in record: raise ValueError(f'checkpoint missing {key}')
+        # Save/export are equally strict even without a caller-supplied config.
+        if config is None:
+            config = training_config_from_record(record['config'])
+        require_frontier_semantics(record['semantics'])
+        if record['learner'].get('schema') != LEARNER_SCHEMA:
+            raise ValueError('incompatible learner schema')
+        require_frontier_semantics(record['learner'])
         semantics = dict(record['semantics'])
         semantics['model'] = canonical_model_config(semantics['model'])
         semantics['learning'] = canonical_learning_config(semantics['learning'])
@@ -225,6 +234,12 @@ class TrainingState:
                 not isinstance(collector_actor.get('model_config'), dict) or
                 canonical_model_config(collector_actor['model_config']) != semantics['model']):
             raise ValueError('checkpoint collector model config missing or disagrees with semantics')
+        from .runtime import ActorPolicy
+        # Validate collector publication without retaining an extra random Actor.
+        with torch.random.fork_rng(devices=[]):
+            ActorPolicy.from_record(collector_actor)
+        if collector_actor['version'] != record['collector_state']['actor_version']:
+            raise ValueError('checkpoint collector weights/publication version disagree')
         learner_learning = canonical_learning_config(record['learner']['learning_config'])
         recorded_learning = canonical_learning_config(record['config']['learning'])
         for key, value in semantics['learning'].items():
@@ -251,12 +266,14 @@ class TrainingState:
             raise ValueError('checkpoint replay admission count is inconsistent')
         if schedule.can_update and count == 0:
             raise ValueError('checkpoint earned update credit requires a replay sample')
+        # A current envelope cannot conceal legacy or semantically mismatched content.
+        return ReplayBuffer.from_snapshot(record['replay'], config.replay_max_bytes,
+                                          validate_only=not materialize_replay)
 
     def restore(self, learner, config):
-        self.validate(config)
+        replay=self.validate(config, materialize_replay=True)
         record=self.record
         # Parse owned state first; no environment Scene/TerrainGrid regeneration.
-        replay=ReplayBuffer.from_snapshot(record['replay'],config.replay_max_bytes)
         schedule=UpdateSchedule.from_state_dict(record['schedule'])
         # A larger operational credit cap is safe; a smaller one must still cover
         # all saved earned credit (no truncation and no silent credit loss).
@@ -320,9 +337,11 @@ class CheckpointManager:
             local_total_max_bytes=self.total_max_bytes)
 
     def save(self, state):
-        state.validate()
+        if not isinstance(state.record.get('replay'), bytes):
+            raise ValueError('checkpoint replay snapshot bytes are required')
         if len(state.record['replay'])>self.snapshot_max_bytes:
             raise ResourceLimitError('replay snapshot bytes',len(state.record['replay']),self.snapshot_max_bytes)
+        state.validate()
         self._atomic('resume.pt',lambda stream:torch.save(state.record,stream))
         self.last_save=self.clock()
         self.requested_reason=None

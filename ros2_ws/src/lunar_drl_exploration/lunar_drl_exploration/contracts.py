@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 import numpy as np
-from .feature_schema import NODE_FEATURE_DIM
+from .feature_schema import OBSERVATION_SCHEMA, PRIVILEGED_SCHEMA, require_observation_identity
 
 
 def freeze_array(value, *, dtype=None) -> np.ndarray:
@@ -119,7 +119,7 @@ class DecisionObservation:
     goals: np.ndarray
     epoch: str
     revision: int
-    schema: str = "task_graph_v4"
+    schema: str = OBSERVATION_SCHEMA
 
     def __post_init__(self):
         for name, dtype in (("node_ids", np.int64), ("positions", np.float32),
@@ -128,8 +128,7 @@ class DecisionObservation:
                             ("context", np.float32), ("action_nodes", np.int64),
                             ("action_yaws", np.float32), ("goals", np.float64)):
             object.__setattr__(self, name, freeze_array(getattr(self, name), dtype=dtype))
-        if self.features.ndim != 2 or self.features.shape[1] != NODE_FEATURE_DIM:
-            raise ValueError(f"features must contain {NODE_FEATURE_DIM} scalars per graph node")
+        require_observation_identity(self)
         if self.context.shape != (8,):
             raise ValueError("context must contain 8 platform/sensor scalars")
         if self.node_ids.shape != (self.features.shape[0],):
@@ -155,8 +154,11 @@ class PrivilegedActionContext:
     support_indices: np.ndarray
     support_distances: np.ndarray
     removed_frontiers: np.ndarray
+    schema: str = PRIVILEGED_SCHEMA
 
     def __post_init__(self):
+        if self.schema != PRIVILEGED_SCHEMA:
+            raise ValueError("incompatible privileged frontier schema")
         counts = np.asarray(self.removed_frontiers)
         if (counts.size and (counts.dtype.kind not in 'iu' or np.any(counts < 0)
                             or np.any(counts > np.iinfo(np.int64).max))):
@@ -191,8 +193,11 @@ class PrivilegedState:
     scene_id: str
     observed: np.ndarray
     actions: PrivilegedActionContext | None = None
+    schema: str = PRIVILEGED_SCHEMA
 
     def __post_init__(self):
+        if self.schema != PRIVILEGED_SCHEMA:
+            raise ValueError("incompatible privileged frontier schema")
         object.__setattr__(self, "observed", freeze_array(self.observed, dtype=np.uint8))
 
 

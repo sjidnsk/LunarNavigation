@@ -26,7 +26,7 @@ def collector_main(pipe, config_record, initial_state, *, domain_base=210,
                    env_factory='lunar_drl_exploration.ros_env:RosExplorationEnv',
                    recovery_limit=3, worker_timeout_s=180., stop_timeout_s=10.):
     from .worker import numerical_threads, worker_main
-    from .ipc import Duplex
+    from .ipc import Duplex, load_actor_publication
     wake = threading.Event()
     numerical_threads(config_record['collector_threads'])
     # The learner owns the STOP/ACK/checkpoint barrier. Process-group signals
@@ -34,15 +34,13 @@ def collector_main(pipe, config_record, initial_state, *, domain_base=210,
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, signal.SIG_IGN)
     import torch
-    from .config import ModelConfig
-    from .model import Actor
     from .replay import loads_transport
     torch.set_num_threads(config_record['collector_threads'])
     torch.set_num_interop_threads(1)
     state = pickle.loads(initial_state)
-    actor_record = state['actor_record']
-    actor = Actor(ModelConfig(**actor_record['model_config'])).eval()
-    actor.load_state_dict(actor_record['state_dict'])
+    actor_record, actor = load_actor_publication(pickle.dumps(state['actor_record'], protocol=5))
+    if state['actor_version'] != actor_record['version']:
+        raise ValueError('collector weights/publication version disagree')
     generator = torch.Generator(device='cpu')
     generator.set_state(state['policy_rng'])
     sequences = dict(state.get('sequences', {}))
@@ -132,8 +130,10 @@ def collector_main(pipe, config_record, initial_state, *, domain_base=210,
                 elif kind == 'RESUME':
                     paused = frozen = False
                 elif kind == 'PUBLISH':
-                    actor_record = pickle.loads(command['payload'])
-                    actor.load_state_dict(actor_record['state_dict'])
+                    publication, replacement = load_actor_publication(command['payload'])
+                    if replacement.config != actor.config:
+                        raise ValueError('collector publication model config differs')
+                    actor_record, actor = publication, replacement
                     emit('PUBLISHED', version=actor_record['version'])
                 elif kind in ('RESET', 'GRANT', 'ACK'):
                     env_id = command['env']; slot = slots[env_id]

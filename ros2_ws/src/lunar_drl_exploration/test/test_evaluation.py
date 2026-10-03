@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 import numpy as np
 import pytest
+from lunar_drl_exploration.feature_schema import frontier_semantics
 
 torch = pytest.importorskip('torch')
 from lunar_drl_exploration.config import TrainingConfig
@@ -32,7 +33,7 @@ def test_frozen_evaluation_json_keeps_reference_areas_and_failure_measurements(t
     actor = Actor(config.model)
     weights = {key: value.clone() for key, value in actor.state_dict().items()}
     artifact = tmp_path / 'actor.pt'
-    torch.save(dict(schema='task_graph_v3', model_config=asdict(config.model),
+    torch.save(dict(schema='task_graph_v4', frontier_semantics=frontier_semantics(), model_config=asdict(config.model),
                     version=17, state_dict=weights), artifact)
     actions = []
 

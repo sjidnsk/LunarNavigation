@@ -150,3 +150,34 @@ bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest ros2_ws/s
 原生有效观测oracle、非有限/UNKNOWN、有效BLOCKED需求、中心重分类、负/分数原点及±1e-16、区外站位、只归一化一次、隐藏真值与Actor隔离、整段冻结/ACK/一次完成奖金均有测试。外部日志 `/home/kai/.cache/lunar-drl-task-frontier/task-4/`：red.log、green-first.log、focused-first.log、focused.log、focused-final.log、full-suite.log、imports.log。UTF-8读取及git diff --check通过。
 
 导入确认当前专项源码、专项Jazzy native/generated messages和既有venv。旧overlay/checkpoint/replay未修改。正式训练、冻结评测、真实ROS闭环、Humble、Orin、DDS部署和实车：NOT_RUN。发布及resume元数据仍待Task5，不能用此中间提交混用旧checkpoint。没有合并、推送或PR；等待控制器独立审查。
+
+## Task 5：训练、经验、发布、导出和恢复的统一语义身份
+
+起点 `432554c8e31b8efc590973d81d6aca874c34539f`。`feature_schema.py` 提供 `task_graph_v4`、`candidate_frontier_truth_v2`、`candidate_graph_sac_v3` 与完整 `FRONTIER_SEMANTICS`，记录FREE中心/8邻域同域未知需求、边界归属任务内、中心与ANY同域需求的8方向原生FOV、ALL冻结同域需求有效观测且旧前沿消失/中心仍FREE、整段距离及绝对转角、内外输入各/100、奖励与Critic消除/50、原始整数单位和奖励公式。外层 `bounded_training_v1` 保留；内部身份必须全部匹配。
+
+控制器补充的 `contracts.py` 变更将DecisionObservation默认/检查绑定统一常量；同27维错标签在构造、transport、replay与runtime均拒绝。PrivilegedState/ActionContext具有显式v2标签，transport禁止缺标签静默套新默认；旧面积字段不能解码成原始消除计数。Actor和learner快照、collector初始及PUBLISH、runtime与export共享完整身份验证。PUBLISH先验证/构造replacement再替换；export先验证后原子写文件。旧19维、仅维度相同但奖励/尺度错误、旧replay envelope、checkpoint内部及replay内部不一致均有保留有效目标bytes的回归。
+
+`TrainingState.validate()` 无显式config时也从保存配置重建预期身份，因此save/export不能绕过旧语义拒绝。`LDRLRP3` envelope与 `bounded_replay_v2` 携带语义；保存/加载验证实际payload，并逐条admission/evict，避免额外全量ledger；restore将同一次验证构建的replay直接复用。校验保留Python/Torch RNG，不从旧source初始化或修改旧artifact。真实一个split-SAC update后的五网络、五Adam、双温度、schedule/replay、Python/NumPy/Torch/采样/课程/collector RNG、计数和课程逐项完全一致；导出概率与learner Actor零误差。
+
+### RED / GREEN及最终证据
+
+初始新增identity文件执行 `15 failed, 2 passed in 4.51s`：缺三schema及FRONTIER_SEMANTICS、v3发布、同形错标签未拒绝、无config的save校验接受错误内层语义。实现后初版 `17 passed in 4.68s`；补充内部replay错误奖励/privileged及真实fresh runner边界后，新文件为20项。
+
+```bash
+bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest -q ros2_ws/src/lunar_drl_exploration/test/test_frontier_identity.py
+bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest -q ros2_ws/src/lunar_drl_exploration/test
+```
+
+一次全包输出 `704 passed, 3 failed, 2 skipped in 133.12s (0:02:13)`；三失败均为fork测试旧错误信息正则要求 `learning config`/`model config`，新无config校验已正确更早拒绝并报 `incompatible full resume semantics: learning/model`。仅更新这两文件的错误信息断言，生产源码未因这三失败更改；随后按受影响范围运行全部指定文件及这两文件：
+
+```bash
+bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest -q ros2_ws/src/lunar_drl_exploration/test/test_frontier_identity.py ros2_ws/src/lunar_drl_exploration/test/test_replay_checkpoint.py ros2_ws/src/lunar_drl_exploration/test/test_runtime.py ros2_ws/src/lunar_drl_exploration/test/test_training_identity.py ros2_ws/src/lunar_drl_exploration/test/test_collector.py ros2_ws/src/lunar_drl_exploration/test/test_sac.py ros2_ws/src/lunar_drl_exploration/test/test_evaluation.py ros2_ws/src/lunar_drl_exploration/test/test_multistep_fork.py ros2_ws/src/lunar_drl_exploration/test/test_training_fork.py
+```
+
+最终 `151 passed in 62.73s (0:01:02)`，退出0，无警告。自审补齐save预算前置检查的replay bytes类型错误后，新identity及replay_checkpoint再覆盖 `37 passed in 7.88s`，退出0。`compileall`、逐文件UTF-8读取与 `git diff --check` 通过。完整包不是全绿声明；上述151与37是最后变更的覆盖证据，两skip仍是未启用的实际ROS动作闭环参数。
+
+外部证据：`/home/kai/.cache/lunar-drl-task-frontier/task-5-{red,green,affected,affected-final,focused-final,package,final,selfreview-final,imports,memory-example}.txt`。导入证据：本专项源码、`ROS_DISTRO=jazzy`、指定venv、专项Jazzy build native与install的lunar_planning_msgs。所有训练/评估调用都是既有ControlledEnv或合成测试fixture，不是正式场景训练或冻结评测；未创建子代理、合并、推送或PR，旧overlay/26856/source checkpoint/replay保留。
+
+### 内存及验证边界
+
+严格payload校验必须短暂持有解码record和不可变数值backing；save-only不保留完整新ledger并在返回时释放。序列化snapshot字节上限不等于RSS/PSS上限：合成1条样本实测serialized为5239字节，完整decode replay ledger计费43778字节（这不是RSS测量）；validate-only返回None。现有ResourceMonitor在训练循环采样，不对save内瞬时allocation单独预留，原子文件总输出预算仍执行。依控制器范围不新增内存预留框架；Task8实际smoke仍须测save/resume峰值。正式训练/冻结评测、真实ROS闭环、Humble、Orin、DDS部署、传感器及实车均NOT_RUN。状态：实现完成，等待控制器独立审查。

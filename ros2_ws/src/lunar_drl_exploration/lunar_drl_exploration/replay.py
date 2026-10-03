@@ -9,6 +9,8 @@ from types import MappingProxyType
 
 import numpy as np
 from .metrics import ResourceLimitError
+from .feature_schema import (PRIVILEGED_SCHEMA, frontier_semantics,
+                             require_frontier_semantics, require_observation_identity)
 from .contracts import (DecisionObservation, PrivilegedScene, PrivilegedState, PrivilegedActionContext,
                         Transition, RewardParts, Pose, TaskSpec, SensorSpec)
 
@@ -16,7 +18,7 @@ _TYPES = {cls.__name__: cls for cls in (DecisionObservation, PrivilegedScene,
           PrivilegedState, PrivilegedActionContext, Transition, RewardParts, Pose, TaskSpec, SensorSpec)}
 
 
-_SNAPSHOT_MAGIC = b'LDRLRP2\0'
+_SNAPSHOT_MAGIC = b'LDRLRP3\0'
 _SNAPSHOT_HEADER_BYTES = len(_SNAPSHOT_MAGIC) + 8
 
 
@@ -85,7 +87,8 @@ def dumps_transport(value, *, _prefix=b''):
         return ('ref', index)
 
     root = encode(value)
-    record = dict(schema='immutable_transport_v1', root=root, nodes=nodes)
+    record = dict(schema='immutable_transport_v1', frontier_semantics=frontier_semantics(),
+                  root=root, nodes=nodes)
     if not _prefix:
         return pickle.dumps(record, protocol=5)
     # One output stream: adding the fixed replay envelope never concatenates a
@@ -101,6 +104,7 @@ def loads_transport(payload):
     record = pickle.loads(payload)
     if record.get('schema') != 'immutable_transport_v1':
         raise ValueError('transport schema mismatch')
+    require_frontier_semantics(record)
     memo = {}
 
     def decode(ref):
@@ -123,7 +127,12 @@ def loads_transport(payload):
             if cls is None:
                 raise ValueError('unknown transport contract')
             kwargs = {k: decode(v) for k, v in node[2].items()}
-            result = cls(**kwargs)  # Run normal contract validation.
+            if cls in (DecisionObservation, PrivilegedState, PrivilegedActionContext) and 'schema' not in kwargs:
+                raise ValueError('transport contract schema is required')
+            try:
+                result = cls(**kwargs)  # Run normal contract validation.
+            except TypeError as error:
+                raise ValueError('incompatible transport contract fields') from error
             # Validation copies arrays; restore already immutable decoded views to
             # retain graph and packed-mask sharing across adjacent transitions.
             for key, item in kwargs.items():
@@ -263,6 +272,12 @@ class ReplayBuffer:
     def add(self, transition, scenes):
         if not isinstance(transition, Transition):
             raise TypeError('only finished Transition records enter replay')
+        for obs in (transition.observation, transition.next_observation):
+            require_observation_identity(obs)
+        for state in (transition.privileged, transition.next_privileged):
+            if state.schema != PRIVILEGED_SCHEMA or (state.actions is not None and
+                    state.actions.schema != PRIVILEGED_SCHEMA):
+                raise ValueError('incompatible privileged frontier schema')
         if (transition.step_index is not None and
                 (transition.episode_id, transition.step_index) in self._sequence_index):
             raise ValueError('duplicate episode step in replay')
@@ -417,7 +432,8 @@ class ReplayBuffer:
                 raise ResourceLimitError(
                     f'replay snapshot requires a complete sample within {max_bytes} bytes', 0, 1)
             prefix = _SNAPSHOT_MAGIC + len(selected).to_bytes(8, 'little')
-            payload = dumps_transport(dict(schema='bounded_replay_v1',
+            payload = dumps_transport(dict(schema='bounded_replay_v2',
+                frontier_semantics=frontier_semantics(),
                 transitions=[entry[0] for entry in selected._entries.values()],
                 scenes=dict(selected._scenes)), _prefix=prefix)
             if len(payload) <= max_bytes: return payload
@@ -425,15 +441,27 @@ class ReplayBuffer:
             selected.evict_oldest()
 
     @classmethod
-    def from_snapshot(cls, payload, max_bytes=8 * 1024**3):
+    def from_snapshot(cls, payload, max_bytes=8 * 1024**3, *, validate_only=False):
         count = snapshot_sample_count(payload)
         # memoryview removes the envelope without copying the complete bytes.
         record = loads_transport(memoryview(payload)[_SNAPSHOT_HEADER_BYTES:])
-        if not isinstance(record, dict) or record.get('schema') != 'bounded_replay_v1':
+        if not isinstance(record, dict) or record.get('schema') != 'bounded_replay_v2':
             raise ValueError('replay schema mismatch')
+        require_frontier_semantics(record)
         if not isinstance(record.get('transitions'), list) or len(record['transitions']) != count:
             raise ValueError('replay sample count disagrees with envelope')
         result = cls(max_bytes)
+        steps = set()
         for transition in record['transitions']:
+            if transition.step_index is not None:
+                key = (transition.episode_id, transition.step_index)
+                if key in steps:
+                    raise ValueError('duplicate episode step in replay snapshot')
+                steps.add(key)
             result.add(transition, record['scenes'])
-        return result
+            if validate_only:
+                # Decode must inspect all contracts, but save/load acceptance needs
+                # only one admission ledger at a time. Retain the actual replay only
+                # on restore; decoded record objects are released at function exit.
+                result.evict_oldest()
+        return None if validate_only else result
