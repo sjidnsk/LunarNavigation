@@ -13,6 +13,8 @@ import math
 import os
 from pathlib import Path
 import signal
+import select
+import stat
 import subprocess
 import time
 import uuid
@@ -24,6 +26,7 @@ LEGACY = Path('/home/kai/CodexDownloads/lunar_navigation/drl-26856-continuation-
 OLD_WRAPPER = Path('/home/kai/CodexDownloads/lunar_navigation/drl-small-recovery-20260926/evaluation/phase12_python')
 OLD_CHECKPOINT = Path('/home/kai/CodexDownloads/lunar_navigation/drl-small-recovery-20260926/entropy-extended-split/resume.pt')
 OLD_ACTOR_SHA = 'ab2f144f1f201b2abe189e06bcca8ca3c644d936d1d22668c4b8623b2bfc2278'
+STARTUP_TIMEOUT = 30.0
 CASE_KEYS = ('case_index', 'family', 'seed', 'extent_m', 'budget')
 PAIR_KEYS = ('terrain_id', 'reference_id', 'pairing_digest')
 
@@ -128,11 +131,22 @@ def identity(root):
 
 
 @contextmanager
-def root_lock(root):
+def root_lock(root, inherited_fd=None):
+    """Close our descriptor only: an inherited child retains the same flock.
+
+    LOCK_UN here would unlock the shared open-file-description in BOTH processes.
+    """
     identity(root)
-    with (Path(root)/'.controller.lock').open('a') as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield
+    path=Path(root)/'.controller.lock'
+    descriptor=(os.open(path,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW,0o600)
+                if inherited_fd is None else inherited_fd)
+    try:
+        actual=os.fstat(descriptor);expected=path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(actual.st_mode) or (actual.st_dev,actual.st_ino)!=(expected.st_dev,expected.st_ino):
+            raise RuntimeError('inherited controller lock identity mismatch')
+        fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        yield descriptor
+    finally:os.close(descriptor)
 
 
 def process_matches(manifest):
@@ -146,6 +160,74 @@ def process_matches(manifest):
             str(manifest.get('root', '')).encode() in args and
             str(manifest.get('run_id', '')).encode() in args and
             started == manifest.get('process_start'))
+
+
+def startup_identity_matches(ready,process,root,owned,token):
+    expected=dict(pid=process.pid,root=str(root),run_id=owned['run_id'],startup_token=token,
+                  ready=True,lock_owned=True)
+    if any(ready.get(key)!=value for key,value in expected.items()) or not process_matches(ready):return False
+    try:
+        lock=Path(root)/'.controller.lock'
+        held=os.stat(f"/proc/{process.pid}/fd/{ready['lock_fd']}")
+        target=lock.stat(follow_symlinks=False)
+        manifest=read(Path(root)/'manifest.json')
+    except (OSError,ValueError,KeyError):return False
+    fields=(*expected,'process_start','lock_fd','lock_device','lock_inode')
+    return (stat.S_ISREG(held.st_mode) and
+            (held.st_dev,held.st_ino)==(target.st_dev,target.st_ino)==(ready.get('lock_device'),ready.get('lock_inode'))
+            and all(manifest.get(key)==ready.get(key) for key in fields))
+
+
+def wait_startup(process,reader,root,owned,token):
+    deadline=time.monotonic()+STARTUP_TIMEOUT;payload=bytearray()
+    while True:
+        code=process.poll()
+        if code is not None:raise RuntimeError(f'controller exited {code} before startup confirmation; inspect controller.log')
+        remaining=deadline-time.monotonic()
+        if remaining<=0:raise RuntimeError('controller startup timed out; inspect controller.log')
+        if not select.select([reader],[],[],min(.1,remaining))[0]:continue
+        chunk=os.read(reader,16384)
+        if not chunk:
+            try:code=process.wait(timeout=min(.1,max(.001,deadline-time.monotonic())))
+            except subprocess.TimeoutExpired:code=process.poll()
+            raise RuntimeError(f'controller exited {code} / closed readiness pipe before startup confirmation')
+        payload.extend(chunk)
+        if len(payload)>16384:raise RuntimeError('controller startup identity message exceeds bound')
+        if b'\n' not in payload:continue
+        try:ready=json.loads(payload)
+        except ValueError as error:raise RuntimeError('controller startup identity is invalid JSON') from error
+        if process.poll() is not None or not startup_identity_matches(ready,process,root,owned,token):
+            raise RuntimeError('controller startup identity/lock confirmation mismatch')
+        return ready
+
+
+def start_background(root):
+    owned=identity(root);verify_gate(root)
+    token=uuid.uuid4().hex;reader,writer=os.pipe();process=None
+    try:
+        with root_lock(root) as lock_fd:
+            with (Path(root)/'controller.log').open('ab') as log:
+                process=subprocess.Popen(['bash',str(HERE/'run.sh'),'run','--root',str(root),
+                    '--run-id',owned['run_id'],'--lock-fd',str(lock_fd),'--ready-fd',str(writer),
+                    '--startup-token',token],pass_fds=(lock_fd,writer),
+                    start_new_session=True,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT)
+            os.close(writer);writer=None
+            ready=wait_startup(process,reader,root,owned,token)
+        # Parent closed its duplicate; confirm the matching live child retains the lock fd.
+        if process.poll() is not None or not startup_identity_matches(ready,process,root,owned,token):
+            raise RuntimeError('controller exited or lost startup identity during lock handoff')
+        return dict(ready,monitor=f'bash {HERE}/run.sh monitor --root {root}')
+    except BaseException:
+        if process is not None and process.poll() is None:
+            try:os.killpg(process.pid,signal.SIGINT)
+            except ProcessLookupError:pass
+            try:process.wait(timeout=30)
+            except subprocess.TimeoutExpired as error:
+                raise RuntimeError(f'failed startup; controller {process.pid} is still saving/stopping') from error
+        raise
+    finally:
+        os.close(reader)
+        if writer is not None:os.close(writer)
 
 
 def request_stop(root):
@@ -209,6 +291,16 @@ class Controller:
     def record(self, **values):
         self.manifest.update(values, updated_unix=time.time())
         write(self.root/'manifest.json', self.manifest)
+
+    def announce_ready(self,ready_fd,startup_token,lock_fd):
+        if ready_fd is None:return
+        held=os.fstat(lock_fd)
+        self.record(ready=True,startup_token=startup_token,lock_owned=True,lock_fd=lock_fd,
+                    lock_device=held.st_dev,lock_inode=held.st_ino)
+        payload=(json.dumps(self.manifest,ensure_ascii=False,allow_nan=False)+'\n').encode('utf-8')
+        if len(payload)>16384:raise RuntimeError('controller startup identity message exceeds bound')
+        offset=0
+        while offset<len(payload):offset+=os.write(ready_fd,payload[offset:])
 
     def interrupt(self, *_):
         self.stop = True
@@ -305,7 +397,7 @@ class Controller:
         self.record(eval_completed=20, eval_groups=10)
         return result
 
-    def run(self):
+    def run(self,*,ready_fd=None,startup_token=None,lock_fd=None):
         verify_gate(self.root)
         signal.signal(signal.SIGINT, self.interrupt)
         signal.signal(signal.SIGTERM, self.interrupt)
@@ -316,6 +408,7 @@ class Controller:
             self.record()
             self.schedule()
             freeze_cases(LEGACY/'artifacts/baseline-summary.json',self.root/'cases.json')
+            self.announce_ready(ready_fd,startup_token,lock_fd)
             baseline = self.screen('baseline', LEGACY/'artifacts/actor-26856.pt')
             if baseline is None: return
             for stage in range(11):
@@ -387,6 +480,9 @@ def main(argv=None):
     parser.add_argument('--root', type=Path, default=DEFAULT_ROOT)
     parser.add_argument('--config', type=Path, default=REPO/'config/drl_task_frontier.yaml')
     parser.add_argument('--run-id')
+    parser.add_argument('--lock-fd',type=int,help=argparse.SUPPRESS)
+    parser.add_argument('--ready-fd',type=int,help=argparse.SUPPRESS)
+    parser.add_argument('--startup-token',help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     root = args.root.resolve()
     if args.command == 'prepare': print(json.dumps(prepare(root,args.config))); return
@@ -398,15 +494,18 @@ def main(argv=None):
     if args.command == 'stop': return request_stop(root)
     if args.command == 'status': print(json.dumps(read(root/'manifest.json'),ensure_ascii=False,indent=2)); return
     if args.command in ('start','resume'):
-        verify_gate(root)
-        with root_lock(root):
-            with (root/'controller.log').open('ab') as log:
-                process = subprocess.Popen(['bash',str(HERE/'run.sh'),'run','--root',str(root),'--run-id',owned['run_id']],
-                    start_new_session=True,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT)
-        print(json.dumps(dict(pid=process.pid, root=str(root), monitor=f'bash {HERE}/run.sh monitor --root {root}')))
+        print(json.dumps(start_background(root),ensure_ascii=False))
         return
     if args.run_id != owned['run_id']: raise ValueError('controller run identity mismatch')
-    with root_lock(root): Controller(root).run()
+    inherited=(args.lock_fd,args.ready_fd,args.startup_token)
+    if any(value is not None for value in inherited) and any(value is None for value in inherited):
+        raise ValueError('complete inherited startup lock/readiness identity required')
+    try:
+        with root_lock(root,args.lock_fd) as lock_fd:
+            Controller(root).run(ready_fd=args.ready_fd,startup_token=args.startup_token,lock_fd=lock_fd)
+    finally:
+        if args.ready_fd is not None:os.close(args.ready_fd)
+
 
 
 if __name__ == '__main__': main()

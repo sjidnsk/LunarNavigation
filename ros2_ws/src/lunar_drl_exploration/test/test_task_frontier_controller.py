@@ -360,3 +360,96 @@ def test_owned_run_rejects_effective_config_drift(tmp_path):
     c=module('controller');root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
     config=c.read(root/'config.json');config['warmup']=4;c.write(root/'config.json',config)
     with pytest.raises(ValueError,match='config'):c.identity(root)
+
+
+@pytest.fixture
+def startup_fixture(tmp_path,monkeypatch):
+    """Real child entry/locks/pipe; substitute only gate and long-running job body."""
+    import os
+    import select
+    import subprocess
+    import threading
+    c=module('controller');root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
+    monkeypatch.setattr(c,'verify_gate',lambda root:None)
+    children=[];entered=threading.Event();release=threading.Event()
+    options={'mode':'ready','hold_parent':False};real_popen=subprocess.Popen
+    code='''import os,signal,sys
+sys.path.insert(0,sys.argv[1])
+import controller as c
+marker=int(sys.argv[2]);mode=sys.argv[3]
+c.verify_gate=lambda root:None
+if mode=='exit':
+    os.write(marker,b'E');os.close(marker);sys.exit(7)
+def finite_job(self,*,ready_fd=None,startup_token=None,lock_fd=None):
+    signal.signal(signal.SIGINT,lambda *args:sys.exit(0))
+    signal.signal(signal.SIGTERM,lambda *args:sys.exit(0))
+    os.write(marker,b'L');os.close(marker)
+    if mode!='timeout':
+        self.announce_ready(ready_fd,'wrong-token' if mode=='identity' else startup_token,lock_fd)
+    while True:signal.pause()
+c.Controller.run=finite_job
+c.main(sys.argv[5:])
+'''
+    def controlled_popen(command,**kwargs):
+        reader,writer=os.pipe()
+        inherited=tuple(kwargs.pop('pass_fds',()))
+        process=real_popen([*command[:2],'python','-c',code,str(SCRIPTS),str(writer),options['mode'],
+            str(SCRIPTS/'controller.py'),*command[2:]],pass_fds=(*inherited,writer),**kwargs)
+        children.append(process);os.close(writer)
+        try:
+            assert select.select([reader],[],[],10)[0],'child never reached lock or exit'
+            event=os.read(reader,1)
+            # This wait happens INSIDE the parent's execution-lock context.
+            # L proves the inherited child acquired/adopted it before parent release.
+            options['child_event']=event
+            entered.set()
+            if options['hold_parent']:assert release.wait(10),'test did not release launcher'
+        finally:os.close(reader)
+        return process
+    monkeypatch.setattr(c.subprocess,'Popen',controlled_popen)
+    try:yield c,root,children,options,entered,release
+    finally:
+        release.set()
+        for process in children:
+            if process.poll() is None:process.terminate()
+            process.wait(timeout=10)
+
+
+def test_background_entry_hands_owned_lock_to_child_before_parent_release(startup_fixture,capsys):
+    import threading
+    c,root,children,options,entered,release=startup_fixture
+    options['hold_parent']=True;errors=[]
+    def start():
+        try:c.main(['start','--root',str(root)])
+        except Exception as error:errors.append(error)
+    launcher=threading.Thread(target=start);launcher.start()
+    try:
+        assert entered.wait(12)
+        # Another concurrent startup cannot enter while either launcher or child owns it.
+        with pytest.raises(BlockingIOError):c.main(['resume','--root',str(root)])
+    finally:release.set();launcher.join(12)
+    assert not launcher.is_alive() and not errors
+    assert options['child_event']==b'L','child must hold execution lock before launcher releases it'
+    ready=json.loads(capsys.readouterr().out)
+    assert ready['ready'] is True and ready['pid']==children[0].pid
+    assert ready['run_id']==c.identity(root)['run_id'] and ready['root']==str(root)
+    assert c.process_matches(ready)
+    owned=c.identity(root)
+    for key,value in (('pid',ready['pid']+1),('process_start','wrong'),('run_id','wrong'),
+                      ('root',str(root/'other')),('lock_inode',ready['lock_inode']+1)):
+        assert not c.startup_identity_matches(dict(ready,**{key:value}),children[0],root,owned,ready['startup_token'])
+    assert c.read(root/'manifest.json')['startup_token']==ready['startup_token']
+    with pytest.raises(BlockingIOError):
+        with c.root_lock(root):pass
+
+
+@pytest.mark.parametrize('mode,pattern',[('exit','7'),('identity','identity'),('timeout','timed out')])
+def test_background_entry_rejects_early_exit_bad_identity_and_timeout(startup_fixture,capsys,mode,pattern,monkeypatch):
+    c,root,children,options,entered,release=startup_fixture
+    options['mode']=mode
+    monkeypatch.setattr(c,'STARTUP_TIMEOUT',.5,raising=False)
+    with pytest.raises(RuntimeError,match=pattern):c.main(['resume','--root',str(root)])
+    assert not capsys.readouterr().out.strip(),'failed startup must not print successful PID result'
+    assert children[0].poll() is not None
+    # Failed startup leaves no lock-owning orphan and permits a later retry.
+    with c.root_lock(root):pass
