@@ -209,3 +209,8 @@ Task3已实现并自审，等待控制器独立审查；允许独立workspace复
 
 
 文档阶段证据：专项工作树创建后源码未变；源包contracts/maps 14项测试在隔离Jazzy消息overlay下通过。此前未加载ROS消息的7项失败和pytest自动加载launch插件缺少lark的错误均属于环境入口，已使用匹配消息overlay并禁用自动插件后重跑通过；这不是新原生构建或新算法验证。
+
+
+## Task8 原生交付边界补充（2026-10-04）
+
+Task8范围包括scripts/drl/build.sh、build_cache.py、对应build回归；run.sh显式owned DRL_CACHE、controller identity/manifest的runtime_cache绑定与focused fixture；train_live.py仅DRL_SMOKE_TELEMETRY opt-in actuallearner纯读RNG/allocator hook；plot_curves.py单采样marker/title cosmetic。冷symlink/普通六包与真实8环境CUDA中断→零新增清算→精确128/16通过，实际probe outside2/98rows，inside/boundary缺测。完整DRL778/2skip之后cache绑定39focused通过，后续presentation同CSV再渲染，无重复不变全套。实际训练源码为9cdc5a3b；后续仅绘图/文档，训练/native源码hash保持等效。实现与效果验收分开：旧20图严格baseline、warmup1024、十阶段及每阶段20terminal尚NOT_RUN，父控制器最终审阅后直接启动。全体Ruling、公式、配置、实际CLI、provenance与剩余边界见docs/validation/2026-10-04-drl-task-frontier.md。

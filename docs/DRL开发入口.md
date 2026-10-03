@@ -1,6 +1,12 @@
 # 强化学习统一开发入口
 
-当前专项：用户已确认[位置与朝向独立熵对照](validation/2026-09-27-drl-independent-entropy.md)，
+当前专项为`feat/drl-task-frontier`，工作树`/home/kai/WS/lunar-navigation/lunar-runtime/.worktrees/drl-task-frontier`，配置`config/drl_task_frontier.yaml`。实现/本机原生CUDA烟测完成；正式实验等待最终独立审阅门禁后由父控制器直接启动。开发整合线仍为`dev/drl-exploration`，不合并/推送本专项。
+
+新入口与证据见[Task frontier验证](validation/2026-10-04-drl-task-frontier.md)及[操作指令](操作指令.md#task-frontier-20261004)。专项输出`/home/kai/CodexDownloads/lunar_navigation/drl-task-frontier-20261003/`，生产managed与独立task8烟测计数分开；两项Task1 deferred minor（当前入口索引、冷构建native链接）已解决。
+
+以下为历史实验索引，其运行状态和cache不覆盖本轮专项。
+
+历史专项：用户已确认[位置与朝向独立熵对照](validation/2026-09-27-drl-independent-entropy.md)，
 分支`feat/drl-factorized-entropy`，工作树`.worktrees/drl-factorized-entropy`。
 采用原25320完整起点、一步回报及相同预算；默认joint路径和部署决策保持兼容。
 两臂共同使用温度学习率.003，唯一臂间变量为联合/独立熵控制；不能与旧实验直接作因果比较。

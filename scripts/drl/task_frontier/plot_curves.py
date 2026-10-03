@@ -18,8 +18,8 @@ def render(kind,path):
         for ax,keys in zip(axes.flat,groups):
             for key in keys:
                 selected=[r for r in rows if r['metric']==key]
-                ax.plot([float(r['last_update']) for r in selected],[float(r['mean']) for r in selected],label=key)
-            ax.set_title(' / '.join(keys));ax.set_xlabel('updates');ax.legend(fontsize=7)
+                ax.plot([float(r['last_update']) for r in selected],[float(r['mean']) for r in selected],label=key,marker='o')
+            ax.set_title(' / '.join(keys),fontsize=9);ax.set_xlabel('updates');ax.legend(fontsize=7)
     else:
         if kind=='fixed':
             fixed={}

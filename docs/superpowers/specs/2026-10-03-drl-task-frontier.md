@@ -142,3 +142,8 @@ Critic 候选收益标量从真值可见新增平方米改成：在同一冻结�
 - 新模型先通过原生环境短训练、恢复和月表/洞穴烟测，再启动第一完整阶段；任何异常保留日志和检查点。
 
 单元/静态通过不等于模型改善。最终改善判断依赖与26856同图的完成率、覆盖、循环和返回指标；本机Jazzy证据不声明Humble、Orin或实车有效。
+
+
+## Task8 原生交付边界补充（2026-10-04）
+
+Task8范围包括scripts/drl/build.sh、build_cache.py、对应build回归；run.sh显式owned DRL_CACHE、controller identity/manifest的runtime_cache绑定与focused fixture；train_live.py仅DRL_SMOKE_TELEMETRY opt-in actuallearner纯读RNG/allocator hook；plot_curves.py单采样marker/title cosmetic。冷symlink/普通六包与真实8环境CUDA中断→零新增清算→精确128/16通过，实际probe outside2/98rows，inside/boundary缺测。完整DRL778/2skip之后cache绑定39focused通过，后续presentation同CSV再渲染，无重复不变全套。实际训练源码为9cdc5a3b；后续仅绘图/文档，训练/native源码hash保持等效。实现与效果验收分开：旧20图严格baseline、warmup1024、十阶段及每阶段20terminal尚NOT_RUN，父控制器最终审阅后直接启动。全体Ruling、公式、配置、实际CLI、provenance与剩余边界见docs/validation/2026-10-04-drl-task-frontier.md。

@@ -239,3 +239,74 @@ bash scripts/drl/task_frontier/run.sh status
 `prepare`仅创建独占managed产物目录与配置/cases，不启动训练。`start/resume`要求managed下`review-gate.json`的source_commit和config_sha匹配，`native_smoke`及`independent_audit`均为`status=passed`且绑定同commit；仅最终审阅方记录该门禁。运行顺序先严格旧baseline，后warmup及10阶段；训练正式启动权限已经给出。独立监控可在gnome-terminal中打开上述monitor命令；关闭终端不影响后台控制器。Task8小规模真实训练验证可直接经`run.sh python train_live.py train ... --probe --max-transitions ...`调用，设置`DRL_ROOT`和`DRL_RUN_ID`到该smoke专属目录；未冻结probe索引可由`fixed_probes.freeze_index`在验证完成后固定。
 
 Task7最终检查：`git diff --check`、UTF-8逐文件解码、全部专项Python `py_compile`、`bash -n run.sh`通过。实际初始pose在`reset_scene`入参捕获，防止把初始化扫描后pose误标为初始值；该边界由spawn fixture覆盖。owned identity拒绝有效config漂移，运行前重新核对冻结cases原始来源。原`evaluation.py`复用已获父控制器明确裁定，文件保持原实现；其指定回归已包含在最终62通过中。最终真实Jazzy/native/CUDA和旧20图baseline仍须Task8/整分支审阅，未由本结果代替。
+
+
+## Task8 新鲜构建、原生CUDA与交付门槛
+
+`task_graph_v4` 节点27维、动作7维；`candidate_frontier_truth_v2` / `candidate_graph_sac_v3`。FREE中心与未知需求都属于同一任务域才形成该域前沿，边界中心归任务内。一次可见收益命中至少一项同域未知需求；消除要求冻结的全部同域需求被有效观测且旧前沿消失。Actor只读实测地图；内/外8方向原始前沿数量各除100，Critic消除数量除50。奖励为 `removed_in/50 - .02*distance_m/10 - .005*abs_turn_rad/pi - .001 + 5*completed`；out消除仅作诊断，实际面积零收益仍按new_area_m2=0判断。区外站位可以获取任务内收益，零收益通行/绕行/回退保留；成功为无碰撞且reference coverage≥99%，前沿为空不等于成功。
+
+生产从零创建全部SAC/回放/优化器/RNG状态，保留旧26856和旧overlay。配对月表/洞穴50–100m，每回合512决策，训练停滞128步/8站位、正式评测关闭。模型128/8/6、batch64/micro8、Actor/Q学习率1e-5、温度学习率.003、初值5e-5/上限1e-4、位置/朝向目标熵因子各.1、gamma1、polyak.005、return_steps1、position_aux_weight0；8环境/worker1/collector2/learner4线程。
+
+独立warmup1024后十阶段每阶段8192条/2048更新，绝对边界 `T=1024+8192*s, U=2048*s`，stage1=9216/2048、stage10=82944/20480。`C=max(0,T-W)/4-U` 使用Fraction，派发投影≤32且在途≤8；正常终态C=0/在途0/最终Actor ACK。中断保留信用，恢复先偿整数信用；额度已满用`--resume --max-transitions 0`只清算，不采集新转移。完整严格旧20图baseline先行，每阶段20/20 terminal后才比较；评分为完成数、负的长期面积零收益循环失败数、覆盖总和，平分保留先前checkpoint，实际路程另报。
+
+本机Jazzy证据于2026-10-04执行。冷symlink六包50.6s、独立普通install六包50.1s、同cache增量六包1.44s；正式build.sh自动创建owned native链接，来源marker/锁/目录链/参数覆盖不匹配fail closed，未知非空cache不收养。入口保证build.sh，裸colcon与可搬迁deployment bundle不在此修复保证范围。Task1手工cache原样保留，正式命令始终显式选择`/home/kai/.cache/lunar-drl-task-frontier/jazzy-task8-20261004`；managed identity/manifest保存runtime_cache，错prefix启动/恢复拒绝。
+
+DRL完整新overlay测试778 passed/2显式ROS opt-in skipped，256.31s；随后批准的cache绑定小改由39项focused测试通过11.23s覆盖，未重复不变全套。真实`LUNAR_DRL_RUN_ROS=1`两坐标参数2 passed/16.18s；wheel Python150 passed/1.48s；core+navigation colcon test-result378 tests/0errors/0failures/0skips。完整套件在BASE85342859及当时Task8未提交构建/telemetry修改下执行，不能称它在未来HEAD重跑；真实烟测执行源码提交`9cdc5a3bad6a401785d236c990b6230518326dec`，起始dirty为空，执行摘要`78edfb4b5520d74c8e13625c6878fd5d0509b0f428331568581a7df12ca0c68c`。
+
+独立八槽原生CUDA烟测仅把warmup改64/本次累计目标128，场景范围50–100m/每回合512/完整模型/batch64/micro8/线程与生产相同。真实SIGINT后T80/U3/C1/在途0/Actor3；零新增resume实际更新一次到T80/U4/C0/Actor4；恢复+48条精确T128/U16/C0/在途0/Actor16、overshoot0、children closed。wrapper中断130/child0，恢复两次0，forced_stop_stage全0。CPU/CUDA saved→restore RNG哈希逐项相等，保存的collector Actor版本与张量等于learner；最终checkpoint 102900262 bytes，replay snapshot 22294102 bytes。所有worker未import torch，learner CUDA实际16次SAC更新。
+
+0.5s采样同时PSS峰值3.773GiB，最低MemAvailable13.371GiB；learner allocator峰值allocated589.25MiB/reserved1376MiB，driverGPU与allocator分开记录。包括真实learner/collector/8worker、8原生navigation及8wheel controller，plant/sensor运行在worker内。保存/中断/恢复均覆盖，三个监测尾记录owned活进程为空；采样峰值是下界，短命进程/瞬态峰值可能漏测，不能由checkpoint cap推长期RAM保证。
+
+两份实际捕获probe逐字节offline重建、持久hash复核与真实Actor/双Q评分通过，98动作行；实际类别只有outside，inside/boundary明确missing，未补造。capture-disabled/enabled独立正常ROS reset/step均5次observe、同命令goal/knownarea，但完整snapshot/时序/物理轨迹hash不相等，整体对照inconclusive。另在实际正常observe边界核验capture_before/finish的coverage/last-area/history/GraphBuilder状态不变、underlying observe一次、额外poll/sensor consumption0；该纯读证据不能证明不同运行的完整轨迹相等。完整输入/输出相等的早期假设已撤回。learning/fixed/reward/evaluation四类PNG已实际视觉检查；learning单采样不可见minor通过marker与较小标题修复，同CSV重新渲染；evaluation明确NO VERIFIED DATA YET。
+
+原生产baseline、warmup1024、stage1–10与每阶段严格20图效果仍NOT_RUN，启动由父控制器在Task8和整分支独立审阅后执行，无需再次用户批准。Humble/Orin/实车NOT_RUN；本证据不证明探索能力提升、收敛或车辆安全。旧checkpoint/overlay/工作树/回放HTTP服务未修改。
+
+### 复制执行的最终入口
+
+```bash
+cd /home/kai/WS/lunar-navigation/lunar-runtime/.worktrees/drl-task-frontier
+export DRL_CACHE=/home/kai/.cache/lunar-drl-task-frontier/jazzy-task8-20261004
+bash scripts/drl/task_frontier/run.sh prepare
+# 最终独立审阅方填写同HEAD/config_sha的review-gate.json后：
+bash scripts/drl/task_frontier/run.sh start
+gnome-terminal --title='Task frontier monitor' -- bash -lc 'cd /home/kai/WS/lunar-navigation/lunar-runtime/.worktrees/drl-task-frontier && export DRL_CACHE=/home/kai/.cache/lunar-drl-task-frontier/jazzy-task8-20261004 && bash scripts/drl/task_frontier/run.sh monitor'
+bash scripts/drl/task_frontier/run.sh status
+bash scripts/drl/task_frontier/run.sh stop
+bash scripts/drl/task_frontier/run.sh resume
+```
+
+### 完整外部证据
+
+外部根`/home/kai/CodexDownloads/lunar_navigation/drl-task-frontier-20261003/task8/`：build-cold/build-normal/build-incremental/full-drl/native-optin/wheeled-tests/native-ctest/colcon-results.log；imports-cuda.json、runtime-identity.json、native-ldd.log、executed-source.json、runtime-code-equivalence.json；smoke.json与三份*-command.json记录实际CLI/env；actual-sigint.json、interrupt/drain/finish-{run,launch,exit}.json、*-resources.jsonl、smoke-boundaries.json、smoke-audit.json；cuda-smoke/{allocator-rng.jsonl,run,curves,fixed-probes}。独立smoke-driver.py及audit_smoke.py可复查原始数据，禁止将其计数记为正式阶段。
+
+### 已批准实现裁定与剩余边界
+
+Ruling: Task 2 will retain/reindex K across integer origin translations on the same epoch/resolution/lattice and preserve task-area count, resetting only on true identity changes; add coverage.py and focused origin-shift regressions to Task 2 — required to prevent re-created unknown demands after map movement — cost if wrong is misregistered observation history/coverage, addressed by equivalence fixtures and legacy coverage regressions.
+
+Ruling: Task 6 will add CLI/API support for --resume --max-transitions 0 as a drain-only resume, reject negative budgets and fresh zero-budget runs, and include cli.py/tests in its task scope — Task 7 requires recovery when admissions are already at target but update credit remains; current positive-only validation cannot express that — cost if wrong is an empty run falsely accepted or incorrect recovery boundary, tested by CLI and no-new-admission drain fixtures.
+
+Ruling: Task8 scope also includes scripts/drl/build.sh and a focused build-cache/source-identity regression if needed to make the documented clean symlink build reproducible — Task1 workaround and readonly colcon audit show native extension sources are absent from symlink build cache — cost if wrong is stale/cross-worktree native code or broken packaging, mitigated by fail-closed source identity and a fresh dedicated-cache build.
+
+Ruling: Task3 scope also fills measured_workspace coverage=None stable lattice_origin/current offset via shared geometry helper, and adds +/-1e-16 independent GraphBuilder/frontier visibility regressions — build_frontiers and directional_frontier_counts must share the same frame even without cumulative CoverageHistory — cost if wrong is one-cell demand visibility misregistration, mitigated by independent coordinate-boundary tests; coverage/reference identity branch stays unchanged.
+
+Ruling: Task5 also modifies contracts.py to bind DecisionObservation construction/validation to canonical feature_schema observation identity — its current v4 default is hardcoded and schema argument is not validated, so loader-only checks leave a same-shape wrong-schema gap — cost if wrong is in-memory or transported observations accepted under mismatched meaning, mitigated by same27D wrong-tag constructor/transport/runtime tests. Exact affected fixtures may migrate; no unrelated API expansion.
+
+Ruling: Task5 validates decoded replay contracts/admissions without a second full ReplayBuffer ledger; restore may construct/reuse actual replay, and no new allocation-reservation framework is added — envelope-only validation cannot reject internal wrong semantics, while duplicate full ledger adds avoidable transient memory — cost if wrong is save-time RSS/PSS pressure beyond serialized snapshot budget; report this boundary, release validation-only structures promptly, use bounded formal snapshot/system reserve, and measure native save/resume memory in Task8.
+
+Ruling: Task6 reuses schedule.py Fraction/reservation API if sufficient, amending planned file-list wording rather than adding artificial scheduler edits — existing exact arithmetic supports the new state-machine control — cost if wrong is omitted scheduler defect, mitigated by scaled exact stages, fractional/1/32 debt and all-slot projected-credit tests; genuine schedule defects stay authorized.
+
+Ruling: Task7 adds scripts/drl/task_frontier/fixed_probes.py, eval_case.py and train_live.py within the same owned script directory to separate measured capture/rebuild, single-case legacy/new evaluation provenance, and training telemetry from controller/curves — these responsibilities are already required by the spec and readiness evidence, not new functionality — cost if wrong is additional module/entry-point maintenance and interface drift; mitigate with explicit script entry points, shared semantic/cache contracts and focused integration tests.
+
+Ruling: Task7 reuses unchanged P/evaluation.py while eval_case.py supplies task-domain telemetry and strict runtime/case provenance — existing evaluator already uses actual new_area_m2 for zero-area loops, terminated+99%+collision-free success and training=False stagnation behavior, so new adapter covers the added responsibilities without artificial file edits — cost if wrong is adapter/evaluator contract drift or missed completion/area behavior; mitigate existing evaluation/stagnation regressions and adapter case-cache/screen/spawn integration tests, followed by real Task8 native proof. Task7 filelist and review brief amended accordingly.
+
+Ruling: Task8 preserves the unmarked Task1 canonical jazzy cache and builds in a fresh owned jazzy-task8-* sibling; scripts/drl/task_frontier/run.sh may accept explicit DRL_CACHE (default unchanged) only with matching cache/source identity, and final commands select the proven clean cache — moving/replacing the canonical prefix would disturb preserved build artifacts and absolute install paths — cost if wrong is launching a stale/wrong overlay or requiring explicit cache selection on restart; mitigate fail-closed identity/import/native-hash validation and consistent documented start/resume/monitor cache selection. Legacy phase12_python sources fixed old prefixes and remains unchanged.
+
+Ruling: Task8 adds opt-in DRL_SMOKE_TELEMETRY wrappers in train_live.py around the actual learner init/update and checkpoint restore/save solely to record CPU/CUDA RNG hashes and allocated/reserved/peak memory, resetting allocator peaks once before model creation — external nvidia-smi cannot measure the learner allocator and existing status lacks peak_reserved/restore RNG evidence — cost if wrong is diagnostic hooks perturbing RNG or normal runtime/error behavior; mitigate disabled-by-default scope, unchanged original call/return/state flow, read-only RNG hashing, focused hook transparency checks and actual smoke proof. No training algorithm/parameter changes.
+
+Ruling: Task8 binds normalized selected DRL_CACHE as runtime_cache in managed controller identity/manifest and rejects start/resume under another prefix, extending controller.py plus focused lifecycle fixtures — explicit cache selection must persist with the run rather than depend on shell memory or an unvalidated side note — cost if wrong is refusing a valid cache relocation/rebuild or selecting a stale runtime; mitigate canonical path/source identity validation, exact selected-prefix import evidence and focused same-cache/mismatch lifecycle tests. Existing unmanaged legacy records are preserved; no migration or silent rebind.
+
+Ruling: Task8 capture side-effect acceptance uses the matched actual first normal-observe boundary plus before/after core coverage/history/GraphBuilder state and exactly-one underlying observe/no-extra-poll-event assertions, while reporting whole physical reset/step trajectory comparison inconclusive — separate ROS runs already diverge in motion/yaw/sensor frame timing during initialization, so whole-run bitwise equality cannot isolate capture effects — cost if wrong is a timing-dependent capture effect beyond the measured boundary remaining undetected; preserve divergent artifacts, compare identical observed input/output and area baselines, do not alter physics/timing/learning configuration or claim whole-trajectory equivalence.
+
+Ruling: Amendment to Task8 capture comparison — complete first-snapshot hashes also differ across independent ROS runs, so do not accept or report fully matched input/output snapshots; accept only actual single-boundary read-only pre/post core-state equality, exactly-one underlying observe and zero extra poll/sensor-consumption calls, with matching measured pose/tiles/goals/features/history reported as partial correspondence — cost if wrong is unmeasured timing/metadata effects outside the single boundary; explicitly preserve whole-run and full-hash inconclusive results and forbid broader determinism claims. This supersedes the earlier assumption of fully matched first snapshot, not the no-extra-observe requirement.
+
+Task1 deferred minors已解决：活动入口改为本frontier专项；冷构建链接由build.sh自动核验创建。Task8绘图单采样minor已解决。纯读capture核验仍不排除跨真实ROS时序的性能影响；完整物理轨迹比较不作为相等证据。长期10阶段稳定性/完整baseline效果与实车边界保持NOT_RUN。

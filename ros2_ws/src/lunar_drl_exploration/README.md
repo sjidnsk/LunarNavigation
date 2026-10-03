@@ -876,3 +876,14 @@ claim of learned generalization. `infer` only attaches the existing observed
 `InferenceRuntime`; it does not spawn navigation/control or import scenes,
 reference builders or SAC. Native/environment dependencies remain needed for
 training/evaluation; inference still requires the measured native map contract.
+
+
+## 2026-10-04 task frontier专项
+
+`task_graph_v4` 节点27维、动作7维；`candidate_frontier_truth_v2` / `candidate_graph_sac_v3`。FREE中心与未知需求都属于同一任务域才形成该域前沿，边界中心归任务内。一次可见收益命中至少一项同域未知需求；消除要求冻结的全部同域需求被有效观测且旧前沿消失。Actor只读实测地图；内/外8方向原始前沿数量各除100，Critic消除数量除50。奖励为 `removed_in/50 - .02*distance_m/10 - .005*abs_turn_rad/pi - .001 + 5*completed`；out消除仅作诊断，实际面积零收益仍按new_area_m2=0判断。区外站位可以获取任务内收益，零收益通行/绕行/回退保留；成功为无碰撞且reference coverage≥99%，前沿为空不等于成功。
+
+生产从零创建全部SAC/回放/优化器/RNG状态，保留旧26856和旧overlay。配对月表/洞穴50–100m，每回合512决策，训练停滞128步/8站位、正式评测关闭。模型128/8/6、batch64/micro8、Actor/Q学习率1e-5、温度学习率.003、初值5e-5/上限1e-4、位置/朝向目标熵因子各.1、gamma1、polyak.005、return_steps1、position_aux_weight0；8环境/worker1/collector2/learner4线程。
+
+独立warmup1024后十阶段每阶段8192条/2048更新，绝对边界 `T=1024+8192*s, U=2048*s`，stage1=9216/2048、stage10=82944/20480。`C=max(0,T-W)/4-U` 使用Fraction，派发投影≤32且在途≤8；正常终态C=0/在途0/最终Actor ACK。中断保留信用，恢复先偿整数信用；额度已满用`--resume --max-transitions 0`只清算，不采集新转移。完整严格旧20图baseline先行，每阶段20/20 terminal后才比较；评分为完成数、负的长期面积零收益循环失败数、覆盖总和，平分保留先前checkpoint，实际路程另报。
+
+正式入口`config/drl_task_frontier.yaml`与`scripts/drl/task_frontier/run.sh`（prepare/start/monitor/stop/resume/status）。构建使用scripts/drl/build.sh及owned外部cache；new/legacy输入语义不可普通resume混用。Task8本机native CUDA精确128/16烟测通过，不代表正式9216/2048或训练效果。实际两outside probe缺inside/boundary；Humble/Orin/实车NOT_RUN。具体copyable命令/资源/provenance见`docs/validation/2026-10-04-drl-task-frontier.md`。
