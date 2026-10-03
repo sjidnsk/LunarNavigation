@@ -1,6 +1,9 @@
 """Single learner owner of replay, exact update credit and continuation state."""
 
 
+FINAL_CONFIRM_TIMEOUT_S = 12.
+
+
 def within_admission_budget(admitted, inflight, *, baseline, maximum):
     """Reserve room for already granted actions before starting another one."""
     return maximum is None or admitted - baseline + inflight < maximum
@@ -175,7 +178,9 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
 
     The only replay/optimizer owner is this process. Periodic saves ACK-drain at
     a completed update boundary; unfinished goals are retained live until resume
-    of dispatch. A restored run deliberately creates new environment episodes.
+    of dispatch. A restored run repays saved integral credit before dispatching
+    new work; resume with a zero budget only drains that credit. Fractional
+    credit is retained. Finite runs confirm the final Actor before stopping.
     """
     import multiprocessing as mp
     import os
@@ -203,8 +208,8 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     if fork_experiment is not None and (fork_from is None or resume):
         raise ValueError('fork experiment requires an explicit new fork')
     if config.seed < 0: raise ValueError('training seed must be nonnegative')
-    if max_transitions is not None and max_transitions <= 0:
-        raise ValueError('max_transitions must be positive')
+    if max_transitions is not None and (max_transitions < 0 or (max_transitions == 0 and not resume)):
+        raise ValueError('max_transitions must be positive, or zero with resume for credit drain')
     if not 0 <= domain_base <= 233 - config.environments:
         raise ValueError('isolated worker DDS domains must be within 0..232')
     if config.model.width != 128 or config.model.heads != 8 or config.model.layers != 6:
@@ -296,9 +301,14 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     episode_ids = []
     barrier_pending = False
     stopping = False
+    normal_draining = max_transitions == 0
+    repay_before_dispatch = schedule.can_update
+    final_phase = None
+    final_version = None
+    final_deadline = None
+    terminal_saved = False
     stopped = False
     exit_drain_deadline = None
-    failure = None
     stop_reason = None
     last_metrics = started
     last_summary = started
@@ -344,14 +354,26 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             updates=schedule.updates, actor_version=collector_state['actor_version'],
             unfinished_reservations=schedule.inflight, path=str(path)))
 
+    def final_command(kind):
+        nonlocal final_phase, final_deadline, final_version
+        final_phase = {'PUBLISH': 'PUBLISHED', 'BARRIER': 'BARRIER', 'STOP': 'STOPPED'}[kind]
+        final_deadline = time.monotonic() + FINAL_CONFIRM_TIMEOUT_S
+        message = dict(kind=kind)
+        if kind == 'PUBLISH':
+            final_version = learner.updates
+            message['payload'] = pickle.dumps(learner.actor_state(), protocol=5)
+        connection.send(message)
+
     def stop(reason):
         nonlocal stopping, stop_reason
-        if stop_reason is None: stop_reason = reason
+        if stop_reason is None or normal_draining: stop_reason = reason
         manager.request_save(reason, stop=True)
-        if not stopping:
-            stopping = True
-            pending_requests.clear()
-            connection.send(dict(kind='STOP'))
+        stopping = True
+        pending_requests.clear()
+        # Complete updates are atomic; preserve all remaining earned credit.
+        # Keep the collector alive until it confirms this final Actor.
+        if final_phase is None:
+            final_command('PUBLISH')
 
     def record_run():
         owned = [os.getpid(), process.pid] + [pid for pids in env_owners.values() for pid in pids]
@@ -386,13 +408,17 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                 config.actor_publish_updates)
         record_run()
         while not stopped:
+            if manager.stop_requested and not stopping:
+                stop(manager.requested_reason or 'stop requested')
+            if final_deadline is not None and time.monotonic() >= final_deadline:
+                raise RuntimeError(f'collector final {final_phase} confirmation timed out')
             if connection.poll(.01):
                 try: message = connection.recv()
                 except EOFError as exc:
                     raise RuntimeError('collector transport ended before acknowledged stop') from exc
                 kind = message['kind']; env_id = message.get('env')
                 if kind == 'NEED_RESET':
-                    if not stopping:
+                    if not stopping and not normal_draining:
                         spec = curriculum.next(env_id, schedule.transitions)
                         env_status[env_id] = dict(state='RESETTING', seed=spec['seed'],
                             family=spec['family'], extent_m=spec['extent'], budget=spec['episode_budget'])
@@ -411,7 +437,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                         truth_edges=sum(len(scene.edges) for scene in scenes.values()),
                         reference_cells=sum(len(scene.reference_indices) for scene in scenes.values()))
                 elif kind == 'RESERVE':
-                    if not stopping: pending_requests[env_id] = message['token']
+                    if not stopping and not normal_draining: pending_requests[env_id] = message['token']
                 elif kind == 'DONE':
                     transition = loads_transport(message['payload'])
                     is_new = message['token'] > ledger.last_admitted.get(env_id, -1)
@@ -451,7 +477,9 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                         metrics.append(dict(status, event='transition', env=env_id, token=message['token'],
                             transitions=schedule.transitions, episode_id=transition.episode_id))
                     if max_transitions is not None and schedule.transitions-baseline >= max_transitions:
-                        stop('max new transitions reached; draining finished messages')
+                        normal_draining = True
+                        pending_requests.clear()
+                        if stop_reason is None: stop_reason = 'max new transitions reached; credit drained'
                 elif kind == 'ABORTED':
                     if reservations.get(env_id) == message['token']:
                         schedule.cancel_dispatch(); reservations.pop(env_id)
@@ -461,19 +489,37 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     collector_state = pickle.loads(message['payload'])
                     if counters['transitions'] != schedule.transitions:
                         raise RuntimeError('admission counter differs at barrier')
-                    save()
-                    barrier_pending = False
                     if kind == 'STOPPED':
+                        if final_phase != 'STOPPED':
+                            raise RuntimeError('collector stopped before final Actor confirmation')
                         if schedule.inflight or reservations: raise RuntimeError('stop left unaccounted reservations')
+                        if collector_state['actor_version'] != final_version:
+                            raise RuntimeError('stopped collector Actor differs from final learner')
+                        if not terminal_saved: save()
                         stopped = True
-                    elif not stopping:
-                        connection.send(dict(kind='RESUME'))
-                elif kind == 'PUBLISHED': observed_publication = message['version']
+                        final_deadline = None
+                    elif final_phase == 'BARRIER':
+                        if schedule.inflight or reservations:
+                            raise RuntimeError('terminal barrier left unaccounted reservations')
+                        if (collector_state['actor_version'] != final_version or
+                                collector_state['actor_record']['version'] != final_version):
+                            raise RuntimeError('terminal collector Actor differs from final learner')
+                        save()
+                        terminal_saved = True
+                        stopping = True
+                        final_command('STOP')
+                    else:
+                        # A periodic barrier may already be queued when stop is
+                        # requested; it cannot stand in for the final snapshot.
+                        if not stopping: save()
+                        if not stopping: connection.send(dict(kind='RESUME'))
+                    barrier_pending = False
+                elif kind == 'PUBLISHED':
+                    observed_publication = message['version']
+                    if final_phase == 'PUBLISHED' and observed_publication == final_version:
+                        final_command('STOP' if stopping else 'BARRIER')
                 elif kind == 'FATAL':
-                    failure = message['reason']
-                    terminal.clear()
-                    print(f'Collector fatal: {failure}', file=sys.stderr, flush=True)
-                    stop(failure)
+                    raise RuntimeError('Collector fatal: ' + message['reason'])
                 elif kind == 'RECOVERY':
                     if diagnostics is not None:
                         diagnostics.reset(env_id, 'RECOVERY')
@@ -502,8 +548,15 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                 if time.monotonic() >= exit_drain_deadline:
                     raise RuntimeError('collector transport drain timed out before acknowledged stop')
                 continue
-            if not stopping and not barrier_pending:
+            if manager.stop_requested and not stopping:
+                stop(manager.requested_reason or 'stop requested')
+            if repay_before_dispatch and not schedule.can_update:
+                repay_before_dispatch = False
+            if not stopping and not normal_draining and not barrier_pending and not repay_before_dispatch:
                 for env_id, token in list(pending_requests.items()):
+                    if manager.stop_requested:
+                        stop(manager.requested_reason or 'stop requested')
+                        break
                     if not within_admission_budget(schedule.transitions, schedule.inflight,
                             baseline=baseline, maximum=max_transitions):
                         break
@@ -513,7 +566,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                         connection.send(dict(kind='GRANT', env=env_id, token=token))
                         del pending_requests[env_id]
             # Exactly one complete update; poll completions again before the next.
-            if not stopping and not barrier_pending and schedule.can_update:
+            if not stopping and not manager.stop_requested and not barrier_pending and final_phase is None and schedule.can_update:
                 with boundary.update():
                     before_update = time.monotonic()
                     if config.learning.return_steps == 1:
@@ -529,7 +582,12 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                 if schedule.updates % config.actor_publish_updates == 0:
                     connection.send(dict(kind='PUBLISH', payload=pickle.dumps(learner.actor_state(), protocol=5)))
             if manager.stop_requested and not stopping: stop(manager.requested_reason or 'stop requested')
-            if manager.save_requested and not stopping and not barrier_pending:
+            if (normal_draining and not stopping and final_phase is None and
+                    not barrier_pending and not schedule.inflight and not schedule.can_update):
+                if reservations: raise RuntimeError('drain left unmatched reservations')
+                if stop_reason is None: stop_reason = 'zero-admission resume; credit drained'
+                final_command('PUBLISH')
+            if manager.save_requested and not stopping and not normal_draining and not barrier_pending and final_phase is None:
                 connection.send(dict(kind='BARRIER')); barrier_pending = True
             if not stopped and time.monotonic() - last_metrics >= 2:
                 record = status_record()
@@ -547,17 +605,16 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                 metrics.append(record)
                 if time.monotonic() - last_summary >= 30:
                     persist_diagnostics()
-                terminal.render(record, phase='保存并停止' if stopping else ('保存检查点' if barrier_pending else None))
+                terminal.render(record, phase='保存并停止' if stopping else ('补完更新' if normal_draining else ('保存检查点' if barrier_pending else None)))
                 last_metrics = time.monotonic()
         process.join(10)
         observations['final'] = status_record()
-        observations['final']['overshoot'] = max(0, schedule.transitions-baseline-(max_transitions or schedule.transitions))
-        observations['final']['stop_reason'] = failure or stop_reason or 'orderly stop'
+        observations['final']['overshoot'] = max(0, schedule.transitions-baseline-(max_transitions if max_transitions is not None else schedule.transitions-baseline))
+        observations['final']['stop_reason'] = stop_reason or 'orderly stop'
         observations['final']['owned_children_closed'] = not process.is_alive()
         record_run()
         persist_diagnostics()
-        terminal.render(status_record(), phase='已停止（异常）' if failure else '已保存并停止', force=True)
-        if failure: raise RuntimeError(failure)
+        terminal.render(status_record(), phase='已保存并停止', force=True)
         return dict(transitions=schedule.transitions, new_transitions=schedule.transitions-baseline,
             updates=schedule.updates, episode_ids=episode_ids, episodes_issued=curriculum.state['episodes_issued'],
             stop_reason=stop_reason)

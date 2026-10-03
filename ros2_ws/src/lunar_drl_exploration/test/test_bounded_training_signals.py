@@ -31,7 +31,7 @@ if __name__ == '__main__':
     from lunar_drl_exploration.training import run_training
     from lunar_drl_exploration.checkpoint import CheckpointManager
     root = Path(sys.argv[1])
-    config = replace(TrainingConfig(), environments=2, warmup=100000,
+    config = replace(TrainingConfig(), environments=2, warmup=0,
         system_reserve_bytes=0, save_interval_s=3600.,
         artifact_root=str(root), output_dir=str(root / 'training'),
         total_output_max_bytes=8 * 1024**3)
@@ -41,6 +41,10 @@ if __name__ == '__main__':
     atomic_json(root / 'fixture-result.json', dict(result=result,
         saved_transitions=saved['schedule']['transitions'],
         unfinished=saved['schedule']['unfinished_reservations'],
+        credit=saved['schedule']['credit'],
+        updates=saved['schedule']['updates'],
+        learner_updates=saved['learner']['updates'],
+        actor_version=saved['collector_state']['actor_version'],
         active_children=[p.pid for p in mp.active_children()]))
 ''', encoding='utf-8')
     python_paths = [str(ROOT / 'ros2_ws/src/lunar_drl_exploration'),
@@ -91,6 +95,9 @@ if __name__ == '__main__':
         assert evidence['saved_transitions'] == evidence['result']['transitions']
         assert evidence['result']['new_transitions'] == evidence['saved_transitions']
         assert evidence['unfinished'] == 0
+        from fractions import Fraction
+        assert evidence['updates'] == evidence['learner_updates'] == evidence['actor_version']
+        assert Fraction(evidence['credit']) == Fraction(evidence['saved_transitions'], 4) - evidence['updates']
         assert evidence['active_children'] == []
         final = json.loads(run_path.read_text())['observations']['final']
         assert final['owned_children_closed']

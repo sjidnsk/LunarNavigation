@@ -181,3 +181,33 @@ bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest -q ros2_w
 ### 内存及验证边界
 
 严格payload校验必须短暂持有解码record和不可变数值backing；save-only不保留完整新ledger并在返回时释放。序列化snapshot字节上限不等于RSS/PSS上限：合成1条样本实测serialized为5239字节，完整decode replay ledger计费43778字节（这不是RSS测量）；validate-only返回None。现有ResourceMonitor在训练循环采样，不对save内瞬时allocation单独预留，原子文件总输出预算仍执行。依控制器范围不新增内存预留框架；Task8实际smoke仍须测save/resume峰值。正式训练/冻结评测、真实ROS闭环、Humble、Orin、DDS部署、传感器及实车均NOT_RUN。状态：实现完成，等待控制器独立审查。
+
+## Task 6：精确阶段补完更新与中断信用恢复
+
+起点 `5376eca3dcedf7d0bac92ef7085fce3b723f327a`。正常预算耗尽仅停止新GRANT，继续对已有DONE准入/ACK，并完成所有可支付SAC更新；整除阶段credit=0，任意非整除预算保留不足1余额。终态顺序为最终PUBLISH → 匹配版本PUBLISHED → 新BARRIER快照 → save → STOP → STOPPED。每个最终确认等待有12秒上界，已退出collector的大帧有序交接仍处理。SIGINT/资源stop完成已经开始的同步更新，保留其他信用；先确认完整Actor再STOP，对已完成消息ACK-drain后保存。部分优化器失败仍不得保存或发布污染状态。
+
+CLI/API增加仅resume允许的 `--max-transitions 0`，不产生新GRANT/admission，只偿还旧整数信用；负数和fresh零预算拒绝。任何resume先还旧整数债再派发新转移，fractional信用保留。target0终端与run.json均报告本次采集0、overshoot0。既有schedule Fraction和reservation API已足够，依控制器裁定复用，不新增接口。
+
+有效TDD RED：两阶段真实collector/worker测试在第一阶段只保存1次更新而预期2；三种零预算API恢复与合法CLI resume0被正数校验拒绝。命令：
+
+```bash
+bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest -q ros2_ws/src/lunar_drl_exploration/test/test_stage_credit_drain.py ros2_ws/src/lunar_drl_exploration/test/test_training_cli.py -k 'exact_two or zero_admission or zero_budget'
+```
+
+修复前 `5 failed, 3 passed, 33 deselected in 6.19s`，最小实现后同命令 `8 passed, 33 deselected in 18.43s`。首版测试曾因batch2违反现有batch64配置约束失败，已改为64；直接执行wrapper的权限126也改用bash处理，这些夹具/启动错误不作为功能RED。
+
+覆盖：两个scaled stage分别保存 `(T,U,C)=(12,2,0),(20,4,0)`，最终Actor逐张量等于learner；生产10阶段9216/2048及后续算术由纯schedule测试验证。八个真实worker的DONE通过Event等全部完成后释放，达到8个并发reservation且信用投影≤32；没有把32信用误当32个reservation。credit1/32恢复夹具由4/128条ControlledEnv transition逐次ledger准入并经完整Checkpoint校验构造，零预算分别执行1/32个真实SAC更新；credit1/4保留且后续3条恰好支付一次。
+
+真实SIGINT通过外层spawn父进程和Pipe握手，命中pre-loop、update前、update返回后、schedule记账后、PUBLISH前/后、PUBLISHED后。已开始同步update仍完整执行一次；其余余额保留。恢复核验learner/schedule、回放计数/字节、collector acknowledged与ledger last_admitted、最终Actor及children/IPC线程关闭。实际wrapper SIGTERM启用warmup0，补验信用公式与最终发布版本。缺失PUBLISHED/BARRIER的真实raw-pipe帧测试证明等待有界、无假成功且checkpoint SHA256不变。既有延迟STOPPED/有序EOF继续覆盖；正常save先于STOP，因此STOPPED丢失时保留已确认的terminal checkpoint并报告错误。
+
+优化器失败测试改为真实Adam.step执行一个子步骤后抛错，证明其状态已实际改变；同时检查保存次数只有初始有效一次、文件SHA256未变、无污染PUBLISH、最后有效optimizer/counter保留和子进程关闭。
+
+指定回归命令：
+
+```bash
+bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest -q ros2_ws/src/lunar_drl_exploration/test/test_stage_credit_drain.py ros2_ws/src/lunar_drl_exploration/test/test_schedule.py ros2_ws/src/lunar_drl_exploration/test/test_training_cli.py ros2_ws/src/lunar_drl_exploration/test/test_bounded_training_signals.py ros2_ws/src/lunar_drl_exploration/test/test_training_fork.py
+```
+
+结果 `108 passed in 175.36s`。随后新增fractional实际中断/API非法预算断言，并在自审时收紧每次update前的signal flag检查；完整DRL包使用同一wrapper运行整个`ros2_ws/src/lunar_drl_exploration/test`：`739 passed, 2 skipped in 276.33s`，退出0。两skip为显式启用的真实ROS闭环参数。包级启动后补了上述一行signal检查，最终版本使用同一wrapper单独运行`test_stage_credit_drain.py`：`28 passed in 139.71s`（`task6-final.log`），无警告；不把包级结果冒称该最后一行修改的再次全包测试。
+
+所有外部日志位于 `/home/kai/.cache/lunar-drl-task-frontier/task6-*.log`：red、core-green、signal、focused、package、final、imports。现场导入证据仍为专项源码、新Jazzy graph/terrain native与lunar_planning_msgs、既有依赖venv；未混入旧overlay。阶段评测唯一性属Task7，未声称已验证。正式训练/冻结评测、真实ROS动作、Humble、Orin、DDS、传感器、实车NOT_RUN；未合并、推送或PR。UTF-8逐文件读取、Python源码编译和`git diff --check`通过。状态：实现完成，等待控制器独立审查。

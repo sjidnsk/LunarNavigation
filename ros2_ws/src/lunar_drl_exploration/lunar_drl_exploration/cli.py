@@ -22,7 +22,7 @@ def parser():
                 help='requires --fork-from; allow only the named learning variable, paired scenes and a smaller snapshot budget')
             cmd.add_argument('--output-dir')
             cmd.add_argument('--device', default='cuda', choices=('cpu', 'cuda'))
-            cmd.add_argument('--max-transitions', type=int, help='maximum new admissions this run, including dispatched work')
+            cmd.add_argument('--max-transitions', type=int, help='maximum new admissions this run; zero with --resume drains saved update credit only')
             cmd.add_argument('--probe', action='store_true', help='explicit finite diagnostic run; keeps full model/batch/physical backend')
             cmd.add_argument('--probe-warmup', type=int)
             cmd.add_argument('--probe-extent', type=float)
@@ -69,7 +69,8 @@ def load_config(args):
             raise ValueError('--fork-experiment requires --fork-from')
         overrides = any(getattr(args, key) is not None for key in ('probe_warmup', 'probe_extent', 'probe_budget'))
         if overrides and not args.probe: raise ValueError('probe overrides require --probe')
-        if args.max_transitions is not None and args.max_transitions <= 0: raise ValueError('positive --max-transitions required')
+        if args.max_transitions is not None and (args.max_transitions < 0 or (args.max_transitions == 0 and not args.resume)):
+            raise ValueError('--max-transitions must be positive, or zero with --resume')
         for key in ('probe_extent', 'probe_budget'):
             if getattr(args, key) is not None and getattr(args, key) <= 0: raise ValueError('positive ' + key + ' required')
         if args.probe_warmup is not None: config = replace(config, warmup=args.probe_warmup)

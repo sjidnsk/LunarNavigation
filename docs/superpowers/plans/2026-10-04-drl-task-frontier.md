@@ -151,15 +151,17 @@ Task3已实现并自审，等待控制器独立审查；允许独立workspace复
 
 ### Task 6: 正常阶段补完更新，Ctrl+C恢复信用
 
-**Files:** 修改 `P/training.py`、`schedule.py`；创建 `T/test_stage_credit_drain.py`，更新 `T/test_training_cli.py`、`test_bounded_training_signals.py`。
+**Files:** 修改 `P/training.py`、`cli.py`；验证并复用既有 `schedule.py` 的 Fraction/reservation 接口；创建 `T/test_stage_credit_drain.py`，更新 `T/test_training_cli.py`、`test_bounded_training_signals.py`。
 
-**Interfaces:** 维持 `train(..., max_transitions=...)` 的本次新增转移预算；控制状态分正常限额drain与用户/异常stop。正常drain不再GRANT，收齐/ACK既有完成，继续合法learner更新到credit=0，最终PUBLISH收到collector确认后，保存stopped状态。Ctrl+C保存credit并退出，resume在新派发前偿还旧credit；更新中异常不能保存污染optimizer。
+**Interfaces:** 维持 `run_training(..., max_transitions=...)` 的本次新增转移预算；控制状态分正常限额drain与用户/异常stop。正常drain不再GRANT，收齐/ACK既有完成，继续合法learner更新；整除阶段到credit=0，任意有限预算保留不足1的余额，最终PUBLISH收到collector确认后，获取新的BARRIER快照、保存再STOP；每次最终确认等待有界。Ctrl+C保存credit并退出，resume在新派发前偿还旧credit；更新中异常不能保存污染optimizer。CLI/API允许 `--resume --max-transitions 0`，只偿还已保存整数信用且无新GRANT/admission；负数及非resume的零预算拒绝。恢复先还旧债再派发，target=0显示与overshoot保持0。
 
-- [ ] 写失败并发测试：到转移上限后无新派发，inflight=0、credit=0；warmup1024后第一阶段总9216trans/2048updates。
-- [ ] 实现正常drain路径和最终PUBLISH确认；不能收到STOPPED后直接跳过尚未赚完的更新，不能无限等待已停止collector确认。
-- [ ] 在credit=1/32、更新前后、PUBLISH前后注入Ctrl+C；断言恢复既不丢转移/信用，也不重复SAC update、transition ACK或阶段评测。
-- [ ] 使用缩小warmup/budget的真实子进程fixture证明精确算术，固定 `transitions=warmup+s*block`、`updates=s*block/4`；覆盖最大并发reservations，credit上限32不突破。
-- [ ] 跑新测试及 `T/test_schedule.py`、`test_training_cli.py`、`test_bounded_training_signals.py`、`test_training_fork.py`；精确提交。
+- [x] 写失败并发测试：到转移上限后无新派发，inflight=0、credit=0；warmup1024后第一阶段总9216trans/2048updates。
+- [x] 实现正常drain路径和最终PUBLISH确认；不能收到STOPPED后直接跳过尚未赚完的更新，不能无限等待已停止collector确认。
+- [x] 在credit=1/32、更新前后、PUBLISH前后注入Ctrl+C；断言恢复既不丢转移/信用，也不重复SAC update或transition admission/ACK状态；阶段评测唯一性由Task7控制器测试验证，本任务不声称已运行评测。
+- [x] 使用缩小warmup/budget的真实子进程fixture证明精确算术，固定 `transitions=warmup+s*block`、`updates=s*block/4`；覆盖最大并发reservations，credit上限32不突破。
+- [x] 跑新测试及 `T/test_schedule.py`、`test_training_cli.py`、`test_bounded_training_signals.py`、`test_training_fork.py`；精确提交。
+
+**Task6状态：** 实现完成并精确提交，等待控制器独立审查。指定回归108通过；包级739通过/2显式ROS跳过；最终signal检查收紧后的Task6全文件28通过，详见validation证据。schedule.py算术接口足够，依控制器裁定不人为新增接口。正式训练/评测等待Task7/8及完整分支门禁。
 
 ### Task 7: 多阶段控制、同图缓存和三类曲线
 

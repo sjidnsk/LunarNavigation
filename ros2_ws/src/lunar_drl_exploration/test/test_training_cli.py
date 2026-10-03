@@ -67,8 +67,8 @@ def test_training_real_updates_save_actual_published_policy_and_resume_new_episo
     assert result['new_transitions'] >= 8 and result['updates'] >= 1
     saved = CheckpointManager(tmp_path).load(config).record
     published = saved['collector_state']
-    assert published['actor_version'] == published['actor_record']['version'] == 0
-    assert any(not torch.equal(value, saved['learner']['actor'][key])
+    assert published['actor_version'] == published['actor_record']['version'] == result['updates'] == 2
+    assert all(torch.equal(value, saved['learner']['actor'][key])
         for key, value in published['actor_record']['state_dict'].items())
     assert saved['schedule']['unfinished_reservations'] == 0
     assert loads_transport(saved['counters'])['transitions'] == saved['schedule']['transitions']
@@ -190,10 +190,26 @@ def test_partial_optimizer_failure_keeps_last_good_checkpoint_and_closes_childre
     from lunar_drl_exploration.sac import SACLearner
     config = replace(TrainingConfig(), environments=2, warmup=0, output_dir=str(tmp_path), system_reserve_bytes=0)
     before = {p.pid for p in mp.active_children()}
-    def fail_update(self, *args):
-        with torch.no_grad(): next(self.actor.parameters()).add_(10)
+    original_step = torch.optim.Adam.step
+    poisoned = []
+    def fail_step(self, *args, **kwargs):
+        original_step(self, *args, **kwargs)
+        poisoned.append(bool(self.state))
         raise RuntimeError('injected mid optimizer failure')
-    monkeypatch.setattr(SACLearner, 'update', fail_update)
+    monkeypatch.setattr(torch.optim.Adam, 'step', fail_step)
+    import hashlib
+    from lunar_drl_exploration.ipc import Duplex
+    original_save, original_send = CheckpointManager.save, Duplex.send
+    saved_digests, commands = [], []
+    def save(self, state):
+        path = original_save(self, state)
+        saved_digests.append(hashlib.sha256(path.read_bytes()).hexdigest())
+        return path
+    def send(self, message):
+        commands.append(message['kind'])
+        return original_send(self, message)
+    monkeypatch.setattr(CheckpointManager, 'save', save)
+    monkeypatch.setattr(Duplex, 'send', send)
     import time
     started = time.monotonic()
     with pytest.raises(RuntimeError, match='mid optimizer'):
@@ -202,6 +218,12 @@ def test_partial_optimizer_failure_keeps_last_good_checkpoint_and_closes_childre
     saved = CheckpointManager(tmp_path).load(config).record
     assert saved['schedule']['updates'] == 0 and saved['schedule']['transitions'] == 0
     assert saved['learner']['updates'] == 0
+    assert poisoned == [True]
+    assert len(saved_digests) == 1
+    assert hashlib.sha256((tmp_path / 'resume.pt').read_bytes()).hexdigest() == saved_digests[0]
+    assert 'PUBLISH' not in commands
+    assert not saved['learner']['actor_optimizer']['state']
+    assert not saved['learner']['q1_optimizer']['state']
     assert {p.pid for p in mp.active_children()} == before
     import threading
     assert not [thread for thread in threading.enumerate() if thread.name.startswith('drl-ipc-')]
@@ -219,11 +241,10 @@ def test_default_sixteen_update_publication_captures_the_published_weights(tmp_p
         env_factory='worker_fixtures:ControlledEnv', probe_extent=40, probe_budget=100)
     state = CheckpointManager(tmp_path).load(config).record
     assert 16 <= result['updates'] < 32
-    assert state['collector_state']['actor_version'] == 16
-    assert state['collector_state']['actor_record']['version'] == 16
-    if result['updates'] > 16:
-        assert any(not torch.equal(value, state['learner']['actor'][key])
-            for key, value in state['collector_state']['actor_record']['state_dict'].items())
+    assert state['collector_state']['actor_version'] == 18
+    assert state['collector_state']['actor_record']['version'] == 18
+    assert all(torch.equal(value, state['learner']['actor'][key])
+        for key, value in state['collector_state']['actor_record']['state_dict'].items())
 
 
 @pytest.mark.parametrize('count,seed,budget', [
@@ -347,7 +368,9 @@ def test_training_final_transport_handoff_after_collector_exit_saves_or_reports_
                 run_training(config, device='cpu', max_transitions=8,
                     env_factory='worker_fixtures:ControlledEnv', probe_extent=40, probe_budget=3)
             saved = CheckpointManager(tmp_path).load(config).record
-            assert saved['schedule']['transitions'] == saved['schedule']['updates'] == 0
+            # The normal terminal barrier was confirmed and saved BEFORE STOP.
+            assert saved['schedule']['transitions'] == 8
+            assert saved['schedule']['updates'] == 2
         else:
             result = run_training(config, device='cpu', max_transitions=8,
                 env_factory='worker_fixtures:ControlledEnv', probe_extent=40, probe_budget=3)
@@ -360,7 +383,7 @@ def test_training_final_transport_handoff_after_collector_exit_saves_or_reports_
             assert saved['schedule']['updates'] == saved['learner']['updates'] == result['updates']
             assert Fraction(saved['schedule']['credit']) == Fraction(result['transitions'], 4) - result['updates']
             published = saved['collector_state']
-            assert published['actor_version'] == final['actor_version'] == 0
+            assert published['actor_version'] == final['actor_version'] == 2
             assert published['sequences'] == final['sequences']
             assert published['acknowledged'] == final['acknowledged']
             torch.testing.assert_close(published['policy_rng'], final['policy_rng'], atol=0, rtol=0)
@@ -401,3 +424,14 @@ def test_episode_progress_does_not_mix_old_reward_and_new_reset_pose():
     resetting = dict(state='RESETTING', seed=8, family='moon', extent_m=40., budget=8)
     assert _merge_progress(resetting, dict(old, steps=8)) == resetting
     assert _merge_progress(fresh, dict(episode_id='new', steps=1))['known_area_m2'] == 0.
+
+
+@pytest.mark.parametrize('resume,budget,valid', [(True, 0, True), (False, 0, False), (True, -1, False), (False, -1, False)])
+def test_cli_zero_budget_is_drain_only_resume(resume, budget, valid):
+    from lunar_drl_exploration.cli import parser, load_config
+    args = parser().parse_args(['train', '--max-transitions', str(budget)] + (['--resume'] if resume else []))
+    if valid:
+        load_config(args)
+    else:
+        with pytest.raises(ValueError, match='max-transitions'):
+            load_config(args)
