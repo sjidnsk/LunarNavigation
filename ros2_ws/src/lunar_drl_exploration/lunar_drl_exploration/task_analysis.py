@@ -33,6 +33,8 @@ class MeasuredWorkspace:
     reachable: np.ndarray
     task_mask: np.ndarray
     available: bool
+    lattice_origin: tuple = None
+    lattice_offset: tuple = None
 
 
 def measured_workspace(snapshot, task, sensor, coverage=None):
@@ -102,6 +104,8 @@ def measured_workspace(snapshot, task, sensor, coverage=None):
         reachable,
         polygon_mask(reachable.shape, origin, resolution, task.polygon),
         available,
+        None if coverage is None else coverage.coordinate_identity[2],
+        None if coverage is None else coverage.cell_offset,
     )
 
 

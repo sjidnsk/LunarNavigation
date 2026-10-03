@@ -4,7 +4,7 @@ Consumes applied native observations only. Current B/M classifications never
 come from this history. Public projections use the current native map origin.
 """
 import numpy as np
-from .geometry import lattice_coordinates, polygon_mask
+from .geometry import lattice_coordinates, lattice_displacement, polygon_mask
 
 
 class CoverageHistory:
@@ -16,6 +16,13 @@ class CoverageHistory:
         self._known_count = 0
         self._bounds = None
         self._offset = np.zeros(2, np.int64)
+        self._reference_origin = None
+        self._reference_offset = None
+
+    @property
+    def cell_offset(self):
+        """Current native origin in the retained lattice coordinate system."""
+        return tuple(map(int, self._offset))
 
     @property
     def known_area_m2(self):
@@ -30,14 +37,26 @@ class CoverageHistory:
         return x0-dx, y0-dy, x1-dx, y1-dy
 
     def consume(self, snapshot):
-        phase, offset = lattice_coordinates(snapshot.origin, snapshot.resolution_m)
-        coordinate_identity = (snapshot.epoch, snapshot.resolution_m, phase)
         identity = (snapshot.epoch, snapshot.resolution_m, tuple(snapshot.origin))
-        reset = self.coordinate_identity != coordinate_identity
+        displacement = None
+        if (self.coordinate_identity is not None and
+                self.coordinate_identity[:2] == identity[:2]):
+            displacement = lattice_displacement(snapshot.origin, self._reference_origin,
+                                                snapshot.resolution_m)
+        reset = displacement is None
+        if reset:
+            phase, offset = lattice_coordinates(snapshot.origin, snapshot.resolution_m)
+            coordinate_identity = (snapshot.epoch, snapshot.resolution_m, phase)
+        else:
+            coordinate_identity = self.coordinate_identity
+            phase = coordinate_identity[2]
+            offset = self._reference_offset + displacement
         if not reset and snapshot.revision < self.revision:
             raise ValueError('stale coverage snapshot')
         moved = self.identity != identity
         if reset:
+            self._reference_origin = tuple(snapshot.origin)
+            self._reference_offset = offset.copy()
             self._tiles.clear(); self._task_bits.clear()
             self._known_count = 0; self._bounds = None; self.revision = -1
         if moved:

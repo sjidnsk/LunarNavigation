@@ -4,7 +4,7 @@ import hashlib
 from typing import TYPE_CHECKING
 import numpy as np
 from .contracts import MapSnapshot, TaskSpec, freeze_array
-from .geometry import lattice_coordinates, pack_cell_ids
+from .geometry import lattice_coordinates, lattice_displacement, pack_cell_ids
 from .maps import FREE
 
 if TYPE_CHECKING:
@@ -57,7 +57,10 @@ def build_frontiers(snapshot: MapSnapshot, workspace: 'MeasuredWorkspace',
                     task: TaskSpec) -> FrontierSnapshot:
     """Use cumulative effective K and current measured B, over the full workspace."""
     w = workspace
-    phase, offset = lattice_coordinates(snapshot.origin, snapshot.resolution_m)
+    if w.lattice_origin is None:
+        phase, offset = lattice_coordinates(snapshot.origin, snapshot.resolution_m)
+    else:
+        phase, offset = w.lattice_origin, np.asarray(w.lattice_offset, np.int64)
     shift = np.asarray(w.bounds[:2], np.int64) + offset
     ys, xs = np.nonzero(w.known & (w.intrinsic == FREE))
     free_ids = pack_cell_ids(xs+shift[0], ys+shift[1])
@@ -107,9 +110,13 @@ def count_removed(before: FrontierSnapshot, after: FrontierSnapshot, *, domain: 
     """
     if domain not in ('inside', 'outside'):
         raise ValueError("frontier domain must be inside or outside")
-    for field in ('epoch', 'resolution_m', 'lattice_origin', 'task_id', 'polygon_digest'):
+    for field in ('epoch', 'resolution_m', 'task_id', 'polygon_digest'):
         if getattr(before, field) != getattr(after, field):
             raise ValueError(f"incompatible frontier {field}")
+    shift = lattice_displacement(after.lattice_origin, before.lattice_origin,
+                                 before.resolution_m)
+    if shift is None:
+        raise ValueError("incompatible frontier lattice_origin")
     if after.revision < before.revision:
         raise ValueError("stale frontier revision")
     if after.revision == before.revision:
@@ -117,8 +124,15 @@ def count_removed(before: FrontierSnapshot, after: FrontierSnapshot, *, domain: 
     old, new = getattr(before, domain), getattr(after, domain)
     if not len(old.cell_ids):
         return 0
-    solved = np.logical_and.reduceat(np.isin(old.demand_ids, after.known_ids),
+    def aligned(ids):
+        # Independent initial phases may straddle 0/resolution because of
+        # modulo noise. Rebase signed XY IDs as well as accepting the phase.
+        if not np.any(shift):
+            return ids
+        return pack_cell_ids((ids >> 32)+shift[0], ((ids << 32) >> 32)+shift[1])
+
+    solved = np.logical_and.reduceat(np.isin(old.demand_ids, aligned(after.known_ids)),
                                      old.demand_offsets[:-1])
-    removed = (~np.isin(old.cell_ids, new.cell_ids) &
-               np.isin(old.cell_ids, after.free_ids) & solved)
+    removed = (~np.isin(old.cell_ids, aligned(new.cell_ids)) &
+               np.isin(old.cell_ids, aligned(after.free_ids)) & solved)
     return int(np.count_nonzero(removed))

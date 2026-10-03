@@ -154,3 +154,26 @@ def test_real_lattice_identity_change_resets_cumulative_and_direction(change):
     c.consume(replace(first, tiles={}, **change))
     assert c.coverage.known_area_m2 == 0
     assert not np.any(c.history.bits([[.15,.25]]))
+
+
+@pytest.mark.parametrize('revision', [1, 2])
+def test_quantization_boundary_integer_shift_retains_K_and_physical_history(revision):
+    from lunar_drl_exploration.decision import DecisionCore
+    from lunar_drl_exploration.frontiers import count_removed
+    origin = (.02469135781, .02469135781, 0.)
+    first = snapshot(np.ones((1,1),np.uint8), resolution=.2, origin=origin)
+    c = DecisionCore(task(-1,-1,1,1), SensorSpec(range_m=.2))
+    c.observe(first)
+    before = c.frontiers; identity = c.coverage.coordinate_identity
+    c.record_observation(first.pose, [[0,0]])
+    moved = replace(first, origin=(origin[0]+256*.2, origin[1]-256*.2, 0.),
+                    tiles={}, revision=revision)
+    _, report = c.observe(moved)
+    assert report.known_area_m2 == pytest.approx(.04)
+    assert report.new_area_m2 == 0
+    assert c.coverage.coordinate_identity == identity
+    assert c.frontiers.lattice_origin == before.lattice_origin
+    assert c.coverage.identity == ('test',.2,moved.origin)
+    assert c.coverage.mask((-256,256,-255,257)).tolist() == [[True]]
+    assert c.history.bits([[first.pose.x, first.pose.y]])[0,0] == 1
+    assert count_removed(before,c.frontiers,domain='inside') == 0

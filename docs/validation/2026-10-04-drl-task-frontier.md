@@ -66,7 +66,7 @@ bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest ros2_ws/s
 
 `count_removed` 要求旧前沿不再存在、全部冻结旧同域需求已有效观测、旧中心仍在当前 `free_ids`；区外独立计数，新增前沿不冲销旧消除。相同revision返回0，旧revision或epoch/resolution/phase/task/polygon身份不符拒绝。该函数无状态，后续动作消费者必须推进动作前冻结快照；重复调用同一不同revision快照对仍是同一计数，不承担全局去重。
 
-控制器预检发现旧 CoverageHistory 对绝对origin变化清空K，不满足已批准的稳定世界格定义。本任务按修订把 K 存在固定相位的packed-bit世界tile，原点平移时重投影 `mask`/`bounds`；公开 `identity` 仍为当前 `(epoch,resolution,origin)`，新增 `coordinate_identity` 用于面积报告和方向历史连续性。整数origin旧回归改为保留35格，并验证 `RosExplorationEnv._privileged` 投影仍保留35格。非整数相位/epoch/resolution改变清空历史。coverage/frontiers共享相位算法（容差1e-10格），FREE/需求ID为有符号世界格打包，中心保留实际米坐标。
+控制器预检发现旧 CoverageHistory 对绝对origin变化清空K，不满足已批准的稳定世界格定义。本任务按修订把 K 存在固定相位的packed-bit世界tile，原点平移时重投影 `mask`/`bounds`；公开 `identity` 仍为当前 `(epoch,resolution,origin)`，新增 `coordinate_identity` 用于面积报告和方向历史连续性。整数origin旧回归改为保留35格，并验证 `RosExplorationEnv._privileged` 投影仍保留35格。非整数相位/epoch/resolution改变清空历史。coverage/frontiers共享整数位移算法（绝对容差1e-10格），相对保留的首次原始origin判断连续性，独立快照按同一容差对齐相位与格ID，FREE/需求ID为有符号世界格打包，中心保留实际米坐标。
 
 ### RED / GREEN 与变异验证
 
@@ -85,3 +85,10 @@ bash /home/kai/.cache/lunar-drl-task-frontier/task-1/test.sh -m pytest ros2_ws/s
 完整DRL包使用前文同一启动器和包级命令：646 passed、2 skipped in 121.29s，退出0；两项skip仍是 `test_ros_native_execution.py::test_native_cold_start_spin_adjacent_arrival_and_frozen_transition` 的显式ROS闭环参数。没有启动学习任务或评测。源码UTF-8及 `git diff --check` 验证通过。外部日志位于 `/home/kai/.cache/lunar-drl-task-frontier/task-2/`：`red-frontiers.log`、`red-coverage.log`、`green-first.log`、`focused.log`、`mutation-demand-all.log`、`mutation-free-center.log`、`full-suite.log`。
 
 本任务是实测前沿/消除原语及覆盖连续性通过；方向可见性特征、实际奖励接线、Critic虚拟观测、schema升级、训练/评测均属于后续任务。没有更改传感器或原生地图分类规则，没有重建/修改旧overlay与模型。Humble、Orin、DDS、实车仍为NOT_RUN。
+
+
+### Task 2 独立审查修复 I1
+
+审查复现 resolution=0.2、origin=0.02469135781 加256格时，独立量化相位分别落在舍入边界两侧，错误清空K并拒绝前沿比较。本轮改为相对保留的首次原始origin判断整数位移（绝对容差1e-10格）；复用原坐标身份，工作区携带同一phase/offset。独立前沿快照不再精确比较各自相位；容差判断后对齐必要的整数格ID偏移，覆盖相位跨0/分辨率边界。
+
+先写回归：3 failed in 0.26s，修复后3 passed in 0.22s。增加±1e-16原点案例；临时绕过ID重对齐导致1 failed、2 passed（0.17s），证明独立比较没有只放宽身份而忽略ID。恢复源码后运行test_cumulative_coverage、test_frontier_sets、test_frontier_removal、test_task_analysis、test_graph_decision五文件：67 passed in 2.94s，退出0。日志在原Task 2目录的fix1-red.log、fix1-green.log、fix1-mutation-rebase.log、fix1-focused.log。本轮按控制器范围未重复包级测试；前述646通过是修复前提交的历史证据。无训练/评测；原验证边界继续有效。

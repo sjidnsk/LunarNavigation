@@ -5,10 +5,10 @@ import numpy as np
 
 
 def lattice_coordinates(origin, resolution_m):
-    """Canonical XY phase and signed cell offset; integer moves share a phase.
+    """Initial XY phase and signed offset, without independently quantizing phase.
 
-    Normalize at 1e-10 of a cell to remove floating-point modulo noise. This
-    tolerance is only for lattice identity, never metric center reconstruction.
+    Float phases are representatives, not exact identity keys. Retain the first
+    representative and use lattice_displacement for subsequent comparisons.
     """
     if not math.isfinite(resolution_m) or resolution_m <= 0:
         raise ValueError("positive finite map resolution required")
@@ -17,11 +17,25 @@ def lattice_coordinates(origin, resolution_m):
         raise ValueError("finite XY origin required")
     units = xy / resolution_m
     whole = np.floor(units)
-    fraction = np.round(units - whole, 10)
-    carry = fraction >= 1.0
-    whole += carry
-    fraction[carry] = 0.0
-    return tuple(fraction * resolution_m), whole.astype(np.int64)
+    return tuple(xy - whole * resolution_m), whole.astype(np.int64)
+
+
+def lattice_displacement(origin, reference, resolution_m):
+    """Integer XY displacement from a retained reference, or None for a new lattice.
+
+    Absolute tolerance is 1e-10 cell; never use a relative tolerance that grows
+    with the number of translated cells. The reference must not drift per frame.
+    """
+    if not math.isfinite(resolution_m) or resolution_m <= 0:
+        raise ValueError("positive finite map resolution required")
+    delta = (np.asarray(origin[:2], np.float64) -
+             np.asarray(reference[:2], np.float64)) / resolution_m
+    if delta.shape != (2,) or not np.all(np.isfinite(delta)):
+        raise ValueError("finite XY lattice origins required")
+    rounded = np.rint(delta)
+    if np.any(np.abs(delta-rounded) > 1e-10):
+        return None
+    return rounded.astype(np.int64)
 
 
 def pack_cell_ids(x, y):

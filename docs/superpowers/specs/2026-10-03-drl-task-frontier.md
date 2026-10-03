@@ -30,7 +30,7 @@
 
 使用完整的已测地图，任务边界不产生虚拟障碍或虚拟 UNKNOWN。每个格子使用稳定世界栅格身份；格子中心落在任务多边形上或内部算任务内，统一使用规范 `TaskSpec.polygon` 与多边形掩码。
 
-2026-10-04 Task 2 预检修订与实现：整数 XY origin 平移不改变栅格身份，累计有效观测 K 存在固定相位的世界tile上，并按当前 origin 投影；任务内累计面积、新增面积及物理方向历史连续。epoch、resolution或非整数相位改变才重置。公开 `CoverageHistory.identity` 仍含当前 origin，稳定身份另存 `coordinate_identity`，避免破坏训练真值投影。相位归一化容差为1e-10格；前沿ID打包两个有符号int32格坐标，前沿中心仍使用实际metric XY，不由ID反推。冻结快照分别保存累计 `known_ids` 与当前实测 `free_ids`，丢失/重分类的旧FREE中心不计消除。
+2026-10-04 Task 2 预检修订与实现：整数 XY origin 平移不改变栅格身份，累计有效观测 K 存在固定相位的世界tile上，并按当前 origin 投影；任务内累计面积、新增面积及物理方向历史连续。epoch、resolution或非整数相位改变才重置。公开 `CoverageHistory.identity` 仍含当前 origin，稳定身份另存 `coordinate_identity`，避免破坏训练真值投影。整数位移相对保留的首次原始origin判断，绝对容差为1e-10格并保留已有规范身份；独立前沿快照按同一容差比较相位代表值，必要时重对齐格ID，不逐位比较各自量化的相位；前沿ID打包两个有符号int32格坐标，前沿中心仍使用实际metric XY，不由ID反推。冻结快照分别保存累计 `known_ids` 与当前实测 `free_ids`，丢失/重分类的旧FREE中心不计消除。
 
 令 `K` 为累计有效已观测分类掩码，`B` 为实测 intrinsic 分类，`P` 为任务区域掩码，邻域为 8 邻格。
 

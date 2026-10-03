@@ -84,3 +84,22 @@ def test_invalid_domain_and_stale_revision_rejected():
     b = np.ones((9, 9), np.uint8); first, final = run_sequence([b, b])
     with pytest.raises(ValueError): count_removed(first, final, domain='both')
     with pytest.raises(ValueError): count_removed(final, first, domain='inside')
+
+
+@pytest.mark.parametrize('coordinate', [.02469135781, -1e-16, 1e-16])
+def test_independent_frontier_snapshots_accept_quantization_boundary_integer_shift(coordinate):
+    from lunar_drl_exploration.frontiers import build_frontiers
+    from lunar_drl_exploration.task_analysis import measured_workspace
+    origin = (coordinate, coordinate, 0.)
+    b = np.full((9,9),2,np.uint8); b[4,4] = 1; b[4,5] = 0
+    first = snapshot(b,b,resolution=.2,origin=origin)
+    b[4,5] = 2
+    done = snapshot(b,b,resolution=.2,origin=origin)
+    moved = replace(done,origin=(origin[0]+256*.2,origin[1]-256*.2,0.),
+                    tiles={(-1,1):done.tiles[(0,0)]},revision=2,
+                    start_connections=done.start_connections+[-256,256])
+    t = task(-1,-1,3,3); sensor = SensorSpec(range_m=.2)
+    before = build_frontiers(first,measured_workspace(first,t,sensor),t)
+    after = build_frontiers(moved,measured_workspace(moved,t,sensor),t)
+    assert len(before.inside.cell_ids) == 1 and len(after.inside.cell_ids) == 0
+    assert count_removed(before,after,domain='inside') == 1
