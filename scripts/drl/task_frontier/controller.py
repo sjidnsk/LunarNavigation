@@ -82,6 +82,28 @@ def evaluation_plan(root):
     return plan
 
 
+def decision_budget(extent_m, specification):
+    """Frozen size allowance; episode outcome never changes its budget."""
+    if type(extent_m) not in (int,float) or not math.isfinite(extent_m) or extent_m<=0:
+        raise ValueError('positive finite evaluation extent required')
+    if type(specification) is int:
+        if specification<=0:raise ValueError('positive evaluation budget required')
+        return specification
+    keys={'mode','min_extent_m','max_extent_m','round_to','min_decisions','max_decisions'}
+    if not isinstance(specification,dict) or set(specification)!=keys or specification['mode']!='linear_extent':
+        raise ValueError('invalid evaluation budget rule')
+    low,high=(specification[k] for k in ('min_extent_m','max_extent_m'))
+    if any(type(v) not in (int,float) or not math.isfinite(v) or v<=0 for v in (low,high)) or low>=high:
+        raise ValueError('invalid budget reference extents')
+    quantum,minimum,maximum=(specification[k] for k in ('round_to','min_decisions','max_decisions'))
+    if (any(type(v) is not int or v<=0 for v in (quantum,minimum,maximum))
+            or minimum>maximum or minimum%quantum or maximum%quantum):
+        raise ValueError('invalid evaluation budget bounds/rounding')
+    fraction=min(1.,max(0.,(extent_m-low)/(high-low)))
+    raw=minimum+fraction*(maximum-minimum)
+    return min(maximum,max(minimum,math.floor(raw/quantum+.5)*quantum))
+
+
 def validate_case_set(cases):
     if not cases or len(cases)%2 or len(cases)>20:
         raise ValueError('evaluation requires one to ten paired groups')
@@ -97,7 +119,7 @@ def validate_case_set(cases):
 def freeze_cases(source, output, *, group_indices=None, budget=512):
     groups=list(range(10)) if group_indices is None else group_indices
     if (not isinstance(groups,list) or not groups or any(type(i) is not int or not 0<=i<10 for i in groups)
-            or groups!=sorted(set(groups)) or type(budget) is not int or budget<=0):
+            or groups!=sorted(set(groups))):
         raise ValueError('invalid evaluation groups/budget')
     rows = read(source)['cases']
     if len(rows) != 20: raise ValueError('historical identity requires twenty ordered cases')
@@ -109,11 +131,12 @@ def freeze_cases(source, output, *, group_indices=None, budget=512):
             raise ValueError('historical case differs from original continue.py expression/order')
         if index in groups:
             cases.append(dict(case_index=len(cases), family=row['family'], seed=row['seed'],
-                              extent_m=row['extent_m'], budget=budget))
+                              extent_m=row['extent_m'], budget=decision_budget(row['extent_m'],budget)))
     validate_case_set(cases)
     record = dict(schema='paired_cases_v1', source_sha=sha(source), cases=cases, cases_digest=digest(cases))
     if groups!=list(range(10)) or budget!=512:
         record.update(schema='paired_cases_v2',selected_groups=groups)
+    if isinstance(budget,dict):record.update(schema='paired_cases_v3',budget_rule=budget)
     output = Path(output)
     if output.exists():
         if read(output) != record: raise ValueError('frozen cases changed')

@@ -59,11 +59,11 @@ def coverage_lines(manifest):
     cases=read(ROOT/'cases.json',{}).get('cases',[])
     def pct(row):return f"{row['final_coverage']:6.2%}" if row else ' 待评 '
     result=['',f'已完成场景覆盖率 · {label}（括号内为 26856 基线）',
-            '组   尺寸(m)      月表覆盖率(基线)       洞穴覆盖率(基线)']
+            '组   尺寸(m)  预算    月表覆盖率(基线)       洞穴覆盖率(基线)']
     for group in range((len(cases)+1)//2):
         pair=cases[group*2:group*2+2]
         values=[f'{pct(current.get(c["case_index"]))} ({pct(baseline.get(c["case_index"]))})' for c in pair]
-        result.append(f'{group+1:2}   {pair[0]["extent_m"]:7.2f}      '+ '       '.join(values))
+        result.append(f'{group+1:2}   {pair[0]["extent_m"]:7.2f}  {pair[0]["budget"]:4}    '+ '       '.join(values))
     for family,name in (('moon','月表'),('cave','洞穴')):
         rows=[r for r in current.values() if r['family']==family]
         mean=f"{sum(r['final_coverage'] for r in rows)/len(rows):.2%}" if rows else '—'
@@ -75,9 +75,12 @@ def lines(manifest,progress,evaluation):
     stage=manifest.get('stage',0);phase=manifest.get('phase','等待状态')
     cases=read(ROOT/'cases.json',{}).get('cases',[])
     total=len(cases) or manifest.get('eval_total',20)
-    eval_budget=cases[0]['budget'] if cases else manifest.get('eval_budget',512)
+    selected=next((c for c in cases if c['case_index']==manifest.get('case_index',0)),None)
+    eval_budget=selected['budget'] if selected else manifest.get('eval_budget',512)
+    budgets=[c['budget'] for c in cases] or [eval_budget]
+    allowance=str(min(budgets)) if min(budgets)==max(budgets) else f'{min(budgets)}–{max(budgets)}'
     output=['任务内外前沿 · 从零训练监看',
-        f'位置辅助损失 0  |  月表、洞穴 50–100m  |  训练 512 / 评测 {eval_budget} 决策',
+        f'位置辅助损失 0  |  月表、洞穴 50–100m  |  训练 512 / 评测 {allowance} 决策',
         '─'*70,
         f"状态：{manifest.get('status','等待')}   阶段：{'预热' if stage==0 else str(stage)+'/10'}   任务：{phase}"]
     if phase=='evaluation':
