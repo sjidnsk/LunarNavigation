@@ -21,7 +21,7 @@ learning:
   polyak: 0.005
   return_steps: 1
   position_aux_weight: 0.0
-completion_bonus: 5.0
+completion_bonus: 20.0
 success_coverage: 0.99
 sensor:
   range_m: 10.0
@@ -53,8 +53,8 @@ metrics_max_bytes: 1048576
 system_reserve_bytes: 2147483648
 reward_diagnostics: true
 save_interval_s: 1800.0
-output_dir: /home/kai/CodexDownloads/lunar_navigation/drl-ordered-curriculum-30-100-20261004/managed/run
-artifact_root: /home/kai/CodexDownloads/lunar_navigation/drl-ordered-curriculum-30-100-20261004/managed
+output_dir: /home/kai/CodexDownloads/lunar_navigation/drl-ordered-curriculum-30-100-bonus20-20261004/managed/run
+artifact_root: /home/kai/CodexDownloads/lunar_navigation/drl-ordered-curriculum-30-100-bonus20-20261004/managed
 ordered_curriculum: true
 ordered_rehearsal_fraction: 0.2
 ordered_budget_rule:
