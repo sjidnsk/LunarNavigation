@@ -51,8 +51,38 @@ class Curriculum:
         import copy
         self.state = copy.deepcopy(state or {'episodes_issued': 0})
         self.probe_extent, self.probe_budget = probe_extent, probe_budget
+        self.course = None
+        if config.ordered_curriculum:
+            import os
+            from .ordered_curriculum import OrderedCourse
+            phase = int(os.environ.get('DRL_COURSE_PHASE', '0'))
+            if state is not None and 'course' not in state:
+                raise ValueError('mixed curriculum cannot restore into ordered course')
+            self.course = OrderedCourse(phase, config.ordered_rehearsal_fraction,
+                state=self.state.get('course'), success_coverage=config.success_coverage)
+            if config.environments < phase + 1:
+                raise ValueError('ordered course needs at least one slot per active task')
+            self.state['course'] = self.course.state_dict()
 
     def next(self, env_id, transitions):
+        if self.course is not None:
+            from .ordered_curriculum import area_budget
+            if not 0 <= env_id < self.config.environments:
+                raise ValueError('ordered curriculum requires a valid environment slot')
+            # Namespace differs from frozen evaluation. Issued serial persists
+            # across phase changes and learner restarts; no map is reissued.
+            serial = self.state['episodes_issued']
+            self.state['episodes_issued'] = serial + 1
+            seed = ((int(self.config.seed) + 1) << 32) + serial
+            low, high = self.config.curriculum_extents_m[0]
+            extent = self.probe_extent if self.probe_extent is not None else float(self.rng.uniform(low, high))
+            self.course.release(env_id)
+            task = self.course.next_task()
+            self.course.activate(env_id, task)
+            family, start_mode = task.split('_')
+            return dict(seed=seed, family=family, extent=extent, start_mode=start_mode,
+                curriculum_task=task, episode_budget=self.probe_budget if self.probe_budget is not None
+                else area_budget(extent, self.config.ordered_budget_rule))
         if self.config.paired_scene_sequence:
             import numpy as np
             if not 0 <= env_id < self.config.environments:
@@ -267,6 +297,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
         raise ValueError('saved collector weights/publication identity disagree')
     curriculum = Curriculum(config, curriculum_rng, curriculum_state,
         probe_extent=probe_extent, probe_budget=probe_budget)
+    course = curriculum.course
     ledger = AdmissionLedger(replay, schedule)
     ledger.last_admitted = dict(counters.get('last_admitted', {}))
     diagnostics = None
@@ -323,6 +354,9 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     def capture():
         counters['last_admitted'] = dict(ledger.last_admitted)
         counters['trace_totals'] = dict(trace_totals)
+        if course is not None:
+            curriculum.state['course'] = course.state_dict()
+            counters['course'] = course.state_dict()
         if diagnostics is not None:
             counters['reward_diagnostics'] = diagnostics.state_dict()
         state = TrainingState.capture(learner=learner, config=config, replay=replay,
@@ -334,9 +368,16 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
 
     def persist_diagnostics():
         nonlocal last_summary
-        if diagnostics is None:
-            return
         from .artifacts import atomic_json
+        if course is not None:
+            atomic_json(Path(config.output_dir)/'course-summary.json',
+                dict(course.summary(), transitions=schedule.transitions, updates=schedule.updates,
+                    training_boundary=dict(transitions=schedule.transitions,
+                    updates=schedule.updates, last_checkpoint_transitions=last_checkpoint_transitions)),
+                max_bytes=1024**2)
+        if diagnostics is None:
+            last_summary = time.monotonic()
+            return
         boundary_record = dict(transitions=schedule.transitions, updates=schedule.updates,
             last_checkpoint_transitions=last_checkpoint_transitions)
         atomic_json(Path(config.output_dir)/'reward-summary.json',
@@ -390,6 +431,8 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             replay_count=len(replay), replay_bytes=replay.bytes_used,
             save_in_s=max(0., config.save_interval_s-(time.monotonic()-manager.last_save)),
             environments=env_status, learning=last_update, trace_totals=dict(trace_totals),
+            **({'course': dict(course.summary(), transitions=schedule.transitions, updates=schedule.updates)}
+                if course is not None else {}),
             gpu_memory=(dict(allocated_bytes=torch.cuda.memory_allocated(learner.device),
                 reserved_bytes=torch.cuda.memory_reserved(learner.device),
                 peak_allocated_bytes=torch.cuda.max_memory_allocated(learner.device))
@@ -421,12 +464,20 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     if not stopping and not normal_draining:
                         spec = curriculum.next(env_id, schedule.transitions)
                         env_status[env_id] = dict(state='RESETTING', seed=spec['seed'],
-                            family=spec['family'], extent_m=spec['extent'], budget=spec['episode_budget'])
+                            family=spec['family'], extent_m=spec['extent'], budget=spec['episode_budget'],
+                            **({key: spec[key] for key in ('start_mode', 'curriculum_task')} if course is not None else {}))
                         connection.send(dict(kind='RESET', env=env_id, spec=spec))
                 elif kind == 'SCENE':
                     scenes = loads_transport(message['payload'])
                     ledger.scene(env_id, scenes)
                     metadata = message['metadata']
+                    if course is not None:
+                        # Includes infrastructure recovery: a fresh SCENE never
+                        # inherits unfinished episode duration or collision state.
+                        task = next(iter(scenes.values())).generator_descriptor.get('curriculum_task')
+                        if task != course.active.get(env_id):
+                            raise ValueError('worker scene disagrees with frozen course task')
+                        course.reset_episode(env_id)
                     if diagnostics is not None:
                         diagnostics.reset(env_id, 'RESET')
                     env_status[env_id] = dict(metadata, state='READY')
@@ -447,6 +498,8 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     if admitted:
                         reservations.pop(env_id)
                         counters['transitions'] = schedule.transitions
+                        if course is not None:
+                            course.admitted(env_id)
                     # Order is transactional replay admission -> collected -> ACK.
                     connection.send(dict(kind='ACK', env=env_id, token=message['token']))
                     status = env_status.setdefault(env_id, {})
@@ -465,6 +518,11 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     wall = message.get('execution', {}).get('wall_s', 0)
                     status['actual_rtf'] = message.get('execution', {}).get('simulation_s', 0) / wall if wall else None
                     if admitted:
+                        if course is not None:
+                            course.observe(env_id, terminated=transition.terminated,
+                                truncated=transition.truncated, coverage=status['reference_coverage'],
+                                collision=execution.get('reason_code') == 'COLLISION' or
+                                    bool(execution.get('geometry_failure', False)))
                         if diagnostics is not None:
                             before_count = int(np.unpackbits(
                                 transition.privileged.observed & scene.packed_reference).sum())
@@ -537,7 +595,12 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     env_status[env_id] = _merge_progress(env_status.get(env_id, {}), progress)
                     worker_pid = observations['workers'].get(str(env_id), {}).get('pid')
                     env_owners[env_id] = ([worker_pid] if worker_pid else []) + list(progress.get('owned_pids', []))
-                elif kind == 'EPISODE_END': metrics.append(dict(message, event='episode_end'))
+                elif kind == 'EPISODE_END':
+                    if course is not None and message.get('zero_decisions') and env_id in course.active:
+                        success = message['reason'] == 'COVERAGE_REACHED'
+                        course.observe(env_id, terminated=True, truncated=False,
+                            coverage=1. if success else 0., collision=False)
+                    metrics.append(dict(message, event='episode_end'))
                 else: raise RuntimeError('unexpected learner message ' + kind)
             if not process.is_alive() and not stopped:
                 # Process exit can precede the reader's final large-frame
@@ -553,7 +616,11 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             if repay_before_dispatch and not schedule.can_update:
                 repay_before_dispatch = False
             if not stopping and not normal_draining and not barrier_pending and not repay_before_dispatch:
-                for env_id, token in list(pending_requests.items()):
+                dispatch_items = list(pending_requests.items())
+                if course is not None:
+                    selected = course.select_pending(pending_requests, reservations)
+                    dispatch_items = [] if selected is None else [(selected, pending_requests[selected])]
+                for env_id, token in dispatch_items:
                     if manager.stop_requested:
                         stop(manager.requested_reason or 'stop requested')
                         break
@@ -569,13 +636,20 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             if not stopping and not manager.stop_requested and not barrier_pending and final_phase is None and schedule.can_update:
                 with boundary.update():
                     before_update = time.monotonic()
+                    weights = course.sampling_weights(replay.task_counts) if course is not None else None
                     if config.learning.return_steps == 1:
-                        batch = replay.sample(config.learning.batch_size, replay_rng)
+                        batch = (replay.sample_stratified(config.learning.batch_size, replay_rng, weights)
+                            if course is not None else replay.sample(config.learning.batch_size, replay_rng))
                     else:
+                        sequence_kwargs = {'weights': weights} if course is not None else {}
                         batch = replay.sample_sequences(config.learning.batch_size, replay_rng,
-                            max_steps=config.learning.return_steps)
+                            max_steps=config.learning.return_steps, **sequence_kwargs)
                     last_update = learner.update(batch, replay.scenes)
                     schedule.updated()
+                    if course is not None:
+                        from .replay import transition_task
+                        anchors = batch if config.learning.return_steps == 1 else [sequence[0] for sequence in batch]
+                        course.sampled([transition_task(anchor, replay.scenes) for anchor in anchors])
                     for key in trace_keys:
                         trace_totals[key] += last_update[key]
                     last_update['wall_s'] = time.monotonic() - before_update

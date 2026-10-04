@@ -134,16 +134,30 @@ class CurveRecorder:
                 result=read(path)
                 if not frozen_cases or result.get('status')!='finished':continue
                 cases=result['cases']
-                expected=[dict(case,config_digest=row['config_digest'],**{key:(baseline['cases'][i][key]
+                expected=result.get('expected_cases') or [dict(case,config_digest=row['config_digest'],**{key:(baseline['cases'][i][key]
                     if baseline else row[key]) for key in PAIR_KEYS}) for i,(case,row) in enumerate(zip(frozen_cases,cases))]
-                if len(expected)!=len(frozen_cases):continue
+                if len(expected)!=len(cases) or (not result.get('expected_cases') and len(expected)!=len(frozen_cases)):continue
                 validate_evaluation(result,actor_sha=result['actor_sha'],semantic_id=result['semantic_id'],cases=expected)
                 for row in cases:
                     evaluation.append(dict(label=result['label'],stage=result['stage'],actor_sha=result['actor_sha'],
                         semantic_id=result['semantic_id'],**{key:row.get(key) for key in (*CASE_KEYS,*PAIR_KEYS,
-                        'final_coverage','completed','zero_gain_ratio','max_zero_gain_run',
+                        'start_mode','curriculum_task','decisions','final_coverage','completed','zero_gain_ratio','max_zero_gain_run',
                         'zero_gain_two_point_loop_steps','reverse_edge_count','outside_steps','max_outside_run','task_exits','task_returns')}))
             self.data['evaluations']=evaluation
+            course_path=self.root/'run/course-summary.json'
+            if course_path.exists():
+                course=read(course_path);total_samples=sum(v['samples'] for v in course['by_task'].values())
+                total_transitions=sum(v['transitions'] for v in course['by_task'].values())
+                self.data.setdefault('course',[])
+                new=[]
+                for task,stats in course['by_task'].items():
+                    new.append(dict(updates=course.get('updates',0),phase=course['phase'],task=task,**stats,
+                        transition_fraction=stats['transitions']/total_transitions if total_transitions else 0.,
+                        sample_fraction=stats['samples']/total_samples if total_samples else 0.,
+                        success_rate=stats['successes']/stats['ended'] if stats['ended'] else 0.,
+                        mean_episode_steps=stats['episode_steps']/stats['ended'] if stats['ended'] else 0.))
+                self.data['course']=[r for r in self.data['course'] if r['updates']!=course.get('updates',0)]+new
+                self.data['course']=self.data['course'][-4096:]
             path=self.root/'run/reward-summary.json'
             if path.exists():
                 value=read(path);totals=value['totals'];updates=value['training_boundary']['updates']
@@ -182,6 +196,9 @@ class CurveRecorder:
                   'evaluation':(self.data['evaluations'],['stage','family','final_coverage','completed']),
                   'reward':(self.data['reward'],['updates','exploration','motion','step','completion'])}
             atomic_json(self.path,self.data,max_bytes=16*1024**2)
+            if 'course' in self.data:
+                payload=csv_bytes(self.data['course'],['updates','phase','task','transitions','samples','ended','successes','episode_steps'])
+                atomic_write(self.directory/'course.csv',lambda stream:stream.write(payload),max_bytes=16*1024**2)
             for name,(rows,columns) in data.items():
                 payload=csv_bytes(rows,columns)
                 atomic_write(self.directory/f'{name}.csv',lambda stream:stream.write(payload),max_bytes=16*1024**2)

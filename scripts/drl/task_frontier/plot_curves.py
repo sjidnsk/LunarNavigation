@@ -41,15 +41,19 @@ def render(kind,path):
               'reward':['exploration','motion','step','completion','reward_sum','new_area_m2','removed_frontiers_in','removed_frontiers_out','reward_mismatch_count']}[kind]
         xkey='stage' if kind=='evaluation' else 'updates'
         for ax,key in zip(axes.flat,keys):
-            groups={}
+            series={}
             for row in rows:
                 if row.get(key) in (None,''):continue
                 value=float(row[key]=='True') if row[key] in ('True','False') else float(row[key])
-                groups.setdefault(float(row[xkey]),[]).append(value)
-            xs=sorted(groups);ys=[sum(groups[x])/len(groups[x]) for x in xs]
-            ax.plot(xs,ys,marker='o',markersize=3);ax.set_title(key);ax.set_xlabel(xkey)
+                label=row.get('curriculum_task') or ('paired mean' if kind=='evaluation' else 'mean')
+                series.setdefault(label,{}).setdefault(float(row[xkey]),[]).append(value)
+            for label,groups in sorted(series.items()):
+                xs=sorted(groups);ys=[sum(groups[x])/len(groups[x]) for x in xs]
+                ax.plot(xs,ys,marker='o',markersize=3,label=label)
+            if series:ax.legend(fontsize=6)
+            ax.set_title(key);ax.set_xlabel('training block' if kind=='evaluation' and any(r.get('curriculum_task') for r in rows) else xkey)
     for ax in axes.flat:ax.grid(alpha=.2)
-    figure.suptitle(kind+' | sampled diagnostics' if kind!='evaluation' else 'Frozen paired evaluation | complete strict results only')
+    figure.suptitle(kind+' | sampled diagnostics' if kind!='evaluation' else 'Frozen evaluation | complete strict results only')
     if not rows:figure.text(.5,.5,'NO VERIFIED DATA YET',ha='center',fontsize=16)
     output=io.BytesIO();figure.savefig(output,format='png',dpi=110);plt.close(figure)
     return output.getvalue()

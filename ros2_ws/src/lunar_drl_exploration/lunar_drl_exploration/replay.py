@@ -201,6 +201,24 @@ def _same_content(left, right):
     return bool(left == right)
 
 
+def transition_task(transition, scenes):
+    """Frozen episode task; robot movement never changes this replay label."""
+    labels = []
+    for state in (transition.privileged, transition.next_privileged):
+        truth = scenes.get(state.scene_id)
+        if not isinstance(truth, PrivilegedScene):
+            raise ValueError(f'missing static scene for task: {state.scene_id}')
+        task = truth.generator_descriptor.get('curriculum_task', 'unclassified')
+        if task is None:
+            task = 'unclassified'  # Explicit None is the normal non-course reset.
+        if not isinstance(task, str) or not task:
+            raise ValueError('nonempty curriculum task label required')
+        labels.append(task)
+    if labels[0] != labels[1]:
+        raise ValueError('transition cannot cross curriculum task labels')
+    return labels[0]
+
+
 class _Ledger:
     def __init__(self):
         self.items = {}; self.bytes = 0; self.buffer_bytes = 0
@@ -241,6 +259,7 @@ class ReplayBuffer:
         self.max_bytes = int(max_bytes)
         self._entries = {}; self._first = self._next = 0; self._scenes = {}; self._refs = {}; self._scene_keys = {}
         self._sequence_index = {}
+        self._task_entries = {}; self._task_positions = {}; self._task_bytes = 0
         self._ledger = _Ledger()
         self._entry_bytes = self._refcount_bytes = self._sequence_bytes = 0
 
@@ -251,8 +270,11 @@ class ReplayBuffer:
         tables = sum(sys.getsizeof(table) for table in
                      (self._entries, self._scenes, self._refs,
                       self._scene_keys, self._sequence_index, self._ledger.items))
+        tables += sys.getsizeof(self._task_entries) + sys.getsizeof(self._task_positions)
+        tables += sum(sys.getsizeof(task) + sys.getsizeof(entries)
+                      for task, entries in self._task_entries.items())
         return (self._ledger.bytes + self._ledger.membership_bytes + tables +
-                self._entry_bytes + self._refcount_bytes + self._sequence_bytes)
+                self._entry_bytes + self._refcount_bytes + self._sequence_bytes + self._task_bytes)
 
     @property
     def buffer_bytes(self):
@@ -265,6 +287,10 @@ class ReplayBuffer:
     @property
     def scene_refcounts(self):
         return dict(self._refs)
+
+    @property
+    def task_counts(self):
+        return {task: len(entries) for task, entries in self._task_entries.items()}
 
     def __len__(self):
         return len(self._entries)
@@ -293,6 +319,7 @@ class ReplayBuffer:
             if not isinstance(truth, PrivilegedScene) or truth.scene_id != key:
                 raise ValueError(f'missing or invalid static scene: {key}')
             selected[key] = truth
+        transition_task(transition, selected)
         for state in (transition.privileged, transition.next_privileged):
             truth = selected[state.scene_id]
             if state.observed.shape != ((math.prod(truth.reference_shape)+7)//8,):
@@ -339,6 +366,12 @@ class ReplayBuffer:
         keys = self._ledger.acquire(transition)
         entry = (transition, ids, keys)
         self._entries[self._next] = entry
+        task = transition_task(transition, selected)
+        entries = self._task_entries.setdefault(task, [])
+        position = len(entries)
+        entries.append(self._next)
+        self._task_positions[self._next] = position
+        self._task_bytes += 2 * sys.getsizeof(self._next) + sys.getsizeof(position)
         self._entry_bytes += self._entry_size(self._next, entry)
         if transition.step_index is not None:
             key = (transition.episode_id, transition.step_index)
@@ -361,6 +394,17 @@ class ReplayBuffer:
         entry = self._entries.pop(self._first)
         self._entry_bytes -= self._entry_size(self._first, entry)
         transition, ids, keys = entry
+        task = transition_task(transition, self._scenes)
+        entries = self._task_entries[task]
+        position = self._task_positions.pop(self._first)
+        self._task_bytes -= 2 * sys.getsizeof(self._first) + sys.getsizeof(position)
+        last = entries.pop()
+        if position < len(entries):
+            entries[position] = last
+            self._task_bytes += sys.getsizeof(position) - sys.getsizeof(self._task_positions[last])
+            self._task_positions[last] = position
+        if not entries:
+            del self._task_entries[task]
         if transition.step_index is not None:
             key = (transition.episode_id, transition.step_index)
             entry_id = self._sequence_index.pop(key)
@@ -378,6 +422,7 @@ class ReplayBuffer:
         if not self._entries:
             self._entries = {}; self._scenes = {}; self._refs = {}; self._scene_keys = {}
             self._sequence_index = {}
+            self._task_entries = {}; self._task_positions = {}; self._task_bytes = 0
 
     def sample(self, batch_size, rng):
         if not self._entries or batch_size <= 0:
@@ -387,7 +432,42 @@ class ReplayBuffer:
         indices = rng.integers(0, len(self._entries), size=batch_size)
         return [self._entries[self._first + int(index)][0] for index in indices]
 
-    def sample_sequences(self, batch_size, rng, max_steps):
+    def sample_stratified(self, batch_size, rng, weights):
+        """Integer largest-remainder quotas, O(tasks + batch), with replacement."""
+        if (isinstance(batch_size, (bool, np.bool_)) or
+                not isinstance(batch_size, (int, np.integer)) or batch_size <= 0):
+            raise ValueError('positive integer batch required')
+        if not isinstance(weights, Mapping) or not weights:
+            raise ValueError('nonempty task weights required')
+        active = []
+        for task, weight in weights.items():
+            if (not isinstance(task, str) or isinstance(weight, (bool, np.bool_)) or
+                    not isinstance(weight, (int, float, np.number)) or
+                    not math.isfinite(weight) or weight < 0):
+                raise ValueError('finite nonnegative task weights required')
+            if weight > 0:
+                if not self._task_entries.get(task):
+                    raise ValueError(f'missing replay task: {task}')
+                active.append((task, float(weight)))
+        total = sum(weight for _, weight in active)
+        if not active or not math.isfinite(total):
+            raise ValueError('positive finite total task weight required')
+        expected = [batch_size * weight / total for _, weight in active]
+        quotas = [math.floor(value) for value in expected]
+        # Rotate ties using the saved caller RNG, avoiding systematic old-task bias.
+        tie_order = rng.permutation(len(active))
+        ranked = sorted(tie_order, key=lambda i: expected[i] - quotas[i], reverse=True)
+        for index in ranked[:batch_size - sum(quotas)]:
+            quotas[index] += 1
+        result = []
+        for (task, _), quota in zip(active, quotas):
+            entries = self._task_entries[task]
+            for index in rng.integers(0, len(entries), size=quota):
+                result.append(self._entries[entries[int(index)]][0])
+        rng.shuffle(result)
+        return result
+
+    def sample_sequences(self, batch_size, rng, max_steps, weights=None):
         """Uniform original anchors followed by available same-episode steps.
 
         Returned tuples only reference stored immutable transitions. Index upkeep
@@ -397,7 +477,8 @@ class ReplayBuffer:
         if (isinstance(max_steps, (bool, np.bool_)) or
                 not isinstance(max_steps, (int, np.integer)) or not 1 <= max_steps <= 8):
             raise ValueError('integer sequence horizon from 1 through 8 required')
-        anchors = self.sample(batch_size, rng)
+        anchors = (self.sample(batch_size, rng) if weights is None else
+                   self.sample_stratified(batch_size, rng, weights))
         result = []
         for anchor in anchors:
             sequence = [anchor]
@@ -422,20 +503,59 @@ class ReplayBuffer:
 
     def snapshot(self, max_bytes=2 * 1024**3, *, require_sample=False):
         selected = ReplayBuffer(max(1, max_bytes))
-        for transition, _, _ in self._entries.values():
+        active_tasks = set(self._task_entries) - {'unclassified'}
+        # Put one recent representative of each course task last. Bounded FIFO
+        # trimming then retains every class, or explicitly rejects the snapshot.
+        reserved = set()
+        for task in active_tasks:
+            # An unusually large recent transition must not mask a fitting old
+            # representative from the same task.
+            for index in sorted(self._task_entries[task], reverse=True):
+                single = ReplayBuffer(max(1, max_bytes))
+                try:
+                    single.add(self._entries[index][0], self._scenes)
+                except ValueError as error:
+                    if 'exceed replay budget' not in str(error):
+                        raise
+                    continue
+                reserved.add(index)
+                break
+            else:
+                raise ResourceLimitError(
+                    f'replay snapshot cannot preserve active task {task} within {max_bytes} bytes', 0, 1)
+        order = [index for index in self._entries if index not in reserved]
+        order.extend(sorted(reserved))
+        source_indices = {}
+        for index in order:
+            transition = self._entries[index][0]
             try:
                 selected.add(transition, self._scenes)
+                source_indices[selected._next - 1] = index
             except ValueError as error:
                 if 'exceed replay budget' not in str(error): raise
         while True:
+            if not active_tasks.issubset(selected.task_counts):
+                raise ResourceLimitError(
+                    f'replay snapshot cannot preserve active task samples within {max_bytes} bytes',
+                    len(active_tasks.intersection(selected.task_counts)), len(active_tasks))
             if require_sample and not len(selected):
                 raise ResourceLimitError(
                     f'replay snapshot requires a complete sample within {max_bytes} bytes', 0, 1)
             prefix = _SNAPSHOT_MAGIC + len(selected).to_bytes(8, 'little')
-            payload = dumps_transport(dict(schema='bounded_replay_v2',
+            retained = sorted(selected._entries, key=source_indices.__getitem__)
+            record = dict(schema='bounded_replay_v2',
                 frontier_semantics=frontier_semantics(),
-                transitions=[entry[0] for entry in selected._entries.values()],
-                scenes=dict(selected._scenes)), _prefix=prefix)
+                transitions=[selected._entries[index][0] for index in retained],
+                scenes=dict(selected._scenes))
+            if active_tasks:
+                # Preserve sampler bucket order as well as chronological replay
+                # order. Swap-delete task indexes otherwise change across resume.
+                ordinals = {source_indices[index]: ordinal
+                            for ordinal, index in enumerate(retained)}
+                record['task_order'] = {task: [ordinals[index] for index in entries if index in ordinals]
+                                        for task, entries in self._task_entries.items()
+                                        if any(index in ordinals for index in entries)}
+            payload = dumps_transport(record, _prefix=prefix)
             if len(payload) <= max_bytes: return payload
             if not len(selected): raise ValueError('snapshot budget smaller than empty schema')
             selected.evict_oldest()
@@ -452,7 +572,11 @@ class ReplayBuffer:
             raise ValueError('replay sample count disagrees with envelope')
         result = cls(max_bytes)
         steps = set()
+        active_tasks = set()
         for transition in record['transitions']:
+            task = transition_task(transition, record['scenes'])
+            if task != 'unclassified':
+                active_tasks.add(task)
             if transition.step_index is not None:
                 key = (transition.episode_id, transition.step_index)
                 if key in steps:
@@ -464,4 +588,30 @@ class ReplayBuffer:
                 # only one admission ledger at a time. Retain the actual replay only
                 # on restore; decoded record objects are released at function exit.
                 result.evict_oldest()
+        if not validate_only and not active_tasks.issubset(result.task_counts):
+            raise ResourceLimitError('replay restore budget lost active task samples',
+                                     len(active_tasks.intersection(result.task_counts)), len(active_tasks))
+        if 'task_order' in record:
+            orders = record['task_order']
+            if not isinstance(orders, dict):
+                raise ValueError('invalid replay task order')
+            seen = set()
+            for task, indices in orders.items():
+                if not isinstance(indices, list) or not indices:
+                    raise ValueError('invalid replay task order bucket')
+                for index in indices:
+                    if (type(index) is not int or not 0 <= index < count or index in seen or
+                            transition_task(record['transitions'][index], record['scenes']) != task):
+                        raise ValueError('invalid replay task order index')
+                    seen.add(index)
+            if len(seen) != count:
+                raise ValueError('incomplete replay task order')
+            if not validate_only:
+                for task, indices in orders.items():
+                    kept = [index for index in indices if index in result._entries]
+                    if kept:
+                        result._task_entries[task] = kept
+                        for position, index in enumerate(kept):
+                            result._task_bytes += sys.getsizeof(position) - sys.getsizeof(result._task_positions[index])
+                            result._task_positions[index] = position
         return None if validate_only else result

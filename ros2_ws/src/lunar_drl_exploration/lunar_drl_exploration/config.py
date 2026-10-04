@@ -200,6 +200,9 @@ class TrainingConfig:
     platform: PlatformConfig = field(default_factory=load_platform_config)
     seed: int = 20260915
     paired_scene_sequence: bool = False
+    ordered_curriculum: bool = False
+    ordered_rehearsal_fraction: float = .2
+    ordered_budget_rule: dict | None = None
     environments: int = 8
     target_rtf: float = 30.0
     integration_step_s: float = .05
@@ -233,6 +236,20 @@ class TrainingConfig:
 
     def __post_init__(self):
         boundaries = self.curriculum_transition_boundaries
+        if type(self.ordered_curriculum) is not bool:
+            raise ValueError('ordered_curriculum must be boolean')
+        if (type(self.ordered_rehearsal_fraction) not in (int, float) or
+                not np.isfinite(self.ordered_rehearsal_fraction) or
+                not 0 <= self.ordered_rehearsal_fraction < 1):
+            raise ValueError('ordered_rehearsal_fraction must be in [0,1)')
+        if self.ordered_budget_rule is not None and not isinstance(self.ordered_budget_rule, dict):
+            raise ValueError('ordered_budget_rule must be a dictionary or None')
+        if self.ordered_budget_rule is not None:
+            import json
+            try:
+                json.dumps(self.ordered_budget_rule, allow_nan=False)
+            except (TypeError, ValueError) as error:
+                raise ValueError('ordered_budget_rule must contain finite JSON values') from error
         if not isinstance(self.artifact_root, str):
             raise ValueError('artifact_root must be a path string')
         if type(self.reward_diagnostics) is not bool:
@@ -320,6 +337,12 @@ def resume_semantics(config):
         schedule=dict(warmup=config.warmup, ratio=config.update_ratio),
         curriculum_budgets=record['curriculum_budgets'],
         curriculum_extents_m=record['curriculum_extents_m'])
+    if config.ordered_curriculum:
+        result['ordered_curriculum'] = dict(version='ordered_task_transfer_v1',
+            tasks=['moon_inside', 'cave_inside', 'moon_outside', 'cave_outside'],
+            start_sampling='seeded_main_component_task_mask_v1',
+            rehearsal_fraction=config.ordered_rehearsal_fraction,
+            budget_rule=record['ordered_budget_rule'])
     if config.paired_scene_sequence:
         result['scene_sequence'] = dict(mode='paired_slot_episode_v1',
             seed=config.seed, environments=config.environments)

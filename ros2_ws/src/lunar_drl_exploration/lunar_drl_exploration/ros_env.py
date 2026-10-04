@@ -81,15 +81,27 @@ class RosExplorationEnv:
     @property
     def owned_pids(self): return self.owned.pids
 
-    def reset(self,seed,family,extent,*,episode_budget=None):
+    def reset(self,seed,family,extent,*,episode_budget=None,start_mode='any',curriculum_task=None):
         self.close()
         from .scene import Scene,TerrainGrid
+        if start_mode not in ('any', 'inside', 'outside'):
+            raise ValueError('start_mode must be any, inside or outside')
+        if curriculum_task is not None and (
+                start_mode == 'any' or curriculum_task != f'{family}_{start_mode}'):
+            raise ValueError('curriculum_task must match family and start_mode')
         scene=Scene(seed,family,extent,platform=self.config.platform)
         terrain=TerrainGrid.from_scene(scene)
         self.episode_budget=int(episode_budget) if episode_budget is not None else self.config.curriculum_budgets[0 if extent<=80 else 1 if extent<=150 else 2]
         if self.episode_budget<=0:raise ValueError("positive episode budget required")
-        return self.reset_scene(terrain,scene.initial_pose(terrain),scene.task,
-                                descriptor={'seed':seed,'family':family,'extent_m':extent})
+        from types import MappingProxyType
+        start_descriptor=dict(start_mode=start_mode)
+        if curriculum_task is not None:
+            start_descriptor['curriculum_task']=curriculum_task
+        terrain.generator_descriptor=MappingProxyType(dict(terrain.generator_descriptor,
+            **start_descriptor))
+        return self.reset_scene(terrain,scene.initial_pose(terrain,start_mode=start_mode),scene.task,
+            descriptor={'seed':seed,'family':family,'extent_m':extent,
+                        'start_mode':start_mode,'curriculum_task':curriculum_task})
 
     def reset_scene(self,terrain,pose,task,*,descriptor=None):
         """Explicit deterministic fixture entry; identical sensor/navigation path."""

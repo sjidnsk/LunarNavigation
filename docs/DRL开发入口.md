@@ -1,5 +1,12 @@
 # 强化学习统一开发入口
 
+## 2026-10-04 四阶段课程（当前训练方案）
+
+同一专项工作树启用 `config/drl_ordered_curriculum.yaml`：区内月表 → 区内洞穴 → 区外月表 → 区外洞穴，一个SAC从零开始，各阶段继承完整学习状态。后续阶段按转移/采样当前80%、旧任务合计20%；面积预算256–512，不计算可探索面积。默认每8192转移评测当前5图及旧任务5图，按连续评测门槛晋级，未通过且达上限保存停止。旧混合训练已保存24,152转移/5,781更新。
+
+设计、门槛、恢复与监看命令见[四阶段课程操作](drl/2026-10-04-ordered-curriculum-operations.md)。新产物根 `/home/kai/CodexDownloads/lunar_navigation/drl-ordered-curriculum-20261004/managed`；旧实验和26856保留。本专项仍未合并/推送。
+
+
 当前专项为`feat/drl-task-frontier`，工作树`/home/kai/WS/lunar-navigation/lunar-runtime/.worktrees/drl-task-frontier`，配置`config/drl_task_frontier.yaml`。实现/本机原生CUDA烟测完成；正式实验等待最终独立审阅门禁后由父控制器直接启动。开发整合线仍为`dev/drl-exploration`，不合并/推送本专项。
 
 新入口与证据见[Task frontier验证](validation/2026-10-04-drl-task-frontier.md)及[操作指令](操作指令.md#task-frontier-20261004)。专项输出`/home/kai/CodexDownloads/lunar_navigation/drl-task-frontier-20261003/`，生产managed与独立task8烟测计数分开；两项Task1 deferred minor（当前入口索引、冷构建native链接）已解决。

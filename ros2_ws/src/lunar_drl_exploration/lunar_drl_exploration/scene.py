@@ -13,7 +13,7 @@ from types import MappingProxyType
 import numpy as np
 import lunar_drl_terrain_native as native
 from .contracts import Pose, TaskSpec
-from .geometry import cell_center, world_to_cell
+from .geometry import cell_center, world_to_cell, polygon_mask
 from .sensor import OBSERVATION_MODEL_VERSION
 
 
@@ -210,8 +210,10 @@ class Scene:
             z = np.where(inside, 0.0, 2.0)
         return np.asarray(z, np.float32)
 
-    def initial_pose(self, terrain):
+    def initial_pose(self, terrain, start_mode='any'):
         """Uniform seeded native stance in the main component; yaw is unchanged."""
+        if start_mode not in ('any', 'inside', 'outside'):
+            raise ValueError('start_mode must be any, inside or outside')
         if terrain.terrain_id != self.scene_id:
             raise ValueError("terrain belongs to different scene")
         if self.family == "moon":
@@ -240,6 +242,12 @@ class Scene:
                 self._yaw
             )
             component = terrain.reachable(anchor)
+        if start_mode != 'any':
+            task_mask = polygon_mask(terrain.shape, terrain.origin,
+                                     terrain.resolution_m, self.task.polygon)
+            component = (component != 0) & (task_mask if start_mode == 'inside' else ~task_mask)
+            if not np.any(component):
+                raise ValueError(f'generated main terrain has no legal {start_mode} start')
         row_counts = np.count_nonzero(component, axis=1)
         cumulative = np.cumsum(row_counts, dtype=np.int64)
         if not cumulative[-1]:

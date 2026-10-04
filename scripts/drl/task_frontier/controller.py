@@ -158,7 +158,7 @@ def validate_evaluation(record: dict, *, actor_sha: str, semantic_id: str, cases
     rows = record.get('cases', [])
     require(len(rows) == len(cases) and bool(cases), 'case count')
     for row, expected in zip(rows, cases):
-        for key in (*CASE_KEYS, *PAIR_KEYS, 'config_digest'):
+        for key in (*CASE_KEYS, *PAIR_KEYS, 'config_digest', *(k for k in ('start_mode','curriculum_task') if k in expected)):
             require(key in expected and bool(expected[key]) if key in (*PAIR_KEYS, 'config_digest') else key in expected,
                     'expected ' + key)
             require(row.get(key) == expected[key], key)
@@ -218,7 +218,7 @@ def process_matches(manifest):
         args = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
         started = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
     except (OSError, IndexError): return False
-    return (str(HERE/'controller.py').encode() in args and
+    return (any(str(HERE/name).encode() in args for name in ('controller.py','course_controller.py')) and
             str(manifest.get('root', '')).encode() in args and
             str(manifest.get('run_id', '')).encode() in args and
             started == manifest.get('process_start'))
@@ -263,13 +263,17 @@ def wait_startup(process,reader,root,owned,token):
         return ready
 
 
-def start_background(root):
+def start_background(root, *, entry=None):
+    if entry is not None and Path(entry).resolve()!=HERE/'course_controller.py':
+        raise ValueError('unknown controller entry')
     owned=identity(root);verify_gate(root)
     token=uuid.uuid4().hex;reader,writer=os.pipe();process=None
     try:
         with root_lock(root) as lock_fd:
             with (Path(root)/'controller.log').open('ab') as log:
-                process=subprocess.Popen(['bash',str(HERE/'run.sh'),'run','--root',str(root),
+                command=['bash',str(HERE/'run.sh')]
+                if entry is not None:command += ['python',str(entry)]
+                process=subprocess.Popen([*command,'run','--root',str(root),
                     '--run-id',owned['run_id'],'--lock-fd',str(lock_fd),'--ready-fd',str(writer),
                     '--startup-token',token],pass_fds=(lock_fd,writer),
                     start_new_session=True,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT)
@@ -311,6 +315,9 @@ def verify_gate(root):
             or any(gate.get(key, {}).get('status') != 'passed' or
                    gate[key].get('source_commit') != commit for key in ('native_smoke', 'independent_audit'))):
         raise ValueError('native smoke and independent audit gate must pass for current source/config')
+    if read(Path(root)/'config.json').get('ordered_curriculum'):
+        if gate.get('course_plan_sha') != sha(Path(root)/'course-plan.json'):
+            raise ValueError('review gate course plan changed')
     if subprocess.check_output(['git', '-C', str(REPO), 'status', '--porcelain', '--untracked-files=no'], text=True):
         raise ValueError('review gate requires clean committed source')
     return gate

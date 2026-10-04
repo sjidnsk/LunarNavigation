@@ -10,6 +10,10 @@ import time
 from controller import CASE_KEYS, PAIR_KEYS, read, write, sha, digest, validate_evaluation
 
 
+def case_fields(request):
+    return (*CASE_KEYS, *(k for k in ('start_mode','curriculum_task') if k in request))
+
+
 def runtime_identity():
     modules={}
     for name in ('lunar_drl_exploration.evaluation','lunar_drl_exploration.ros_env',
@@ -43,7 +47,7 @@ def effective_identity(config):
 def validate_cached(record,request,current):
     row=record['cases'][0]
     proof=record['provenance']
-    expected_proof=dict(current,case={k:request[k] for k in CASE_KEYS},actor_sha=request['actor_sha'],
+    expected_proof=dict(current,case={k:request[k] for k in case_fields(request)},actor_sha=request['actor_sha'],
                         config_sha=request['config_sha'],wrapper_sha=sha(request['wrapper']),
                         source_commit=request['source_commit'],run_id=request['run_id'])
     expected_proof.update({key:request.get(key) for key in ('source_checkpoint','source_checkpoint_sha')})
@@ -95,7 +99,7 @@ class DomainMetrics:
                     task_exits=self.exits,task_returns=self.returns)
 
 
-def observed_env_class(base,telemetry,domain,proof,current,capture):
+def observed_env_class(base,telemetry,domain,proof,current,capture,*,start_mode='any',curriculum_task=None):
     from lunar_drl_exploration.config import config_record
     from lunar_drl_exploration.graph import _inside
     class ObservedEnv(base):
@@ -104,7 +108,8 @@ def observed_env_class(base,telemetry,domain,proof,current,capture):
             return super().reset_scene(terrain,pose,task,descriptor=descriptor)
         def reset(self,seed,family,extent,*,episode_budget=None):
             telemetry.update(phase='初始化地图')
-            obs,state=super().reset(seed,family,extent,episode_budget=episode_budget)
+            kwargs={} if start_mode=='any' and curriculum_task is None else dict(start_mode=start_mode,curriculum_task=curriculum_task)
+            obs,state=super().reset(seed,family,extent,episode_budget=episode_budget,**kwargs)
             proof.update(terrain_id=self.terrain.terrain_id,reference_id=self.reference.reference_id,
                 actual_schema=obs.schema,episode_metadata=dict(self.episode_metadata),
                 polygon_digest=digest(self.task.polygon.tolist()),initial_pose=self.probe_initial_pose,
@@ -142,7 +147,7 @@ def evaluate_case(request,output):
         cached=read(output)
         validate_cached(cached,request,current)
         return cached
-    proof=dict(current,case={k:request[k] for k in CASE_KEYS},actor_sha=request['actor_sha'],
+    proof=dict(current,case={k:request[k] for k in case_fields(request)},actor_sha=request['actor_sha'],
         config_sha=request['config_sha'],wrapper_sha=sha(request['wrapper']),source_commit=request['source_commit'],
         run_id=request['run_id'],pid=os.getpid(),source_checkpoint=request.get('source_checkpoint'),source_checkpoint_sha=request.get('source_checkpoint_sha'))
     telemetry=Telemetry(request['root'],request);domain=DomainMetrics();capture=None
@@ -151,7 +156,8 @@ def evaluate_case(request,output):
         from fixed_probes import ProbeCapture
         capture=ProbeCapture(probe_root,dict(proof,phase='evaluation'));capture.install()
     base=ros_env.RosExplorationEnv
-    ObservedEnv=observed_env_class(base,telemetry,domain,proof,current,capture)
+    ObservedEnv=observed_env_class(base,telemetry,domain,proof,current,capture,
+        start_mode=request.get('start_mode','any'),curriculum_task=request.get('curriculum_task'))
     ros_env.RosExplorationEnv=ObservedEnv
     telemetry.start()
     try:
@@ -163,7 +169,7 @@ def evaluate_case(request,output):
     if sha(request['actor'])!=request['actor_sha'] or sha(request['config'])!=request['config_sha']:
         raise ValueError('actor/config changed during evaluation')
     if runtime_identity()!=current['runtime']:raise ValueError('runtime modules changed during evaluation')
-    row=dict(original['cases'][0],**domain.record(),**{k:request[k] for k in CASE_KEYS})
+    row=dict(original['cases'][0],**domain.record(),**{k:request[k] for k in case_fields(request)})
     for key in (*PAIR_KEYS,'config_digest','semantic_id','actor_sha','run_id','pid'):row[key]=proof.get(key)
     row.update(provenance_digest=digest(proof),exit_code=0)
     result=dict(status='finished',exit_code=0,actor_sha=request['actor_sha'],semantic_id=current['semantic_id'],
