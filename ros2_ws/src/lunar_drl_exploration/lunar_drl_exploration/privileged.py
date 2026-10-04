@@ -4,14 +4,13 @@ This module is never needed by the online decision path. Terrain and temporary
 ray results stay with the environment; replay owns only raw removal counts and sparse
 read-only query supports. Truth does not add or remove measured actions.
 """
-from dataclasses import replace
 from typing import TYPE_CHECKING
 import numpy as np
 from scipy.spatial import cKDTree
 from .config import GraphConfig
 from .contracts import PrivilegedScene, PrivilegedState, PrivilegedActionContext, Pose, SensorSpec
 from .geometry import lattice_displacement, pack_cell_ids
-from .frontiers import FrontierSet, FrontierSnapshot, count_removed
+from .frontiers import FrontierSnapshot
 from .maps import FREE, UNKNOWN
 from .metric_graph import MetricGrid, greedy_spanner
 from .sensor import visible_cells
@@ -55,39 +54,58 @@ def build_truth(terrain, reference, config=None):
         indices, reference.packed_mask, tuple(reference.shape), descriptor)
 
 
+def _sorted_membership(values, sorted_ids):
+    """Probe canonical snapshot IDs without scanning/copying the known map."""
+    indices = np.searchsorted(sorted_ids, values)
+    result = np.zeros(len(values), bool)
+    valid = indices < len(sorted_ids)
+    result[valid] = sorted_ids[indices[valid]] == values[valid]
+    return result
+
+
+class _RemovalPrediction:
+    """Per-build projection of frozen inside demands; never retained across K."""
+    def __init__(self, before, terrain):
+        if terrain.resolution_m != before.resolution_m:
+            raise ValueError('native/reference resolution mismatch')
+        self.offset = lattice_displacement(terrain.origin, before.lattice_origin,
+                                           before.resolution_m)
+        if self.offset is None:
+            raise ValueError('native/reference lattice mismatch')
+        self.old = before.inside
+        self.known_demands = _sorted_membership(self.old.demand_ids, before.known_ids)
+        self.free_centers = _sorted_membership(self.old.cell_ids, before.free_ids)
+
+    def predict(self, terrain, pose, sensor):
+        # Keep the native reveal and its sensor/pose validation even for no fronts.
+        rows, cols = visible_cells(terrain.intrinsic, terrain.origin,
+                                   terrain.resolution_m, pose, sensor)
+        old = self.old
+        if not len(old.cell_ids):
+            return 0
+        classes = terrain.intrinsic[rows, cols]
+        valid = np.isfinite(terrain.heights[rows, cols]) & (classes != UNKNOWN)
+        hits = pack_cell_ids(cols[valid]+self.offset[0], rows[valid]+self.offset[1])
+        solved = np.logical_and.reduceat(
+            self.known_demands | np.isin(old.demand_ids, hits), old.demand_offsets[:-1])
+        # A revealed BLOCKED center cannot earn removal. Unrevealed centers
+        # retain measured FREE membership, exactly as the virtual snapshot did.
+        free = ((self.free_centers & ~np.isin(old.cell_ids, hits)) |
+                np.isin(old.cell_ids, hits[classes[valid] == FREE]))
+        # All demands known implies the old center is absent from the projected
+        # frontier set. New fronts and outside demands cannot affect this count.
+        return int(np.count_nonzero(solved & free))
+
+
 def predict_removed(before: FrontierSnapshot, terrain: 'TerrainGrid', pose: Pose,
                     sensor: SensorSpec) -> int:
-    """Predict old inside-front removal from one endpoint truth observation.
+    """Exact old inside-front elimination after one endpoint truth observation.
 
-    The virtual snapshot projects onto old centers only: new fronts cannot
-    cancel old removals. Remaining demands are still unknown after the reveal.
-    This intentionally differs from the real action's accumulated route reward.
+    This projects only the frozen inside demands and current FREE centers,
+    without constructing/copying whole-map virtual snapshots. It intentionally
+    differs from the real action's accumulated route reward.
     """
-    if terrain.resolution_m != before.resolution_m:
-        raise ValueError('native/reference resolution mismatch')
-    offset = lattice_displacement(terrain.origin, before.lattice_origin, before.resolution_m)
-    if offset is None:
-        raise ValueError('native/reference lattice mismatch')
-    rows, cols = visible_cells(terrain.intrinsic, terrain.origin,
-                               terrain.resolution_m, pose, sensor)
-    classes = terrain.intrinsic[rows, cols]
-    valid = np.isfinite(terrain.heights[rows, cols]) & (classes != UNKNOWN)
-    hits = pack_cell_ids(cols[valid]+offset[0], rows[valid]+offset[1])
-    known = np.union1d(before.known_ids, hits)
-    free = np.union1d(np.setdiff1d(before.free_ids, hits), hits[classes[valid] == FREE])
-
-    def remaining(old):
-        unknown = ~np.isin(old.demand_ids, known)
-        counts = (np.add.reduceat(unknown.astype(np.int64), old.demand_offsets[:-1])
-                  if len(old.cell_ids) else np.empty(0, np.int64))
-        kept = (counts > 0) & np.isin(old.cell_ids, free)
-        demand_kept = unknown & np.repeat(kept, np.diff(old.demand_offsets))
-        return FrontierSet(old.cell_ids[kept], old.centers[kept],
-                           np.r_[0, np.cumsum(counts[kept])], old.demand_ids[demand_kept])
-
-    after = replace(before, revision=before.revision+1, known_ids=known, free_ids=free,
-                    inside=remaining(before.inside), outside=remaining(before.outside))
-    return count_removed(before, after, domain='inside')
+    return _RemovalPrediction(before, terrain).predict(terrain, pose, sensor)
 
 
 class PrivilegedBuilder:
@@ -125,7 +143,8 @@ class PrivilegedBuilder:
             support_distances.extend(distance[selected].tolist())
             offsets.append(len(supports))
         observed = np.asarray(observed, dtype=np.uint8)
-        removed = np.asarray([predict_removed(frontiers, terrain, Pose(*goal), self.sensor)
+        prediction = _RemovalPrediction(frontiers, terrain) if len(observation.goals) else None
+        removed = np.asarray([prediction.predict(terrain, Pose(*goal), self.sensor)
                               for goal in observation.goals], dtype=np.int64)
         actions = PrivilegedActionContext(positions, inverse, observation.goals[:, 2], np.asarray(offsets),
             np.asarray(supports, np.int64), np.asarray(support_distances, np.float32), removed)
