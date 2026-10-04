@@ -17,7 +17,7 @@ def default_plan():
     return dict(schema='ordered_course_v1',tasks=list(TASKS),warmup=1024,block_transitions=8192,
         block_updates=2048,current_cases=5,rehearsal_cases=5,success_rate=.8,max_loop_fraction=.2,
         consecutive_passes=2,max_blocks=[20,10,20,10],extents=[50.,50.+2*50./9.,50.+4*50./9.,50.+7*50./9.,100.],
-        evaluation_seed_base=2026100400,budget=BUDGET)
+        evaluation_seed_base=2026100400,scene_seed_overrides={3:2026100410},budget=BUDGET)
 
 
 def validate_plan(plan):
@@ -35,6 +35,9 @@ def validate_plan(plan):
         if type(plan[key]) not in (int,float) or not 0<plan[key]<=1:raise ValueError('invalid course gate '+key)
     if type(plan['evaluation_seed_base']) is not int or not 0<=plan['evaluation_seed_base']<2**32-100:
         raise ValueError('invalid evaluation seed namespace')
+    overrides=plan['scene_seed_overrides']
+    if overrides not in ({3:2026100410},{'3':2026100410}) or any(str(k)!='3' or type(v) is not int or not 0<=v<2**32 for k,v in overrides.items()):
+        raise ValueError('invalid fixed scene seed overrides')
     return plan
 
 
@@ -47,8 +50,9 @@ def course_cases(phase,phase_block,plan):
     for i,task_index in enumerate(tasks):
         family,start_mode=TASKS[task_index].split('_')
         ordinal=i%5;extent=plan['extents'][ordinal]
+        seed=plan['scene_seed_overrides'].get(ordinal,plan['scene_seed_overrides'].get(str(ordinal),plan['evaluation_seed_base']+ordinal))
         cases.append(dict(case_index=i,family=family,start_mode=start_mode,curriculum_task=TASKS[task_index],
-            seed=plan['evaluation_seed_base']+ordinal,extent_m=extent,budget=decision_budget(extent,plan['budget'])))
+            seed=seed,extent_m=extent,budget=decision_budget(extent,plan['budget'])))
     return cases
 
 

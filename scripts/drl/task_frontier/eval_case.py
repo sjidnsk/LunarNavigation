@@ -166,6 +166,9 @@ def evaluate_case(request,output):
     finally:
         telemetry.close();ros_env.RosExplorationEnv=base
         if capture:capture.close()
+    failed=[row for row in original.get('cases',[]) if row.get('error')]
+    if failed:
+        raise RuntimeError('frozen evaluation scene failed before producing provenance: '+failed[0]['error'])
     if sha(request['actor'])!=request['actor_sha'] or sha(request['config'])!=request['config_sha']:
         raise ValueError('actor/config changed during evaluation')
     if runtime_identity()!=current['runtime']:raise ValueError('runtime modules changed during evaluation')
