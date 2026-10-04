@@ -1,5 +1,5 @@
 """Fixed curses terminal dashboard over files; never drives policy decisions."""
-import curses,json,os,signal,time,unicodedata
+import curses,json,math,os,signal,time,unicodedata
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -32,6 +32,44 @@ def latest_progress():
     except OSError:pass
     return {}
 
+def completed_cases(root,label,manifest=None):
+    """Only terminal, matching results contribute to coverage statistics."""
+    rows={}
+    expected=read(root/'cases.json',{}).get('cases',[])
+    for case in expected:
+        index=case['case_index'];record=read(root/f'{label}-case-{index:02}.json',{})
+        if record.get('status')!='finished' or record.get('exit_code')!=0:continue
+        results=record.get('cases',[])
+        if len(results)!=1:continue
+        row=results[0];coverage=row.get('final_coverage')
+        if not all(row.get(key)==case.get(key) for key in ('case_index','family','seed','extent_m','budget')):continue
+        if (row.get('error') is not None or row.get('exit_code')!=0
+                or not (row.get('terminated') or row.get('truncated'))
+                or type(coverage) not in (int,float) or not math.isfinite(coverage) or not 0<=coverage<=1):continue
+        if manifest and (row.get('run_id')!=manifest.get('run_id') or row.get('actor_sha')!=manifest.get('actor_sha')):continue
+        rows[index]=row
+    return rows
+
+def coverage_lines(manifest):
+    label=manifest.get('label',f"stage{manifest.get('stage',0)}")
+    if label=='baseline':label='baseline'
+    current=completed_cases(ROOT,label,manifest if manifest.get('phase')=='evaluation' else None)
+    baseline=completed_cases(ROOT,'baseline')
+    if not current and manifest.get('phase')!='evaluation':return []
+    cases=read(ROOT/'cases.json',{}).get('cases',[])
+    def pct(row):return f"{row['final_coverage']:6.2%}" if row else ' 待评 '
+    result=['',f'已完成场景覆盖率 · {label}（括号内为 26856 基线）',
+            '组   尺寸(m)      月表覆盖率(基线)       洞穴覆盖率(基线)']
+    for group in range((len(cases)+1)//2):
+        pair=cases[group*2:group*2+2]
+        values=[f'{pct(current.get(c["case_index"]))} ({pct(baseline.get(c["case_index"]))})' for c in pair]
+        result.append(f'{group+1:2}   {pair[0]["extent_m"]:7.2f}      '+ '       '.join(values))
+    for family,name in (('moon','月表'),('cave','洞穴')):
+        rows=[r for r in current.values() if r['family']==family]
+        mean=f"{sum(r['final_coverage'] for r in rows)/len(rows):.2%}" if rows else '—'
+        result.append(f'{name}：已评 {len(rows)}/10 · 平均覆盖率 {mean} · 完成 {sum(bool(r["completed"]) for r in rows)}/{len(rows)}')
+    return result
+
 def lines(manifest,progress,evaluation):
     stage=manifest.get('stage',0);phase=manifest.get('phase','等待状态')
     output=['任务内外前沿 · 从零训练监看',
@@ -61,6 +99,7 @@ def lines(manifest,progress,evaluation):
             '环境   类型       尺寸       决策     已知面积(m²)    状态'])
         for key,e in sorted(progress.get('environments',{}).items(),key=lambda kv:int(kv[0])):
             output.append(f"{key:>3}    {e.get('family','—'):<7} {e.get('extent_m',0):>6.1f}m  {e.get('steps',0):>4}/512   {e.get('known_area_m2',0):>9.1f}    {e.get('state','—')}")
+    output.extend(coverage_lines(manifest))
     if manifest.get('error'):output.extend(['错误：'+manifest['error']])
     checkpoint=ROOT/'run/resume.pt'
     stamp=datetime.fromtimestamp(checkpoint.stat().st_mtime,ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M:%S') if checkpoint.exists() else '—'
