@@ -31,3 +31,25 @@ def test_terminal_shows_current_large_map_budget_and_range(tmp_path,monkeypatch)
     d=module('dashboard');monkeypatch.setattr(d,'ROOT',tmp_path);monkeypatch.setattr(d,'telemetry_valid',lambda *_:True)
     text='\n'.join(d.lines(dict(phase='evaluation',case_index=2,eval_budget=384),{},dict(step=300,coverage=.8)))
     assert '评测 256–384' in text and '300/384' in text and '训练 512' in text
+
+
+AREA_RULE=dict(RULE,mode='linear_area',max_decisions=512)
+
+
+def test_area_budget_exact_groups_and_midpoint(tmp_path):
+    c=module('controller')
+    rows=c.freeze_cases(c.LEGACY/'artifacts/baseline-summary.json',tmp_path/'area.json',group_indices=[0,2,4,7,9],budget=AREA_RULE)
+    assert [r['budget'] for r in rows[::2]]==[256,288,352,448,512]
+    assert all(rows[i]['budget']==rows[i+1]['budget'] for i in range(0,10,2))
+    assert c.decision_budget(75,AREA_RULE)==352
+    assert c.decision_budget(25,AREA_RULE)==256
+    assert c.decision_budget(150,AREA_RULE)==512
+    with pytest.raises(ValueError,match='frozen cases changed'):
+        c.freeze_cases(c.LEGACY/'artifacts/baseline-summary.json',tmp_path/'area.json',group_indices=[0,2,4,7,9],budget=dict(AREA_RULE,mode='linear_extent'))
+
+
+def test_area_budget_half_up_thresholds():
+    c=module('controller')
+    extent=(2500+7500*16/256)**.5
+    assert c.decision_budget(extent-1e-6,AREA_RULE)==256
+    assert c.decision_budget(extent+1e-6,AREA_RULE)==288

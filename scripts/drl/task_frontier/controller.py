@@ -90,7 +90,7 @@ def decision_budget(extent_m, specification):
         if specification<=0:raise ValueError('positive evaluation budget required')
         return specification
     keys={'mode','min_extent_m','max_extent_m','round_to','min_decisions','max_decisions'}
-    if not isinstance(specification,dict) or set(specification)!=keys or specification['mode']!='linear_extent':
+    if not isinstance(specification,dict) or set(specification)!=keys or specification['mode'] not in ('linear_extent','linear_area'):
         raise ValueError('invalid evaluation budget rule')
     low,high=(specification[k] for k in ('min_extent_m','max_extent_m'))
     if any(type(v) not in (int,float) or not math.isfinite(v) or v<=0 for v in (low,high)) or low>=high:
@@ -99,7 +99,12 @@ def decision_budget(extent_m, specification):
     if (any(type(v) is not int or v<=0 for v in (quantum,minimum,maximum))
             or minimum>maximum or minimum%quantum or maximum%quantum):
         raise ValueError('invalid evaluation budget bounds/rounding')
-    fraction=min(1.,max(0.,(extent_m-low)/(high-low)))
+    if specification['mode']=='linear_area':
+        # Clamp the extent before squaring to keep finite out-of-range inputs bounded.
+        bounded=min(high,max(low,extent_m))
+        fraction=(bounded**2-low**2)/(high**2-low**2)
+    else:
+        fraction=min(1.,max(0.,(extent_m-low)/(high-low)))
     raw=minimum+fraction*(maximum-minimum)
     return min(maximum,max(minimum,math.floor(raw/quantum+.5)*quantum))
 
