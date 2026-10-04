@@ -229,7 +229,7 @@ class RosExplorationEnv:
                 origin,planes=payload
                 self._map_pub.publish(grid_message(planes,origin,self.terrain.resolution_m,self._sim_ns))
             self._last_sensor_ns=self._latest_sensor_ns=self._sim_ns;self._sensor_count+=1
-        snap=self.adapter.poll_snapshot()
+        snap=self.adapter.poll_snapshot(self._latest_sensor_ns,refresh=False)
         if snap is not None:
             self.buffer.acknowledge(self.adapter.processed_stamp_ns)
             self._apply_known(snap)
@@ -260,7 +260,9 @@ class RosExplorationEnv:
 
     def _snapshot(self):
         minimum=self._latest_sensor_ns
-        snap=self._wait(lambda:self.adapter.poll_snapshot(minimum),'processed final policy map')
+        # A cached moving anchor cannot certify an action's final stopped pose.
+        self.adapter.require_fresh_snapshot()
+        snap=self._wait(lambda:self.adapter.poll_snapshot(minimum,refresh=False),'processed final policy map')
         self.buffer.acknowledge(self.adapter.processed_stamp_ns);self._apply_known(snap)
         return snap
 

@@ -1,5 +1,7 @@
 """Deterministic metric cover, exact observation supplements and greedy spanner."""
 import math
+import hashlib
+from collections import OrderedDict
 import numpy as np
 from scipy.spatial import cKDTree
 from .config import GraphConfig, load_platform_config
@@ -18,6 +20,15 @@ def _stable_ids(cells):
     if np.any(cells < -(2**31)) or np.any(cells >= 2**31):
         raise ValueError("world cell index outside stable int32 lattice")
     return (cells[:, 0] << 32) | (cells[:, 1] & 0xFFFFFFFF)
+
+
+def _array_key(*arrays):
+    digest=hashlib.blake2b(digest_size=32)
+    for value in arrays:
+        value=np.ascontiguousarray(value)
+        digest.update(repr((value.shape,value.dtype.str)).encode())
+        digest.update(value.tobytes())
+    return digest.digest()
 
 
 def _inside(points, polygon):
@@ -48,6 +59,33 @@ class GraphBuilder:
         self._epoch = None
         self._lattice_origin = None
         self.unrepresented_interfaces = np.empty((0, 2), np.int64)
+        self._connections=OrderedDict()
+        self._gains={}
+
+    def _cached_connections(self,metric,cells,key):
+        key=(key,self.config.connection_limit_m,_array_key(cells))
+        if key not in self._connections:
+            self._connections[key]=metric.connections(cells,self.config.connection_limit_m)
+            if len(self._connections)>4:self._connections.popitem(last=False)
+        self._connections.move_to_end(key)
+        return self._connections[key]
+
+    def _cached_gains(self,domain,frontiers,w,points,sensor,resolution,key):
+        key=(key,sensor.range_m,sensor.fov_deg,sensor.offset_x_m,sensor.offset_y_m,
+             sensor.offset_yaw_rad,_array_key(frontiers.cell_ids,frontiers.centers,
+                                            frontiers.demand_offsets,frontiers.demand_ids))
+        previous,cache=self._gains.get(domain,(None,OrderedDict()))
+        if previous!=key:cache=OrderedDict()
+        self._gains[domain]=(key,cache)
+        cells=np.floor((points-w.origin)/resolution).astype(np.int64)
+        missing={tuple(cell):i for i,cell in enumerate(cells) if tuple(cell) not in cache}
+        if missing:
+            counts=directional_frontier_counts(frontiers,w,points[list(missing.values())],sensor,resolution)
+            for cell,row in zip(missing,counts):cache[cell]=row.copy()
+        result=np.asarray([cache[tuple(cell)] for cell in cells],np.int64).reshape(-1,8)
+        for cell in cells:cache.move_to_end(tuple(cell))
+        while len(cache)>4096:cache.popitem(last=False)
+        return result
 
     def build(self, snapshot, report, history, task, sensor, velocity, *,
               frontiers: FrontierSnapshot | None = None):
@@ -74,6 +112,9 @@ class GraphBuilder:
         shift = np.array(w.bounds[:2])
         origin = np.asarray(w.origin)
         resolution = snapshot.resolution_m
+        geometry_key=(snapshot.epoch,resolution,tuple(w.bounds),tuple(w.origin),tuple(w.lattice_offset))
+        connection_key=(geometry_key,_array_key(w.reachable))
+        gain_key=(geometry_key,frontiers.task_id,frontiers.polygon_digest,_array_key(w.intrinsic))
         metric = MetricGrid(w.reachable, resolution, navigation_free=w.navigation == 1)
         retained = np.rint((self._base_points-origin)/resolution-.5).astype(np.int64)
         base = metric.cover(retained, self.config.coverage_radius_m)
@@ -140,7 +181,7 @@ class GraphBuilder:
         distances=metric.distances(starts,costs,self.config.connection_limit_m,cells)
         # Actual anchor distances use native start segments. Arrived nodes
         # were contracted before optical selection and cannot prune exits.
-        edges,lengths=metric.connections(cells,self.config.connection_limit_m)
+        edges,lengths=self._cached_connections(metric,cells,connection_key)
         current=len(cells)
         neighbors=np.flatnonzero(np.isfinite(distances))
         edges=np.vstack((edges,np.column_stack((neighbors,np.full(len(neighbors),current)))))
@@ -158,10 +199,10 @@ class GraphBuilder:
         feature[:, :2] = (points - actual) / 10.0
         feature[:, 2] = _inside(points, task.polygon)
         feature[:, HISTORY_SLICE] = history.action_bits(points, sensor)
-        feature[:, IN_GAIN_SLICE] = directional_frontier_counts(
-            frontiers.inside, w, points, sensor, resolution) / IN_GAIN_SCALE
-        feature[:, OUT_GAIN_SLICE] = directional_frontier_counts(
-            frontiers.outside, w, points, sensor, resolution) / OUT_GAIN_SCALE
+        feature[:, IN_GAIN_SLICE] = self._cached_gains(
+            'inside',frontiers.inside,w,points,sensor,resolution,gain_key) / IN_GAIN_SCALE
+        feature[:, OUT_GAIN_SLICE] = self._cached_gains(
+            'outside',frontiers.outside,w,points,sensor,resolution,gain_key) / OUT_GAIN_SCALE
         # The old unknown-interface certificates define observation turns;
         # FREE-side domain gains cannot replace these cross-boundary chances.
         pending_visible = np.zeros(8, bool)

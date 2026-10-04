@@ -33,13 +33,17 @@ class MeasurementBuffer:
     def __init__(self, origin, resolution_m):
         self.origin=origin;self.resolution_m=resolution_m
         self._cells={}
+        self._generation=0;self._acked_generation=-1;self._ack_stamp=None
 
     def add(self, measurements, stamp):
+        self._generation+=1
         for x,y,h,stats in zip(measurements.cols,measurements.rows,measurements.heights,measurements.stats):
             self._cells[(int(x),int(y))]=(int(stamp),float(h),stats)
 
     def acknowledge(self, stamp):
+        if stamp==self._ack_stamp and self._generation==self._acked_generation:return
         self._cells={k:v for k,v in self._cells.items() if v[0]>stamp}
+        self._ack_stamp=stamp;self._acked_generation=self._generation
 
     def payload(self):
         if not self._cells: return None
@@ -183,7 +187,7 @@ class RosNavigationAdapter:
         self._minimum_response_serial=self._request_serial+1
         self._current_input=False
 
-    def poll_snapshot(self,minimum_map_stamp_ns=0):
+    def poll_snapshot(self,minimum_map_stamp_ns=0,*,refresh=True):
         service_ready=self.client.service_is_ready()
         if not service_ready:
             self.require_fresh_snapshot()
@@ -209,7 +213,9 @@ class RosNavigationAdapter:
                         self._force_full=False
                         self.processed_stamp_ns=stamp_ns(response.processed_stamp)
                         self._current_input=service_ready and self._request_serial>=self._minimum_response_serial
-        if self._map_future is None and service_ready:
+        current=(self._current_input and self.snapshot is not None
+                 and self.processed_stamp_ns>=minimum_map_stamp_ns)
+        if self._map_future is None and service_ready and (refresh or not current):
             req=self._service_type.Request()
             req.since_revision=0 if self._force_full or self.snapshot is None else self.snapshot.revision
             req.minimum_map_stamp_ns=int(minimum_map_stamp_ns)
