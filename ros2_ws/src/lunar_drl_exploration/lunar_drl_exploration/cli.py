@@ -17,9 +17,9 @@ def parser():
             continuation = cmd.add_mutually_exclusive_group()
             continuation.add_argument('--resume', action='store_true', help='restore output-dir/resume.pt; start new environment episodes')
             continuation.add_argument('--fork-from', type=Path,
-                help='trusted checkpoint for a new run; explicit stagnation, resource and diagnostic changes only')
-            cmd.add_argument('--fork-experiment', choices=('paired-polyak', 'paired-multistep', 'paired-entropy'),
-                help='requires --fork-from; allow only the named learning variable, paired scenes and a smaller snapshot budget')
+                help='trusted checkpoint for a new run; collection changes or an explicitly named fork experiment only')
+            cmd.add_argument('--fork-experiment', choices=('paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent'),
+                help='requires --fork-from; paired experiments change their named learning variable; ordered-extent expands 50-100m to 30-100m only')
             cmd.add_argument('--output-dir')
             cmd.add_argument('--device', default='cuda', choices=('cpu', 'cuda'))
             cmd.add_argument('--max-transitions', type=int, help='maximum new admissions this run; zero with --resume drains saved update credit only')

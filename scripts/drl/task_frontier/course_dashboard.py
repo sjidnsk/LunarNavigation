@@ -35,11 +35,14 @@ def latest_progress(root):
 def lines(root,manifest,progress,course,evaluation):
     root=Path(root);phase=manifest.get('course_phase',0);task=TASKS[phase]
     state=safe_read(root/'course-state.json',{});plan=safe_read(root/'course-plan.json',{})
+    config=safe_read(root/'config.json',{})
+    extents=config.get('curriculum_extents_m',[[50.,100.]])[0]
+    extent_label=f'{extents[0]:g}–{extents[1]:g}m'
     targets=manifest.get('targets',{});actuals=manifest.get('actuals',{})
     t=progress.get('transitions',actuals.get('transitions',0));u=progress.get('updates',actuals.get('updates',0))
     training=manifest.get('phase') in ('warmup','training')
     output=['四阶段 SAC 课程 · 逐场景覆盖率',
-            '区内月表 → 区内洞穴 → 区外月表 → 区外洞穴  |  50–100m / 256–512决策',
+            f'区内月表 → 区内洞穴 → 区外月表 → 区外洞穴  |  训练{extent_label} / 256–512决策 · 固定评测50–100m',
             '─'*100,
             f"状态 {manifest.get('status','等待')} · 第{phase+1}/4阶段 {NAMES[task]} · {manifest.get('phase','等待')} · 本阶段训练块 {state.get('phase_blocks',0)}/{plan.get('max_blocks',[20,10,20,10])[phase]}",
             f"累计转移 {t:,} · 更新 {u:,} · 本块目标 {targets.get('transitions',0):,}条 / {targets.get('updates',0):,}次 · 连续评测通过 {state.get('streak',0)}/2"]

@@ -45,3 +45,11 @@ python3 scripts/drl/task_frontier/course_browser.py --root /home/kai/CodexDownlo
 详细证据在实验根的 `native-smoke/报告.md`、`native-smoke/report.json`、`independent-review.md`、`review-learner.md` 和 `start-feasibility.json`。正式启动、保存恢复及进程状态证据在 `launch-evidence.json`。
 
 2026-10-04覆盖率监看增量：新增8项测试，受影响模块回归93 passed。独立审阅两项Minor（旧任务样本标注、短窗口总和一致性）均已修复。恢复验证使用正式配置短程16条转移，详细证据见实验根 `coverage-smoke-telemetry.jsonl` 和 `coverage-monitor-review.md`。
+
+## 30–100米训练分支
+
+用户于2026-10-04要求加入30–50米简单场景，提高收集成功样本的机会。新输出为 `/home/kai/CodexDownloads/lunar_navigation/drl-ordered-curriculum-30-100-20261004/managed`，原50–100米实验保存暂停。训练边长均匀采样30–100米；30–50米沿用256决策，50–100米保持原面积插值到512决策。固定评测仍使用原50–100米5张图，课程晋级门槛不变。完成奖励仍为5，普通奖励不变。
+
+`ordered-extent` 显式fork仅允许有序课程将训练范围从50–100米扩大到30–100米，保留原模型、目标网络、优化器、replay、更新信用、RNG、课程计数和监看覆盖率历史，并记录来源与配置差异；普通resume仍拒绝场景范围变化。新目录课程进度接续未完成训练块，曲线沿用已记录历史，配置切换边界在fork证据中记录。新旧训练覆盖率分布不同，均值抬升不能单独证明学到更多能力；固定50–100米评测用于判断效果。
+
+本次范围调整验证：新fork18项测试先RED后GREEN；原fork/CLI回归80 passed；主代理受影响模块148 passed。真实正式配置短程16条转移、5次CUDA更新（含恢复信用1），从8588/1890恢复到8604/1895，包含小于50米的真实场景；保存与RNG恢复均验证。来源状态逐项相等及原文件SHA不变见新实验根 `extent-fork-evidence.json`，native运行见 `native-smoke-report.json` 与 `native-smoke-telemetry.jsonl`，独立审阅无待修复项见 `independent-review.md`。

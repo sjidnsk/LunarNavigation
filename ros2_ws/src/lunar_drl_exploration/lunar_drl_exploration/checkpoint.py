@@ -77,10 +77,12 @@ class TrainingState:
         Explicit paired experiments additionally allow their single learning
         variable, paired scenes and a nonincreasing saved-replay budget. Learning state
         remains intact, including target weights and optimizer history.
+        ordered-extent allows only ordered 50-100m to 30-100m collection and
+        relocated output/artifact roots, preserving every other parameter.
         This operation neither creates the destination nor writes the source.
         """
         from .config import training_config_from_record
-        if experiment not in (None, 'paired-polyak', 'paired-multistep', 'paired-entropy'):
+        if experiment not in (None, 'paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent'):
             raise ValueError('unknown fork experiment: ' + str(experiment))
         source = Path(source).resolve()
         destination = Path(config.output_dir).resolve()
@@ -98,6 +100,17 @@ class TrainingState:
         fields = ('stagnation_window_steps', 'stagnation_max_positions',
                   'stagnation_position_tolerance_m', 'artifact_root',
                   'total_output_max_bytes', 'metrics_max_bytes', 'reward_diagnostics')
+        if experiment == 'ordered-extent':
+            # Explicit expansion of the ordered training distribution only. All
+            # SAC, rewards, budgets and collection/resource settings stay fixed.
+            if original.ordered_curriculum is not True or config.ordered_curriculum is not True:
+                raise ValueError('ordered-extent requires ordered_curriculum=true in both runs')
+            previous, requested = before['curriculum_extents_m'], after['curriculum_extents_m']
+            if (len(previous) != 3 or len(requested) != 3 or any(
+                    len(old) != 2 or len(new) != 2 or old[0] != 50. or new[0] != 30. or old[1] != 100. or new[1] != old[1]
+                    for old, new in zip(previous, requested))):
+                raise ValueError('ordered-extent allows only all training extents 50-100 to 30-100')
+            fields = ('artifact_root', 'curriculum_extents_m')
         if experiment in ('paired-multistep', 'paired-entropy'):
             # This comparison changes only the return horizon. Collection and
             # output caps remain the source contract, unlike a collection fork.
@@ -143,6 +156,9 @@ class TrainingState:
                 for key in fields if before[key] != after[key]})
         if experiment is not None:
             state.record['fork']['experiment'] = experiment
+        if experiment == 'ordered-extent':
+            import hashlib
+            state.record['fork']['source_checkpoint_sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
         if learning_changes:
             state.record['fork']['changes']['learning'] = learning_changes
         if experiment == 'paired-multistep':
