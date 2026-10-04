@@ -66,12 +66,25 @@ def lines(root,manifest,progress,course,evaluation):
     if not current_statistics:output += ['等待本阶段统计；累计回合与转移仍显示已保存值。']
     total_t=sum(phase_t.values());total_s=sum(phase_s.values())
     stats=course.get('by_task',{})
-    output += ['', '任务        结束回合  成功/结束   累计转移   本阶段转移占比  本阶段采样占比  平均回合步数']
+    coverage_stats=course.get('coverage_stats',{})
+    def coverage_text(key):
+        c=coverage_stats.get(key,{});n=c.get('count',0);recent=c.get('recent',[])
+        mean=f"{c.get('sum',0.)/n:.2%}" if n else '—'
+        near=f"{sum(recent)/len(recent):.2%}" if recent else '—'
+        return mean,near,n,len(recent)
+    mean,near,n,recent_n=coverage_text(task)
+    missing=max(0,stats.get(task,{}).get('ended',0)-n)
+    output += ['',f'当前任务平均最终覆盖率 {mean}（已记录{n}回合） · 最近20均值 {near}（实际{recent_n}回合）']
+    if missing:output += [f'历史缺{missing}个最终覆盖率，均值只使用可核对记录；后续结束回合完整累计。']
+    output += ['', '任务        结束回合  成功/结束   累计转移   本阶段转移占比  本阶段采样占比  平均步数   平均覆(样本)  近20(样本)']
     for key in TASKS:
         v=stats.get(key,{})
         tf=phase_t.get(key,0)/total_t if total_t else 0.;sf=phase_s.get(key,0)/total_s if total_s else 0.
         ended=v.get('ended',0);mean=v.get('episode_steps',0)/ended if ended else 0.
-        output.append(f"{NAMES[key]:<6} {ended:8}  {v.get('successes',0):3}/{ended:<4} {v.get('transitions',0):10,}  {tf:12.1%}  {sf:12.1%}  {mean:10.1f}")
+        cov,near_cov,cov_n,near_n=coverage_text(key)
+        if cov_n:cov+=f'({cov_n})'
+        if near_n:near_cov+=f'({near_n})'
+        output.append(f"{NAMES[key]:<6} {ended:8}  {v.get('successes',0):3}/{ended:<4} {v.get('transitions',0):10,}  {tf:12.1%}  {sf:12.1%}  {mean:8.1f}  {cov:>14}  {near_cov:>14}")
     if current_statistics and course.get('missing_replay_tasks'):output.append('新任务经验尚在收集：'+','.join(course['missing_replay_tasks'])+'；暂按可用类更新，实际比例如上。')
     output += ['结束回合含成功和有效终止/截断；中断与在途回合不计。起点标签在整回合内固定。']
     label=manifest.get('label')

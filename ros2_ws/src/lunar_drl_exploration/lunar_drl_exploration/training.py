@@ -298,6 +298,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     curriculum = Curriculum(config, curriculum_rng, curriculum_state,
         probe_extent=probe_extent, probe_budget=probe_budget)
     course = curriculum.course
+    if course is not None:course.backfill_coverage(replay)
     ledger = AdmissionLedger(replay, schedule)
     ledger.last_admitted = dict(counters.get('last_admitted', {}))
     diagnostics = None
@@ -599,7 +600,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     if course is not None and message.get('zero_decisions') and env_id in course.active:
                         success = message['reason'] == 'COVERAGE_REACHED'
                         course.observe(env_id, terminated=True, truncated=False,
-                            coverage=1. if success else 0., collision=False)
+                            coverage=env_status[env_id]['initial_reference_coverage'], collision=False)
                     metrics.append(dict(message, event='episode_end'))
                 else: raise RuntimeError('unexpected learner message ' + kind)
             if not process.is_alive() and not stopped:

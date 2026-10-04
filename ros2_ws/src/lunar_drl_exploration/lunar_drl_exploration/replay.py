@@ -424,6 +424,12 @@ class ReplayBuffer:
             self._sequence_index = {}
             self._task_entries = {}; self._task_positions = {}; self._task_bytes = 0
 
+    def terminal_records(self):
+        """Read-only terminal records in retained chronological order."""
+        for transition, _, _ in self._entries.values():
+            if transition.terminated or transition.truncated:
+                yield transition
+
     def sample(self, batch_size, rng):
         if not self._entries or batch_size <= 0:
             raise ValueError('nonempty replay and positive batch required')

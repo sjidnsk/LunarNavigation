@@ -8,6 +8,25 @@ SCHEMA = 'ordered_course_v1'
 DEFAULT_BUDGET_RULE = dict(mode='linear_area', min_extent_m=50., max_extent_m=100.,
     round_to=32, min_decisions=256, max_decisions=512)
 _COUNTERS = ('transitions', 'samples', 'ended', 'successes', 'episode_steps')
+COVERAGE_WINDOW = 20
+
+
+def _coverage_value(value):
+    if isinstance(value, bool):raise ValueError('coverage must be finite and within [0,1]')
+    try:value=float(value)
+    except (TypeError,ValueError) as error:raise ValueError('invalid terminal coverage') from error
+    if not math.isfinite(value) or not 0 <= value <= 1:
+        raise ValueError('coverage must be finite and within [0,1]')
+    return value
+
+
+def _empty_coverage():
+    return {task:dict(count=0,sum=0.,recent=[]) for task in TASKS}
+
+
+def _add_coverage(stats,coverage):
+    stats['count']+=1;stats['sum']+=coverage;stats['recent'].append(coverage)
+    del stats['recent'][:-COVERAGE_WINDOW]
 
 
 def task_weights(phase, rehearsal=.2):
@@ -51,6 +70,8 @@ class OrderedCourse:
         self.success_coverage = success_coverage
         self.active, self.episodes = {}, {}
         self.by_task = {task: dict.fromkeys(_COUNTERS, 0) for task in TASKS}
+        self.coverage_stats = _empty_coverage()
+        self._coverage_needs_backfill = state is not None and 'coverage_stats' not in state
         self.phase_transitions = dict.fromkeys(self.weights, 0)
         self.phase_samples = dict.fromkeys(self.weights, 0)
         self.bootstrap_updates = 0
@@ -69,6 +90,8 @@ class OrderedCourse:
                     set(stats) != set(_COUNTERS) or any(type(v) is not int or v < 0 for v in stats.values())
                     for stats in self.by_task.values()):
                 raise ValueError('invalid saved course counters')
+            if 'coverage_stats' in state:
+                self.coverage_stats = self._validate_coverage(state['coverage_stats'])
             self.bootstrap_updates = state['bootstrap_updates']
             if phase == previous:
                 self.phase_transitions = deepcopy(state['phase_transitions'])
@@ -127,13 +150,58 @@ class OrderedCourse:
     def observe(self, env, *, terminated, truncated, coverage, collision):
         task = self.active[env]
         episode = self.episodes[env]
+        if terminated or truncated:coverage = _coverage_value(coverage)
         episode['collision'] |= bool(collision)
         if terminated or truncated:
             stats = self.by_task[task]
             stats['ended'] += 1
             stats['successes'] += int(terminated and not episode['collision'] and coverage >= self.success_coverage)
             stats['episode_steps'] += episode['steps']
+            _add_coverage(self.coverage_stats[task],coverage)
             self.release(env)
+
+    def _validate_coverage(self, value):
+        if not isinstance(value,dict) or set(value)!=set(TASKS):
+            raise ValueError('invalid saved coverage tasks')
+        result=deepcopy(value)
+        for task,stats in result.items():
+            if not isinstance(stats,dict) or set(stats)!={'count','sum','recent'}:
+                raise ValueError('invalid saved coverage fields')
+            count=stats['count'];recent=stats['recent'];total=stats['sum']
+            if (type(count) is not int or not 0<=count<=self.by_task[task]['ended'] or
+                    type(total) not in (float,int) or not math.isfinite(total) or not 0<=total<=count or
+                    not isinstance(recent,list) or len(recent)!=min(count,COVERAGE_WINDOW)):
+                raise ValueError('invalid saved coverage counters')
+            for coverage in recent:_coverage_value(coverage)
+            if (sum(recent)>total+1e-10 or
+                    (count<=COVERAGE_WINDOW and not math.isclose(sum(recent),total,rel_tol=1e-12,abs_tol=1e-10))):
+                raise ValueError('invalid saved coverage sum')
+        return result
+
+    def backfill_coverage(self,replay):
+        """One-time legacy migration: terminal records only, never extrapolate.
+
+        A bounded replay may no longer retain all ended episodes. Count those
+        actually available; display count versus ended rather than a false
+        all-history average. No replay sampling or RNG consumption occurs.
+        """
+        if not self._coverage_needs_backfill:return
+        import numpy as np
+        from .replay import transition_task
+        restored=_empty_coverage();seen=set()
+        for transition in replay.terminal_records():
+            task=transition_task(transition,replay.scenes)
+            if task not in restored:continue
+            key=(task,transition.episode_id)
+            if key in seen:continue
+            seen.add(key)
+            truth=replay.scenes[transition.next_privileged.scene_id]
+            size=len(truth.reference_indices)
+            covered=int(np.unpackbits(transition.next_privileged.observed & truth.packed_reference).sum())
+            coverage=_coverage_value(covered/size if size else 0.)
+            _add_coverage(restored[task],coverage)
+        self.coverage_stats=self._validate_coverage(restored)
+        self._coverage_needs_backfill=False
 
     def sampling_weights(self, counts):
         missing_retained = [task for task in TASKS[:self.phase] if counts.get(task, 0) <= 0]
@@ -161,6 +229,7 @@ class OrderedCourse:
     def summary(self):
         return dict(schema=SCHEMA, phase=self.phase, task=TASKS[self.phase],
             rehearsal=self.rehearsal, weights=dict(self.weights), by_task=deepcopy(self.by_task),
+            coverage_stats=deepcopy(self.coverage_stats),
             phase_transitions=dict(self.phase_transitions), phase_samples=dict(self.phase_samples),
             bootstrap_updates=self.bootstrap_updates,
             missing_replay_tasks=list(self.missing_replay_tasks), sampling_weights=dict(self.last_sampling_weights))

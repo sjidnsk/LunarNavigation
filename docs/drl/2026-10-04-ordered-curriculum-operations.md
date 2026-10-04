@@ -22,11 +22,13 @@ bash scripts/drl/task_frontier/run.sh python scripts/drl/task_frontier/course_co
 
 监看按起点任务显示每场景覆盖率、回合决策上限、成功/结束回合、累计转移、本阶段转移与采样占比、平均有效结束回合步数。中断/在途回合不计结束，已完成转移保留。阶段切换未收到新统计时显示等待，不贴上旧比例。
 
+平均最终覆盖率按有效结束回合等权计算，包含成功、失败和预算截断；中断和在途场景不计入。监看显示当前任务累计平均、最近20个已记录结束回合均值及实际样本数，各任务表行也标出均值样本数。任务切换后分别保留历史，不将不同任务混为一个提升指标。旧检查点仅从仍保留的terminal replay记录回填，缺失历史明确显示，不补零或推算。当前首次迁移6个结束回合只能核对2个，缺4个；后续新结束回合完整累计并随检查点恢复。趋势应结合成功率和固定评测判断。
+
 `q`只关闭监看；`Ctrl+C`通过owned controller请求保存退出。恢复使用同一命令将 `start` 改为 `resume`；不得直接改 config/course-plan 继续恢复。阶段日志原子保存，评测缓存核验Actor、起点模式、任务标签、场景/参考/运行语义；保存前中断重做同块，保存后恢复下一块。
 
 ## 曲线
 
-`curves/learning.csv/png`：学习损失、温度和策略诊断；`fixed.csv/png`：同实测状态中的Q/策略；`evaluation.csv/png`：完整冻结评测，按四类任务分别画线；`reward.csv/png`：奖励分项。`course.csv`保存四任务分配和结束统计。学习/奖励随训练更新，固定/评测每块完成后新增点，不能从预热期间空学习图推断停止。
+`curves/learning.csv/png`：学习损失、温度和策略诊断；`fixed.csv/png`：同实测状态中的Q/策略；`evaluation.csv/png`：完整冻结评测，按四类任务分别画线；`reward.csv/png`：奖励分项。`course.csv`保存四任务分配和结束统计，以及覆盖率样本数、总和、累计均值、最近20均值与样本数、历史缺失数；无样本均值为空。学习/奖励随训练更新，固定/评测每块完成后新增点，不能从预热期间空学习图推断停止。
 
 本地浏览器服务：
 
@@ -41,3 +43,5 @@ python3 scripts/drl/task_frontier/course_browser.py --root /home/kai/CodexDownlo
 课程配额、严格起点、分层replay、裁剪与随机状态恢复、门槛及缓存均有测试。全包904 passed / 2 skipped；之后补充审阅修复的受影响模块回归125 passed。真实本机Jazzy GPU smoke使用正式128/8/6模型、batch64和8个环境，仅预热缩为8并将smoke场景限定50m/16决策；两阶段32+32转移、6+8更新，阶段2新增洞穴26/月表6，恢复完整状态。单case16决策评测用于接线验证，覆盖14.74%，未达到99%，不能当作训练效果。固定20组起点分类组合和随机20个洞穴区外起点合法，不证明所有随机地图均可用。其他部署平台未运行。
 
 详细证据在实验根的 `native-smoke/报告.md`、`native-smoke/report.json`、`independent-review.md`、`review-learner.md` 和 `start-feasibility.json`。正式启动、保存恢复及进程状态证据在 `launch-evidence.json`。
+
+2026-10-04覆盖率监看增量：新增8项测试，受影响模块回归93 passed。独立审阅两项Minor（旧任务样本标注、短窗口总和一致性）均已修复。恢复验证使用正式配置短程16条转移，详细证据见实验根 `coverage-smoke-telemetry.jsonl` 和 `coverage-monitor-review.md`。

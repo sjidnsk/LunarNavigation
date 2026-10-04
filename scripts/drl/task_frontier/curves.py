@@ -151,7 +151,12 @@ class CurveRecorder:
                 self.data.setdefault('course',[])
                 new=[]
                 for task,stats in course['by_task'].items():
+                    coverage=course.get('coverage_stats',{}).get(task,{});count=coverage.get('count',0);recent=coverage.get('recent',[])
                     new.append(dict(updates=course.get('updates',0),phase=course['phase'],task=task,**stats,
+                        coverage_samples=count,coverage_sum=coverage.get('sum',0.),
+                        mean_final_coverage=coverage.get('sum',0.)/count if count else None,
+                        recent_final_coverage=sum(recent)/len(recent) if recent else None,
+                        recent_coverage_samples=len(recent),missing_coverage_samples=max(0,stats['ended']-count),
                         transition_fraction=stats['transitions']/total_transitions if total_transitions else 0.,
                         sample_fraction=stats['samples']/total_samples if total_samples else 0.,
                         success_rate=stats['successes']/stats['ended'] if stats['ended'] else 0.,
