@@ -67,17 +67,21 @@ def coverage_lines(manifest):
     for family,name in (('moon','月表'),('cave','洞穴')):
         rows=[r for r in current.values() if r['family']==family]
         mean=f"{sum(r['final_coverage'] for r in rows)/len(rows):.2%}" if rows else '—'
-        result.append(f'{name}：已评 {len(rows)}/10 · 平均覆盖率 {mean} · 完成 {sum(bool(r["completed"]) for r in rows)}/{len(rows)}')
+        total=sum(c['family']==family for c in cases)
+        result.append(f'{name}：已评 {len(rows)}/{total} · 平均覆盖率 {mean} · 完成 {sum(bool(r["completed"]) for r in rows)}/{len(rows)}')
     return result
 
 def lines(manifest,progress,evaluation):
     stage=manifest.get('stage',0);phase=manifest.get('phase','等待状态')
+    cases=read(ROOT/'cases.json',{}).get('cases',[])
+    total=len(cases) or manifest.get('eval_total',20)
+    eval_budget=cases[0]['budget'] if cases else manifest.get('eval_budget',512)
     output=['任务内外前沿 · 从零训练监看',
-        '位置辅助损失 0  |  独立位置/朝向熵  |  月表、洞穴 50–100m  |  512 决策',
+        f'位置辅助损失 0  |  月表、洞穴 50–100m  |  训练 512 / 评测 {eval_budget} 决策',
         '─'*70,
         f"状态：{manifest.get('status','等待')}   阶段：{'预热' if stage==0 else str(stage)+'/10'}   任务：{phase}"]
     if phase=='evaluation':
-        output.extend([f"已完成：{manifest.get('eval_completed',0)}/20   当前组：{manifest.get('case_index',0)//2+1}/10",
+        output.extend([f"已完成：{manifest.get('eval_completed',0)}/{total}   当前组：{manifest.get('case_index',0)//2+1}/{total//2}",
             f"当前地图：{manifest.get('family','—')} {manifest.get('extent_m',0):.2f}m seed={manifest.get('seed','—')}"])
         # The old episode's telemetry must not be presented as the new episode.
         expected=f"{manifest.get('family','')} {manifest.get('extent_m',0):g}m"
@@ -85,7 +89,7 @@ def lines(manifest,progress,evaluation):
         valid=telemetry_valid(manifest,evaluation)
         if valid:
             coverage=evaluation.get('coverage')
-            output.extend([f"覆盖率：{'等待观测' if coverage is None else f'{coverage:.2%}'}   决策：{evaluation.get('step',0)}/512   连续零收益：{evaluation.get('zero',0)}",
+            output.extend([f"覆盖率：{'等待观测' if coverage is None else f'{coverage:.2%}'}   决策：{evaluation.get('step',0)}/{eval_budget}   连续零收益：{evaluation.get('zero',0)}",
                 f"当前动作：{evaluation.get('phase','—')}   动作耗时：{duration(evaluation.get('action_wall_s',0))}   回合耗时：{duration(evaluation.get('episode_wall_s',0))}"])
         else:output.extend(['覆盖率：等待本回合实时数据','已完成结果已保存；等待当前回合加载或遥测更新。'])
     elif phase in ('training','warmup'):
@@ -104,7 +108,7 @@ def lines(manifest,progress,evaluation):
     checkpoint=ROOT/'run/resume.pt'
     stamp=datetime.fromtimestamp(checkpoint.stat().st_mtime,ZoneInfo('Asia/Shanghai')).strftime('%m-%d %H:%M:%S') if checkpoint.exists() else '—'
     output.extend(['','─'*70,'最近检查点：'+stamp,
-        '曲线：训练统计 / 固定实测状态 Q与策略诊断 / 完整20回合评测',
+        f'曲线：训练统计 / 固定实测状态 Q与策略诊断 / 完整{total}回合评测',
         f'曲线 CSV+PNG：{ROOT}/curves | 日志：{manifest.get("detail_log","—")}','',
         'q：退出监看（任务继续）   Ctrl+C：请求保存退出任务'])
     return output

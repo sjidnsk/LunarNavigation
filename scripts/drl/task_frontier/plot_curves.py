@@ -49,7 +49,7 @@ def render(kind,path):
             xs=sorted(groups);ys=[sum(groups[x])/len(groups[x]) for x in xs]
             ax.plot(xs,ys,marker='o',markersize=3);ax.set_title(key);ax.set_xlabel(xkey)
     for ax in axes.flat:ax.grid(alpha=.2)
-    figure.suptitle(kind+' | sampled diagnostics' if kind!='evaluation' else 'Fixed 20 paired cases | complete strict results only')
+    figure.suptitle(kind+' | sampled diagnostics' if kind!='evaluation' else 'Frozen paired evaluation | complete strict results only')
     if not rows:figure.text(.5,.5,'NO VERIFIED DATA YET',ha='center',fontsize=16)
     output=io.BytesIO();figure.savefig(output,format='png',dpi=110);plt.close(figure)
     return output.getvalue()

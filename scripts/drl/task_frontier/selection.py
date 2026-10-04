@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 import copy
 import shutil
-from controller import read, write, sha, digest, validate_evaluation, PAIR_KEYS, stage_target
+from controller import read, write, sha, digest, validate_evaluation, PAIR_KEYS, stage_target, validate_case_set
 
 
 def score(result):
@@ -29,8 +29,7 @@ class StageSelection:
         self.config=training_config_from_record(read(self.root/'config.json'))
         self.training_semantic=digest(resume_semantics(self.config))
         self.evaluation_identity=effective_identity(replace(self.config,stagnation_window_steps=0))
-        self.cases=read(self.root/'cases.json')['cases']
-        if len(self.cases)!=20:raise ValueError('selection requires twenty cases')
+        self.cases=validate_case_set(read(self.root/'cases.json')['cases'])
 
     def _summary(self,label):
         return read(self.root/f'{label}-summary.json')

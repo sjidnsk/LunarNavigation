@@ -230,7 +230,7 @@ def test_controller_selects_before_next_updates_and_resume_never_rewinds(selecti
     import curves, fixed_probes
     monkeypatch.setattr(curves,'CurveRecorder',lambda root:SimpleNamespace(start=lambda:None,close=lambda:None,fixed_checkpoint=lambda *args:None))
     monkeypatch.setattr(c,'verify_gate',lambda root:None)
-    monkeypatch.setattr(c,'freeze_cases',lambda *args:None)
+    monkeypatch.setattr(c,'freeze_cases',lambda *args,**kwargs:None)
     monkeypatch.setattr(fixed_probes,'freeze_index',lambda *args:None)
     monkeypatch.setattr(c.signal,'signal',lambda *args:None)
     control=c.Controller.__new__(c.Controller)

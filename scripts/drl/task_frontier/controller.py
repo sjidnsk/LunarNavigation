@@ -74,7 +74,31 @@ def next_training(stage, schedule):
     return None
 
 
-def freeze_cases(source, output):
+def evaluation_plan(root):
+    path=Path(root)/'evaluation-plan.json'
+    plan=read(path) if path.exists() else dict(group_indices=list(range(10)),budget=512)
+    if not isinstance(plan,dict) or set(plan)!={'group_indices','budget'}:
+        raise ValueError('invalid evaluation plan fields')
+    return plan
+
+
+def validate_case_set(cases):
+    if not cases or len(cases)%2 or len(cases)>20:
+        raise ValueError('evaluation requires one to ten paired groups')
+    for index,case in enumerate(cases):
+        if (case['case_index']!=index or case['family']!=('moon','cave')[index%2]
+                or type(case['budget']) is not int or case['budget']<=0):
+            raise ValueError('invalid ordered paired evaluation cases')
+        if index%2 and any(case[key]!=cases[index-1][key] for key in ('seed','extent_m','budget')):
+            raise ValueError('paired evaluation scene/budget differs')
+    return cases
+
+
+def freeze_cases(source, output, *, group_indices=None, budget=512):
+    groups=list(range(10)) if group_indices is None else group_indices
+    if (not isinstance(groups,list) or not groups or any(type(i) is not int or not 0<=i<10 for i in groups)
+            or groups!=sorted(set(groups)) or type(budget) is not int or budget<=0):
+        raise ValueError('invalid evaluation groups/budget')
     rows = read(source)['cases']
     if len(rows) != 20: raise ValueError('historical identity requires twenty ordered cases')
     cases = []
@@ -83,9 +107,13 @@ def freeze_cases(source, output):
         if (row['family'], row['seed'], row['extent_m']) != (
                 ('moon', 'cave')[ordinal % 2], 2026100100+index, 50.+index*50./9.):
             raise ValueError('historical case differs from original continue.py expression/order')
-        cases.append(dict(case_index=ordinal, family=row['family'], seed=row['seed'],
-                          extent_m=row['extent_m'], budget=512))
+        if index in groups:
+            cases.append(dict(case_index=len(cases), family=row['family'], seed=row['seed'],
+                              extent_m=row['extent_m'], budget=budget))
+    validate_case_set(cases)
     record = dict(schema='paired_cases_v1', source_sha=sha(source), cases=cases, cases_digest=digest(cases))
+    if groups!=list(range(10)) or budget!=512:
+        record.update(schema='paired_cases_v2',selected_groups=groups)
     output = Path(output)
     if output.exists():
         if read(output) != record: raise ValueError('frozen cases changed')
@@ -278,7 +306,7 @@ def prepare(root, config_path):
                  semantic_id=digest(resume_semantics(effective)), config_digest=digest(record),runtime_cache=runtime_cache())
     write(root/'identity.json', value)
     write(root/'config.json', record)
-    freeze_cases(LEGACY/'artifacts/baseline-summary.json', root/'cases.json')
+    freeze_cases(LEGACY/'artifacts/baseline-summary.json', root/'cases.json',**evaluation_plan(root))
     return value
 
 
@@ -367,7 +395,7 @@ class Controller:
         source_checkpoint_sha=sha(source_checkpoint) if legacy else read(actor.with_suffix('.json'))['checkpoint_sha']
         if not legacy and read(actor.with_suffix('.json'))['actor_sha'] != model_sha:
             raise ValueError('stage Actor export provenance changed')
-        cases = read(self.root/'cases.json')['cases']
+        cases = validate_case_set(read(self.root/'cases.json')['cases'])
         rows = []
         semantic = None
         for case in cases:
@@ -380,7 +408,7 @@ class Controller:
             request_path = self.root/'evaluation-request.json'
             self.record(phase='evaluation', label=label, actor_sha=model_sha, case_index=index,
                         **{key:case[key] for key in ('family','extent_m','seed')}, eval_completed=len(rows),
-                        eval_groups=len(rows)//2, eval_pid=None)
+                        eval_groups=len(rows)//2,eval_total=len(cases),eval_group_total=len(cases)//2,eval_budget=case['budget'], eval_pid=None)
             # Validate against current effective configs in the child even for a cache hit.
             write(request_path, request)
             if not self.spawn([*wrapper, str(HERE/'eval_case.py'), '--request', str(request_path),
@@ -400,7 +428,7 @@ class Controller:
         expected = [dict(case, config_digest=row['config_digest'], **{key:row[key] for key in PAIR_KEYS}) for case,row in zip(cases, rows)]
         validate_evaluation(result, actor_sha=model_sha, semantic_id=semantic, cases=expected)
         write(self.root/f'{label}-summary.json', result)
-        self.record(eval_completed=20, eval_groups=10)
+        self.record(eval_completed=len(cases), eval_groups=len(cases)//2)
         return result
 
     def run(self,*,ready_fd=None,startup_token=None,lock_fd=None):
@@ -416,7 +444,7 @@ class Controller:
             from selection import StageSelection
             selection=StageSelection(self.root)
             selection.verify()
-            freeze_cases(LEGACY/'artifacts/baseline-summary.json',self.root/'cases.json')
+            freeze_cases(LEGACY/'artifacts/baseline-summary.json',self.root/'cases.json',**evaluation_plan(self.root))
             self.announce_ready(ready_fd,startup_token,lock_fd)
             baseline = self.screen('baseline', LEGACY/'artifacts/actor-26856.pt')
             if baseline is None: return

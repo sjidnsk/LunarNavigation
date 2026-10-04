@@ -18,7 +18,7 @@ def empty_history():
     return dict(schema='task_frontier_curves_v1',last_sampled_update=0,buckets={},fixed=[],evaluations=[],reward=[],
         notes=['Sampled progress only; absent/overwritten optimizer samples are not reconstructed.',
                'Fixed measured states are diagnostics, not independent evaluation.',
-               'Only strict complete twenty-case paired screens enter evaluation curves.'])
+               'Only complete frozen paired screens with matching scene and budget enter evaluation curves.'])
 
 
 def ingest(data,rows):
@@ -136,7 +136,7 @@ class CurveRecorder:
                 cases=result['cases']
                 expected=[dict(case,config_digest=row['config_digest'],**{key:(baseline['cases'][i][key]
                     if baseline else row[key]) for key in PAIR_KEYS}) for i,(case,row) in enumerate(zip(frozen_cases,cases))]
-                if len(expected)!=20:continue
+                if len(expected)!=len(frozen_cases):continue
                 validate_evaluation(result,actor_sha=result['actor_sha'],semantic_id=result['semantic_id'],cases=expected)
                 for row in cases:
                     evaluation.append(dict(label=result['label'],stage=result['stage'],actor_sha=result['actor_sha'],
