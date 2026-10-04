@@ -263,6 +263,12 @@ def wait_startup(process,reader,root,owned,token):
         return ready
 
 
+def monitor_command(root, entry=None):
+    prefix=f'bash {HERE}/run.sh'
+    if entry is not None:prefix+=f' python {entry}'
+    return f'{prefix} monitor --root {root}'
+
+
 def start_background(root, *, entry=None):
     if entry is not None and Path(entry).resolve()!=HERE/'course_controller.py':
         raise ValueError('unknown controller entry')
@@ -282,7 +288,7 @@ def start_background(root, *, entry=None):
         # Parent closed its duplicate; confirm the matching live child retains the lock fd.
         if process.poll() is not None or not startup_identity_matches(ready,process,root,owned,token):
             raise RuntimeError('controller exited or lost startup identity during lock handoff')
-        return dict(ready,monitor=f'bash {HERE}/run.sh monitor --root {root}')
+        return dict(ready,monitor=monitor_command(root,entry))
     except BaseException:
         if process is not None and process.poll() is None:
             try:os.killpg(process.pid,signal.SIGINT)

@@ -84,3 +84,8 @@ def test_review_gate_binds_course_plan_before_first_run(tmp_path,monkeypatch):
     c.verify_gate(root)
     plan=c.read(root/'course-plan.json');plan['max_blocks'][0]=99;c.write(root/'course-plan.json',plan)
     with pytest.raises(ValueError,match='course plan'):c.verify_gate(root)
+
+def test_startup_monitor_command_uses_course_entry(tmp_path):
+    from controller import HERE, monitor_command
+    assert 'course_controller.py monitor' in monitor_command(tmp_path,HERE/'course_controller.py')
+    assert 'run.sh monitor' in monitor_command(tmp_path)
