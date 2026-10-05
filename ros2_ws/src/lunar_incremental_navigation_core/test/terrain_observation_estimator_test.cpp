@@ -258,3 +258,48 @@ TEST(TerrainObservationEstimator, SameSideRemoteReturnsDoNotEraseSupportedGround
   auto e=obs.Estimate({20,20});ASSERT_TRUE(e);EXPECT_NEAR(e->surface_height_m,0.,.005);
   EXPECT_FALSE(obs.Estimate({23,19}));EXPECT_FALSE(obs.Estimate({23,21}));
 }
+
+TEST(TerrainObservationEstimator, AlternativeMethodsKeepRawEvidenceAndCommonGuards) {
+  for(auto method : {TerrainFitMethod::kWeightedPlane,TerrainFitMethod::kMovingLeastSquares,
+                     TerrainFitMethod::kGroupedRansac,TerrainFitMethod::kGaussianProcess}) {
+    GroundFixture f; f.Plane(1,.4);
+    f.heights[20*41+20]=std::numeric_limits<float>::quiet_NaN();
+    auto raw=f.Snapshot(); TerrainObservationEstimator estimator(*raw,{.fit_method=method});
+    auto ground=estimator.Estimate({20,20}); ASSERT_TRUE(ground) << TerrainFitMethodName(method);
+    EXPECT_NEAR(ground->surface_height_m,.4,1e-5);
+    EXPECT_NEAR(ground->gradient.x,.4,1e-5);
+    EXPECT_FALSE(raw->ElevationRangeAt({20,20}));
+    EXPECT_DOUBLE_EQ(ground->confidence,estimator.Estimate({20,20})->confidence);
+    f.heights[20*41+20]=1.; auto spike=f.Snapshot();
+    TerrainObservationEstimator guard(*spike,{.fit_method=method});
+    EXPECT_FALSE(guard.Estimate({20,20}));
+  }
+}
+TEST(TerrainObservationEstimator, TerrainMethodParsingAndInvalidEnumRejected) {
+  EXPECT_EQ(ParseTerrainFitMethod("mls"),TerrainFitMethod::kMovingLeastSquares);
+  EXPECT_THROW(ParseTerrainFitMethod("unknown"),std::invalid_argument);
+  GroundFixture f;auto raw=f.Snapshot();
+  EXPECT_THROW(TerrainObservationEstimator(*raw,{.fit_method=static_cast<TerrainFitMethod>(99)}),std::invalid_argument);
+}
+
+TEST(TerrainObservationEstimator, CurvedFitCannotBypassRawSecondDifferenceGuard) {
+  GroundFixture f;
+  for(int y=0;y<41;++y) for(int x=0;x<41;++x) {
+    double dx=(x-20)*.05; f.heights[y*41+x]=20*dx*dx;
+  }
+  auto raw=f.Snapshot();
+  TerrainObservationEstimator estimator(*raw,{.fit_method=TerrainFitMethod::kMovingLeastSquares});
+  EXPECT_FALSE(estimator.Estimate({20,20}));
+}
+
+TEST(TerrainObservationEstimator, RejectedOutliersCannotProvideTwoDimensionalSupport) {
+  GroundFixture f;
+  for(int x=16;x<=24;++x) if(x!=20) f.heights[20*41+x]=0;
+  f.heights[16*41+20]=f.heights[24*41+20]=.09;
+  auto raw=f.Snapshot();
+  for(auto method:{TerrainFitMethod::kWeightedPlane,TerrainFitMethod::kMovingLeastSquares,
+                  TerrainFitMethod::kGroupedRansac,TerrainFitMethod::kGaussianProcess}) {
+    TerrainObservationEstimator estimator(*raw,{.fit_method=method});
+    EXPECT_FALSE(estimator.Estimate({20,20})) << TerrainFitMethodName(method);
+  }
+}

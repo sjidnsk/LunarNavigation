@@ -7,6 +7,7 @@
 #include <optional>
 #include <vector>
 #include "lunar_incremental_navigation_core/elevation_map.hpp"
+#include "lunar_incremental_navigation_core/types/terrain_fit_method.hpp"
 
 namespace lunar::incremental_navigation::map {
 int ObservationBackgroundRadiusCells(double half_width_m, double resolution_m);
@@ -15,6 +16,7 @@ struct TerrainObservationParameters {
   double support_axis_distance_m{.20};
   double maximum_plane_residual_m{.03};
   double minimum_confidence{.20};
+  TerrainFitMethod fit_method{TerrainFitMethod::kBaseline};
 };
 struct GroundEstimate {
   double surface_height_m{};
@@ -22,6 +24,8 @@ struct GroundEstimate {
   double residual_rms_m{};
   double residual_min_m{}, residual_max_m{};
   double confidence{};
+  double predictive_variance_m2{};
+  bool used_fallback{};
 };
 
 // One immutable input view per instance. Request-local assumed views must use

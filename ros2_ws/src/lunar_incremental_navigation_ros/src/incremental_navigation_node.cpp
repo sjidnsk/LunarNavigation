@@ -217,6 +217,12 @@ struct RuntimeParameters final {
       parameters.profile.confidence_weight < 0.0) {
     throw std::runtime_error("PLANNER_ERROR: confidence_weight must be finite and nonnegative");
   }
+  const auto terrain_fit_method = node.declare_parameter<std::string>("terrain_fit_method", "baseline");
+  try {
+    parameters.profile.terrain_fit_method = core::ParseTerrainFitMethod(terrain_fit_method);
+  } catch (const std::invalid_argument&) {
+    throw std::runtime_error("PLANNER_ERROR: invalid terrain_fit_method: " + terrain_fit_method);
+  }
   parameters.profile.clearance_weight = node.declare_parameter<double>(
       "clearance_weight", parameters.profile.clearance_weight);
   if (!std::isfinite(parameters.profile.clearance_weight) ||

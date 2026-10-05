@@ -838,6 +838,21 @@ TEST(IncrementalNavigationNode, ConfidenceWeightMustBeFiniteAndNonnegative) {
   }
 }
 
+TEST(IncrementalNavigationNode, TerrainFitMethodHasBaselineDefaultAndAllStartupChoices) {
+  auto defaults = std::make_shared<IncrementalNavigationNode>(ServerOptions("fit_default"));
+  EXPECT_EQ(defaults->get_parameter("terrain_fit_method").as_string(), "baseline");
+  for (const std::string method : {"weighted_plane", "mls", "grouped_ransac", "gaussian_process"}) {
+    auto options=ServerOptions("fit_override");
+    options.append_parameter_override("terrain_fit_method",method);
+    auto node=std::make_shared<IncrementalNavigationNode>(options);
+    EXPECT_EQ(node->get_parameter("terrain_fit_method").as_string(),method);
+    EXPECT_FALSE(node->set_parameters_atomically({rclcpp::Parameter("terrain_fit_method","baseline")}).successful);
+  }
+  auto invalid=ServerOptions("fit_invalid");
+  invalid.append_parameter_override("terrain_fit_method","typo");
+  EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(invalid),std::runtime_error);
+}
+
 TEST(IncrementalNavigationNode, RejectsUnsupportedLocalMapQosParameters) {
   auto options = ServerOptions("invalid_map_qos");
   options.append_parameter_override("local_map_qos_durability", "volatilee");

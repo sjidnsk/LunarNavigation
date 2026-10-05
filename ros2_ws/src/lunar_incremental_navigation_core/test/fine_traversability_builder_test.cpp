@@ -875,5 +875,31 @@ TEST(FineTraversabilityBuilder, OverlappingHighResolutionUpdatesMatchFullDerive)
   }
 }
 
+TEST(FineTraversabilityBuilder, MethodSwitchInvalidatesProfileAndMatchesFreshDerivation) {
+  auto geometry=Geometry(31,31,.05); PersistentElevationMap map;
+  std::vector<float> values(geometry.CellCount());
+  for(int y=0;y<31;++y) for(int x=0;x<31;++x) values[y*31+x]=.4f*(x*.05f-.75f)*(x*.05f-.75f);
+  values[15*31+15]=std::numeric_limits<float>::quiet_NaN();
+  const auto raw=Snapshot(map,geometry,values); auto profile=Profile(.05,.05,.02);
+  profile.terrain_background_half_width_m=.2;
+  FineTraversabilityBuilder builder;auto baseline=builder.Derive(raw,LeggedCapabilityForTest(),profile);
+  for(auto method : {TerrainFitMethod::kWeightedPlane,TerrainFitMethod::kMovingLeastSquares,
+                     TerrainFitMethod::kGroupedRansac,TerrainFitMethod::kGaussianProcess}) {
+    profile.terrain_fit_method=method;
+    auto switched=builder.Derive(raw,LeggedCapabilityForTest(),profile,baseline);
+    auto fresh=builder.Derive(raw,LeggedCapabilityForTest(),profile);
+    EXPECT_NE(switched->platform_profile_hash(),baseline->platform_profile_hash());
+    for(int y=10;y<21;++y) for(int x=10;x<21;++x) {
+      EXPECT_EQ(switched->State({x,y}),fresh->State({x,y}));
+      EXPECT_DOUBLE_EQ(switched->Confidence({x,y}),fresh->Confidence({x,y}));
+      EXPECT_DOUBLE_EQ(switched->TraversalCost({x,y}),fresh->TraversalCost({x,y}));
+      const auto a=switched->PlanningElevationRangeAt({x,y}),b=fresh->PlanningElevationRangeAt({x,y});
+      ASSERT_EQ(a.has_value(),b.has_value());
+      if(a) { EXPECT_FLOAT_EQ(a->min_m,b->min_m);EXPECT_FLOAT_EQ(a->max_m,b->max_m); }
+
+    }
+  }
+}
+
 }  // namespace
 }  // namespace lunar::incremental_navigation

@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <vector>
 #include "map/grid_bounds.hpp"
+#include "map/terrain_surface_fit.hpp"
 
 namespace lunar::incremental_navigation::map {
 int ObservationBackgroundRadiusCells(double half_width_m, double resolution_m) {
@@ -21,7 +22,8 @@ TerrainObservationEstimator::TerrainObservationEstimator(
     const ElevationRangeView& view, TerrainObservationParameters parameters)
     : view_(view), parameters_(parameters) {
   const double resolution = view.geometry().resolution_m();
-  if (!std::isfinite(parameters.support_axis_distance_m) ||
+  if (TerrainFitMethodName(parameters.fit_method) == "invalid" ||
+      !std::isfinite(parameters.support_axis_distance_m) ||
       parameters.support_axis_distance_m <= 0. ||
       !std::isfinite(parameters.maximum_plane_residual_m) ||
       parameters.maximum_plane_residual_m <= 0. ||
@@ -66,8 +68,7 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
   const double resolution = view_.geometry().resolution_m();
   const bool measured = view_.ElevationRangeAt(index).has_value();
   if (radius_ < 1 || (!measured && resolution > .10 + 1e-12)) return {};
-  struct Sample { double x,y,low,high,z; };
-  std::vector<Sample> points;
+  std::vector<SurfaceSample> points;
   points.reserve((2*radius_+1)*(2*radius_+1));
   const int preferred = std::max(1, static_cast<int>(std::floor(
       (parameters_.support_axis_distance_m + 1e-12) / resolution)));
@@ -102,6 +103,9 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
       a=(xz*yy-yz*xy)/det;b=(yz*xx-xz*xy)/det;c=(sz-a*sx-b*sy)/n;
       return std::isfinite(a)&&std::isfinite(b)&&std::isfinite(c);
     };
+    std::optional<SurfaceFit> surface;
+    std::size_t inliers=0;
+    if(parameters_.fit_method == TerrainFitMethod::kBaseline) {
     bool valid=fit();
     for(int iteration=0;valid && iteration<4;++iteration) {
       double maximum_residual=0.;
@@ -115,18 +119,41 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
       valid=fit();
     }
     if(!valid)continue;
-    std::size_t inliers=0;
     for(std::size_t i=0;i<points.size();++i) {
       const auto& p=points[i];
       weights[i]=std::abs(p.z-c-a*p.x-b*p.y)<=parameters_.maximum_plane_residual_m?1.:0.;
       inliers+=weights[i]>0.;
     }
     if(inliers<4 || double(inliers)/points.size()<.7 || !fit())continue;
+    } else {
+      surface=FitTerrainSurface(parameters_.fit_method,points,
+          {.support_distance_m=parameters_.support_axis_distance_m,
+           .resolution_m=resolution,.residual_limit_m=parameters_.maximum_plane_residual_m});
+      if(!surface) continue;
+      c=surface->Height(0,0); const auto gradient=surface->Gradient(0,0);
+      a=gradient.x; b=gradient.y;
+      if(!std::isfinite(c)||!std::isfinite(a)||!std::isfinite(b)) continue;
+      for(std::size_t i=0;i<points.size();++i) {
+        weights[i]=surface->inliers[i]?1.:0.; inliers+=surface->inliers[i];
+      }
+      if(inliers<4 || double(inliers)/points.size()<.7) continue;
+      // Rejected points cannot supply the missing second spatial dimension.
+      // Apply the baseline's final-consensus rank check without refitting a curve.
+      double sx=0,sy=0,xx=0,yy=0,xy=0;
+      for(std::size_t i=0;i<points.size();++i) if(weights[i]>0) {
+        const auto& p=points[i];sx+=p.x;sy+=p.y;xx+=p.x*p.x;yy+=p.y*p.y;xy+=p.x*p.y;
+      }
+      xx-=sx*sx/inliers;yy-=sy*sy/inliers;xy-=sx*sy/inliers;
+      if(!(xx>0 && yy>0 && xx*yy-xy*xy>1e-4*(xx+yy)*(xx+yy))) continue;
+    }
+    const auto height=[&](double x,double y) {
+      return surface ? surface->Height(x,y) : c+a*x+b*y;
+    };
     std::vector<double> angles;
     double nearest=std::numeric_limits<double>::infinity(),squared=0.;
     double low=std::numeric_limits<double>::infinity(),high=-low;
     for(std::size_t i=0;i<points.size();++i) {
-      const auto& p=points[i];const double plane=c+a*p.x+b*p.y;
+      const auto& p=points[i];const double plane=height(p.x,p.y);
       low=std::min(low,p.low-plane);high=std::max(high,p.high-plane);
       if(weights[i]==0.)continue;
       squared+=(p.z-plane)*(p.z-plane);
@@ -147,14 +174,16 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
     };
     // With every endpoint within 2 cm of the plane, an adjacent detrended
     // jump is <=4 cm and a second difference <=8 cm: all guards below pass.
-    if(std::max(std::abs(low),std::abs(high))>.02) for(const auto& p:points) {
+    const bool curved=parameters_.fit_method==TerrainFitMethod::kMovingLeastSquares ||
+        parameters_.fit_method==TerrainFitMethod::kGaussianProcess;
+    if(curved || std::max(std::abs(low),std::abs(high))>.02) for(const auto& p:points) {
       // Only evidence inside the target's own central patch can veto its
       // estimate. Remote returns still affect fit consensus/confidence and
       // remain raw obstacles when their own cells are evaluated.
       const int px=static_cast<int>(std::lround(p.x/resolution));
       const int py=static_cast<int>(std::lround(p.y/resolution));
       const bool local_point=std::abs(px)<=1 && std::abs(py)<=1;
-      const double plane=c+a*p.x+b*p.y;
+      const double plane=height(p.x,p.y);
       const bool p_on_ground=std::abs(p.z-plane)<=parameters_.maximum_plane_residual_m;
       if(p.high-p.low>parameters_.maximum_plane_residual_m &&
          std::max(std::abs(p.low-plane),std::abs(p.high-plane))>
@@ -168,8 +197,9 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
         const bool local_pair=local_point && std::abs(qx)<=1 && std::abs(qy)<=1;
         const auto cell=detail::OffsetWithinGeometry(view_.geometry(),index,qx,qy);
         const auto range=cell?view_.ElevationRangeAt(*cell):std::nullopt;
-        const bool q_on_ground=range && std::abs(.5*(double(range->min_m)+range->max_m)-
-            c-resolution*(a*qx+b*qy))<=parameters_.maximum_plane_residual_m;
+        const double qz=range?.5*(double(range->min_m)+range->max_m):0.;
+        const bool q_on_ground=range && std::abs(surface?qz-height(resolution*qx,resolution*qy):
+            qz-c-resolution*(a*qx+b*qy))<=parameters_.maximum_plane_residual_m;
         const int lx=px-static_cast<int>(offset.x),ly=py-static_cast<int>(offset.y);
         if(lx>=-r && ly>=-r && range) {
           const auto left=detail::OffsetWithinGeometry(view_.geometry(),index,lx,ly);
@@ -178,7 +208,8 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
               .5*(double(range->min_m)+range->max_m)-2.*p.z)>.08)
             record_jump(local_pair && std::abs(lx)<=1 && std::abs(ly)<=1,
                 p_on_ground && q_on_ground &&
-                std::abs(.5*(double(lrange->min_m)+lrange->max_m)-c-
+                std::abs(surface?.5*(double(lrange->min_m)+lrange->max_m)-height(resolution*lx,resolution*ly):
+                    .5*(double(lrange->min_m)+lrange->max_m)-c-
                     resolution*(a*lx+b*ly))<=parameters_.maximum_plane_residual_m);
         }
         if(range && std::abs(.5*(double(range->min_m)+range->max_m)-p.z-
@@ -193,7 +224,7 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
       struct RejectedPoint { double x,y,residual; };
       std::vector<RejectedPoint> rejected;
       for(const auto& p:points) {
-        const double residual=p.z-c-a*p.x-b*p.y;
+        const double residual=surface?p.z-height(p.x,p.y):p.z-c-a*p.x-b*p.y;
         if(std::abs(residual)>parameters_.maximum_plane_residual_m)
           rejected.push_back({p.x,p.y,residual});
       }
@@ -221,11 +252,14 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
     for(std::size_t i=1;i<angles.size();++i)gap=std::max(gap,angles[i]-angles[i-1]);
     if(gap>std::acos(-1.)+1e-10)continue;
     const double rms=std::sqrt(squared/inliers);
-    const double confidence=(measured?1.:.85)*(double(inliers)/points.size())*
+    const double uncertainty_factor=surface ?
+        1./(1.+std::sqrt(surface->predictive_variance_m2)/.02) : 1.;
+    const double confidence=uncertainty_factor*(measured?1.:.85)*(double(inliers)/points.size())*
         (.5+.5*std::min(1.,double(inliers)/8.))*
         (1.-.5*nearest/parameters_.support_axis_distance_m)/(1.+rms/.02);
     if(confidence<parameters_.minimum_confidence)continue;
-    GroundEstimate candidate{c,{a,b},rms,low,high,confidence};
+    GroundEstimate candidate{c,{a,b},rms,low,high,confidence,
+        surface?surface->predictive_variance_m2:0.,surface&&surface->used_fallback};
     if(remote_discontinuity) {
       // Prefer a window confined to the target's surface. If no such window
       // has enough observations, remote evidence must not veto valid ground
