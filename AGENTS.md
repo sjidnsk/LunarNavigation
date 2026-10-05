@@ -14,6 +14,11 @@
   `import/pure-planner-orin-main` 的待回合分支。任何开发结果都不得反向合入 import 分支。
 - 新功能和缺陷修复应从 `integration/pure-planner-orin` 创建命名清楚的 `feat/*` 或 `fix/*`
   分支，并使用独立 worktree。验证通过后再合入 integration。
+- `dev/terrain-confidence` 是用户指定的可信度机制开发集成分支，从
+  `integration/pure-planner-orin` 建立。可信度相关设计、实现和修复先在此分支集成与测试；
+  验证合格后再同步到集成主线和相关应用分支。该专题任务的 `feat/*`、`fix/*` 或 `docs/*`
+  子分支从本开发分支建立，并先回合到本开发分支。具体来源、测试门槛和同步范围见
+  `docs/可信度机制开发分支.md`。
 - 不把本历史合入 `lunar-runtime` 的其他主线、开发分支或远程默认分支，除非用户明确批准仓库级
   整合方案。
 - Humble/Orin 稳定或发布分支只能在用户明确要求时从 integration 创建；发布修复中的通用修改
