@@ -77,6 +77,17 @@ if(BUILD_TESTING)
     lunar_enable_sanitizers(${target})
   endfunction()
 
+  lunar_add_core_gtest(lunar_incremental_navigation_core_influence_run_test test/influence_run_test.cpp)
+  target_include_directories(lunar_incremental_navigation_core_influence_run_test PRIVATE src)
+  lunar_add_core_gtest(lunar_incremental_navigation_core_terrain_window_test test/terrain_window_test.cpp)
+  lunar_add_core_gtest(
+    lunar_incremental_navigation_core_boundary_distance_index_test
+    test/boundary_distance_index_test.cpp)
+
+  lunar_add_core_gtest(
+    lunar_incremental_navigation_core_local_query_cache_test
+    test/local_query_cache_test.cpp)
+
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_planning_contract_test
     test/planning_contract_test.cpp)
@@ -86,6 +97,12 @@ if(BUILD_TESTING)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_planning_snapshot_contract_test
     test/planning_snapshot_contract_test.cpp)
+  lunar_add_core_gtest(
+    lunar_incremental_navigation_core_wheel_terrain_basic_test
+    test/wheel_terrain_basic_test.cpp)
+  lunar_add_core_gtest(
+    lunar_incremental_navigation_core_legged_terrain_basic_test
+    test/legged_terrain_basic_test.cpp)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_fine_traversability_builder_test
     test/fine_traversability_builder_test.cpp)

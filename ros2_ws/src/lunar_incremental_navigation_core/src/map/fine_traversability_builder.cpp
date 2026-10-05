@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "map/grid_bounds.hpp"
+#include "map/influence_cells.hpp"
 
 namespace lunar::incremental_navigation {
 namespace {
@@ -78,6 +79,7 @@ using Clock = std::chrono::steady_clock;
 void ValidateProfile(const TraversabilityProfile& profile) {
   if (profile.planar_envelope_xy_m.size() < 3U ||
       !FiniteNonnegative(profile.preferred_clearance_m) ||
+      !FiniteNonnegative(profile.terrain_background_half_width_m) ||
       !FiniteNonnegative(profile.slope_weight) ||
       !FiniteNonnegative(profile.relief_weight) ||
       !FiniteNonnegative(profile.clearance_weight)) {
@@ -133,6 +135,7 @@ class ProfileHasher final {
     hasher.Add(vertex.y);
   }
   hasher.Add(profile.preferred_clearance_m);
+  hasher.Add(profile.terrain_background_half_width_m);
   hasher.Add(profile.slope_weight);
   hasher.Add(profile.relief_weight);
   hasher.Add(profile.clearance_weight);
@@ -250,26 +253,6 @@ void ValidateMergedChanges(
   }
 }
 
-[[nodiscard]] std::set<GridIndex> InfluenceCells(
-    const SparseGridGeometry& geometry,
-    const std::set<GridIndex>& changed_raw_cells,
-    const double influence_m) {
-  std::set<GridIndex> result;
-  for (const GridIndex changed : changed_raw_cells) {
-    const auto [minimum, maximum] =
-        detail::CellBoundsForRadius(geometry, changed, influence_m);
-    for (std::int64_t y = minimum.y; y < maximum.y; ++y) {
-      for (std::int64_t x = minimum.x; x < maximum.x; ++x) {
-        const GridIndex candidate{.x = x, .y = y};
-        if (CircleIntersectsCellArea(CellCenter(geometry, candidate),
-                                     influence_m, geometry, changed)) {
-          result.insert(candidate);
-        }
-      }
-    }
-  }
-  return result;
-}
 
 void IncludeNewGeometryCells(const ElevationSnapshot& raw,
                              const SparseGridGeometry& previous,
@@ -420,9 +403,10 @@ FineTraversabilityBuilder::Derive(
     const std::set<GridIndex> changed_raw(changed.begin(), changed.end());
     const double influence_m =
         hard_radius_m + profile.preferred_clearance_m +
-        std::sqrt(2.0) * raw->geometry().resolution_m();
+        TerrainBackgroundRadiusCells(profile.terrain_background_half_width_m,
+                                     raw->geometry().resolution_m()) * std::sqrt(2.0) * raw->geometry().resolution_m();
     recompute_cells =
-        InfluenceCells(raw->geometry(), changed_raw, influence_m);
+        detail::InfluenceCells(raw->geometry(), changed_raw, influence_m);
     IncludeNewGeometryCells(*raw, previous->geometry(), hard_radius_m,
                              recompute_cells);
   }
