@@ -83,7 +83,7 @@ class OrderedCourse:
             previous = state.get('phase')
             if type(previous) is not int or phase not in (previous, previous + 1):
                 raise ValueError('course resume requires same phase or next phase')
-            if state.get('rehearsal') != rehearsal:
+            if phase == previous and state.get('rehearsal') != rehearsal:
                 raise ValueError('course rehearsal fraction changed on resume')
             self.by_task = deepcopy(state['by_task'])
             if set(self.by_task) != set(TASKS) or any(

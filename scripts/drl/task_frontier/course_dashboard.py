@@ -41,11 +41,15 @@ def lines(root,manifest,progress,course,evaluation):
     targets=manifest.get('targets',{});actuals=manifest.get('actuals',{})
     t=progress.get('transitions',actuals.get('transitions',0));u=progress.get('updates',actuals.get('updates',0))
     training=manifest.get('phase') in ('warmup','training')
+    allocation=state.get('allocation_epoch',{})
+    block_label='当前配比训练块' if allocation.get('phase')==phase else '本阶段训练块'
     output=['四阶段 SAC 课程 · 逐场景覆盖率',
             f'区内月表 → 区内洞穴 → 区外月表 → 区外洞穴  |  训练{extent_label} / 256–512决策 · 固定评测50–100m',
             '─'*100,
-            f"状态 {manifest.get('status','等待')} · 第{phase+1}/4阶段 {NAMES[task]} · {manifest.get('phase','等待')} · 本阶段训练块 {state.get('phase_blocks',0)}/{plan.get('max_blocks',[20,10,20,10])[phase]}",
+            f"状态 {manifest.get('status','等待')} · 第{phase+1}/4阶段 {NAMES[task]} · {manifest.get('phase','等待')} · {block_label} {state.get('phase_blocks',0)}/{plan.get('max_blocks',[20,10,20,10])[phase]}",
             f"累计转移 {t:,} · 更新 {u:,} · 本块目标 {targets.get('transitions',0):,}条 / {targets.get('updates',0):,}次 · 连续评测通过 {state.get('streak',0)}/2"]
+    if allocation.get('phase')==phase:
+        output += ['当前转移/采样目标：区内月表50% · 区内洞穴50%；配额占比从切换点累计，回合统计保留历史。']
     if training:
         output += [f"速度 {progress.get('transitions_per_s',0):.2f}条/s · replay {progress.get('replay_count',0):,}条",'',
                    '环境  起点/地形  尺寸    覆盖率                决策    状态']

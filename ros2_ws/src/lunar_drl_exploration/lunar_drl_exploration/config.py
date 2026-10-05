@@ -202,6 +202,7 @@ class TrainingConfig:
     paired_scene_sequence: bool = False
     ordered_curriculum: bool = False
     ordered_rehearsal_fraction: float = .2
+    ordered_rehearsal_by_phase: tuple | None = None
     ordered_budget_rule: dict | None = None
     environments: int = 8
     target_rtf: float = 30.0
@@ -234,6 +235,12 @@ class TrainingConfig:
     system_reserve_bytes: int = 2 * 1024**3
     owned_pss_limit_bytes: int | None = None
 
+    def ordered_rehearsal_for_phase(self, phase):
+        if type(phase) is not int or not 0 <= phase < 4:
+            raise ValueError('invalid ordered course phase')
+        return (self.ordered_rehearsal_fraction if self.ordered_rehearsal_by_phase is None
+                else self.ordered_rehearsal_by_phase[phase])
+
     def __post_init__(self):
         boundaries = self.curriculum_transition_boundaries
         if type(self.ordered_curriculum) is not bool:
@@ -244,6 +251,12 @@ class TrainingConfig:
             raise ValueError('ordered_rehearsal_fraction must be in [0,1)')
         if self.ordered_budget_rule is not None and not isinstance(self.ordered_budget_rule, dict):
             raise ValueError('ordered_budget_rule must be a dictionary or None')
+        if self.ordered_rehearsal_by_phase is not None and (
+                not isinstance(self.ordered_rehearsal_by_phase, (tuple, list)) or
+                len(self.ordered_rehearsal_by_phase) != 4 or any(
+                    type(value) not in (int, float) or not np.isfinite(value) or not 0 < value < 1
+                    for value in self.ordered_rehearsal_by_phase)):
+            raise ValueError('ordered_rehearsal_by_phase requires four fractions in (0,1)')
         if self.ordered_budget_rule is not None:
             import json
             try:
@@ -343,6 +356,8 @@ def resume_semantics(config):
             start_sampling='seeded_main_component_task_mask_v1',
             rehearsal_fraction=config.ordered_rehearsal_fraction,
             budget_rule=record['ordered_budget_rule'])
+        if config.ordered_rehearsal_by_phase is not None:
+            result['ordered_curriculum']['rehearsal_by_phase'] = record['ordered_rehearsal_by_phase']
     if config.paired_scene_sequence:
         result['scene_sequence'] = dict(mode='paired_slot_episode_v1',
             seed=config.seed, environments=config.environments)
@@ -369,5 +384,7 @@ def training_config_from_record(record):
     if 'curriculum_mixtures' in values:
         values['curriculum_mixtures'] = tuple(tuple(row) for row in values['curriculum_mixtures'])
     values['curriculum_budgets'] = tuple(values['curriculum_budgets'])
+    if values.get('ordered_rehearsal_by_phase') is not None:
+        values['ordered_rehearsal_by_phase'] = tuple(values['ordered_rehearsal_by_phase'])
     values['curriculum_extents_m'] = tuple(tuple(pair) for pair in values['curriculum_extents_m'])
     return TrainingConfig(**values)

@@ -79,10 +79,12 @@ class TrainingState:
         remains intact, including target weights and optimizer history.
         ordered-extent allows only ordered 50-100m to 30-100m collection and
         relocated output/artifact roots, preserving every other parameter.
+        ordered-ratio changes only current cave_inside rehearsal .2 to .5,
+        rebasing allocation quotas while preserving all learned state and totals.
         This operation neither creates the destination nor writes the source.
         """
         from .config import training_config_from_record
-        if experiment not in (None, 'paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent'):
+        if experiment not in (None, 'paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent', 'ordered-ratio'):
             raise ValueError('unknown fork experiment: ' + str(experiment))
         source = Path(source).resolve()
         destination = Path(config.output_dir).resolve()
@@ -111,6 +113,23 @@ class TrainingState:
                     for old, new in zip(previous, requested))):
                 raise ValueError('ordered-extent allows only all training extents 50-100 to 30-100')
             fields = ('artifact_root', 'curriculum_extents_m')
+        if experiment == 'ordered-ratio':
+            if not original.ordered_curriculum or not config.ordered_curriculum:
+                raise ValueError('ordered-ratio requires ordered_curriculum=true')
+            curriculum = loads_transport(state.record['curriculum'])
+            course = curriculum.get('course', {})
+            if course.get('phase') != 1:
+                raise ValueError('ordered-ratio requires current cave_inside phase')
+            from .ordered_curriculum import OrderedCourse
+            OrderedCourse(1, original.ordered_rehearsal_for_phase(1), state=course,
+                success_coverage=original.success_coverage)
+            if (original.ordered_rehearsal_for_phase(1) != .2 or
+                    config.ordered_rehearsal_by_phase is None or
+                    config.ordered_rehearsal_for_phase(1) != .5 or any(
+                        original.ordered_rehearsal_for_phase(phase) != config.ordered_rehearsal_for_phase(phase)
+                        for phase in (0,2,3))):
+                raise ValueError('ordered-ratio changes only cave_inside rehearsal .2 to .5')
+            fields = ('artifact_root', 'ordered_rehearsal_by_phase')
         if experiment in ('paired-multistep', 'paired-entropy'):
             # This comparison changes only the return horizon. Collection and
             # output caps remain the source contract, unlike a collection fork.
@@ -156,9 +175,24 @@ class TrainingState:
                 for key in fields if before[key] != after[key]})
         if experiment is not None:
             state.record['fork']['experiment'] = experiment
-        if experiment == 'ordered-extent':
+        if experiment in ('ordered-extent', 'ordered-ratio'):
             import hashlib
             state.record['fork']['source_checkpoint_sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
+        if experiment == 'ordered-ratio':
+            # Restart quotas at this explicit allocation boundary, retaining all
+            # episode/coverage totals and avoiding historical catch-up collection.
+            course = copy.deepcopy(course)
+            state.record['fork']['allocation_before'] = copy.deepcopy(course)
+            course.update(rehearsal=.5, weights={'moon_inside':.5, 'cave_inside':.5},
+                phase_transitions={'moon_inside':0, 'cave_inside':0},
+                phase_samples={'moon_inside':0, 'cave_inside':0},
+                sampling_weights={}, missing_replay_tasks=[])
+            curriculum['course'] = course
+            state.record['curriculum'] = dumps_transport(curriculum)
+            counters = loads_transport(state.record['counters'])
+            if 'course' in counters:
+                counters['course'] = copy.deepcopy(course)
+            state.record['counters'] = dumps_transport(counters)
         if learning_changes:
             state.record['fork']['changes']['learning'] = learning_changes
         if experiment == 'paired-multistep':

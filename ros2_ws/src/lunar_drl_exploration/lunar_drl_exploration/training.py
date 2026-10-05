@@ -58,7 +58,7 @@ class Curriculum:
             phase = int(os.environ.get('DRL_COURSE_PHASE', '0'))
             if state is not None and 'course' not in state:
                 raise ValueError('mixed curriculum cannot restore into ordered course')
-            self.course = OrderedCourse(phase, config.ordered_rehearsal_fraction,
+            self.course = OrderedCourse(phase, config.ordered_rehearsal_for_phase(phase),
                 state=self.state.get('course'), success_coverage=config.success_coverage)
             if config.environments < phase + 1:
                 raise ValueError('ordered course needs at least one slot per active task')
