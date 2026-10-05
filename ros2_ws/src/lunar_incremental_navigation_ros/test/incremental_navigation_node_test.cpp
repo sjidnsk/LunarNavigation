@@ -773,6 +773,23 @@ TEST(IncrementalNavigationNode, StartupParametersRequireRestart) {
   EXPECT_EQ(server->get_parameter("map_frame").as_string(), "map");
 }
 
+TEST(IncrementalNavigationNode, TerrainBackgroundWidthIsAValidatedStartupParameter) {
+  auto options = ServerOptions("terrain_background_default");
+  auto defaults = std::make_shared<IncrementalNavigationNode>(options);
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("terrain_background_half_width_m").as_double(), 0.4);
+  options.append_parameter_override("terrain_background_half_width_m", 0.0);
+  auto legacy = std::make_shared<IncrementalNavigationNode>(options);
+  EXPECT_DOUBLE_EQ(legacy->get_parameter("terrain_background_half_width_m").as_double(), 0.0);
+  EXPECT_FALSE(legacy->set_parameters_atomically(
+      {rclcpp::Parameter("terrain_background_half_width_m", 0.3)}).successful);
+  for (double width : {-0.1, std::numeric_limits<double>::infinity(),
+                       std::numeric_limits<double>::quiet_NaN()}) {
+    auto invalid = ServerOptions("terrain_background_invalid");
+    invalid.append_parameter_override("terrain_background_half_width_m", width);
+    EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(invalid), std::runtime_error);
+  }
+}
+
 TEST(IncrementalNavigationNode, ClearanceCostHasCalibratedDefaultAndStartupOverride) {
   auto defaults = std::make_shared<IncrementalNavigationNode>(
       ServerOptions("clearance_default"), IncrementalNavigationNodeDependencies{});
@@ -792,6 +809,30 @@ TEST(IncrementalNavigationNode, ClearanceWeightMustBeFiniteAndNonnegative) {
                                std::numeric_limits<double>::quiet_NaN()}) {
     auto options = ServerOptions("clearance_invalid");
     options.append_parameter_override("clearance_weight", weight);
+    EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(
+        options, IncrementalNavigationNodeDependencies{}), std::runtime_error);
+  }
+}
+
+TEST(IncrementalNavigationNode, ConfidenceCostHasDefaultAndStartupOverride) {
+  auto defaults = std::make_shared<IncrementalNavigationNode>(
+      ServerOptions("confidence_default"), IncrementalNavigationNodeDependencies{});
+  ASSERT_TRUE(defaults->has_parameter("confidence_weight"));
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("confidence_weight").as_double(), 2.0);
+  auto options = ServerOptions("confidence_override");
+  options.append_parameter_override("confidence_weight", 0.0);
+  auto disabled = std::make_shared<IncrementalNavigationNode>(
+      options, IncrementalNavigationNodeDependencies{});
+  EXPECT_DOUBLE_EQ(disabled->get_parameter("confidence_weight").as_double(), 0.0);
+  EXPECT_FALSE(disabled->set_parameters_atomically(
+      {rclcpp::Parameter("confidence_weight", 2.0)}).successful);
+}
+
+TEST(IncrementalNavigationNode, ConfidenceWeightMustBeFiniteAndNonnegative) {
+  for (const double weight : {-1.0, std::numeric_limits<double>::infinity(),
+                               std::numeric_limits<double>::quiet_NaN()}) {
+    auto options = ServerOptions("confidence_invalid");
+    options.append_parameter_override("confidence_weight", weight);
     EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(
         options, IncrementalNavigationNodeDependencies{}), std::runtime_error);
   }

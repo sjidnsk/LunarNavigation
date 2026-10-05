@@ -1,0 +1,36 @@
+diff --git a/config/exploration_navigation.yaml b/config/exploration_navigation.yaml
+index 87e8d282..5caefb38 100644
+--- a/config/exploration_navigation.yaml
++++ b/config/exploration_navigation.yaml
+@@ -40,6 +40,7 @@ exploration:
+ navigation:
+   clearance_weight: 2.0
+   terrain_background_half_width_m: 0.4
++  confidence_weight: 2.0
+   publish_local_fine_map: true
+   local_fine_map_topic: /Car/T4/mapping/local_fine_map
+   local_fine_map_window_m: 28.0
+diff --git a/tools/tcp_deployment/templates/debug/p3_joint/exploration-only.yaml b/tools/tcp_deployment/templates/debug/p3_joint/exploration-only.yaml
+index 784fe635..16966cfa 100644
+--- a/tools/tcp_deployment/templates/debug/p3_joint/exploration-only.yaml
++++ b/tools/tcp_deployment/templates/debug/p3_joint/exploration-only.yaml
+@@ -43,6 +43,7 @@ exploration:
+ navigation:
+   clearance_weight: 2.0
+   terrain_background_half_width_m: 0.4
++  confidence_weight: 2.0
+   publish_local_fine_map: true
+   local_fine_map_topic: /Car/T4/mapping/local_fine_map
+   local_fine_map_window_m: 28.0
+diff --git a/tools/tcp_deployment/templates/debug/p3_joint/navigation.yaml b/tools/tcp_deployment/templates/debug/p3_joint/navigation.yaml
+index cc77217d..33147dcf 100644
+--- a/tools/tcp_deployment/templates/debug/p3_joint/navigation.yaml
++++ b/tools/tcp_deployment/templates/debug/p3_joint/navigation.yaml
+@@ -43,6 +43,7 @@ exploration:
+ navigation:
+   clearance_weight: 2.0
+   terrain_background_half_width_m: 0.4
++  confidence_weight: 2.0
+   rolling_replan_period_s: 0.5
+   rolling_replan_distance_m: 1.0
+   publish_local_fine_map: true

@@ -199,13 +199,16 @@ class RequestLocalPlanningView final {
 
   [[nodiscard]] bool CanBeEndpoint(const GridIndex index) const noexcept {
     return geometry_.Contains(index) &&
-           base_->State(index) == FineCellState::kFree;
+           base_->State(index) == FineCellState::kFree &&
+           base_->PlanningElevationRangeAt(index).has_value();
   }
 
   [[nodiscard]] bool CanCertifyLeggedSupport(
       const GridIndex index, const bool is_initial_support) const noexcept {
     const LocalCellSource source = Source(index);
-    return source == LocalCellSource::kEvidenceFree ||
+    // Supported inferred ground is usable elevation; confidence contributes to cost.
+    return (source == LocalCellSource::kEvidenceFree &&
+            base_->PlanningElevationRangeAt(index).has_value()) ||
            (is_initial_support &&
             source == LocalCellSource::kStartAssumedFree);
   }

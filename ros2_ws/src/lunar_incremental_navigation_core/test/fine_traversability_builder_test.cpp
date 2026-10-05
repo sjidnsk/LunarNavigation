@@ -299,8 +299,9 @@ TEST(FineTraversabilityBuilder, ZeroWeightsProduceZeroFiniteTraversalCost) {
   const auto raw = Snapshot(map, geometry, values);
   FineTraversabilityBuilder builder;
 
-  const auto fine = builder.Derive(raw, LeggedCapabilityForTest(),
-                                   Profile(0.01, 0.01, 0.8, {}));
+  auto profile = Profile(0.01, 0.01, 0.8, {});
+  profile.confidence_weight = 0.;
+  const auto fine = builder.Derive(raw, LeggedCapabilityForTest(), profile);
 
   ASSERT_TRUE(fine);
   ASSERT_EQ(fine->State({.x = 12, .y = 12}), FineCellState::kFree);
@@ -867,6 +868,7 @@ TEST(FineTraversabilityBuilder, OverlappingHighResolutionUpdatesMatchFullDerive)
           const GridIndex cell{x, y};
           EXPECT_EQ(incremental->State(cell), full->State(cell));
           EXPECT_DOUBLE_EQ(incremental->TraversalCost(cell), full->TraversalCost(cell));
+          EXPECT_DOUBLE_EQ(incremental->Confidence(cell), full->Confidence(cell));
         }
       previous = incremental;
     }

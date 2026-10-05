@@ -1,3 +1,4 @@
+#include "local/terrain_segment_cost.hpp"
 #include "lunar_incremental_navigation_core/legged_local_planner.hpp"
 #include "local/request_cell_cache.hpp"
 
@@ -608,7 +609,9 @@ class LeggedEdgeEvaluator final {
       return Remember(key, certificate);
     }
     bool uses_assumed_support = false;
+    double maximum_terrain_cost = 0.;
     for (const GridIndex cell : cells.Cells()) {
+      maximum_terrain_cost = std::max(maximum_terrain_cost, cells_.TraversalCost(cell));
       switch (cells_.Source(cell)) {
         case LocalCellSource::kEvidenceFree:
           break;
@@ -633,7 +636,7 @@ class LeggedEdgeEvaluator final {
     certificate.feasible = true;
     certificate.uses_assumed_support = uses_assumed_support;
     certificate.cost = SaturatingTerrainEdgeCost(
-        distance, cells_.TraversalCost(target_cell));
+        distance, maximum_terrain_cost);
     certificate.arrival_yaw_rad = std::atan2(dy, dx);
     return Remember(key, certificate);
   }
@@ -924,7 +927,15 @@ class LeggedEdgeEvaluator final {
     }
     const auto next_phase =
         view.AdvancePhase(source.point.phase, *candidate_cell);
+    const SearchControl cost_control{.deadline=deadline,.stop_token=stop};
+    const long double original_cost=local::TerrainSegmentCost(
+        view,source.point.pose.position_m,previous.point.pose.position_m,cost_control)+
+        local::TerrainSegmentCost(view,previous.point.pose.position_m,
+                                  candidate.point.pose.position_m,cost_control);
+    const long double shortcut_cost=local::TerrainSegmentCost(
+        view,source.point.pose.position_m,candidate.point.pose.position_m,cost_control);
     if (shortcut.certificate.feasible && next_phase.has_value() &&
+        shortcut_cost <= original_cost + 1e-12L*std::max(1.L,original_cost) &&
         *next_phase == candidate.point.phase &&
         (!shortcut.certificate.uses_assumed_support ||
          source.point.phase == StartPhase::kStartPrefix)) {

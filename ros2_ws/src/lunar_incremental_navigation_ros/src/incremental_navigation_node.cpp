@@ -204,6 +204,19 @@ struct RuntimeParameters final {
 #endif
   parameters.profile = PlatformProfileFor(
       parameters.capability, *loaded.start_blind_zone_margin_m);
+  parameters.profile.terrain_background_half_width_m = node.declare_parameter<double>(
+      "terrain_background_half_width_m",
+      std::holds_alternative<core::WheeledCapability>(parameters.capability) ? 0.4 : 0.2);
+  if (!std::isfinite(parameters.profile.terrain_background_half_width_m) ||
+      parameters.profile.terrain_background_half_width_m < 0.0) {
+    throw std::runtime_error("PLANNER_ERROR: invalid terrain background half-width");
+  }
+  parameters.profile.confidence_weight = node.declare_parameter<double>(
+      "confidence_weight", parameters.profile.confidence_weight);
+  if (!std::isfinite(parameters.profile.confidence_weight) ||
+      parameters.profile.confidence_weight < 0.0) {
+    throw std::runtime_error("PLANNER_ERROR: confidence_weight must be finite and nonnegative");
+  }
   parameters.profile.clearance_weight = node.declare_parameter<double>(
       "clearance_weight", parameters.profile.clearance_weight);
   if (!std::isfinite(parameters.profile.clearance_weight) ||
