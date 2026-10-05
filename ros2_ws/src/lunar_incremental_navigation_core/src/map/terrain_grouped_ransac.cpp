@@ -188,7 +188,26 @@ struct Candidate {
   Indices indices;
   double local_weight{};
 };
+double SpatialLinkDistance(const SurfaceFitOptions& options) {
+  return std::max(2.1 * options.resolution_m, .8 * options.support_distance_m);
+}
 }  // namespace
+
+bool HasConnectedGroupedRansacSupport(const std::vector<SurfaceSample>& points,
+    const std::vector<bool>& inliers, const SurfaceFitOptions& options) {
+  if(points.size()!=inliers.size() || !std::isfinite(options.support_distance_m) ||
+     !std::isfinite(options.resolution_m) || options.support_distance_m<=0. ||
+     options.resolution_m<=0.) return false;
+  Indices selected;
+  for(std::size_t i=0;i<points.size();++i) if(inliers[i]) {
+    if(!std::isfinite(points[i].x)||!std::isfinite(points[i].y)) return false;
+    selected.push_back(i);
+  }
+  if(selected.size()<4) return false;
+  const auto groups=SpatialComponents(points,selected,SpatialLinkDistance(options));
+  return groups.size()==1 &&
+      SurroundsOrigin(points,groups.front(),options.support_distance_m);
+}
 
 std::optional<SurfaceFit> FitGroupedRansac(const std::vector<SurfaceSample>& points,
                                          const SurfaceFitOptions& options) {
@@ -209,8 +228,7 @@ std::optional<SurfaceFit> FitGroupedRansac(const std::vector<SurfaceSample>& poi
   });
   const Indices all_indices = active;
   std::vector<Candidate> candidates;
-  const double link_distance = std::max(2.1 * options.resolution_m,
-                                         .8 * options.support_distance_m);
+  const double link_distance = SpatialLinkDistance(options);
   for (int surface = 0; surface < 4 && active.size() >= 4; ++surface) {
     auto extracted = ExtractPlane(points, active, options.residual_limit_m,
                                   static_cast<std::uint64_t>(surface));

@@ -29,6 +29,11 @@ struct SurfaceFit {
 std::optional<SurfaceFit> FitWeightedPlane(const std::vector<SurfaceSample>&, const SurfaceFitOptions&);
 std::optional<SurfaceFit> FitMovingLeastSquares(const std::vector<SurfaceSample>&, const SurfaceFitOptions&);
 std::optional<SurfaceFit> FitGroupedRansac(const std::vector<SurfaceSample>&, const SurfaceFitOptions&);
+// Recheck surviving raw support after filtering/consensus removed points.
+// The complete mask must be one connected component with strict surrounding
+// support under the same physical scales as grouped RANSAC.
+bool HasConnectedGroupedRansacSupport(const std::vector<SurfaceSample>&,
+    const std::vector<bool>& inliers, const SurfaceFitOptions&);
 std::optional<SurfaceFit> FitGaussianProcess(const std::vector<SurfaceSample>&, const SurfaceFitOptions&);
 std::optional<SurfaceFit> FitTerrainSurface(TerrainFitMethod, const std::vector<SurfaceSample>&, const SurfaceFitOptions&);
 }  // namespace lunar::incremental_navigation::map

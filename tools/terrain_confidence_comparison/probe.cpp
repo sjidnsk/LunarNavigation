@@ -13,6 +13,7 @@
 #include "lunar_incremental_navigation_core/legged_local_planner.hpp"
 #include "lunar_incremental_navigation_core/wheel_local_planner.hpp"
 #include "lunar_incremental_navigation_core/types/terrain_fit_method.hpp"
+#include "lunar_incremental_navigation_core/types/terrain_filter_method.hpp"
 #include "capabilities.hpp"
 
 using namespace lunar::incremental_navigation;
@@ -40,9 +41,9 @@ void WriteFloats(const std::string& path, const std::vector<float>& values) {
 
 int main(int argc, char** argv) {
   try {
-    if (argc < 7 || argc > 10) {
+    if (argc < 7 || argc > 11) {
       std::cerr << "usage: probe INPUT_F32 OUTPUT_PREFIX N RES METHOD fit|integrated "
-                   "[CONF_WEIGHT=2] [MIN_CONF=.2] [MAX_RESIDUAL=.03]\n";
+                   "[CONF_WEIGHT=2] [MIN_CONF=.2] [MAX_RESIDUAL=.03] [FILTER=none]\n";
       return 2;
     }
     const int n = std::stoi(argv[3]);
@@ -52,6 +53,7 @@ int main(int argc, char** argv) {
     const double confidence_weight = argc > 7 ? std::stod(argv[7]) : 2.;
     const double minimum_confidence = argc > 8 ? std::stod(argv[8]) : .2;
     const double maximum_residual = argc > 9 ? std::stod(argv[9]) : .03;
+    const auto filter = argc > 10 ? ParseTerrainFilterMethod(argv[10]) : TerrainFilterMethod::kNone;
     if (n < 3 || n > 4096 || resolution <= 0. ||
         (mode != "fit" && mode != "integrated")) throw std::invalid_argument("invalid geometry/mode");
     if (!std::isfinite(confidence_weight) || confidence_weight < 0. ||
@@ -74,7 +76,7 @@ int main(int argc, char** argv) {
     auto raw = elevation.Snapshot();
     TerrainObservationEstimator observations(*raw, {.maximum_plane_residual_m = maximum_residual,
                                                     .minimum_confidence = minimum_confidence,
-                                                    .fit_method = method});
+                                                    .fit_method = method, .filter_method = filter});
     std::vector<float> ground(heights.size() * 6);
     const auto fitting_start = SteadyClock::now();
     for (int y = 0; y < n; ++y) for (int x = 0; x < n; ++x) {
@@ -96,6 +98,7 @@ int main(int argc, char** argv) {
     WriteFloats(prefix + "-ground.bin", ground);
     std::ofstream summary(prefix + "-summary.json");
     summary << std::setprecision(12) << "{\"method\":" << JsonString(std::string(TerrainFitMethodName(method)))
+            << ",\"filter\":" << JsonString(std::string(TerrainFilterMethodName(filter)))
             << ",\"mode\":" << JsonString(mode) << ",\"n\":" << n
             << ",\"resolution_m\":" << resolution << ",\"confidence_weight\":" << confidence_weight
             << ",\"minimum_confidence\":" << minimum_confidence
@@ -114,6 +117,7 @@ int main(int argc, char** argv) {
       profile.preferred_clearance_m = .4; profile.clearance_weight = 2.;
       profile.slope_weight = 1.; profile.relief_weight = 1.;
       profile.confidence_weight = confidence_weight; profile.terrain_fit_method = method;
+      profile.terrain_filter_method = filter;
       auto start_time = SteadyClock::now();
       auto fine = FineTraversabilityBuilder().Derive(raw, capability, profile);
       const double map_ms = Milliseconds(start_time);

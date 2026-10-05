@@ -8,6 +8,7 @@
 
 #include "lunar_incremental_navigation_core/types/geometry.hpp"
 #include "lunar_incremental_navigation_core/types/terrain_fit_method.hpp"
+#include "lunar_incremental_navigation_core/types/terrain_filter_method.hpp"
 
 namespace lunar::incremental_navigation {
 
@@ -32,6 +33,7 @@ struct TraversabilityProfile final {
   double goal_yaw_tolerance_rad{};
   double confidence_weight{2.0};
   TerrainFitMethod terrain_fit_method{TerrainFitMethod::kBaseline};
+  TerrainFilterMethod terrain_filter_method{TerrainFilterMethod::kNone};
 };
 
 enum class PlatformType : std::uint8_t {

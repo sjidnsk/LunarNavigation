@@ -85,7 +85,8 @@ void ValidateProfile(const TraversabilityProfile& profile) {
       !FiniteNonnegative(profile.relief_weight) ||
       !FiniteNonnegative(profile.clearance_weight) ||
       !FiniteNonnegative(profile.confidence_weight) ||
-      TerrainFitMethodName(profile.terrain_fit_method) == "invalid") {
+      TerrainFitMethodName(profile.terrain_fit_method) == "invalid" ||
+      TerrainFilterMethodName(profile.terrain_filter_method) == "invalid") {
     throw std::invalid_argument(
         "traversability profile parameters must be finite and nonnegative");
   }
@@ -144,6 +145,12 @@ class ProfileHasher final {
   hasher.Add(profile.clearance_weight);
   hasher.Add(profile.confidence_weight);
   hasher.Add(static_cast<std::uint64_t>(profile.terrain_fit_method));
+  // Preserve historical cache identities when filtering is disabled. Enabled
+  // filters add a separate domain and method so their snapshots cannot mix.
+  if (profile.terrain_filter_method != TerrainFilterMethod::kNone) {
+    hasher.Add(std::uint64_t{0x5445525246494c54ULL});
+    hasher.Add(static_cast<std::uint64_t>(profile.terrain_filter_method));
+  }
   std::visit(
       [&hasher](const auto& typed_capability) {
         using Capability = std::decay_t<decltype(typed_capability)>;

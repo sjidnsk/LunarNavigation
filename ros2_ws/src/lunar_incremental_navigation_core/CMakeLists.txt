@@ -25,6 +25,7 @@ set(LUNAR_INCREMENTAL_NAVIGATION_PRODUCTION_SOURCES
   src/map/terrain_surface_fit.cpp
   src/map/terrain_weighted_mls.cpp
   src/map/terrain_grouped_ransac.cpp
+  src/map/terrain_sample_filter.cpp
   src/map/terrain_observation_estimator.cpp
   src/map/platform_elevation_physics.cpp
   src/map/fine_traversability_builder.cpp
@@ -82,6 +83,8 @@ if(BUILD_TESTING)
   endfunction()
 
   lunar_add_core_gtest(lunar_incremental_navigation_core_weighted_mls_test test/terrain_weighted_mls_test.cpp)
+  lunar_add_core_gtest(lunar_incremental_navigation_core_sample_filter_test test/terrain_sample_filter_test.cpp)
+  lunar_add_core_gtest(lunar_incremental_navigation_core_filter_integration_test test/terrain_filter_integration_test.cpp)
   lunar_add_core_gtest(lunar_incremental_navigation_core_grouped_ransac_test test/terrain_grouped_ransac_test.cpp)
   lunar_add_core_gtest(lunar_incremental_navigation_core_gaussian_process_test test/terrain_gaussian_process_test.cpp)
   lunar_add_core_gtest(lunar_incremental_navigation_core_influence_run_test test/influence_run_test.cpp)

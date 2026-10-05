@@ -8,6 +8,7 @@
 #include <vector>
 #include "lunar_incremental_navigation_core/elevation_map.hpp"
 #include "lunar_incremental_navigation_core/types/terrain_fit_method.hpp"
+#include "lunar_incremental_navigation_core/types/terrain_filter_method.hpp"
 
 namespace lunar::incremental_navigation::map {
 int ObservationBackgroundRadiusCells(double half_width_m, double resolution_m);
@@ -17,6 +18,7 @@ struct TerrainObservationParameters {
   double maximum_plane_residual_m{.03};
   double minimum_confidence{.20};
   TerrainFitMethod fit_method{TerrainFitMethod::kBaseline};
+  TerrainFilterMethod filter_method{TerrainFilterMethod::kNone};
 };
 struct GroundEstimate {
   double surface_height_m{};
