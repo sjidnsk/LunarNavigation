@@ -448,9 +448,10 @@ def build_pdf(markdown_path: Path, output_path: Path, asset_root: Path | None,
     story.append(Paragraph(fontify("目录"), headings[1]))
     toc = TableOfContents()
     toc.levelStyles = [
-        ParagraphStyle(f"TOC{level}", parent=body, fontName="Latin", fontSize=10 if level == 0 else 9,
-                       leading=16 if level == 0 else 14, leftIndent=level*15,
-                       firstLineIndent=0, spaceBefore=6 if level == 0 else 2,
+        ParagraphStyle(f"TOC{level}", parent=body, fontName="Latin", fontSize=9 if level == 0 else 8.5,
+                       leading=12 if level == 0 else 11, leftIndent=level*15,
+                       firstLineIndent=0, spaceBefore=3 if level == 0 else 1,
+                       spaceAfter=0,
                        textColor=blue if level == 0 else dark)
         for level in range(3)
     ]
@@ -508,8 +509,14 @@ def build_pdf(markdown_path: Path, output_path: Path, asset_root: Path | None,
             ]))
             # Keep compact comparison tables together so a single method does
             # not end up alone after a page break; long tables keep headers.
-            story.extend([KeepTogether([table]) if len(data) <= 8 else table,
-                          Spacer(1, 11)])
+            if story and hasattr(story[-1], "_toc_level") and len(data) <= 12:
+                # A heading directly followed by a short table should not
+                # remain alone on the previous page when the table moves.
+                heading = story.pop()
+                story.extend([KeepTogether([heading, table]), Spacer(1, 11)])
+            else:
+                story.extend([KeepTogether([table]) if len(data) <= 8 else table,
+                              Spacer(1, 11)])
         elif block.kind == "code":
             lines = block.text.split("\n")
             data = [[Paragraph(fontify(line or " ", mono=True, preserve_space=True), code_style)]
