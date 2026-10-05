@@ -79,21 +79,26 @@ def lines(root,manifest,progress,course,evaluation):
     missing=max(0,stats.get(task,{}).get('ended',0)-n)
     output += ['',f'当前任务平均最终覆盖率 {mean}（已记录{n}回合） · 最近20均值 {near}（实际{recent_n}回合）']
     if missing:output += [f'历史缺{missing}个最终覆盖率，均值只使用可核对记录；后续结束回合完整累计。']
-    output += ['', '任务        结束回合  成功/结束   累计转移   本阶段转移占比  本阶段采样占比  平均步数   平均覆(样本)  近20(样本)']
+    output += ['', '任务        结束回合  成功/结束  成功率  累计转移   本阶段转移占比  本阶段采样占比  平均步数   平均覆(样本)  近20(样本)']
     for key in TASKS:
         v=stats.get(key,{})
         tf=phase_t.get(key,0)/total_t if total_t else 0.;sf=phase_s.get(key,0)/total_s if total_s else 0.
-        ended=v.get('ended',0);mean=v.get('episode_steps',0)/ended if ended else 0.
+        ended=v.get('ended',0);successes=v.get('successes',0)
+        success_rate=f'{successes/ended:.1%}' if ended else '—'
+        mean=v.get('episode_steps',0)/ended if ended else 0.
         cov,near_cov,cov_n,near_n=coverage_text(key)
         if cov_n:cov+=f'({cov_n})'
         if near_n:near_cov+=f'({near_n})'
-        output.append(f"{NAMES[key]:<6} {ended:8}  {v.get('successes',0):3}/{ended:<4} {v.get('transitions',0):10,}  {tf:12.1%}  {sf:12.1%}  {mean:8.1f}  {cov:>14}  {near_cov:>14}")
+        output.append(f"{NAMES[key]:<6} {ended:8}  {successes:3}/{ended:<4} {success_rate:>5}  {v.get('transitions',0):10,}  {tf:12.1%}  {sf:12.1%}  {mean:8.1f}  {cov:>14}  {near_cov:>14}")
     if current_statistics and course.get('missing_replay_tasks'):output.append('新任务经验尚在收集：'+','.join(course['missing_replay_tasks'])+'；暂按可用类更新，实际比例如上。')
     output += ['结束回合含成功和有效终止/截断；中断与在途回合不计。起点标签在整回合内固定。']
     label=manifest.get('label')
     if label:
         cases=safe_read(root/'cases.json',{}).get('cases',[])
-        output += ['',f'本轮已完成评测 · {label}']
+        completed=manifest.get('eval_completed',0);total=manifest.get('eval_total',len(cases))
+        caption=('评测中断' if manifest.get('status')=='failed' else
+                 '评测进行中' if manifest.get('phase')=='evaluation' else '本轮评测记录')
+        output += ['',f'{caption} · {label} · 已完成 {completed}/{total}']
         for c in cases:
             row_path=root/f'{label}-case-{c["case_index"]:02}.json'
             value=safe_read(row_path,{})

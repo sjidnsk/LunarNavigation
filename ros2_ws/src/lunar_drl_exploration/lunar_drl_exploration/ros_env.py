@@ -62,8 +62,10 @@ class RosExplorationEnv:
     def __init__(self,config,env_id,*,domain_base=210,wall_timeout_s=120.,training=False):
         self.config=config;self.env_id=int(env_id)
         self.namespace=f'/lunar_training/env_{self.env_id}'
-        self.domain_id=domain_base+self.env_id
-        if not 0 <= self.domain_id <= 232: raise ValueError('invalid isolated DDS domain')
+        self._requested_domain=None if domain_base is None else domain_base+self.env_id
+        self.domain_id=self._requested_domain
+        self._domain_lease=None
+        if self.domain_id is not None and not 0 <= self.domain_id <= 232: raise ValueError('invalid isolated DDS domain')
         self.wall_timeout_s=float(wall_timeout_s)
         self.owned=OwnedProcesses();self.node=None;self.context=None;self.adapter=None;self.executor=None;self._spin_error=None;self._spin_thread=None
         self._cancel=threading.Event();self._closed=True;self.actor_version=0
@@ -160,6 +162,9 @@ class RosExplorationEnv:
             self.close();raise
 
     def _start_ros(self):
+        from .domain_lease import DomainLease
+        self._domain_lease=DomainLease.acquire(self._requested_domain)
+        self.domain_id=self._domain_lease.domain_id
         import rclpy
         from rclpy.context import Context
         from rclpy.parameter import Parameter
@@ -414,3 +419,5 @@ class RosExplorationEnv:
             if self.context is not None and self.context.ok():self.context.shutdown()
             self.context=None;self._closed=True
             self._release_scene()
+            if self._domain_lease is not None:
+                self._domain_lease.close();self._domain_lease=None

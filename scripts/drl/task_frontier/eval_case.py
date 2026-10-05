@@ -162,7 +162,7 @@ def evaluate_case(request,output):
     telemetry.start()
     try:
         original=evaluate(config,request['actor'],seeds=[request['seed']],families=[request['family']],
-            extents=[request['extent_m']],budget=request['budget'],output=None,domain_base=220)
+            extents=[request['extent_m']],budget=request['budget'],output=None,domain_base=None)
     finally:
         telemetry.close();ros_env.RosExplorationEnv=base
         if capture:capture.close()

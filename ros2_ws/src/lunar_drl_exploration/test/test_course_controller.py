@@ -63,6 +63,7 @@ def test_monitor_shows_coverage_and_durable_successes(tmp_path):
     course=dict(phase=0,by_task={'moon_inside':dict(transitions=100,samples=64,ended=2,successes=1,episode_steps=80)},phase_transitions={'moon_inside':100},phase_samples={'moon_inside':64})
     value='\n'.join(lines(tmp_path,dict(course_phase=0,phase='training'),progress,course,{}))
     assert '75.00%' in value and '12/256' in value and '100.0%' in value and '1/2' in value
+    assert '成功率' in value and '50.0%' in value
 
 def test_monitor_does_not_label_previous_phase_shares_as_current(tmp_path):
     from course_dashboard import lines
@@ -89,3 +90,10 @@ def test_startup_monitor_command_uses_course_entry(tmp_path):
     from controller import HERE, monitor_command
     assert 'course_controller.py monitor' in monitor_command(tmp_path,HERE/'course_controller.py')
     assert 'run.sh monitor' in monitor_command(tmp_path)
+
+
+def test_monitor_labels_failed_evaluation_as_interrupted(tmp_path):
+    from course_dashboard import lines
+    value='\n'.join(lines(tmp_path,dict(course_phase=1,phase='error',status='failed',label='course-block9',eval_completed=0,eval_total=10),{},{},{}))
+    assert '本轮已完成评测' not in value
+    assert '评测中断' in value and '0/10' in value
