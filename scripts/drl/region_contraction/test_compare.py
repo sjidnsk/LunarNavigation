@@ -126,6 +126,118 @@ def test_non_infrastructure_exception_is_visible_without_entering_finished_count
     assert len(result['other_errors']) == 1
 
 
+def test_two_arm_comparison_does_not_require_an_unrequested_contracted_arm(tmp_path):
+    for mode in ('baseline', 'remote'):
+        save(tmp_path, 'arbitrary-case-300m-seed51', mode, summary(mode, extent_m=300., seed=51))
+    result = compare.aggregate(tmp_path, cases=['arbitrary-case-300m-seed51'],
+                               modes=['baseline', 'remote'])
+    assert result['modes'] == ['baseline', 'remote']
+    assert result['complete_pairing'] is True
+    assert result['paired_cases'] == ['arbitrary-case-300m-seed51']
+    assert result['missing'] == []
+    assert set(result['paired_groups']) == {'baseline', 'remote'}
+
+
+def test_strata_use_only_complete_pairs_and_keep_infrastructure_errors_separate(tmp_path):
+    cases = ['moon-small-1', 'moon-small-2', 'moon-small-error', 'cave-large-1']
+    fixture = [
+        ('moon-small-1', 'moon', 50., 1, True, .99, 10, 20., 100., 50, 20),
+        ('moon-small-2', 'moon', 50., 2, False, .5, 30, 60., 300., 150, 60),
+        ('cave-large-1', 'cave', 300., 1, False, .6, 80, 500., 900., 1000, 400),
+    ]
+    for case, family, extent, seed, success, coverage, steps, distance, wall, fine, coarse in fixture:
+        baseline = summary('baseline', family=family, extent_m=extent, seed=seed,
+            completed=success, final_coverage=coverage, decisions=steps, distance_m=distance,
+            timing={'episode_wall_seconds': wall},
+            graph={'mean_fine_nodes': fine, 'mean_policy_nodes': fine})
+        remote = summary('remote', family=family, extent_m=extent, seed=seed,
+            final_coverage=.99, decisions=steps / 2, distance_m=distance / 2,
+            timing={'episode_wall_seconds': wall / 2},
+            graph={'mean_fine_nodes': fine, 'mean_policy_nodes': coarse})
+        save(tmp_path, case, 'baseline', baseline)
+        save(tmp_path, case, 'remote', remote)
+    save(tmp_path, 'moon-small-error', 'baseline', summary('baseline', seed=3,
+        decisions=10000, distance_m=20000., final_coverage=.01))
+    save(tmp_path, 'moon-small-error', 'remote', summary('remote', seed=3, status='error',
+        error='worker disconnected', error_category='infrastructure', infrastructure_failures=1))
+    result = compare.run_comparison(tmp_path, cases=cases, modes=['baseline', 'remote'])
+    assert json.loads((tmp_path / 'comparison.strata.json').read_text()) == result['strata']
+    strata = {(row['family'], row['extent_m']): row for row in result['strata']}
+    small = strata['moon', 50.]
+    assert small['paired_cases'] == ['moon-small-1', 'moon-small-2']
+    assert small['complete_pairing'] is False
+    assert small['paired_groups']['baseline']['successes'] == 1
+    assert small['paired_groups']['baseline']['ended'] == 2
+    assert small['paired_groups']['baseline']['success_rate'] == .5
+    assert small['paired_groups']['baseline']['mean_final_coverage'] == pytest.approx(.745)
+    assert small['paired_groups']['baseline']['mean_decisions'] == 20.
+    assert small['paired_groups']['baseline']['mean_distance_m'] == 40.
+    assert small['paired_groups']['baseline']['mean_wall_seconds'] == 200.
+    assert small['paired_groups']['baseline']['mean_fine_nodes'] == 100.
+    assert small['paired_groups']['remote']['mean_policy_nodes'] == 40.
+    assert small['errors_by_mode']['remote']['infrastructure_errors'] == 1
+    assert small['paired_groups']['remote']['successes'] == 2
+    assert small['both_successful_cases'] == ['moon-small-1']
+    assert small['both_successful_groups']['baseline']['mean_distance_m'] == 20.
+    assert small['both_successful_groups']['remote']['mean_distance_m'] == 10.
+    assert small['paired_groups']['baseline']['terminal_counts']['completed'] == 1
+    assert small['paired_groups']['baseline']['terminal_counts']['other_terminal'] == 1
+    assert strata['cave', 300.]['paired_groups']['remote']['ended'] == 1
+    assert result['paired_groups']['baseline']['mean_decisions'] == 40.
+    csv_rows = list(csv.DictReader((tmp_path / 'comparison.strata.csv').open(encoding='utf-8')))
+    assert len(csv_rows) == 4
+    moon_remote = next(row for row in csv_rows if row['family'] == 'moon' and row['mode'] == 'remote')
+    assert float(moon_remote['paired.mean_wall_seconds']) == 100.
+    assert int(moon_remote['errors.infrastructure_errors']) == 1
+
+
+def test_two_arm_cli_writes_the_selected_cases_without_hidden_third_mode(tmp_path, capsys):
+    for mode in ('baseline', 'remote'):
+        save(tmp_path, 'moon100-seed17', mode, summary(mode, extent_m=100., seed=17))
+    compare.main(['--root', str(tmp_path), '--modes', 'baseline', 'remote',
+                  '--cases', 'moon100-seed17'])
+    result = json.loads((tmp_path / 'comparison.json').read_text())
+    assert result['paired_cases'] == ['moon100-seed17']
+    assert result['modes'] == ['baseline', 'remote']
+    assert result['strata'][0]['extent_m'] == 100.
+    assert json.loads(capsys.readouterr().out)['paired_cases'] == ['moon100-seed17']
+
+
+def test_truncated_and_collision_terminals_remain_distinct_from_successful_pairs(tmp_path):
+    cases = ['budget', 'collision']
+    for case in cases:
+        save(tmp_path, case, 'remote', summary('remote', seed=1 if case == 'budget' else 2))
+    save(tmp_path, 'budget', 'baseline', summary('baseline', seed=1, completed=False, truncated=True))
+    save(tmp_path, 'collision', 'baseline', summary('baseline', seed=2, collisions=1))
+    result = compare.aggregate(tmp_path, cases=cases, modes=['baseline', 'remote'])
+    assert result['both_successful_cases'] == []
+    assert result['both_successful_groups']['remote']['ended'] == 0
+    assert result['paired_groups']['baseline']['terminal_counts']['truncated'] == 1
+    assert result['paired_groups']['baseline']['terminal_counts']['collision'] == 1
+    assert result['paired_groups']['baseline']['successes'] == 0
+
+
+def test_missing_requested_arm_is_reported_in_its_known_stratum(tmp_path):
+    save(tmp_path, 'one', 'baseline', summary('baseline', family='cave', extent_m=150.))
+    result = compare.aggregate(tmp_path, cases=['one', 'not-started'], modes=['baseline', 'remote'])
+    assert result['paired_cases'] == []
+    assert result['complete_pairing'] is False
+    assert result['strata'][0]['family'] == 'cave'
+    assert result['strata'][0]['errors_by_mode']['remote']['missing'] == 1
+    assert result['unclassified_cases'] == ['not-started']
+
+
+@pytest.mark.parametrize('modes', [[], ['baseline'], ['baseline', 'baseline'], ['baseline', 'typo']])
+def test_invalid_mode_selection_cannot_emit_a_false_complete_comparison(tmp_path, modes):
+    with pytest.raises(ValueError, match='mode'):
+        compare.aggregate(tmp_path, cases=['one'], modes=modes)
+
+
+def test_empty_case_selection_cannot_be_called_a_complete_comparison(tmp_path):
+    with pytest.raises(ValueError, match='case'):
+        compare.aggregate(tmp_path, cases=[], modes=['baseline', 'remote'])
+
+
 def test_hop_statistics_count_disconnected_frontiers_and_six_layer_limit():
     features = np.zeros((10, 27), np.float32)
     features[[6, 7, 9], 3] = 1.

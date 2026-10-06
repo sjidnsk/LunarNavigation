@@ -1,6 +1,8 @@
 """Paired frozen episodes and same-state CPU snapshot microbenchmarks.
 
 Run ``python -m scripts.drl.region_contraction.compare --root ROOT`` or
+``python -m scripts.drl.region_contraction.compare --root ROOT --modes baseline remote
+--cases CASE1 CASE2 ...`` for an explicitly planned two-arm matrix, or
 ``python -m scripts.drl.region_contraction.compare --probe SNAPSHOT --actor ACTOR
 --output REPORT`` in the original runtime's owned Python environment. This module
 does not choose an overlay, build native code, or change the production runtime.
@@ -44,14 +46,28 @@ def _success(row):
     return bool(row.get('completed')) and not row.get('collisions', 0)
 
 
-def _groups(records):
+def _terminal_kind(row):
+    if _success(row):
+        return 'completed'
+    if row.get('collisions', 0):
+        return 'collision'
+    if row.get('truncated'):
+        return 'truncated'
+    if row.get('exhausted'):
+        return 'exhausted_below_target'
+    return 'other_terminal'
+
+
+def _groups(records, modes=MODES):
     result = {}
-    for mode in MODES:
+    for mode in modes:
         rows = [record['summary'] for record in records
                 if record['mode'] == mode and record['classification'] == 'finished']
         count = len(rows)
         group = dict(ended=count, successes=sum(_success(row) for row in rows),
             success_rate=sum(_success(row) for row in rows) / count if count else None)
+        group['terminal_counts'] = {kind: sum(_terminal_kind(row) == kind for row in rows)
+            for kind in ('completed', 'collision', 'truncated', 'exhausted_below_target', 'other_terminal')}
         for key in METRICS:
             values = [float(row[key]) for row in rows if row.get(key) is not None]
             if any(not math.isfinite(value) for value in values):
@@ -67,6 +83,14 @@ def _groups(records):
                     raise ValueError(f'nonfinite finished metric: {mode}.{category}.{key}')
                 if values:
                     group[category][f'mean_{key}'] = statistics.fmean(values)
+        # Public aliases avoid nesting and the doubled "mean_mean_" names
+        # produced by averaging per-episode graph means. Every episode has the
+        # same weight, independent of its decision count or execution duration.
+        group['mean_wall_seconds'] = group['timing'].get('mean_episode_wall_seconds')
+        group['mean_fine_nodes'] = group['graph'].get('mean_mean_fine_nodes')
+        group['mean_policy_nodes'] = group['graph'].get('mean_mean_policy_nodes')
+        group['mean_fine_edges'] = group['graph'].get('mean_mean_fine_edges')
+        group['mean_policy_edges'] = group['graph'].get('mean_mean_policy_edges')
         result[mode] = group
     return result
 
@@ -93,16 +117,56 @@ def _require_pair_identity(case, records):
                              f'{records[index]["mode"]}: {", ".join(differences)}')
 
 
-def aggregate(root, *, cases=None):
-    """Keep finished denominators, errors, and complete paired triples separate."""
+def _errors_by_mode(records, missing, modes):
+    return {mode: dict(
+        infrastructure_errors=sum(record['mode'] == mode and record['classification'] == 'infrastructure_error'
+                                  for record in records),
+        other_errors=sum(record['mode'] == mode and record['classification'] == 'other_error'
+                         for record in records),
+        incomplete=sum(record['mode'] == mode and record['classification'] == 'incomplete'
+                       for record in records),
+        missing=sum(record['mode'] == mode for record in missing)) for mode in modes}
+
+
+def _strata(records, missing, cases, paired_cases, both_successful_cases, case_strata, modes):
+    result = []
+    for family, extent in sorted(set(case_strata.values())):
+        selected_cases = [case for case in cases if case_strata.get(case) == (family, extent)]
+        paired = [case for case in selected_cases if case in paired_cases]
+        current = [record for record in records if record['case'] in selected_cases]
+        absent = [record for record in missing if record['case'] in selected_cases]
+        matched = [record for record in current if record['case'] in paired]
+        both_successful = [case for case in paired if case in both_successful_cases]
+        successful_records = [record for record in matched if record['case'] in both_successful]
+        result.append(dict(family=family, extent_m=extent, requested_cases=selected_cases,
+            paired_cases=paired, complete_pairing=len(paired) == len(selected_cases),
+            groups=_groups(current, modes), paired_groups=_groups(matched, modes),
+            both_successful_cases=both_successful, both_successful_groups=_groups(successful_records, modes),
+            errors_by_mode=_errors_by_mode(current, absent, modes)))
+    return result
+
+
+def aggregate(root, *, cases=None, modes=MODES):
+    """Keep finished outcomes, errors and complete pairs separate by family/size.
+
+    Explicit ``cases`` names define the planned matrix, including unstarted
+    cases. Missing cases never vanish from the total completeness calculation.
+    The old two-case, three-mode invocation remains the default.
+    """
     root = Path(root)
+    modes = list(modes)
+    if len(modes) < 2 or len(modes) != len(set(modes)) or any(mode not in MODES for mode in modes):
+        raise ValueError('select at least two distinct known comparison modes')
     cases = list(cases) if cases is not None else ['moon50', 'cave50']
+    if not cases:
+        raise ValueError('at least one requested comparison case is required')
     if len(cases) != len(set(cases)):
         raise ValueError('duplicate comparison case')
     records, missing, paired_cases, paired_records, pairing_diagnostics = [], [], [], [], []
+    case_strata, both_successful_cases, both_successful_records = {}, [], []
     for case in cases:
         current = []
-        for mode in MODES:
+        for mode in modes:
             path = root / case / mode / 'summary.json'
             if not path.is_file():
                 missing.append(dict(case=case, mode=mode, path=str(path)))
@@ -114,6 +178,17 @@ def aggregate(root, *, cases=None):
                 classification=_classification(row), summary=row)
             records.append(record)
             current.append(record)
+        if current:
+            row = current[0]['summary']
+            if (not isinstance(row.get('family'), str) or not row['family']
+                    or not isinstance(row.get('extent_m'), (int, float))
+                    or not math.isfinite(row['extent_m']) or row['extent_m'] <= 0):
+                raise ValueError(f'{case}: missing or invalid family/extent grouping metadata')
+            case_strata[case] = (row['family'], float(row['extent_m']))
+            for record in current[1:]:
+                for key in CASE_FIELDS:
+                    if record['summary'].get(key) != row.get(key):
+                        raise ValueError(f'{case}: case directory mixes {key} identities')
         finished = [record for record in current if record['classification'] == 'finished']
         # Validate every available finished arm, even before the final arm ends.
         if finished:
@@ -124,21 +199,35 @@ def aggregate(root, *, cases=None):
                 initial_observations_equal=all(initial_hashes.values()) and len(set(initial_hashes.values())) == 1,
                 note='Initial native scan observations may vary with arrival timing. Hard pairing '
                      'requires unchanged terrain/reference, original spawn, configuration and Actor.'))
-        if len(finished) == len(MODES):
+        if len(finished) == len(modes):
             paired_cases.append(case)
             paired_records.extend(finished)
+            if all(_success(record['summary']) for record in finished):
+                both_successful_cases.append(case)
+                both_successful_records.extend(finished)
     errors = lambda kind: [record for record in records if record['classification'] == kind]
     return dict(schema='region_contraction_comparison_v1', root=str(root.resolve()),
-        requested_cases=cases, paired_cases=paired_cases,
+        modes=modes, requested_cases=cases, paired_cases=paired_cases,
         complete_pairing=len(paired_cases) == len(cases),
-        groups=_groups(records), paired_groups=_groups(paired_records), records=records,
+        groups=_groups(records, modes), paired_groups=_groups(paired_records, modes), records=records,
+        both_successful_cases=both_successful_cases, both_successful_groups=_groups(both_successful_records, modes),
+        strata=_strata(records, missing, cases, paired_cases, both_successful_cases, case_strata, modes),
+        unclassified_cases=[case for case in cases if case not in case_strata],
+        errors_by_mode=_errors_by_mode(records, missing, modes),
         pairing_diagnostics=pairing_diagnostics,
         missing=missing, incomplete=errors('incomplete'),
         infrastructure_errors=errors('infrastructure_error'), other_errors=errors('other_error'),
         limits='Only finished collision-free terminal episodes can succeed. Infrastructure '
                'errors do not enter ended denominators. Compare policy outcomes using paired_groups; '
                'remote also changes the action set. These local frozen episodes do not establish '
-               'retrained policy quality or vehicle readiness.')
+               'retrained policy quality or vehicle readiness. Family/extent strata retain missing '
+               'and errored arms separately. Means weight complete paired episodes equally; node '
+               'means average per-episode graph means, not all decisions pooled together. Fully '
+               'unstarted cases have unknown strata and remain in unclassified_cases and missing. '
+               'Paired distances and wall times can have different terminal endpoints; use '
+               'both_successful_groups for path/time comparisons that require all requested arms to reach 99%. '
+               'Overall pooled means describe the requested matrix and are not evidence of improvement '
+               'in every family or size.')
 
 
 def _flatten(value, prefix='', result=None):
@@ -175,8 +264,8 @@ def _plain(value):
     return value
 
 
-def run_comparison(root, *, cases=None):
-    result = aggregate(root, cases=cases)
+def run_comparison(root, *, cases=None, modes=MODES):
+    result = aggregate(root, cases=cases, modes=modes)
     dataset = []
     for record in result['records']:
         row = _flatten(record['summary'])
@@ -186,6 +275,7 @@ def run_comparison(root, *, cases=None):
         dataset.append(row)
     _write_json(Path(root) / 'comparison.json', result)
     _write_json(Path(root) / 'comparison.dataset.json', dataset)
+    _write_json(Path(root) / 'comparison.strata.json', result['strata'])
     keys = sorted({key for row in dataset for key in row})
     columns = ['case', 'mode', 'classification', 'paired', 'eligible_success']
     columns.extend(key for key in keys if key not in columns)
@@ -193,6 +283,23 @@ def run_comparison(root, *, cases=None):
         writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
         writer.writerows(dataset)
+    stratified = []
+    for stratum in result['strata']:
+        for mode in result['modes']:
+            row = _flatten(dict(paired=stratum['paired_groups'][mode],
+                                both_successful=stratum['both_successful_groups'][mode],
+                                errors=stratum['errors_by_mode'][mode]))
+            row.update(family=stratum['family'], extent_m=stratum['extent_m'], mode=mode,
+                requested_case_count=len(stratum['requested_cases']),
+                paired_case_count=len(stratum['paired_cases']), complete_pairing=stratum['complete_pairing'])
+            row['both_successful_case_count'] = len(stratum['both_successful_cases'])
+            stratified.append(row)
+    columns = ['family', 'extent_m', 'mode', 'requested_case_count', 'paired_case_count', 'complete_pairing']
+    columns.extend(key for key in sorted({key for row in stratified for key in row}) if key not in columns)
+    with (Path(root) / 'comparison.strata.csv').open('w', encoding='utf-8', newline='') as stream:
+        writer = csv.DictWriter(stream, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(stratified)
     return result
 
 
@@ -464,6 +571,7 @@ def main(argv=None):
     parser.add_argument('--output', type=Path)
     parser.add_argument('--repeats', type=int, default=7)
     parser.add_argument('--cases', nargs='+', default=['moon50', 'cave50'])
+    parser.add_argument('--modes', nargs='+', choices=MODES, default=list(MODES))
     args = parser.parse_args(argv)
     if args.probe:
         if args.actor is None or args.output is None:
@@ -474,7 +582,7 @@ def main(argv=None):
             actor_seconds=row['timing']['actor_seconds']) for row in result['modes']]),
             ensure_ascii=False, allow_nan=False))
     else:
-        result = run_comparison(args.root, cases=args.cases)
+        result = run_comparison(args.root, cases=args.cases, modes=args.modes)
         print(json.dumps(dict(paired_cases=result['paired_cases'], groups=result['groups'],
             infrastructure_errors=len(result['infrastructure_errors']),
             other_errors=len(result['other_errors'])), ensure_ascii=False, allow_nan=False))
