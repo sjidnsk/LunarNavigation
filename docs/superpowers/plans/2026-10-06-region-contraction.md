@@ -33,10 +33,10 @@
 **Interfaces:** `contract_observation(observation) -> ContractionResult`；结果包含 `observation`, `fine_to_coarse`, `virtual_mask`, `diagnostics`。
 `expand_frontier_actions(observation, max_positions=32) -> DecisionObservation` 返回原图节点、原动作加已知图可达的任务内前沿真实动作。
 
-- [ ] 写断开分量、内外分量、长链、收益节点及目标保真、虚拟目标禁选、确定性、远程可达/上限/回退的失败测试。
-- [ ] 执行测试确认失败。
-- [ ] 使用连通分量、代表点和分量内 Dijkstra 实现收缩与边长度；远程动作按当前节点 Dijkstra 排序。
-- [ ] 执行测试确认通过。
+- [x] 写断开分量、内外分量、长链、收益节点及目标保真、虚拟目标禁选、确定性、远程可达/上限/回退的失败测试。
+- [x] 执行测试确认失败。
+- [x] 使用连通分量、代表点和分量内 Dijkstra 实现收缩与边长度；远程动作按当前节点 Dijkstra 排序。
+- [x] 执行测试确认通过。
 
 ### Task 2: 冻结对照评测
 
@@ -44,16 +44,20 @@
 
 **Interfaces:** 消费 Task 1 的两个接口；CLI 接受 `--mode baseline|contracted|remote`, `--config`, `--actor`, `--output`, `--family`, `--extent`, `--seed`, `--budget`；运行一回合，原生 ROS 域自动租用。
 
-- [ ] 写 A1 动作对应、A2 环境真实目标替换、终止/错误分类与配置身份记录的测试。
-- [ ] 执行失败测试，实现适配器；不导入实验工作树的 ROS overlay，显式经原源码所属 wrapper 使用原导航，只加载实验适配器。
-- [ ] 记录逐步 JSONL、汇总、完整观察快照和可视化节点轨迹；按阶段计时。
-- [ ] 执行测试及小回合原生烟测。
+- [x] 写 A1 动作对应、A2 环境真实目标替换、终止/错误分类与配置身份记录的测试。
+- [x] 执行失败测试，实现适配器；不导入实验工作树的 ROS overlay，显式经原源码所属 wrapper 使用原导航，只加载实验适配器。
+- [x] 记录逐步 JSONL、汇总、完整观察快照和可视化节点轨迹；按阶段计时。
+- [x] 执行测试及小回合原生烟测。
 
 ### Task 3: 审阅、同图实验与交付
 
 **Files:** Create `scripts/drl/region_contraction/compare.py`; report `docs/validation/2026-10-06-region-contraction.md`.
 
-- [ ] 独立审阅实现和实验方法，修复实质问题。
-- [ ] 冻结 Actor/配置及所有源码哈希；运行相同场景、种子、预算的 A0/A1/A2 完整回合。
-- [ ] 汇总覆盖率、循环、计算开销及执行失败；制作节点压缩与探索轨迹可视化。
-- [ ] 检查 UTF-8、`git diff --check`、相关测试；明确样本数和未验证边界，交付方案、实验源码与结果。
+- [x] 独立审阅实现和实验方法，修复实质问题。
+- [x] 冻结 Actor/配置及所有源码哈希；运行相同场景、种子、预算的 A0/A1/A2 完整回合。
+- [x] 汇总覆盖率、循环、计算开销及执行失败；制作节点压缩与探索轨迹可视化。
+- [x] 检查 UTF-8、`git diff --check`、相关测试；明确样本数和未验证边界，交付方案、实验源码与结果。
+
+## Completed evidence
+
+实现提交 `787176cd`；A0/A1/A2 各2例完整终态。相关测试80 passed、1 skipped，独立审阅与来源身份核对完成。结果、时序差异及未验证边界见 `docs/validation/2026-10-06-region-contraction.md`。正式训练未替换。
