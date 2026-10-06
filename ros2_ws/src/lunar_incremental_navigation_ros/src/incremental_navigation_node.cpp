@@ -223,12 +223,6 @@ struct RuntimeParameters final {
   } catch (const std::invalid_argument&) {
     throw std::runtime_error("PLANNER_ERROR: invalid terrain_fit_method: " + terrain_fit_method);
   }
-  const auto terrain_filter_method = node.declare_parameter<std::string>("terrain_filter_method", "none");
-  try {
-    parameters.profile.terrain_filter_method = core::ParseTerrainFilterMethod(terrain_filter_method);
-  } catch (const std::invalid_argument&) {
-    throw std::runtime_error("PLANNER_ERROR: invalid terrain_filter_method: " + terrain_filter_method);
-  }
   parameters.profile.clearance_weight = node.declare_parameter<double>(
       "clearance_weight", parameters.profile.clearance_weight);
   if (!std::isfinite(parameters.profile.clearance_weight) ||

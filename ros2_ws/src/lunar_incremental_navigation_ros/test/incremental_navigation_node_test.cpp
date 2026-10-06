@@ -853,23 +853,6 @@ TEST(IncrementalNavigationNode, TerrainFitMethodHasBaselineDefaultAndAllStartupC
   EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(invalid),std::runtime_error);
 }
 
-TEST(IncrementalNavigationNode, TerrainFilterDefaultsToNoneAndValidatesStartupChoices) {
-  auto defaults = std::make_shared<IncrementalNavigationNode>(ServerOptions("filter_default"));
-  ASSERT_TRUE(defaults->has_parameter("terrain_filter_method"));
-  EXPECT_EQ(defaults->get_parameter("terrain_filter_method").as_string(), "none");
-  for (const std::string method : {"median", "bilateral"}) {
-    auto options = ServerOptions("filter_override");
-    options.append_parameter_override("terrain_filter_method", method);
-    auto node = std::make_shared<IncrementalNavigationNode>(options);
-    EXPECT_EQ(node->get_parameter("terrain_filter_method").as_string(), method);
-    EXPECT_FALSE(node->set_parameters_atomically(
-        {rclcpp::Parameter("terrain_filter_method", "none")}).successful);
-  }
-  auto invalid = ServerOptions("filter_invalid");
-  invalid.append_parameter_override("terrain_filter_method", "typo");
-  EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(invalid), std::runtime_error);
-}
-
 TEST(IncrementalNavigationNode, RejectsUnsupportedLocalMapQosParameters) {
   auto options = ServerOptions("invalid_map_qos");
   options.append_parameter_override("local_map_qos_durability", "volatilee");

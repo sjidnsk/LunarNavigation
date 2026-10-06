@@ -331,8 +331,7 @@ struct FineCellEvaluator::Impl final {
       : elevation(elevation_value),
         capability(std::move(capability_value)),
         profile(std::move(profile_value)),
-        observations(elevation, {.fit_method=profile.terrain_fit_method,
-                                .filter_method=profile.terrain_filter_method}),
+        observations(elevation, {.fit_method=profile.terrain_fit_method}),
         intrinsic_evaluator(MakeEvaluatorWithObservations(
             capability, profile.terrain_background_half_width_m, &observations)),
         hard_radius_m(CircumscribedRadius(profile.planar_envelope_xy_m)) {
