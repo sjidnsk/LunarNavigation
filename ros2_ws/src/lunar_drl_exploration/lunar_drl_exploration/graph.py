@@ -143,11 +143,22 @@ class GraphBuilder:
             result = set(np.asarray(candidates)[seen.any(axis=1)].tolist())
             visibility_cache[key] = result
             return result
+        def visible_uncovered(source):
+            # Each native target row is independent. Coverage only needs the
+            # outstanding interfaces; do not put a partial result in the full
+            # visible cache used by supplemental witness/options below.
+            candidates = [i for i in tree.query_ball_point(source, radius+1e-10)
+                          if i in uncovered]
+            if not candidates:return set()
+            seen = directional_visibility(w.intrinsic, source, fronts[candidates],
+                radius, HEADINGS+sensor.offset_yaw_rad, math.radians(sensor.fov_deg))
+            return set(np.asarray(candidates)[seen.any(axis=1)].tolist())
         uncovered = set(range(len(fronts)))
         actual_cell = np.floor((actual-origin)/resolution).astype(np.int64)
         uncovered.difference_update(visible(actual_cell))
         for source in active_base:
-            uncovered.difference_update(visible(source))
+            if not uncovered:break
+            uncovered.difference_update(visible_uncovered(source))
         # Observation supplements belong to executable graph geometry. The
         # analyzer's first witness can be contracted by arrival tolerance even
         # when another measured stance can represent the same interface.

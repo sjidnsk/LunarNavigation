@@ -99,6 +99,22 @@ def advance_state(state,gate,plan,actor_sha):
     return state
 
 
+def apply_a2_entry_result(state, rows, plan, actor_sha, checkpoint_sha):
+    """Apply the explicitly authorized entry gate without inventing a training block."""
+    entry = state.get('a2_entry_screen', {})
+    if (state.get('phase') != 1 or not state.get('warmup_complete')
+            or entry.get('status') != 'pending'):
+        raise ValueError('A2 entry assessment requires a pending cave_inside continuation')
+    gate = promotion_gate(rows, 1, plan)
+    state['a2_entry_screen'] = dict(entry, status='finished', gate=gate,
+        actor_sha=actor_sha, checkpoint_sha=checkpoint_sha,
+        promotion_rule='user_authorized_single_complete_entry_gate_v1',
+        source_phase=1, destination_phase=2 if gate['passed'] else 1)
+    if gate['passed']:
+        state.update(phase=2, phase_blocks=0, streak=0)
+    return state
+
+
 class CourseController(Controller):
     def __init__(self,root):
         super().__init__(root)
@@ -115,7 +131,8 @@ class CourseController(Controller):
         if self.course.get('plan_digest')!=digest(self.plan):raise ValueError('owned course plan changed')
         if not state_path.exists():write(state_path,self.course)
         self.manifest.update(stages=4,course_phase=self.course['phase'],course_task=TASKS[self.course['phase']],
-                             course_plan=str(self.root/'course-plan.json'))
+                             course_plan=str(self.root/'course-plan.json'),
+                             policy_graph_mode=self.config.get('policy_graph_mode', 'fine'))
 
     def save_course(self):
         write(self.root/'course-state.json',self.course)
@@ -132,8 +149,8 @@ class CourseController(Controller):
         if remaining_training(target_t,target_u,self.schedule()) is not None:raise ValueError('course trainer missed exact boundary')
         return True
 
-    def screen_course(self,block,phase,local_block,actor):
-        cases=course_cases(phase,local_block,self.plan);label=f'course-block{block}'
+    def screen_course(self,block,phase,local_block,actor,*,label=None):
+        cases=course_cases(phase,local_block,self.plan);label=label or f'course-block{block}'
         write(self.root/'cases.json',dict(schema='course_cases_v1',cases=cases,cases_digest=digest(cases)))
         frozen=self.root/f'{label}-cases.json'
         if frozen.exists() and read(frozen)['cases']!=cases:raise ValueError('frozen course cases changed')
@@ -166,6 +183,35 @@ class CourseController(Controller):
         self.record(eval_completed=len(cases))
         return result
 
+    def screen_a2_entry(self, recorder):
+        """Evaluate the restored learner before collecting or updating anything."""
+        if self.config.get('policy_graph_mode', 'fine') != 'a2':
+            raise ValueError('A2 entry assessment requires the A2 effective configuration')
+        from lunar_drl_exploration.evaluation import export_actor
+        checkpoint = self.root/'run/resume.pt'
+        actor = self.root/'a2-entry.pt'
+        proof_path = actor.with_suffix('.json')
+        checkpoint_sha = sha(checkpoint)
+        updates = self.schedule()['updates']
+        if not proof_path.exists():
+            export_actor(checkpoint, actor)
+            write(proof_path, dict(actor_sha=sha(actor), checkpoint_sha=checkpoint_sha, updates=updates))
+        proof = read(proof_path)
+        if (proof['checkpoint_sha'] != checkpoint_sha or proof['actor_sha'] != sha(actor)
+                or proof['updates'] != updates):
+            raise ValueError('A2 entry Actor/checkpoint changed before assessment completed')
+        result = self.screen_course(self.course['blocks'], 1, self.course['phase_blocks'] + 1,
+                                    actor, label='a2-entry')
+        if result is None:
+            return False
+        recorder.fixed_checkpoint(checkpoint, actor)
+        apply_a2_entry_result(self.course, result['cases'], self.plan, sha(actor), checkpoint_sha)
+        self.save_course()
+        phase = self.course['phase']
+        self.record(course_phase=phase, course_task=TASKS[phase],
+                    entry_gate=self.course['a2_entry_screen']['gate'], phase='entry_gate_complete')
+        return True
+
     def run(self,*,ready_fd=None,startup_token=None,lock_fd=None):
         verify_gate(self.root)
         signal.signal(signal.SIGINT,self.interrupt);signal.signal(signal.SIGTERM,self.interrupt)
@@ -181,6 +227,8 @@ class CourseController(Controller):
                 from fixed_probes import freeze_index
                 freeze_index(self.root/'fixed-probes')
                 self.course['warmup_complete']=True;self.save_course()
+            if self.course.get('a2_entry_screen', {}).get('status') == 'pending':
+                if not self.screen_a2_entry(recorder):return
             while not self.stop and self.course['status']=='running':
                 phase=self.course['phase'];block=self.course['blocks']+1;local=self.course['phase_blocks']+1
                 target_t=self.plan['warmup']+block*self.plan['block_transitions'];target_u=block*self.plan['block_updates']

@@ -18,6 +18,79 @@ from .feature_schema import LEARNER_SCHEMA, require_frontier_semantics
 from .artifacts import BudgetWriter as _BudgetWriter, atomic_write, initialize_artifact_root, _safe_path
 
 SCHEMA='bounded_training_v1'
+REPLAY_BOOTSTRAP_SCHEMA='ordered_a2_replay_bootstrap_v1'
+REPLAY_BOOTSTRAP_TRANSITIONS=64
+
+
+def validate_replay_bootstrap(config, schedule, counters, *, replay=None, count=None, fork=None):
+    """A narrow, persisted empty-replay exception for an explicit learned A2 fork.
+
+    An active bootstrap admits exactly 64 new transitions without any optimizer
+    update. Its credit must be derivable from the original schedule, and all
+    admitted replay survives each checkpoint. Completed records stay as audit
+    evidence while normal replay eviction and SAC updates resume.
+    """
+    from fractions import Fraction
+    from .ordered_curriculum import TASKS
+    bootstrap = counters.get('replay_bootstrap')
+    if bootstrap is None:
+        return None
+    if (not isinstance(bootstrap, dict) or bootstrap.get('schema') != REPLAY_BOOTSTRAP_SCHEMA
+            or config.policy_graph_mode != 'a2' or not config.ordered_curriculum
+            or config.remote_frontier_positions != 32):
+        raise ValueError('invalid ordered A2 replay bootstrap identity')
+    for key in ('source_transitions', 'source_updates', 'required', 'admitted'):
+        if type(bootstrap.get(key)) is not int or bootstrap[key] < 0:
+            raise ValueError('invalid replay bootstrap counter: ' + key)
+    if type(bootstrap.get('active')) is not bool:
+        raise ValueError('invalid replay bootstrap active state')
+    if (bootstrap['required'] != REPLAY_BOOTSTRAP_TRANSITIONS or
+            config.learning.batch_size != REPLAY_BOOTSTRAP_TRANSITIONS or
+            not 0 <= bootstrap['admitted'] <= REPLAY_BOOTSTRAP_TRANSITIONS):
+        raise ValueError('replay bootstrap requires exactly 64 admissions and batch_size=64')
+    sha = bootstrap.get('source_checkpoint_sha256')
+    if not isinstance(sha, str) or len(sha) != 64 or any(c not in '0123456789abcdef' for c in sha):
+        raise ValueError('invalid replay bootstrap source checkpoint SHA')
+    if fork is not None and (fork.get('experiment') != 'ordered-a2' or any(
+            fork.get(key) != bootstrap[key] for key in
+            ('source_checkpoint_sha256', 'source_transitions', 'source_updates'))):
+        raise ValueError('replay bootstrap disagrees with ordered-a2 fork provenance')
+    try:
+        source_credit = Fraction(bootstrap['source_credit'])
+    except (KeyError, TypeError, ValueError, ZeroDivisionError) as error:
+        raise ValueError('invalid replay bootstrap source credit') from error
+    derived = max(0, bootstrap['source_transitions']-schedule.warmup)*schedule.ratio-bootstrap['source_updates']
+    if (source_credit != derived or source_credit < 0 or
+            bootstrap['source_transitions'] < schedule.warmup or
+            source_credit + REPLAY_BOOTSTRAP_TRANSITIONS*schedule.ratio > schedule.max_credit):
+        raise ValueError('replay bootstrap source credit or dispatch capacity is inconsistent')
+    tasks = bootstrap.get('required_tasks')
+    by_task = bootstrap.get('by_task')
+    if (not isinstance(tasks, list) or len(tasks) != len(set(tasks)) or
+            not tasks or any(task not in TASKS for task in tasks) or
+            not isinstance(by_task, dict) or any(task not in TASKS or type(n) is not int or n <= 0
+                for task,n in by_task.items()) or sum(by_task.values()) != bootstrap['admitted']):
+        raise ValueError('invalid replay bootstrap task evidence')
+    if tasks != list(TASKS[:len(tasks)]):
+        raise ValueError('replay bootstrap tasks must follow ordered course phases')
+    delta = schedule.transitions-bootstrap['source_transitions']
+    if bootstrap['active']:
+        course = counters.get('course', {})
+        phase = course.get('phase')
+        if type(phase) is not int or not 0 <= phase < len(TASKS) or tasks != list(TASKS[:phase+1]):
+            raise ValueError('replay bootstrap must include every positive-weight course task')
+        if (bootstrap['admitted'] >= REPLAY_BOOTSTRAP_TRANSITIONS or
+                bootstrap['admitted'] != delta or schedule.updates != bootstrap['source_updates'] or
+                schedule.credit != source_credit+delta*schedule.ratio):
+            raise ValueError('active replay bootstrap counters or earned credit disagree')
+        if count is not None and count != bootstrap['admitted']:
+            raise ValueError('active replay bootstrap must retain every admitted sample')
+        if replay is not None and (len(replay) != bootstrap['admitted'] or replay.task_counts != by_task):
+            raise ValueError('active replay bootstrap samples disagree with task evidence')
+    elif (bootstrap['admitted'] != REPLAY_BOOTSTRAP_TRANSITIONS or delta < REPLAY_BOOTSTRAP_TRANSITIONS
+            or schedule.updates < bootstrap['source_updates'] or any(by_task.get(task,0) == 0 for task in tasks)):
+        raise ValueError('completed replay bootstrap requires all 64 samples and active course tasks')
+    return bootstrap
 
 
 class UpdateBoundary:
@@ -81,10 +154,12 @@ class TrainingState:
         relocated output/artifact roots, preserving every other parameter.
         ordered-ratio changes only current cave_inside rehearsal .2 to .5,
         rebasing allocation quotas while preserving all learned state and totals.
+        ordered-a2 changes only fine to the accepted A2 action/graph contract,
+        replacing experience with a bounded 64-transition replay bootstrap.
         This operation neither creates the destination nor writes the source.
         """
         from .config import training_config_from_record
-        if experiment not in (None, 'paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent', 'ordered-ratio'):
+        if experiment not in (None, 'paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent', 'ordered-ratio', 'ordered-a2'):
             raise ValueError('unknown fork experiment: ' + str(experiment))
         source = Path(source).resolve()
         destination = Path(config.output_dir).resolve()
@@ -102,6 +177,12 @@ class TrainingState:
         fields = ('stagnation_window_steps', 'stagnation_max_positions',
                   'stagnation_position_tolerance_m', 'artifact_root',
                   'total_output_max_bytes', 'metrics_max_bytes', 'reward_diagnostics')
+        if experiment == 'ordered-a2':
+            if (not original.ordered_curriculum or not config.ordered_curriculum or
+                    original.policy_graph_mode != 'fine' or config.policy_graph_mode != 'a2' or
+                    config.remote_frontier_positions != 32):
+                raise ValueError('ordered-a2 fork requires ordered fine to a2 with remote_frontier_positions=32')
+            fields = ('artifact_root', 'policy_graph_mode', 'remote_frontier_positions')
         if experiment == 'ordered-extent':
             # Explicit expansion of the ordered training distribution only. All
             # SAC, rewards, budgets and collection/resource settings stay fixed.
@@ -175,9 +256,24 @@ class TrainingState:
                 for key in fields if before[key] != after[key]})
         if experiment is not None:
             state.record['fork']['experiment'] = experiment
-        if experiment in ('ordered-extent', 'ordered-ratio'):
+        if experiment in ('ordered-extent', 'ordered-ratio', 'ordered-a2'):
             import hashlib
             state.record['fork']['source_checkpoint_sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
+        if experiment == 'ordered-a2':
+            curriculum = loads_transport(state.record['curriculum'])
+            course = curriculum.get('course', {})
+            from .ordered_curriculum import OrderedCourse
+            OrderedCourse(course.get('phase'), original.ordered_rehearsal_for_phase(course.get('phase')),
+                state=course, success_coverage=original.success_coverage)
+            schedule = UpdateSchedule.from_state_dict(state.record['schedule'])
+            counters = loads_transport(state.record['counters'])
+            counters['replay_bootstrap'] = dict(schema=REPLAY_BOOTSTRAP_SCHEMA,
+                source_checkpoint_sha256=state.record['fork']['source_checkpoint_sha256'],
+                source_transitions=schedule.transitions, source_updates=schedule.updates,
+                source_credit=str(schedule.credit), required=REPLAY_BOOTSTRAP_TRANSITIONS,
+                admitted=0, active=True, required_tasks=list(course['weights']), by_task={})
+            state.record['counters'] = dumps_transport(counters)
+            state.record['replay'] = ReplayBuffer(config.replay_max_bytes).snapshot(config.snapshot_max_bytes)
         if experiment == 'ordered-ratio':
             # Restart quotas at this explicit allocation boundary, retaining all
             # episode/coverage totals and avoiding historical catch-up collection.
@@ -217,7 +313,7 @@ class TrainingState:
 
     @classmethod
     def capture(cls, *, learner, config, replay, schedule, boundary, replay_rng,
-                curriculum_rng, curriculum, collector_state, counters):
+                curriculum_rng, curriculum, collector_state, counters, fork=None):
         boundary.require_safe()
         if len(replay) > schedule.transitions:
             raise ValueError('replay admission count exceeds learner-owned counter')
@@ -232,18 +328,26 @@ class TrainingState:
         # counters. Environment-local unfinished motion is intentionally absent.
         if not isinstance(collector_state.get('policy_rng'),torch.Tensor):
             raise ValueError('collector policy_rng tensor is required')
-        saved_replay=replay.snapshot(config.snapshot_max_bytes, require_sample=schedule.can_update)
+        bootstrap = validate_replay_bootstrap(config, schedule, counters, replay=replay, fork=fork or {})
+        active_bootstrap = bootstrap is not None and bootstrap['active']
+        saved_replay=replay.snapshot(config.snapshot_max_bytes,
+            require_sample=schedule.can_update and not active_bootstrap)
+        if active_bootstrap and snapshot_sample_count(saved_replay) != bootstrap['admitted']:
+            raise ValueError('active replay bootstrap snapshot must retain every admitted sample')
         rng=dict(python=random.getstate(),numpy=dumps_transport(np.random.get_state()),
             torch_cpu=torch.get_rng_state().clone(),
             torch_cuda=[state.clone() for state in torch.cuda.get_rng_state_all()]
                 if torch.cuda.is_initialized() else [],
             replay=dumps_transport(replay_rng.bit_generator.state),
             curriculum=dumps_transport(curriculum_rng.bit_generator.state))
-        return cls(dict(schema=SCHEMA,semantics=resume_semantics(config),config=config_record(config),
+        record = dict(schema=SCHEMA,semantics=resume_semantics(config),config=config_record(config),
             learner=learner.state_dict(),schedule=schedule.state_dict(),rng=rng,
             replay=saved_replay,
             curriculum=dumps_transport(curriculum),collector_state=copy.deepcopy(collector_state),
-            counters=dumps_transport(counters)))
+            counters=dumps_transport(counters))
+        if fork is not None:
+            record['fork'] = copy.deepcopy(fork)
+        return cls(record)
 
     def validate(self, config=None, *, materialize_replay=False):
         from .config import (canonical_model_config, canonical_learning_config,
@@ -314,11 +418,19 @@ class TrainingState:
         count=snapshot_sample_count(record['replay'])
         if count>schedule.transitions:
             raise ValueError('checkpoint replay admission count is inconsistent')
-        if schedule.can_update and count == 0:
+        counters = loads_transport(record['counters'])
+        bootstrap = validate_replay_bootstrap(config, schedule, counters, count=count,
+            fork=record.get('fork', {}))
+        active_bootstrap = bootstrap is not None and bootstrap['active']
+        if schedule.can_update and count == 0 and not active_bootstrap:
             raise ValueError('checkpoint earned update credit requires a replay sample')
         # A current envelope cannot conceal legacy or semantically mismatched content.
-        return ReplayBuffer.from_snapshot(record['replay'], config.replay_max_bytes,
-                                          validate_only=not materialize_replay)
+        replay = ReplayBuffer.from_snapshot(record['replay'], config.replay_max_bytes,
+            validate_only=not (materialize_replay or active_bootstrap))
+        if active_bootstrap:
+            validate_replay_bootstrap(config, schedule, counters, replay=replay,
+                fork=record.get('fork', {}))
+        return replay
 
     def restore(self, learner, config):
         replay=self.validate(config, materialize_replay=True)

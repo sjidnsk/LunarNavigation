@@ -24,8 +24,10 @@ def serve(root,port=0,url_file=None):
             if target=='/':return self.payload(PAGE,'text/html; charset=utf-8')
             if target=='/status':
                 m=safe_read(root/'manifest.json',{})
+                task_name=NAMES.get(m.get('course_task'),'区内月表')
+                if m.get('policy_graph_mode') == 'a2':task_name='A2 '+task_name
                 value=dict(status=m.get('status','准备中'),phase=m.get('phase','等待'),course_phase=m.get('course_phase',0),
-                    task_name=NAMES.get(m.get('course_task'),'区内月表'),actuals=m.get('actuals',dict(transitions=0,updates=0)))
+                    task_name=task_name,actuals=m.get('actuals',dict(transitions=0,updates=0)))
                 value['modified']={k:(root/'curves'/f'{k}.png').stat().st_mtime if (root/'curves'/f'{k}.png').exists() else None
                     for k in ('learning','reward','fixed','evaluation')}
                 return self.payload(json.dumps(value,ensure_ascii=False),'application/json; charset=utf-8')

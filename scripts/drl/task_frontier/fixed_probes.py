@@ -103,7 +103,16 @@ def rebuild_fixed_observation(bundle):
     builder=GraphBuilder(GraphConfig(**graph));builder.workspace=workspace
     builder._base_points=np.array(bundle['pre_builder']['base_points'],copy=True)
     builder._epoch=bundle['pre_builder']['epoch'];builder._lattice_origin=bundle['pre_builder']['lattice_origin']
-    return builder.build(snapshot,TaskReport(**bundle['report']),history,task,sensor,bundle['velocity'],frontiers=frontiers)
+    observation = builder.build(snapshot,TaskReport(**bundle['report']),history,task,sensor,bundle['velocity'],frontiers=frontiers)
+    policy_graph = bundle.get('policy_graph')
+    if policy_graph is not None:
+        if (set(policy_graph) != {'mode', 'max_remote_positions'}
+                or policy_graph['mode'] != 'a2'):
+            raise ValueError('unsupported fixed probe policy graph')
+        from lunar_drl_exploration.policy_graph import prepare_policy_graph
+        observation = prepare_policy_graph(observation,
+            max_remote_positions=policy_graph['max_remote_positions']).observation
+    return observation
 
 
 def validate_exact_alignment(rebuilt,captured,privileged=None,scenes=None):
@@ -208,7 +217,15 @@ class ProbeCapture:
         pending=self.pending.pop(id(env.core),None)
         if pending is None or len(observation.goals)<2:return None
         captured,bundle=pending
-        validate_exact_alignment(observation,captured)
+        if getattr(env.config, 'policy_graph_mode', 'fine') == 'a2':
+            validate_exact_alignment(env.native_observation, captured)
+            bundle['policy_graph'] = dict(mode='a2',
+                max_remote_positions=env.config.remote_frontier_positions)
+            from lunar_drl_exploration.policy_graph import prepare_policy_graph
+            validate_exact_alignment(observation, prepare_policy_graph(captured,
+                max_remote_positions=env.config.remote_frontier_positions).observation)
+        else:
+            validate_exact_alignment(observation,captured)
         if (self.root/'index.json').exists():return None
         category=state_category(observation,bundle['sensor']['range_m'],bundle['task']['polygon'])
         entries=[read(path) for path in self.root.glob('probe-*.json')]

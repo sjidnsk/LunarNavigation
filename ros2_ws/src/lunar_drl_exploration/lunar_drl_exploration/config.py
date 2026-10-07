@@ -204,6 +204,8 @@ class TrainingConfig:
     ordered_rehearsal_fraction: float = .2
     ordered_rehearsal_by_phase: tuple | None = None
     ordered_budget_rule: dict | None = None
+    policy_graph_mode: str = 'fine'
+    remote_frontier_positions: int = 32
     environments: int = 8
     target_rtf: float = 30.0
     integration_step_s: float = .05
@@ -243,6 +245,10 @@ class TrainingConfig:
 
     def __post_init__(self):
         boundaries = self.curriculum_transition_boundaries
+        if self.policy_graph_mode not in ('fine', 'a2'):
+            raise ValueError('policy_graph_mode must be fine or a2')
+        if type(self.remote_frontier_positions) is not int or not 0 <= self.remote_frontier_positions <= 32:
+            raise ValueError('remote_frontier_positions must be an integer in [0,32]')
         if type(self.ordered_curriculum) is not bool:
             raise ValueError('ordered_curriculum must be boolean')
         if (type(self.ordered_rehearsal_fraction) not in (int, float) or
@@ -358,6 +364,11 @@ def resume_semantics(config):
             budget_rule=record['ordered_budget_rule'])
         if config.ordered_rehearsal_by_phase is not None:
             result['ordered_curriculum']['rehearsal_by_phase'] = record['ordered_rehearsal_by_phase']
+    # The default fine experience predates these controls; omitting its entry
+    # retains exact resume compatibility with the existing checkpoint contract.
+    if config.policy_graph_mode == 'a2':
+        result['policy_graph'] = dict(version='a2_region_remote_frontier_v1',
+            remote_frontier_positions=config.remote_frontier_positions)
     if config.paired_scene_sequence:
         result['scene_sequence'] = dict(mode='paired_slot_episode_v1',
             seed=config.seed, environments=config.environments)

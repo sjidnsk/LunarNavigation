@@ -20,8 +20,9 @@ def _merge_progress(status, progress):
 
 
 class AdmissionLedger:
-    def __init__(self, replay, schedule):
+    def __init__(self, replay, schedule, bootstrap=None):
         self.replay, self.schedule = replay, schedule
+        self.bootstrap = bootstrap
         self.active_scenes = {}
         self.last_admitted = {}
 
@@ -36,6 +37,16 @@ class AdmissionLedger:
             return False
         self.replay.add(transition, self.active_scenes[env_id])
         self.schedule.collected(reserved=True)
+        if self.bootstrap is not None and self.bootstrap['active']:
+            from .replay import transition_task
+            task = transition_task(transition, self.active_scenes[env_id])
+            if task not in self.bootstrap['required_tasks']:
+                raise ValueError('A2 bootstrap admission outside active course tasks')
+            self.bootstrap['admitted'] += 1
+            counts = self.bootstrap['by_task']
+            counts[task] = counts.get(task, 0) + 1
+            if len(self.replay) != self.bootstrap['admitted']:
+                raise ValueError('A2 bootstrap replay budget cannot retain all 64 admissions')
         self.last_admitted[env_id] = token
         return True
 
@@ -210,7 +221,9 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     a completed update boundary; unfinished goals are retained live until resume
     of dispatch. A restored run repays saved integral credit before dispatching
     new work; resume with a zero budget only drains that credit. Fractional
-    credit is retained. Finite runs confirm the final Actor before stopping.
+    credit is retained. An explicit learned A2 fork first rebuilds its replay
+    with exactly 64 admissions, then repays the preserved credit. Finite runs
+    confirm the final Actor before stopping.
     """
     import multiprocessing as mp
     import os
@@ -225,7 +238,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     numerical_threads(config.learner_threads)
     import numpy as np
     import torch
-    from .checkpoint import CheckpointManager, TrainingState, UpdateBoundary
+    from .checkpoint import CheckpointManager, TrainingState, UpdateBoundary, validate_replay_bootstrap
     from .collector import collector_main
     from .ipc import Duplex
     from .config import config_record
@@ -299,7 +312,14 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
         probe_extent=probe_extent, probe_budget=probe_budget)
     course = curriculum.course
     if course is not None:course.backfill_coverage(replay)
-    ledger = AdmissionLedger(replay, schedule)
+    bootstrap = validate_replay_bootstrap(config, schedule, counters, replay=replay)
+    if bootstrap is not None and bootstrap['active']:
+        # Existing course promotion may add a task before collection begins.
+        # Keep its long-term quotas, and fill missing classes before the batch.
+        bootstrap['required_tasks'] = list(course.weights)
+        if max_transitions == 0:
+            raise ValueError('active A2 replay bootstrap cannot use a zero-admission resume')
+    ledger = AdmissionLedger(replay, schedule, bootstrap)
     ledger.last_admitted = dict(counters.get('last_admitted', {}))
     diagnostics = None
     if config.reward_diagnostics:
@@ -334,7 +354,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     barrier_pending = False
     stopping = False
     normal_draining = max_transitions == 0
-    repay_before_dispatch = schedule.can_update
+    repay_before_dispatch = schedule.can_update and not (bootstrap is not None and bootstrap['active'])
     final_phase = None
     final_version = None
     final_deadline = None
@@ -362,9 +382,8 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             counters['reward_diagnostics'] = diagnostics.state_dict()
         state = TrainingState.capture(learner=learner, config=config, replay=replay,
             schedule=schedule, boundary=boundary, replay_rng=replay_rng, curriculum_rng=curriculum_rng,
-            curriculum=curriculum.state, collector_state=collector_state, counters=counters)
-        if fork_provenance is not None:
-            state.record['fork'] = fork_provenance
+            curriculum=curriculum.state, collector_state=collector_state, counters=counters,
+            fork=fork_provenance)
         return state
 
     def persist_diagnostics():
@@ -430,6 +449,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             updates_per_s=(schedule.updates-start_updates)/elapsed, credit=float(schedule.credit),
             inflight=schedule.inflight, actor_version=observed_publication,
             replay_count=len(replay), replay_bytes=replay.bytes_used,
+            **({'replay_bootstrap': dict(bootstrap)} if bootstrap is not None else {}),
             save_in_s=max(0., config.save_interval_s-(time.monotonic()-manager.last_save)),
             environments=env_status, learning=last_update, trace_totals=dict(trace_totals),
             **({'course': dict(course.summary(), transitions=schedule.transitions, updates=schedule.updates)}
@@ -501,6 +521,14 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                         counters['transitions'] = schedule.transitions
                         if course is not None:
                             course.admitted(env_id)
+                        if bootstrap is not None and bootstrap['active'] and bootstrap['admitted'] == bootstrap['required']:
+                            if any(replay.task_counts.get(task,0) == 0 for task in bootstrap['required_tasks']):
+                                raise ValueError('A2 bootstrap needs a real sample for every positive-weight course task')
+                            bootstrap['active'] = False
+                            repay_before_dispatch = schedule.can_update
+                            metrics.append(dict(event='replay_bootstrap_complete',
+                                transitions=schedule.transitions, updates=schedule.updates,
+                                credit=str(schedule.credit), replay_count=len(replay), task_counts=replay.task_counts))
                     # Order is transactional replay admission -> collected -> ACK.
                     connection.send(dict(kind='ACK', env=env_id, token=message['token']))
                     status = env_status.setdefault(env_id, {})
@@ -538,7 +566,10 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     if max_transitions is not None and schedule.transitions-baseline >= max_transitions:
                         normal_draining = True
                         pending_requests.clear()
-                        if stop_reason is None: stop_reason = 'max new transitions reached; credit drained'
+                        if stop_reason is None:
+                            stop_reason = ('max new transitions reached; A2 bootstrap credit retained'
+                                if bootstrap is not None and bootstrap['active'] else
+                                'max new transitions reached; credit drained')
                 elif kind == 'ABORTED':
                     if reservations.get(env_id) == message['token']:
                         schedule.cancel_dispatch(); reservations.pop(env_id)
@@ -616,10 +647,21 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                 stop(manager.requested_reason or 'stop requested')
             if repay_before_dispatch and not schedule.can_update:
                 repay_before_dispatch = False
+                if bootstrap is not None and not bootstrap['active'] and not bootstrap.get('repaid', False):
+                    bootstrap['repaid'] = True
+                    metrics.append(dict(event='replay_bootstrap_repaid',
+                        transitions=schedule.transitions, updates=schedule.updates, credit=str(schedule.credit)))
             if not stopping and not normal_draining and not barrier_pending and not repay_before_dispatch:
                 dispatch_items = list(pending_requests.items())
                 if course is not None:
-                    selected = course.select_pending(pending_requests, reservations)
+                    if bootstrap is not None and bootstrap['active']:
+                        missing = [task for task in bootstrap['required_tasks'] if replay.task_counts.get(task,0) == 0]
+                        candidates = [env for env in pending_requests if course.active.get(env) in missing
+                            and env not in reservations]
+                        selected = min(candidates) if candidates else (None if missing
+                            else course.select_pending(pending_requests, reservations))
+                    else:
+                        selected = course.select_pending(pending_requests, reservations)
                     dispatch_items = [] if selected is None else [(selected, pending_requests[selected])]
                 for env_id, token in dispatch_items:
                     if manager.stop_requested:
@@ -628,13 +670,17 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     if not within_admission_budget(schedule.transitions, schedule.inflight,
                             baseline=baseline, maximum=max_transitions):
                         break
+                    if (bootstrap is not None and bootstrap['active'] and
+                            bootstrap['admitted']+schedule.inflight >= bootstrap['required']):
+                        break
                     if schedule.can_dispatch():
                         if env_id in reservations: raise RuntimeError('second reservation for environment')
                         schedule.reserve_dispatch(); reservations[env_id] = token
                         connection.send(dict(kind='GRANT', env=env_id, token=token))
                         del pending_requests[env_id]
             # Exactly one complete update; poll completions again before the next.
-            if not stopping and not manager.stop_requested and not barrier_pending and final_phase is None and schedule.can_update:
+            if (not stopping and not manager.stop_requested and not barrier_pending and final_phase is None
+                    and schedule.can_update and not (bootstrap is not None and bootstrap['active'])):
                 with boundary.update():
                     before_update = time.monotonic()
                     weights = course.sampling_weights(replay.task_counts) if course is not None else None
@@ -658,7 +704,8 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     connection.send(dict(kind='PUBLISH', payload=pickle.dumps(learner.actor_state(), protocol=5)))
             if manager.stop_requested and not stopping: stop(manager.requested_reason or 'stop requested')
             if (normal_draining and not stopping and final_phase is None and
-                    not barrier_pending and not schedule.inflight and not schedule.can_update):
+                    not barrier_pending and not schedule.inflight and
+                    (not schedule.can_update or (bootstrap is not None and bootstrap['active']))):
                 if reservations: raise RuntimeError('drain left unmatched reservations')
                 if stop_reason is None: stop_reason = 'zero-admission resume; credit drained'
                 final_command('PUBLISH')

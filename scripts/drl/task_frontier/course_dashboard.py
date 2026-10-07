@@ -48,6 +48,11 @@ def lines(root,manifest,progress,course,evaluation):
             '─'*100,
             f"状态 {manifest.get('status','等待')} · 第{phase+1}/4阶段 {NAMES[task]} · {manifest.get('phase','等待')} · {block_label} {state.get('phase_blocks',0)}/{plan.get('max_blocks',[20,10,20,10])[phase]}",
             f"累计转移 {t:,} · 更新 {u:,} · 本块目标 {targets.get('transitions',0):,}条 / {targets.get('updates',0):,}次 · 连续评测通过 {state.get('streak',0)}/2"]
+    if config.get('policy_graph_mode') == 'a2':
+        output[0] = 'A2 收缩＋远程站位 · 四阶段 SAC · 逐场景覆盖率'
+        if state.get('a2_entry_screen', {}).get('status') == 'pending':
+            output += ['启动前课程评测：5个区内洞穴＋5个区内月表；两类达标后进入区外月表。']
+        output += ['累计回合与覆盖率统计继承来源课程；本目录记录 A2 新曲线。']
     if allocation.get('phase')==phase:
         output += ['当前转移/采样目标：区内月表50% · 区内洞穴50%；配额占比从切换点累计，回合统计保留历史。']
     if training:

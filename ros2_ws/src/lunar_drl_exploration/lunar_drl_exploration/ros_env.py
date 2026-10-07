@@ -79,6 +79,8 @@ class RosExplorationEnv:
             if training and config.stagnation_window_steps>0 else None)
         self.truncation_reason=None
         self._episode_truncated=False
+        self.native_observation=None;self.fine_observation=None
+        self.policy_graph_stats=None;self.policy_graph_diagnostics=None
 
     @property
     def owned_pids(self): return self.owned.pids
@@ -149,7 +151,11 @@ class RosExplorationEnv:
             if not len(snap.start_connections):
                 raise InputUnavailable('bounded initialization produced no native start connection')
             if not self.report.available: raise InputUnavailable(self.report.reason_code)
-            self.privileged=self._privileged()
+            native=self.observation
+            policy,fine,diagnostics,stats=self._prepare_policy_state(native)
+            self.privileged=self._privileged(fine)
+            self.observation=policy;self.native_observation=native;self.fine_observation=fine
+            self.policy_graph_diagnostics=diagnostics;self.policy_graph_stats=stats
             self.episode_metadata=dict(descriptor or {},episode_id=self.episode_id,
                 scene_id=static.scene_id,reference_area_m2=self.reference.area_m2,
                 initial_known_area_m2=self._known_area,
@@ -316,6 +322,29 @@ class RosExplorationEnv:
         return self.privileged_builder.build(self.observation if observation is None else observation,
                                              self.reference.pack(mask), frontiers=self.core.frontiers)
 
+    def _prepare_policy_state(self, native):
+        """Adapt the Actor graph before computing real-goal Critic descriptors."""
+        started=time.perf_counter()
+        mode=self.config.policy_graph_mode
+        cap=self.config.remote_frontier_positions
+        if mode=='a2':
+            from .policy_graph import prepare_policy_graph
+            result=prepare_policy_graph(native,max_remote_positions=cap)
+            policy,fine=result.observation,result.fine_observation
+            diagnostics=result.diagnostics
+            virtual_nodes=int(result.virtual_mask.sum())
+        elif mode=='fine':
+            policy=fine=native;diagnostics={};virtual_nodes=0
+        else:
+            raise ValueError('unknown policy graph mode')
+        stats=dict(mode=mode,max_remote_positions=cap,
+            native_nodes=len(native.node_ids),fine_nodes=len(fine.node_ids),
+            coarse_nodes=len(policy.node_ids),native_edges=len(native.edges),
+            fine_edges=len(fine.edges),coarse_edges=len(policy.edges),
+            native_actions=len(native.goals),actions=len(policy.goals),virtual_nodes=virtual_nodes,
+            preparation_wall_s=time.perf_counter()-started)
+        return policy,fine,diagnostics,stats
+
     @property
     def completed(self):
         """Training/evaluation success; never enters observed Actor inputs."""
@@ -343,9 +372,10 @@ class RosExplorationEnv:
         try:
             result=self._execute_goal(goal)
             snap=self._snapshot()
-            next_observation,report=self.core.observe(snap,self.adapter.velocity)
+            next_native,report=self.core.observe(snap,self.adapter.velocity)
             if not report.available:raise InfrastructureError('unconstructable final state: '+report.reason_code)
-            next_privileged=self._privileged(next_observation);self.steps+=1
+            next_observation,next_fine,diagnostics,stats=self._prepare_policy_state(next_native)
+            next_privileged=self._privileged(next_fine);self.steps+=1
             success=(not self.plant.collision and
                 self.reference.coverage_ratio(next_privileged.observed)>=self.config.success_coverage)
             final=(self._known_area,self.plant.distance_m,self.plant.turn_rad)
@@ -368,6 +398,8 @@ class RosExplorationEnv:
                 final[1]-before[1],final[2]-before[2],self.plant.simulation_s-sim,time.monotonic()-wall,
                 snap.revision,self.adapter.processed_stamp_ns,self.plant.collision)
             self.observation,self.report,self.privileged=next_observation,report,next_privileged
+            self.native_observation=next_native;self.fine_observation=next_fine
+            self.policy_graph_diagnostics=diagnostics;self.policy_graph_stats=stats
             return transition
         finally:self._step_active=False
 
@@ -387,7 +419,8 @@ class RosExplorationEnv:
             'stagnation_enabled':self.stagnation is not None,
             'stagnation_zero_gain_steps':self.stagnation.zero_gain_steps if self.stagnation else 0,
             'stagnation_position_count':self.stagnation.position_count if self.stagnation else 0,
-            'stagnation_triggered':self.stagnation.triggered if self.stagnation else False}
+            'stagnation_triggered':self.stagnation.triggered if self.stagnation else False,
+            'policy_graph':dict(self.policy_graph_stats or {})}
 
     def cancel(self):
         """Thread-safe request; active step owns ROS cancel-and-stop pumping."""
@@ -396,7 +429,8 @@ class RosExplorationEnv:
     def _release_scene(self):
         # Replay/collector own their explicit immutable static-scene references.
         # A closed worker must not retain terrain or an old native/map graph.
-        for name in ('terrain','plant','reference','core','buffer','observation','privileged','privileged_builder'):
+        for name in ('terrain','plant','reference','core','buffer','observation','privileged','privileged_builder',
+                     'native_observation','fine_observation','policy_graph_stats','policy_graph_diagnostics'):
             if hasattr(self,name):setattr(self,name,None)
         self.static_scenes={}
 

@@ -4,6 +4,8 @@ This module is never needed by the online decision path. Terrain and temporary
 ray results stay with the environment; replay owns only raw removal counts and sparse
 read-only query supports. Truth does not add or remove measured actions.
 """
+from collections import OrderedDict
+from numbers import Integral
 from typing import TYPE_CHECKING
 import numpy as np
 from scipy.spatial import cKDTree
@@ -109,13 +111,23 @@ def predict_removed(before: FrontierSnapshot, terrain: 'TerrainGrid', pose: Pose
 
 
 class PrivilegedBuilder:
-    """One environment's truth geometry; state-dependent descriptors never cache K."""
-    def __init__(self, terrain, scene, task, sensor, config=None):
+    """One environment's fixed truth geometry; never cache state-dependent gains.
+
+    The exact-XY support cache belongs to this builder's terrain/scene/config,
+    and is discarded with it at reset. Its values contain only static query
+    geometry; observed bits and frozen frontier demands are rebuilt each call.
+    """
+    def __init__(self, terrain, scene, task, sensor, config=None, *, support_cache_size=4096):
+        if (isinstance(support_cache_size, bool) or not isinstance(support_cache_size, Integral)
+                or support_cache_size < 0):
+            raise ValueError('support cache size must be a nonnegative integer')
         self.terrain, self.scene, self.sensor = terrain, scene, sensor
         self.config = config or GraphConfig()
         self.grid = MetricGrid(terrain.navigation == 1, terrain.resolution_m)
         self.cells = np.floor((scene.positions.astype(float) - terrain.origin[:2]) /
                               terrain.resolution_m).astype(np.int64)
+        self._support_cache_size = int(support_cache_size)
+        self._support_cache = OrderedDict()
 
     def build(self, observation, observed, *, frontiers: FrontierSnapshot):
         """Freeze current actions against the measured pre-action frontier snapshot."""
@@ -131,16 +143,28 @@ class PrivilegedBuilder:
             if not (0 <= y < terrain.shape[0] and 0 <= x < terrain.shape[1]
                     and terrain.navigation[y, x] == 1):
                 raise ValueError('candidate query lacks native truth FREE start connection')
-            # Formal BuildStartConnections returns the containing grid cell in
-            # the evidence-FREE case. This is also the plant's truth precondition.
-            entry = float(np.linalg.norm((cell + .5) * resolution + origin - xy))
-            distance = self.grid.distances(cell.reshape(1, 2), np.array([entry]),
-                self.config.coverage_radius_m + entry, self.cells)
-            selected = np.flatnonzero(np.isfinite(distance))
-            if not len(selected):
-                raise ValueError('truth cover provides no legal candidate query support')
-            supports.extend(selected.tolist())
-            support_distances.extend(distance[selected].tolist())
+            # Continuous entry costs depend on exact XY, even within one cell.
+            key = tuple(map(float, xy))
+            cached = self._support_cache.get(key)
+            if cached is None:
+                # Formal BuildStartConnections returns the containing grid cell
+                # in the evidence-FREE case, also the plant's truth precondition.
+                entry = float(np.linalg.norm((cell + .5) * resolution + origin - xy))
+                distance = self.grid.distances(cell.reshape(1, 2), np.array([entry]),
+                    self.config.coverage_radius_m + entry, self.cells)
+                selected = np.flatnonzero(np.isfinite(distance))
+                if not len(selected):
+                    raise ValueError('truth cover provides no legal candidate query support')
+                # Immutable tuples cannot alias or be changed by output arrays.
+                cached = (tuple(selected.tolist()), tuple(distance[selected].tolist()))
+                if self._support_cache_size:
+                    self._support_cache[key] = cached
+                    if len(self._support_cache) > self._support_cache_size:
+                        self._support_cache.popitem(last=False)
+            else:
+                self._support_cache.move_to_end(key)
+            supports.extend(cached[0])
+            support_distances.extend(cached[1])
             offsets.append(len(supports))
         observed = np.asarray(observed, dtype=np.uint8)
         prediction = _RemovalPrediction(frontiers, terrain) if len(observation.goals) else None
