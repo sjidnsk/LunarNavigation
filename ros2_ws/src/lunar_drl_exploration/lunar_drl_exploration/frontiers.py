@@ -112,8 +112,9 @@ def directional_frontier_counts(frontiers: FrontierSet, workspace: 'MeasuredWork
     """Count each FREE center once when it and any same-domain demand are seen.
 
     Stable signed demand IDs use the workspace's retained lattice offset.
-    The spatial query only limits targets to the native fan's bounding square;
-    native directional membership decides range, beam support and occlusion.
+    Finite beam events stay within their tip's radius. The spatial query can
+    therefore exclude centers outside that circle; native membership still
+    decides beam support, FOV and occlusion.
     """
     validate_sensor(sensor)
     if not math.isfinite(resolution_m) or resolution_m <= 0:
@@ -129,20 +130,27 @@ def directional_frontier_counts(frontiers: FrontierSet, workspace: 'MeasuredWork
     ids = frontiers.demand_ids
     demand_cells = np.column_stack((ids >> 32, (ids << 32) >> 32)) - shift
     centers = np.floor((frontiers.centers-w.origin)/resolution_m).astype(np.int64)
+    # Adjacent fronts commonly share the same pending cell. Query each cell
+    # once, then restore its multiplicity for the per-front any-demand rule.
+    targets, target_ids = np.unique(np.vstack((centers, demand_cells)),
+                                   axis=0, return_inverse=True)
     sources = np.floor((positions-w.origin)/resolution_m).astype(np.int64)
     tree = cKDTree(centers)
     radius = sensor.range_m/resolution_m
     for i, source in enumerate(sources):
-        candidates = np.asarray(tree.query_ball_point(source, math.ceil(radius), p=np.inf),
+        candidates = np.asarray(tree.query_ball_point(source, radius+1e-10),
                                 np.int64)
         if not len(candidates):
             continue
-        rows = np.concatenate([np.arange(frontiers.demand_offsets[j],
-                                         frontiers.demand_offsets[j+1]) for j in candidates])
-        offsets = np.r_[0, np.cumsum(np.diff(frontiers.demand_offsets)[candidates])]
+        lengths = np.diff(frontiers.demand_offsets)[candidates]
+        offsets = np.r_[0, np.cumsum(lengths)]
+        rows = (np.repeat(frontiers.demand_offsets[candidates]-offsets[:-1], lengths)
+                + np.arange(offsets[-1]))
+        selected, restore = np.unique(target_ids[np.r_[candidates, len(centers)+rows]],
+                                      return_inverse=True)
         seen = directional_visibility(w.intrinsic, source,
-            np.vstack((centers[candidates], demand_cells[rows])), radius,
-            HEADINGS+sensor.offset_yaw_rad, math.radians(sensor.fov_deg))
+            targets[selected], radius, HEADINGS+sensor.offset_yaw_rad,
+            math.radians(sensor.fov_deg))[restore]
         center_seen = seen[:len(candidates)]
         demand_seen = np.logical_or.reduceat(seen[len(candidates):], offsets[:-1], axis=0)
         result[i] = np.count_nonzero(center_seen & demand_seen, axis=0)

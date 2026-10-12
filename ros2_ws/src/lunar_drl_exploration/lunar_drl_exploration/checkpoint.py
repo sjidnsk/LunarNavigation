@@ -159,7 +159,7 @@ class TrainingState:
         This operation neither creates the destination nor writes the source.
         """
         from .config import training_config_from_record
-        if experiment not in (None, 'paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent', 'ordered-ratio', 'ordered-a2'):
+        if experiment not in (None, 'paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent', 'ordered-ratio', 'ordered-a2', 'course-two', 'course-two-rebalance'):
             raise ValueError('unknown fork experiment: ' + str(experiment))
         source = Path(source).resolve()
         destination = Path(config.output_dir).resolve()
@@ -177,6 +177,19 @@ class TrainingState:
         fields = ('stagnation_window_steps', 'stagnation_max_positions',
                   'stagnation_position_tolerance_m', 'artifact_root',
                   'total_output_max_bytes', 'metrics_max_bytes', 'reward_diagnostics')
+        if experiment in ('course-two','course-two-rebalance'):
+            curriculum=loads_transport(state.record['curriculum'])
+            if (not original.ordered_curriculum or original.course_two or not config.course_two
+                    or config.ordered_curriculum or original.policy_graph_mode!='a2'
+                    or config.policy_graph_mode!='a2' or curriculum.get('course',{}).get('phase')!=3):
+                raise ValueError('course-two requires completed-phase ordered A2 source and a new course-two run')
+            fields=('course_two','ordered_curriculum','artifact_root','total_output_max_bytes',
+                    'snapshot_max_bytes','metrics_max_bytes','save_interval_s',
+                    'owned_pss_limit_bytes','system_reserve_bytes')
+            if experiment=='course-two-rebalance':
+                if not config.course_two_variant or not original.environments<=config.environments<=32:
+                    raise ValueError('rebalance requires variant and bounded environment increase')
+                fields+=('course_two_variant','course_two_catalog','course_two_catalog_sha','course_two_task_scope','course_two_sampling','course_two_scene_profile','environments')
         if experiment == 'ordered-a2':
             if (not original.ordered_curriculum or not config.ordered_curriculum or
                     original.policy_graph_mode != 'fine' or config.policy_graph_mode != 'a2' or
@@ -256,9 +269,32 @@ class TrainingState:
                 for key in fields if before[key] != after[key]})
         if experiment is not None:
             state.record['fork']['experiment'] = experiment
-        if experiment in ('ordered-extent', 'ordered-ratio', 'ordered-a2'):
+        if experiment in ('ordered-extent', 'ordered-ratio', 'ordered-a2', 'course-two','course-two-rebalance'):
             import hashlib
             state.record['fork']['source_checkpoint_sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
+        if experiment in ('course-two','course-two-rebalance'):
+            from .course_two import CourseTwo
+            curriculum=loads_transport(state.record['curriculum'])
+            curriculum['course_one_history']=copy.deepcopy(curriculum['course'])
+            if config.course_two_variant:
+                from .course_two_rebalance import RebalancedCourse,course_for
+                course=course_for(config)
+            else:course=CourseTwo('A1',success_coverage=config.success_coverage)
+            curriculum['course']=course.state_dict()
+            curriculum['active_specs']={};curriculum['course_two_ordinals']={}
+            state.record['curriculum']=dumps_transport(curriculum)
+            counters=loads_transport(state.record['counters'])
+            counters['course_one_history']=copy.deepcopy(counters.get('course',{}))
+            counters['course']=copy.deepcopy(curriculum['course'])
+            diagnostics=counters.get('reward_diagnostics')
+            if diagnostics is not None and config.environments!=original.environments:
+                diagnostics['environments']=config.environments
+                diagnostics['active'].extend([None]*(config.environments-original.environments))
+            if 'replay_bootstrap' in counters:
+                if counters['replay_bootstrap']['active']:
+                    raise ValueError('course-two cannot fork an unfinished A2 bootstrap')
+                counters['course_one_replay_bootstrap']=counters.pop('replay_bootstrap')
+            state.record['counters']=dumps_transport(counters)
         if experiment == 'ordered-a2':
             curriculum = loads_transport(state.record['curriculum'])
             course = curriculum.get('course', {})
@@ -330,8 +366,14 @@ class TrainingState:
             raise ValueError('collector policy_rng tensor is required')
         bootstrap = validate_replay_bootstrap(config, schedule, counters, replay=replay, fork=fork or {})
         active_bootstrap = bootstrap is not None and bootstrap['active']
+        index=replay.course_two_index if config.course_two_variant else None
+        required=index.required_indices() if index is not None else ()
         saved_replay=replay.snapshot(config.snapshot_max_bytes,
-            require_sample=schedule.can_update and not active_bootstrap)
+            require_sample=schedule.can_update and not active_bootstrap,required_indices=required)
+        if index is not None and index.status()['ready']:
+            saved=ReplayBuffer.from_snapshot(saved_replay,config.replay_max_bytes)
+            if not saved.enable_course_two_sampling(completion_bonus=config.completion_bonus, task_scope=config.course_two_task_scope, sampling=config.course_two_sampling, scene_profile=config.course_two_scene_profile).status()['ready']:
+                raise ValueError('snapshot lost balanced replay readiness')
         if active_bootstrap and snapshot_sample_count(saved_replay) != bootstrap['admitted']:
             raise ValueError('active replay bootstrap snapshot must retain every admitted sample')
         rng=dict(python=random.getstate(),numpy=dumps_transport(np.random.get_state()),
@@ -419,6 +461,26 @@ class TrainingState:
         if count>schedule.transitions:
             raise ValueError('checkpoint replay admission count is inconsistent')
         counters = loads_transport(record['counters'])
+        if config.course_two:
+            if config.environments != record['config']['environments']:
+                raise ValueError('incompatible course-two environment count; use explicit slot reconfiguration')
+            from .course_two import CourseTwo
+            curriculum=loads_transport(record['curriculum'])
+            saved=curriculum.get('course',{})
+            if config.course_two_variant:
+                from .course_two_rebalance import RebalancedCourse,course_for
+                course_for(config,state=saved)
+            else:CourseTwo(saved.get('stage'),state=saved,success_coverage=config.success_coverage)
+            from .course_two_scene import validate_case
+            for spec in curriculum.get('active_specs',{}).values():
+                case=spec.get('course_two_case')
+                if case is not None:
+                    if case.get('version') in ('region_sensor_rebalanced_scene_v2','region_sensor_rebalanced_scene_v3'):
+                        from .course_two_rebalanced_scene import validate_case as validate_rebalanced
+                        validate_rebalanced(case)
+                    else:validate_case(case)
+                    if spec.get('curriculum_task')!=case['curriculum_task'] or spec.get('seed')!=case['seed']:
+                        raise ValueError('saved scenario dispatch identity mismatch')
         bootstrap = validate_replay_bootstrap(config, schedule, counters, count=count,
             fork=record.get('fork', {}))
         active_bootstrap = bootstrap is not None and bootstrap['active']

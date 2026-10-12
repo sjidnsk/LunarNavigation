@@ -64,7 +64,8 @@ def test_reset_persists_static_task_and_start_descriptor_without_changing_terrai
     env = RosExplorationEnv(TrainingConfig(), 0)
     monkeypatch.setattr(env, 'close', lambda: None)
     captured = {}
-    def capture(terrain, pose, task, *, descriptor):
+    def capture(terrain, pose, task, *, descriptor, sensor=None):
+        assert sensor is None  # Legacy resets retain the configured sensor.
         captured.update(terrain=terrain, pose=pose, task=task, descriptor=descriptor)
         return 'observation', 'privileged'
     monkeypatch.setattr(env, 'reset_scene', capture)

@@ -42,7 +42,12 @@ def _scan(root):
     for directory, dirs, files in os.walk(root, followlinks=False):
         for name in (*dirs, *files):
             path = Path(directory) / name
-            info = path.lstat()
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                # Unmanaged progress writers may replace a temporary after walk
+                # lists it. It no longer consumes space; other errors still fail.
+                continue
             if stat.S_ISLNK(info.st_mode):
                 raise ValueError(f'artifact symlink is not allowed: {path}')
             if stat.S_ISDIR(info.st_mode):

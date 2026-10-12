@@ -11,6 +11,17 @@ import pickle
 import signal
 import time
 
+STOP_GRACE_TIMEOUT_S = 10.
+
+
+def worker_timeout_for(slot,ordinary):
+    """Physical predecessors have their own hard reset budget, never action slack."""
+    case=slot.get('reset_spec',{}).get('course_two_case',{})
+    if slot.get('mode')=='RESETTING' and case.get('version') in ('region_sensor_rebalanced_scene_v2','region_sensor_rebalanced_scene_v3'):
+        if case.get('qualification_request'):return 2460.
+        if case.get('prelude_goals'):return 1260.
+    return ordinary
+
 
 def sample_behavior_action(weights, generator):
     """One original multinomial draw plus its normalized joint log probability."""
@@ -24,7 +35,7 @@ def sample_behavior_action(weights, generator):
 
 def collector_main(pipe, config_record, initial_state, *, domain_base=210,
                    env_factory='lunar_drl_exploration.ros_env:RosExplorationEnv',
-                   recovery_limit=3, worker_timeout_s=180., stop_timeout_s=10.):
+                   recovery_limit=3, worker_timeout_s=180., stop_timeout_s=STOP_GRACE_TIMEOUT_S):
     from .worker import numerical_threads, worker_main
     from .ipc import Duplex, load_actor_publication
     wake = threading.Event()
@@ -102,6 +113,10 @@ def collector_main(pipe, config_record, initial_state, *, domain_base=210,
         emit('RECOVERY', env=env_id, reason=reason, attempt=slot['failures'] + 1,
             stage=stage or slot['mode'], reset_spec=slot.get('reset_spec'))
         if stopping: return
+        if (config_record.get('course_two_variant') and (stage or slot['mode'])=='RESETTING'
+                and slot.get('reset_spec',{}).get('course_two_case',{}).get('version') in ('region_sensor_rebalanced_scene_v2','region_sensor_rebalanced_scene_v3')):
+            emit('FATAL',env=env_id,reason='native scene qualification/reset failed; no silent seed substitution: '+reason)
+            request_stop();return
         if slot['failures'] >= recovery_limit:
             emit('FATAL', env=env_id, reason=f'infrastructure recovery exhausted: {reason}')
             request_stop()
@@ -196,7 +211,7 @@ def collector_main(pipe, config_record, initial_state, *, domain_base=210,
                             if not stopping: emit('NEED_RESET', env=env_id)
                         elif kind == 'CLOSED':
                             slot['closed'] = True
-                            slot['process'].join(3); connection.close(flush=False)
+                            slot['process'].join(0 if stopping else 3); connection.close(flush=False)
                             emit('OWNERSHIP', env=env_id, worker_pid=None, child_pids=[])
                             if 'restart_reason' in slot and not stopping:
                                 recover(env_id, slot['restart_reason'])
@@ -218,7 +233,7 @@ def collector_main(pipe, config_record, initial_state, *, domain_base=210,
                     elif 'restart_reason' in slot:
                         if time.monotonic() > slot['restart_deadline'] and slot['pending'] is None:
                             recover(env_id, slot['restart_reason'] + '; cancellation join timed out')
-                    elif slot['mode'] in ('STARTING', 'RESETTING', 'ACTIVE') and time.monotonic() - slot['since'] > worker_timeout_s:
+                    elif slot['mode'] in ('STARTING', 'RESETTING', 'ACTIVE') and time.monotonic() - slot['since'] > worker_timeout_for(slot,worker_timeout_s):
                         # First ask the responsive control loop to cancel and
                         # flush any constructed completion. Hard termination is
                         # reserved for an explicit bounded infrastructure hang.
@@ -245,10 +260,28 @@ def collector_main(pipe, config_record, initial_state, *, domain_base=210,
                 frozen = True; barrier_requested = False
             if stopping:
                 if time.monotonic() - stop_started > stop_timeout_s:
-                    for env_id, slot in list(slots.items()):
-                        if not slot['closed'] and slot['pending'] is None:
-                            recover(env_id, 'bounded stop timeout; unfinished action excluded')
-                if all(slot['closed'] for slot in slots.values()) and all(slot['pending'] is None for slot in slots.values()):
+                    # Workers deliberately ignore process-group SIGTERM. After
+                    # their shared cooperative grace, kill all stuck workers
+                    # together; serial terminate/join would multiply the bound
+                    # by the number of environments and block control/ACKs.
+                    retiring = [(i, s) for i, s in slots.items()
+                                if s['pending'] is None and
+                                (not s['closed'] or s['process'].is_alive())]
+                    for env_id, slot in retiring:
+                        if slot['process'].is_alive():slot['process'].kill()
+                    for env_id, slot in retiring:
+                        if slot['process'].is_alive():continue
+                        slot['process'].join(0)
+                        if not slot['closed']:
+                            if slot['mode'] == 'ACTIVE':
+                                emit('ABORTED', env=env_id, token=slot['token'],
+                                     reason='bounded stop timeout; unfinished action excluded')
+                            slot['pipe'].close(flush=False); slot['closed'] = True
+                            emit('RECOVERY', env=env_id, attempt=slot['failures'] + 1,
+                                 reason='bounded stop timeout; unfinished action excluded',
+                                 stage=slot['mode'], reset_spec=slot.get('reset_spec'))
+                if (all(slot['closed'] and not slot['process'].is_alive() for slot in slots.values())
+                        and all(slot['pending'] is None for slot in slots.values())):
                     emit('STOPPED', payload=snapshot())
                     return
     except (EOFError, BrokenPipeError):

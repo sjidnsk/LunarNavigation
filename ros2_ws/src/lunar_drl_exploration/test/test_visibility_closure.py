@@ -111,8 +111,8 @@ def test_map_clipping_keeps_nominal_beams_and_threadsafe_cache():
     for r, got in zip(radii, results):
         assert np.array_equal(got, oracle_observe(b, (0, 3), r, 0.32, 0.1))
     info = native.visibility_cache_info()
-    assert info["templates"] <= 8
-    assert info["bytes"] <= info["limit_bytes"] == 128 * 1024 * 1024
+    assert info["templates"] <= 16
+    assert info["bytes"] <= info["limit_bytes"] == 256 * 1024 * 1024
 
 
 def test_optical_component_prefilter_preserves_exact_all_stance_union():

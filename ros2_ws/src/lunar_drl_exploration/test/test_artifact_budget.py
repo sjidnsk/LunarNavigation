@@ -192,3 +192,55 @@ def test_caught_budget_exception_cannot_replace_previous_good_artifact(tmp_path)
     with pytest.raises(ResourceLimitError):
         atomic_write(target, suppress_error, max_bytes=100)
     assert json.loads(target.read_text()) == {'good': True}
+
+
+def test_atomic_progress_write_survives_disappearing_sibling_temporary(tmp_path, monkeypatch):
+    from lunar_drl_exploration import artifacts
+    temporary = tmp_path / '.other-progress.json.pending.tmp'
+    temporary.write_text('pending')
+    atomic_json(tmp_path / 'completed.json', {'keep': True})
+    original_walk = artifacts.os.walk
+    removed = []
+
+    def concurrent_replace(root, *args, **kwargs):
+        for directory, directories, files in original_walk(root, *args, **kwargs):
+            if temporary.name in files:
+                # Another process finishes atomic replacement after directory listing.
+                temporary.unlink()
+                removed.append(temporary)
+            yield directory, directories, files
+
+    monkeypatch.setattr(artifacts.os, 'walk', concurrent_replace)
+    atomic_json(tmp_path / 'progress.json', {'phase': 'passed'})
+    assert removed == [temporary]
+    assert json.loads((tmp_path / 'completed.json').read_text()) == {'keep': True}
+    assert json.loads((tmp_path / 'progress.json').read_text()) == {'phase': 'passed'}
+
+
+def _parallel_progress_writer(path, ready):
+    ready.wait()
+    for sequence in range(60):
+        atomic_json(path, {'sequence': sequence, 'worker': path.name})
+
+
+def test_eight_parallel_progress_writers_preserve_all_completed_records(tmp_path):
+    context = multiprocessing.get_context('spawn')
+    ready = context.Event()
+    processes = [context.Process(target=_parallel_progress_writer,
+        args=(tmp_path / f'worker-{index}.json', ready)) for index in range(8)]
+    try:
+        for process in processes:
+            process.start()
+        ready.set()
+        for process in processes:
+            process.join(30)
+            assert process.exitcode == 0
+        for index in range(8):
+            name = f'worker-{index}.json'
+            assert json.loads((tmp_path / name).read_text()) == {'sequence': 59, 'worker': name}
+        assert not list(tmp_path.glob('*.tmp'))
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join(5)

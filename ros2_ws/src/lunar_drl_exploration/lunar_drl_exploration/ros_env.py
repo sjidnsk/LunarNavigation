@@ -3,7 +3,7 @@
 Task8 owns workers, asynchronous dispatch, retained completions/ACK and recovery.
 This object never imports Torch and never resets inside step().
 """
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import math
 import os
 import threading
@@ -61,6 +61,10 @@ def make_transition(observation,action,next_observation,privileged,next_privileg
 class RosExplorationEnv:
     def __init__(self,config,env_id,*,domain_base=210,wall_timeout_s=120.,training=False):
         self.config=config;self.env_id=int(env_id)
+        self.sensor=config.sensor
+        self._fixed_sensor=self.sensor
+        self._initial_reference_coverage=0.
+        self._first_roi=None;self._approach_limits={};self._approach_start_distance=0.
         self.namespace=f'/lunar_training/env_{self.env_id}'
         self._requested_domain=None if domain_base is None else domain_base+self.env_id
         self.domain_id=self._requested_domain
@@ -85,45 +89,111 @@ class RosExplorationEnv:
     @property
     def owned_pids(self): return self.owned.pids
 
-    def reset(self,seed,family,extent,*,episode_budget=None,start_mode='any',curriculum_task=None):
+    def reset(self,seed,family,extent,*,episode_budget=None,start_mode='any',curriculum_task=None,
+              course_two_case=None,task_scope='',outside_distance_max_m=None,
+              outside_distance_min_m=None,context_margin_m=12.,sensor=None,scene_profile=''):
         self.close()
+        if (outside_distance_max_m is not None or outside_distance_min_m is not None) and (
+                family!='moon' or start_mode!='outside' or course_two_case is not None):
+            raise ValueError('bounded distance applies only to ordinary outside moon scenes')
+        if scene_profile not in ('','distance_sensor_10_30_v1'):
+            raise ValueError('unknown ordinary scene profile')
+        if course_two_case is not None and (sensor is not None or scene_profile or context_margin_m!=12.):
+            raise ValueError('ordinary scene overrides cannot alter a frozen course-two case')
+        from .contracts import SensorSpec
+        from .sensor import validate_sensor
+        if sensor is not None:
+            sensor=SensorSpec(**sensor) if isinstance(sensor,dict) else sensor
+            validate_sensor(sensor)
+        extra={}
+        if sensor is not None:extra['sensor']=asdict(sensor)
+        if scene_profile:extra['scene_profile']=scene_profile
+        from types import MappingProxyType
+        if course_two_case is not None:
+            rebalanced=course_two_case.get('version') in ('region_sensor_rebalanced_scene_v2','region_sensor_rebalanced_scene_v3')
+            if rebalanced:
+                from .course_two_rebalanced_scene import build_case
+            else:from .course_two_scene import build_case
+            if (seed != course_two_case['seed'] or family != course_two_case['family']
+                    or curriculum_task != course_two_case['curriculum_task']):
+                raise ValueError('course-two dispatch identity differs from frozen scene')
+            if rebalanced and course_two_case.get('qualification_request'):
+                from .course_two_rebalanced_scene import validate_case
+                validate_case(course_two_case)
+                from .course_two_prelude import resolve_generated
+                return resolve_generated(self,course_two_case)
+            terrain,pose,task,sensor,descriptor=build_case(course_two_case,self.config.platform)
+            self.episode_budget=int(episode_budget or course_two_case['episode_budget'])
+            if not 0 < self.episode_budget <= course_two_case['episode_budget']:
+                raise ValueError('invalid course-two episode budget')
+            self.reset_scene(terrain,pose,task,sensor=sensor,descriptor=descriptor)
+            if rebalanced:
+                from .course_two_prelude import prepare_start
+                try:prepare_start(self,course_two_case)
+                except BaseException:
+                    self.close();raise
+            return self.observation,self.privileged
         from .scene import Scene,TerrainGrid
         if start_mode not in ('any', 'inside', 'outside'):
             raise ValueError('start_mode must be any, inside or outside')
         if curriculum_task is not None and (
                 start_mode == 'any' or curriculum_task != f'{family}_{start_mode}'):
             raise ValueError('curriculum_task must match family and start_mode')
-        scene=Scene(seed,family,extent,platform=self.config.platform)
+        if task_scope:
+            if family!='cave' or task_scope!='whole_cave_v1':raise ValueError('invalid rehearsal task scope')
+            from .course_two_task_scope import build_rehearsal
+            terrain,pose,task,descriptor=build_rehearsal(seed,extent,start_mode,self.config.platform)
+            descriptor=dict(descriptor,**extra)
+            terrain.generator_descriptor=MappingProxyType(dict(terrain.generator_descriptor,**extra))
+            self.episode_budget=int(episode_budget or self.config.curriculum_budgets[0])
+            if self.episode_budget<=0:raise ValueError('positive episode budget required')
+            return self.reset_scene(terrain,pose,task,descriptor=descriptor,sensor=sensor)
+        scene=Scene(seed,family,extent,platform=self.config.platform,context_margin_m=context_margin_m)
         terrain=TerrainGrid.from_scene(scene)
         self.episode_budget=int(episode_budget) if episode_budget is not None else self.config.curriculum_budgets[0 if extent<=80 else 1 if extent<=150 else 2]
         if self.episode_budget<=0:raise ValueError("positive episode budget required")
-        from types import MappingProxyType
-        start_descriptor=dict(start_mode=start_mode)
+        start_descriptor=dict(start_mode=start_mode,**extra)
+        if outside_distance_max_m is not None:
+            start_descriptor['outside_distance_max_m']=outside_distance_max_m
+        if outside_distance_min_m is not None:
+            start_descriptor['outside_distance_min_m']=outside_distance_min_m
+        if context_margin_m!=12.:start_descriptor['context_margin_m']=context_margin_m
         if curriculum_task is not None:
             start_descriptor['curriculum_task']=curriculum_task
+        pose=scene.initial_pose(terrain,start_mode=start_mode,outside_distance_max_m=outside_distance_max_m,
+            outside_distance_min_m=outside_distance_min_m)
+        if outside_distance_min_m is not None:
+            from .scene import polygon_boundary_distance
+            start_descriptor['start_boundary_distance_m']=float(polygon_boundary_distance(pose.x,pose.y,scene.task.polygon))
         terrain.generator_descriptor=MappingProxyType(dict(terrain.generator_descriptor,
             **start_descriptor))
-        return self.reset_scene(terrain,scene.initial_pose(terrain,start_mode=start_mode),scene.task,
+        return self.reset_scene(terrain,pose,scene.task,sensor=sensor,
             descriptor={'seed':seed,'family':family,'extent_m':extent,
-                        'start_mode':start_mode,'curriculum_task':curriculum_task})
+                        **start_descriptor})
 
-    def reset_scene(self,terrain,pose,task,*,descriptor=None):
+    def reset_scene(self,terrain,pose,task,*,descriptor=None,sensor=None):
         """Explicit deterministic fixture entry; identical sensor/navigation path."""
         self.close()
         from .reference import CoverageReference
         from .privileged import build_truth, PrivilegedBuilder
+        from .sensor import validate_sensor
+        self.sensor=self.config.sensor if sensor is None else sensor
+        validate_sensor(self.sensor)
+        self._fixed_sensor=self.sensor
         self.terrain=terrain;self.task=task
         self.plant=KinematicPlant(terrain,pose,self.config.platform)
-        self.reference=CoverageReference.build(terrain,pose,task,self.config.sensor)
+        self.reference=CoverageReference.build(terrain,pose,task,self.sensor)
         static=build_truth(terrain,self.reference,GraphConfig(platform=self.config.platform))
-        self.privileged_builder=PrivilegedBuilder(terrain,static,task,self.config.sensor,
+        self.privileged_builder=PrivilegedBuilder(terrain,static,task,self.sensor,
             GraphConfig(platform=self.config.platform))
         self.static_scenes={static.scene_id:static}
-        self.core=DecisionCore(task,self.config.sensor,GraphConfig(platform=self.config.platform))
+        self.core=DecisionCore(task,self.sensor,GraphConfig(platform=self.config.platform))
         self.core.history.tolerance_m=self.config.goal_position_tolerance_m
         self.buffer=MeasurementBuffer(terrain.origin,terrain.resolution_m)
         self._cancel.clear();self._closed=False;self.steps=0;self.last_execution=None
         self.truncation_reason=None;self._episode_truncated=False
+        self._first_roi=None
+        self._approach_limits=(dict(descriptor) if descriptor and descriptor.get('scenario_id') else {})
         if self.stagnation is not None:self.stagnation.reset()
         self.report=None
         self.episode_id=uuid.uuid4().hex
@@ -156,16 +226,54 @@ class RosExplorationEnv:
             self.privileged=self._privileged(fine)
             self.observation=policy;self.native_observation=native;self.fine_observation=fine
             self.policy_graph_diagnostics=diagnostics;self.policy_graph_stats=stats
+            self._initial_reference_coverage=self.reference.coverage_ratio(self.privileged.observed)
+            self._approach_start_distance=self.plant.distance_m
             self.episode_metadata=dict(descriptor or {},episode_id=self.episode_id,
                 scene_id=static.scene_id,reference_area_m2=self.reference.area_m2,
                 initial_known_area_m2=self._known_area,
                 initialization_turn_rad=self.plant.turn_rad-initial_turn,
                 initialization_simulation_s=self.plant.simulation_s-initial_time,
                 initialization_wall_s=time.monotonic()-self._start_wall,
-                budget=self.episode_budget,domain_id=self.domain_id,namespace=self.namespace)
+                budget=self.episode_budget,domain_id=self.domain_id,namespace=self.namespace,
+                sensor=asdict(self.sensor),initial_reference_coverage=self._initial_reference_coverage,
+                initial_pose=[self.plant.pose.x,self.plant.pose.y,self.plant.pose.yaw],
+                initial_roi_visible=self._initial_reference_coverage>0)
             return self.observation,self.privileged
         except BaseException:
             self.close();raise
+
+    def prelude_goal(self,goal):
+        """Execute a real navigation prefix without generating a learning sample."""
+        if time.monotonic()>getattr(self,'_preparation_deadline',float('inf')):
+            raise TimeoutError('native preparation hard deadline exceeded')
+        if self.sensor!=self._fixed_sensor:raise InfrastructureError('prelude sensor changed')
+        if self.plant.collision:raise GeometryFailure('prelude collision')
+        before=(self.plant.distance_m,self.plant.turn_rad,self.plant.simulation_s,time.monotonic())
+        result=self._execute_goal(goal)
+        snapshot=self._snapshot()
+        native,report=self.core.observe(snapshot,self.adapter.velocity)
+        if result.outcome!=0 or not report.available or self.plant.collision:
+            raise InputUnavailable('prelude navigation failed: '+str(result.reason_code))
+        policy,fine,diagnostics,stats=self._prepare_policy_state(native)
+        self.observation,self.native_observation,self.fine_observation=policy,native,fine
+        self.privileged=self._privileged(fine);self.report=report
+        self.policy_graph_diagnostics=diagnostics;self.policy_graph_stats=stats
+        p=self.plant.pose
+        return dict(goal=list(goal),outcome=int(result.outcome),reason_code=result.reason_code,
+            actual_pose=[p.x,p.y,p.yaw],distance_m=self.plant.distance_m-before[0],
+            turn_rad=self.plant.turn_rad-before[1],simulation_s=self.plant.simulation_s-before[2],
+            wall_s=time.monotonic()-before[3],map_revision=snapshot.revision,
+            coverage=self.reference.coverage_ratio(self.privileged.observed))
+
+    def set_policy_start(self,prelude):
+        self._initial_reference_coverage=self.reference.coverage_ratio(self.privileged.observed)
+        self._approach_start_distance=self.plant.distance_m
+        self._first_roi=None;self.steps=0;self._episode_truncated=False;self.truncation_reason=None
+        if self.stagnation is not None:self.stagnation.reset()
+        p=self.plant.pose
+        self.episode_metadata.update(prelude=prelude,initial_reference_coverage=self._initial_reference_coverage,
+            initial_pose=[p.x,p.y,p.yaw],initial_roi_visible=self._initial_reference_coverage>0,
+            initial_known_area_m2=self._known_area)
 
     def _start_ros(self):
         from .domain_lease import DomainLease
@@ -244,7 +352,8 @@ class RosExplorationEnv:
         tf=TransformStamped();tf.header.stamp=stamp;tf.header.frame_id='map';tf.child_frame_id='odom';tf.transform.rotation.w=1.
         self._tf_pub.publish(TFMessage(transforms=[tf]))
         if self._sim_ns-self._last_sensor_ns>=round(1e9/self.config.observation_hz):
-            hits=SensorModel.observe(self.terrain,p,self.config.sensor)
+            if self.sensor != self._fixed_sensor:raise InfrastructureError('sensor changed within scene')
+            hits=SensorModel.observe(self.terrain,p,self.sensor)
             self.buffer.add(hits,self._sim_ns)
             self.core.record_observation(p,hits.indices)
             payload=self.buffer.payload()
@@ -359,6 +468,7 @@ class RosExplorationEnv:
 
     def step(self,action_index,*,actor_version=None):
         if self._closed or self._step_active:raise RuntimeError('environment is closed or already stepping')
+        if self.sensor != self._fixed_sensor:raise InfrastructureError('sensor changed within scene')
         if self.terminated or self._episode_truncated or self.steps>=self.episode_budget:raise RuntimeError('episode requires reset')
         if self.plant.collision:raise GeometryFailure('collision episode requires reset')
         if not 0<=int(action_index)<len(self.observation.goals):raise ValueError('action outside frozen observation')
@@ -384,15 +494,22 @@ class RosExplorationEnv:
             if self.stagnation is not None:
                 stagnated=self.stagnation.observe((p.x,p.y),final[0]-before[0])
             budget_hit=self.steps>=self.episode_budget
+            after_coverage=self.reference.coverage_ratio(next_privileged.observed)
+            if self._initial_reference_coverage == 0 and self._first_roi is None and after_coverage>0:
+                self._first_roi=dict(decisions=self.steps,distance_m=self.plant.distance_m-self._approach_start_distance,
+                    simulation_s=self.plant.simulation_s,coverage=after_coverage)
+            approach_hit=bool(self._approach_limits and self._initial_reference_coverage==0
+                and self._first_roi is None and (self.steps>=self._approach_limits['approach_decision_budget']
+                    or self.plant.distance_m-self._approach_start_distance>=self._approach_limits['approach_distance_budget_m']))
             transition=make_transition(observation,action_index,next_observation,privileged,next_privileged,
                 initial=before,final=final,
                 removed_frontiers_in=count_removed(before_frontiers,self.core.frontiers,domain="inside"),
                 removed_frontiers_out=count_removed(before_frontiers,self.core.frontiers,domain="outside"),
                 completed=success,exhausted=report.completed,
-                budget_hit=budget_hit or stagnated,
+                budget_hit=budget_hit or stagnated or approach_hit,
                 episode_id=self.episode_id,actor_version=version,completion_bonus=self.config.completion_bonus)
             self._episode_truncated=transition.truncated
-            self.truncation_reason=('DECISION_BUDGET' if budget_hit else 'STAGNATION') if transition.truncated else None
+            self.truncation_reason=('DECISION_BUDGET' if budget_hit else 'APPROACH_BUDGET' if approach_hit else 'STAGNATION') if transition.truncated else None
             self.last_execution=ExecutionMetadata(goal,result.outcome,result.reason_code,result.last_segment_revision,
                 self.terrain.world_to_cell(*goal[:2]),self.terrain.world_to_cell(p.x,p.y),(p.x,p.y,p.yaw),
                 final[1]-before[1],final[2]-before[2],self.plant.simulation_s-sim,time.monotonic()-wall,
@@ -420,6 +537,8 @@ class RosExplorationEnv:
             'stagnation_zero_gain_steps':self.stagnation.zero_gain_steps if self.stagnation else 0,
             'stagnation_position_count':self.stagnation.position_count if self.stagnation else 0,
             'stagnation_triggered':self.stagnation.triggered if self.stagnation else False,
+            'sensor':asdict(self.sensor),'scenario_id':self.episode_metadata.get('scenario_id'),
+            'first_roi':self._first_roi,'initial_roi_visible':self._initial_reference_coverage>0,
             'policy_graph':dict(self.policy_graph_stats or {})}
 
     def cancel(self):

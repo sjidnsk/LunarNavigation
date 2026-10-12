@@ -10,9 +10,10 @@ class UpdateSchedule:
         self.ratio = Fraction(str(ratio))
         self.max_credit = Fraction(str(max_credit))
         self.transitions = self.updates = self.inflight = 0
+        self.prefill_transitions = 0
 
     def _credit_at(self, transitions):
-        return max(0, transitions - self.warmup) * self.ratio - self.updates
+        return max(0, transitions - self.prefill_transitions - self.warmup) * self.ratio - self.updates
 
     @property
     def credit(self):
@@ -22,15 +23,15 @@ class UpdateSchedule:
     def can_update(self):
         return self.credit >= 1
 
-    def can_dispatch(self, inflight_count=None, count=1):
+    def can_dispatch(self, inflight_count=None, count=1, *, prefill=False):
         """Includes the proposed dispatch; caller count cannot omit own reservations."""
         inflight = self.inflight if inflight_count is None else inflight_count
         if int(inflight) != inflight or inflight < self.inflight or int(count) != count or count < 1:
             raise ValueError('invalid inflight/count')
-        return self._credit_at(self.transitions + inflight + count) <= self.max_credit
+        return prefill or self._credit_at(self.transitions + inflight + count) <= self.max_credit
 
-    def reserve_dispatch(self, count=1):
-        if not self.can_dispatch(count=count):
+    def reserve_dispatch(self, count=1, *, prefill=False):
+        if not self.can_dispatch(count=count,prefill=prefill):
             raise ValueError('update credit backpressure')
         self.inflight += count
 
@@ -39,16 +40,17 @@ class UpdateSchedule:
             raise ValueError('no matching dispatch reservation')
         self.inflight -= count
 
-    def collected(self, *, reserved=False):
+    def collected(self, *, reserved=False, prefill=False):
         """Call once AFTER replay admission, then acknowledge the finished message."""
         if reserved:
             if self.inflight < 1:
                 raise ValueError('no matching dispatch reservation')
-        elif not self.can_dispatch():
+        elif not self.can_dispatch(prefill=prefill):
             raise ValueError('update credit backpressure')
         if reserved:
             self.inflight -= 1
         self.transitions += 1
+        if prefill:self.prefill_transitions += 1
 
     def updated(self):
         """Only after a complete successful synchronous SAC update."""
@@ -57,14 +59,17 @@ class UpdateSchedule:
         self.updates += 1
 
     def state_dict(self):
-        return dict(schema='update_credit_v1', warmup=self.warmup,
+        result=dict(schema='update_credit_v1', warmup=self.warmup,
                     ratio=str(self.ratio), max_credit=str(self.max_credit),
                     transitions=self.transitions, updates=self.updates,
                     credit=str(self.credit), unfinished_reservations=self.inflight)
+        if self.prefill_transitions:
+            result.update(schema='update_credit_prefill_v2',prefill_transitions=self.prefill_transitions)
+        return result
 
     @classmethod
     def from_state_dict(cls, state):
-        if state.get('schema') != 'update_credit_v1':
+        if state.get('schema') not in ('update_credit_v1','update_credit_prefill_v2'):
             raise ValueError('update schedule schema mismatch')
         result = cls(state['warmup'], Fraction(state['ratio']), Fraction(state['max_credit']))
         for key in ('transitions', 'updates'):
@@ -72,6 +77,10 @@ class UpdateSchedule:
             if not isinstance(value, int) or value < 0:
                 raise ValueError('invalid schedule counter')
             setattr(result, key, value)
+        if state['schema']=='update_credit_prefill_v2':
+            value=state['prefill_transitions']
+            if type(value) is not int or not 0<=value<=result.transitions:raise ValueError('invalid prefill counter')
+            result.prefill_transitions=value
         if not 0 <= result.credit <= result.max_credit or str(result.credit) != state['credit']:
             raise ValueError('inconsistent schedule credit')
         # Unfinished motion is deliberately not stitched into new episodes.

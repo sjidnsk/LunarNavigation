@@ -5,6 +5,7 @@ ray results stay with the environment; replay owns only raw removal counts and s
 read-only query supports. Truth does not add or remove measured actions.
 """
 from collections import OrderedDict
+import math
 from numbers import Integral
 from typing import TYPE_CHECKING
 import numpy as np
@@ -15,7 +16,7 @@ from .geometry import lattice_displacement, pack_cell_ids
 from .frontiers import FrontierSnapshot
 from .maps import FREE, UNKNOWN
 from .metric_graph import MetricGrid, greedy_spanner
-from .sensor import visible_cells
+from .sensor import visible_cells, directional_visibility, validate_sensor
 
 if TYPE_CHECKING:
     from .scene import TerrainGrid
@@ -98,6 +99,56 @@ class _RemovalPrediction:
         # frontier set. New fronts and outside demands cannot affect this count.
         return int(np.count_nonzero(solved & free))
 
+    def predict_many(self, terrain, goals, sensor):
+        """Same endpoint projection, querying only the frozen relevant cells.
+
+        Full-map revelations do not affect removal of these old fronts. Share
+        the exact native directional query across headings at one sensor cell;
+        retain current known demands and the FREE-center gate per action.
+        """
+        validate_sensor(sensor)
+        goals = np.asarray(goals, float).reshape(-1, 3)
+        if not np.isfinite(goals).all():raise ValueError('invalid prediction pose')
+        cells = np.floor((goals[:, :2]-terrain.origin[:2])/terrain.resolution_m).astype(np.int64)
+        h,w = terrain.shape
+        if np.any((cells[:,0]<0)|(cells[:,0]>=w)|(cells[:,1]<0)|(cells[:,1]>=h)):
+            raise ValueError('sensor outside provided grid')
+        result = np.zeros(len(goals), np.int64)
+        old = self.old
+        if not len(old.cell_ids) or not len(goals):return result
+        ids, restore = np.unique(np.r_[old.cell_ids,old.demand_ids], return_inverse=True)
+        targets = np.column_stack((ids>>32,(ids<<32)>>32))-self.offset
+        valid = ((targets[:,0]>=0)&(targets[:,0]<w)&(targets[:,1]>=0)&(targets[:,1]<h))
+        classes = np.zeros(len(ids),np.uint8)
+        good = np.flatnonzero(valid)
+        x,y = targets[good].T
+        classes[good] = terrain.intrinsic[y,x]
+        valid[good] &= np.isfinite(terrain.heights[y,x]) & (classes[good]!=UNKNOWN)
+        count = len(old.cell_ids)
+        center_free = (classes[restore[:count]]==FREE)[:,None]
+        positions, inverse = np.unique(cells,axis=0,return_inverse=True)
+        for position,source in enumerate(positions):
+            actions = np.flatnonzero(inverse==position)
+            # At 360 degrees every heading has the same reveal. Keep the
+            # original action order/yaws in the returned context nonetheless.
+            yaws, yaw_inverse = np.unique(np.zeros(len(actions)) if sensor.fov_deg==360.
+                else goals[actions,2], return_inverse=True)
+            for start in range(0,len(yaws),8):
+                headings = yaws[start:start+8]
+                padded = np.pad(headings,(0,8-len(headings)),mode='edge')
+                seen = np.zeros((len(ids),8),bool)
+                seen[valid] = directional_visibility(terrain.intrinsic,source,targets[valid],
+                    sensor.range_m/terrain.resolution_m,padded+sensor.offset_yaw_rad,
+                    math.radians(sensor.fov_deg))
+                hit = seen[restore]
+                solved = np.logical_and.reduceat(self.known_demands[:,None]|hit[count:],
+                                                 old.demand_offsets[:-1],axis=0)
+                free = (self.free_centers[:,None]&~hit[:count]) | (hit[:count]&center_free)
+                removed = np.count_nonzero(solved&free,axis=0)
+                selected = (yaw_inverse>=start)&(yaw_inverse<start+len(headings))
+                result[actions[selected]] = removed[yaw_inverse[selected]-start]
+        return result
+
 
 def predict_removed(before: FrontierSnapshot, terrain: 'TerrainGrid', pose: Pose,
                     sensor: SensorSpec) -> int:
@@ -168,8 +219,8 @@ class PrivilegedBuilder:
             offsets.append(len(supports))
         observed = np.asarray(observed, dtype=np.uint8)
         prediction = _RemovalPrediction(frontiers, terrain) if len(observation.goals) else None
-        removed = np.asarray([prediction.predict(terrain, Pose(*goal), self.sensor)
-                              for goal in observation.goals], dtype=np.int64)
+        removed = (prediction.predict_many(terrain, observation.goals, self.sensor)
+                   if prediction is not None else np.empty(0, np.int64))
         actions = PrivilegedActionContext(positions, inverse, observation.goals[:, 2], np.asarray(offsets),
             np.asarray(supports, np.int64), np.asarray(support_distances, np.float32), removed)
         return PrivilegedState(self.scene.scene_id, observed, actions)

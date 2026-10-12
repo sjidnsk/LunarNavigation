@@ -20,9 +20,10 @@ def _merge_progress(status, progress):
 
 
 class AdmissionLedger:
-    def __init__(self, replay, schedule, bootstrap=None):
+    def __init__(self, replay, schedule, bootstrap=None, *, prefill=False):
         self.replay, self.schedule = replay, schedule
         self.bootstrap = bootstrap
+        self.prefill = prefill
         self.active_scenes = {}
         self.last_admitted = {}
 
@@ -36,7 +37,7 @@ class AdmissionLedger:
         if token <= previous:
             return False
         self.replay.add(transition, self.active_scenes[env_id])
-        self.schedule.collected(reserved=True)
+        self.schedule.collected(reserved=True,prefill=self.prefill)
         if self.bootstrap is not None and self.bootstrap['active']:
             from .replay import transition_task
             task = transition_task(transition, self.active_scenes[env_id])
@@ -63,6 +64,33 @@ class Curriculum:
         self.state = copy.deepcopy(state or {'episodes_issued': 0})
         self.probe_extent, self.probe_budget = probe_extent, probe_budget
         self.course = None
+        self._resume_specs={}
+        if config.course_two:
+            import os
+            from .course_two import CourseTwo
+            saved=self.state.get('course')
+            stage=os.environ.get('DRL_COURSE_TWO_STAGE',saved['stage'] if saved else 'A1')
+            if config.course_two_variant:
+                from .course_two_rebalance import RebalancedCourse,load_catalog,course_for
+                if stage!='A1':raise ValueError('rebalance later stages require separate qualification')
+                self.course=course_for(config,state=saved)
+                self.catalog,self.catalog_templates=load_catalog(config)
+            else:self.course=CourseTwo(stage,state=saved,success_coverage=config.success_coverage)
+            saved_sensor=self.state.get('sensor_curriculum') or dict(range_limit=20.,easy=True)
+            sensor_curriculum=dict(range_limit=float(os.environ.get('DRL_COURSE_TWO_RANGE_LIMIT',str(saved_sensor['range_limit']))),
+                easy=os.environ.get('DRL_COURSE_TWO_RANGE_EASY','1' if saved_sensor['easy'] else '0')=='1') if stage=='B' else None
+            if sensor_curriculum and sensor_curriculum['range_limit'] not in (20.,40.,70.,100.):
+                raise ValueError('invalid range curriculum anchor')
+            if saved is not None and (stage!=saved['stage'] or
+                    sensor_curriculum!=self.state.get('sensor_curriculum')):
+                # A promotion begins a new allocation; otherwise all slots can
+                # retain old episodes until the bounded update credit fills,
+                # before the new task has enough data to permit any update.
+                self.state['active_specs']={}
+            else:self._resume_specs=copy.deepcopy(self.state.get('active_specs',{}))
+            self.state['sensor_curriculum']=sensor_curriculum
+            self.state['course']=self.course.state_dict()
+            self.state.setdefault('active_specs',{})
         if config.ordered_curriculum:
             import os
             from .ordered_curriculum import OrderedCourse
@@ -76,6 +104,45 @@ class Curriculum:
             self.state['course'] = self.course.state_dict()
 
     def next(self, env_id, transitions):
+        if self.config.course_two:
+            from .course_two_scene import make_case
+            from .ordered_curriculum import area_budget
+            if not 0 <= env_id < self.config.environments: raise ValueError('invalid environment slot')
+            self.course.release(env_id)
+            saved=self._resume_specs.pop(str(env_id),None)
+            if saved is not None:
+                self.course.activate(env_id,saved['curriculum_task'])
+                return saved
+            serial=self.state['episodes_issued'];self.state['episodes_issued']=serial+1
+            seed=((int(self.config.seed)+2)<<32)+serial
+            task=self.course.next_task();self.course.activate(env_id,task)
+            ordinals=self.state.setdefault('course_two_ordinals',{})
+            ordinal=ordinals.get(task,0);ordinals[task]=ordinal+1
+            if self.config.course_two_variant:
+                from copy import deepcopy
+                from .course_two_rebalance import CatalogExhausted
+                if ordinal>=len(self.catalog[task]):
+                    from .course_two_rebalance import fresh_spec
+                    spec=fresh_spec(self.config,task,ordinal,self.catalog_templates)
+                else:spec=deepcopy(self.catalog[task][ordinal])
+                self.state['active_specs'][str(env_id)]=spec
+                return spec
+            if task.startswith('c2_'):
+                stage=task[3:]
+                sensor_course=self.state.get('sensor_curriculum') if stage=='B' else None
+                limit=sensor_course['range_limit'] if sensor_course else 100.
+                easy=bool(sensor_course and sensor_course['easy'])
+                case=make_case(seed,stage,ordinal,range_limit=limit,
+                    range_m=limit if easy else None,easy=easy)
+                spec=dict(seed=seed,family=case['family'],extent=case['roi_width_m'],
+                    start_mode='outside',curriculum_task=task,episode_budget=case['episode_budget'],course_two_case=case)
+            else:
+                family,start=task.split('_');low,high=self.config.curriculum_extents_m[0]
+                extent=float(self.rng.uniform(low,high))
+                spec=dict(seed=seed,family=family,extent=extent,start_mode=start,curriculum_task=task,
+                    episode_budget=area_budget(extent,self.config.ordered_budget_rule))
+            self.state['active_specs'][str(env_id)]=spec
+            return spec
         if self.course is not None:
             from .ordered_curriculum import area_budget
             if not 0 <= env_id < self.config.environments:
@@ -124,6 +191,15 @@ class Curriculum:
         seed = ((int(self.config.seed) + 1) << 32) + serial
         return dict(seed=seed, family='moon' if env_id % 2 == 0 else 'cave', extent=extent,
             episode_budget=self.probe_budget or self.config.curriculum_budgets[size])
+
+    def snapshot(self):
+        from copy import deepcopy
+        if self.course is not None:self.state['course']=self.course.state_dict()
+        result=deepcopy(self.state)
+        if self.config.course_two:
+            result['active_specs']={key:value for key,value in result.get('active_specs',{}).items()
+                if int(key) in self.course.active or key in self._resume_specs}
+        return result
 
 
 def initial_model_checksum(learner):
@@ -213,7 +289,7 @@ def initial_training_identity(learner, *, replay, schedule, replay_rng, curricul
 
 
 def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, device='cuda', max_transitions=None,
-                 domain_base=210, probe_extent=None, probe_budget=None,
+                 domain_base=210, probe_extent=None, probe_budget=None, collect_only=False,
                  env_factory='lunar_drl_exploration.ros_env:RosExplorationEnv'):
     """Run finite or continuous training; max_transitions counts this-run admissions.
 
@@ -250,6 +326,8 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
         raise ValueError('resume and fork_from are mutually exclusive')
     if fork_experiment is not None and (fork_from is None or resume):
         raise ValueError('fork experiment requires an explicit new fork')
+    if collect_only and (not config.course_two_variant or max_transitions is None or not 0<max_transitions<=4096):
+        raise ValueError('collect-only requires bounded rebalance preparation of at most 4096 admissions')
     if config.seed < 0: raise ValueError('training seed must be nonnegative')
     if max_transitions is not None and (max_transitions < 0 or (max_transitions == 0 and not resume)):
         raise ValueError('max_transitions must be positive, or zero with resume for credit drain')
@@ -311,6 +389,17 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     curriculum = Curriculum(config, curriculum_rng, curriculum_state,
         probe_extent=probe_extent, probe_budget=probe_budget)
     course = curriculum.course
+    if config.course_two_variant:
+        replay.enable_course_two_sampling(completion_bonus=config.completion_bonus, task_scope=config.course_two_task_scope, sampling=config.course_two_sampling, scene_profile=config.course_two_scene_profile)
+    def learning_ready():
+        if config.course_two_variant == 'C3' or collect_only and config.course_two_variant=='C2':
+            return replay.course_two_index.status()['ready']
+        if collect_only:
+            from .course_two_rebalance import preparation_ready
+            return preparation_ready(config.course_two_variant,replay)
+        return not config.course_two or course.ready_for_learning(replay.task_counts)
+    if config.course_two_variant and not collect_only and not learning_ready():
+        raise ValueError('rebalance requires completed qualified replay prefill before learning')
     if course is not None:course.backfill_coverage(replay)
     bootstrap = validate_replay_bootstrap(config, schedule, counters, replay=replay)
     if bootstrap is not None and bootstrap['active']:
@@ -319,7 +408,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
         bootstrap['required_tasks'] = list(course.weights)
         if max_transitions == 0:
             raise ValueError('active A2 replay bootstrap cannot use a zero-admission resume')
-    ledger = AdmissionLedger(replay, schedule, bootstrap)
+    ledger = AdmissionLedger(replay, schedule, bootstrap, prefill=collect_only)
     ledger.last_admitted = dict(counters.get('last_admitted', {}))
     diagnostics = None
     if config.reward_diagnostics:
@@ -354,7 +443,8 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     barrier_pending = False
     stopping = False
     normal_draining = max_transitions == 0
-    repay_before_dispatch = schedule.can_update and not (bootstrap is not None and bootstrap['active'])
+    repay_before_dispatch = (not collect_only and schedule.can_update and not (bootstrap is not None and bootstrap['active'])
+        and learning_ready())
     final_phase = None
     final_version = None
     final_deadline = None
@@ -382,7 +472,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             counters['reward_diagnostics'] = diagnostics.state_dict()
         state = TrainingState.capture(learner=learner, config=config, replay=replay,
             schedule=schedule, boundary=boundary, replay_rng=replay_rng, curriculum_rng=curriculum_rng,
-            curriculum=curriculum.state, collector_state=collector_state, counters=counters,
+            curriculum=curriculum.snapshot(), collector_state=collector_state, counters=counters,
             fork=fork_provenance)
         return state
 
@@ -418,7 +508,11 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     def final_command(kind):
         nonlocal final_phase, final_deadline, final_version
         final_phase = {'PUBLISH': 'PUBLISHED', 'BARRIER': 'BARRIER', 'STOP': 'STOPPED'}[kind]
-        final_deadline = time.monotonic() + FINAL_CONFIRM_TIMEOUT_S
+        from .collector import STOP_GRACE_TIMEOUT_S
+        # STOP includes cooperative worker teardown; publication/barrier remain
+        # short control acknowledgements. This bound is shared across workers.
+        budget = FINAL_CONFIRM_TIMEOUT_S + (STOP_GRACE_TIMEOUT_S if kind == 'STOP' else 0.)
+        final_deadline = time.monotonic() + budget
         message = dict(kind=kind)
         if kind == 'PUBLISH':
             final_version = learner.updates
@@ -449,6 +543,9 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             updates_per_s=(schedule.updates-start_updates)/elapsed, credit=float(schedule.credit),
             inflight=schedule.inflight, actor_version=observed_publication,
             replay_count=len(replay), replay_bytes=replay.bytes_used,
+            collect_only=collect_only,prefill_transitions=schedule.prefill_transitions,
+            **({'balanced_replay':dict(replay.course_two_index.status(),last_batch=replay.course_two_index.last_batch)}
+                if replay.course_two_index is not None else {}),
             **({'replay_bootstrap': dict(bootstrap)} if bootstrap is not None else {}),
             save_in_s=max(0., config.save_interval_s-(time.monotonic()-manager.last_save)),
             environments=env_status, learning=last_update, trace_totals=dict(trace_totals),
@@ -483,7 +580,12 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                 kind = message['kind']; env_id = message.get('env')
                 if kind == 'NEED_RESET':
                     if not stopping and not normal_draining:
-                        spec = curriculum.next(env_id, schedule.transitions)
+                        from .course_two_rebalance import CatalogExhausted
+                        try:
+                            if config.course_two_sampling=='scene_episode_v1':course.set_supply(replay.course_two_index.status())
+                            spec = curriculum.next(env_id, schedule.transitions)
+                        except CatalogExhausted as exc:
+                            stop(str(exc));continue
                         env_status[env_id] = dict(state='RESETTING', seed=spec['seed'],
                             family=spec['family'], extent_m=spec['extent'], budget=spec['episode_budget'],
                             **({key: spec[key] for key in ('start_mode', 'curriculum_task')} if course is not None else {}))
@@ -492,6 +594,13 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     scenes = loads_transport(message['payload'])
                     ledger.scene(env_id, scenes)
                     metadata = message['metadata']
+                    if config.course_two_variant and metadata.get('resolved_course_two_case'):
+                        from .course_two_qualification import spec_for
+                        resolved=metadata['resolved_course_two_case']
+                        original=curriculum.state['active_specs'][str(env_id)]
+                        if resolved['seed']!=original['seed'] or resolved['curriculum_task']!=original['curriculum_task']:
+                            raise ValueError('native qualification changed task/seed identity')
+                        curriculum.state['active_specs'][str(env_id)]=spec_for(resolved)
                     if course is not None:
                         # Includes infrastructure recovery: a fresh SCENE never
                         # inherits unfinished episode duration or collision state.
@@ -548,6 +657,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     status['actual_rtf'] = message.get('execution', {}).get('simulation_s', 0) / wall if wall else None
                     if admitted:
                         if course is not None:
+                            if config.course_two:course.record_progress(env_id,status)
                             course.observe(env_id, terminated=transition.terminated,
                                 truncated=transition.truncated, coverage=status['reference_coverage'],
                                 collision=execution.get('reason_code') == 'COLLISION' or
@@ -563,6 +673,11 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                                 seed=status.get('seed'))
                         metrics.append(dict(status, event='transition', env=env_id, token=message['token'],
                             transitions=schedule.transitions, episode_id=transition.episode_id))
+                    if collect_only and learning_ready() and schedule.transitions-baseline>=64:
+                        normal_draining=True;pending_requests.clear()
+                        stop_reason='qualified replay prefill ready; zero optimizer updates'
+                    if config.course_two_variant and not collect_only and not learning_ready():
+                        stop('required replay phase lost; no fallback sampling')
                     if max_transitions is not None and schedule.transitions-baseline >= max_transitions:
                         normal_draining = True
                         pending_requests.clear()
@@ -673,18 +788,25 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     if (bootstrap is not None and bootstrap['active'] and
                             bootstrap['admitted']+schedule.inflight >= bootstrap['required']):
                         break
-                    if schedule.can_dispatch():
+                    if schedule.can_dispatch(prefill=collect_only):
                         if env_id in reservations: raise RuntimeError('second reservation for environment')
-                        schedule.reserve_dispatch(); reservations[env_id] = token
+                        if collect_only:schedule.reserve_dispatch(prefill=True)
+                        else:schedule.reserve_dispatch()
+                        reservations[env_id] = token
                         connection.send(dict(kind='GRANT', env=env_id, token=token))
                         del pending_requests[env_id]
             # Exactly one complete update; poll completions again before the next.
             if (not stopping and not manager.stop_requested and not barrier_pending and final_phase is None
-                    and schedule.can_update and not (bootstrap is not None and bootstrap['active'])):
+                    and not collect_only and schedule.can_update and not (bootstrap is not None and bootstrap['active'])
+                    and learning_ready()):
                 with boundary.update():
                     before_update = time.monotonic()
                     weights = course.sampling_weights(replay.task_counts) if course is not None else None
-                    if config.learning.return_steps == 1:
+                    if config.course_two_variant=='C3':
+                        batch=replay.sample_course_two(replay_rng)
+                    elif config.course_two_variant=='C2':
+                        batch=replay.sample_course_two_control(replay_rng)
+                    elif config.learning.return_steps == 1:
                         batch = (replay.sample_stratified(config.learning.batch_size, replay_rng, weights)
                             if course is not None else replay.sample(config.learning.batch_size, replay_rng))
                     else:
@@ -705,7 +827,8 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             if manager.stop_requested and not stopping: stop(manager.requested_reason or 'stop requested')
             if (normal_draining and not stopping and final_phase is None and
                     not barrier_pending and not schedule.inflight and
-                    (not schedule.can_update or (bootstrap is not None and bootstrap['active']))):
+                    (collect_only or not schedule.can_update or (bootstrap is not None and bootstrap['active'])
+                     or (config.course_two and not learning_ready()))):
                 if reservations: raise RuntimeError('drain left unmatched reservations')
                 if stop_reason is None: stop_reason = 'zero-admission resume; credit drained'
                 final_command('PUBLISH')
@@ -725,6 +848,9 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     record['resource_unavailable'] = str(exc)
                 except ResourceLimitError as exc: stop(str(exc))
                 metrics.append(record)
+                if config.course_two:
+                    from .artifacts import atomic_json
+                    atomic_json(Path(config.output_dir)/'progress.json',record,max_bytes=4*1024**2)
                 if time.monotonic() - last_summary >= 30:
                     persist_diagnostics()
                 terminal.render(record, phase='保存并停止' if stopping else ('补完更新' if normal_draining else ('保存检查点' if barrier_pending else None)))

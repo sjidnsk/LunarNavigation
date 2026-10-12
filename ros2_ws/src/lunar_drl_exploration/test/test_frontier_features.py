@@ -149,12 +149,13 @@ def test_cross_boundary_pending_turn_survives_zero_inside_frontiers():
     assert np.any(o.action_nodes == o.current_index)
 
 
-def test_frontier_counts_match_native_observation_for_all_directions_and_lattice_shifts():
+@pytest.mark.parametrize('range_m,fov_deg', [(.8,90),(24.3,60),(100.,360)])
+def test_frontier_counts_match_native_observation_for_all_directions_and_lattice_shifts(range_m,fov_deg):
     from lunar_drl_exploration.frontiers import directional_frontier_counts
     from test_cumulative_coverage import shifted_snapshot
     from lunar_drl_exploration.task_analysis import TaskAnalyzer
     t = task(-3, -3, 3, 3)
-    sensor = SensorSpec(range_m=.8, fov_deg=90, offset_yaw_rad=.17)
+    sensor = SensorSpec(range_m=range_m, fov_deg=fov_deg, offset_yaw_rad=.17)
     a = TaskAnalyzer(t, sensor)
     cells = [(-1, 0, 1), (0, 0, 1), (1, 0, 1)]
     before = None

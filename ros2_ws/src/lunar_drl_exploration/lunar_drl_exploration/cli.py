@@ -18,11 +18,12 @@ def parser():
             continuation.add_argument('--resume', action='store_true', help='restore output-dir/resume.pt; start new environment episodes')
             continuation.add_argument('--fork-from', type=Path,
                 help='trusted checkpoint for a new run; collection changes or an explicitly named fork experiment only')
-            cmd.add_argument('--fork-experiment', choices=('paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent', 'ordered-ratio', 'ordered-a2'),
+            cmd.add_argument('--fork-experiment', choices=('paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent', 'ordered-ratio', 'ordered-a2', 'course-two', 'course-two-rebalance'),
                 help='requires --fork-from; paired experiments change their named learning variable; ordered-extent expands 50-100m to 30-100m; ordered-ratio changes cave_inside rehearsal to 50/50; ordered-a2 preserves the learner and rebuilds replay under A2')
             cmd.add_argument('--output-dir')
             cmd.add_argument('--device', default='cuda', choices=('cpu', 'cuda'))
             cmd.add_argument('--max-transitions', type=int, help='maximum new admissions this run; zero with --resume drains saved update credit only')
+            cmd.add_argument('--collect-only',action='store_true',help='bounded rebalance replay prefill without optimizer updates')
             cmd.add_argument('--probe', action='store_true', help='explicit finite diagnostic run; keeps full model/batch/physical backend')
             cmd.add_argument('--probe-warmup', type=int)
             cmd.add_argument('--probe-extent', type=float)
@@ -94,7 +95,7 @@ def main(argv=None):
         return run_training(config, resume=args.resume, fork_from=args.fork_from,
             fork_experiment=args.fork_experiment, device=args.device,
             max_transitions=args.max_transitions, domain_base=args.domain_base,
-            probe_extent=args.probe_extent, probe_budget=args.probe_budget)
+            probe_extent=args.probe_extent, probe_budget=args.probe_budget,collect_only=args.collect_only)
     if args.command == 'evaluate':
         from .evaluation import evaluate
         return evaluate(config, args.actor, seeds=args.seeds, families=args.families,

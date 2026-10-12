@@ -107,6 +107,26 @@ class TrainingModeEnv(ControlledEnv):
         super().__init__(config, env_id, **kwargs)
 
 
+class ControlledCourseEnv(ControlledEnv):
+    """Real collector/checkpoint integration double; no native geometry claim."""
+    def reset(self,seed,family,extent,*,episode_budget=None,start_mode=None,curriculum_task=None,course_two_case=None):
+        from dataclasses import replace
+        result=super().reset(seed,family,extent,episode_budget=episode_budget)
+        self.static_scenes={k:replace(v,generator_descriptor=dict(curriculum_task=curriculum_task))
+            for k,v in self.static_scenes.items()}
+        self.episode_metadata['curriculum_task']=curriculum_task
+        return result
+
+
+class ControlledSlowCourseResetEnv(ControlledCourseEnv):
+    def reset(self,*args,**kwargs):
+        self.stop.clear()
+        if self.stop.wait(3.):
+            class TaskCanceled(RuntimeError):pass
+            raise TaskCanceled('slow reset canceled')
+        return super().reset(*args,**kwargs)
+
+
 def large_transport_collector(child, record, state, large_kind, entered, sent):
     from lunar_drl_exploration.collector import collector_main
     class LargePipe:
@@ -132,3 +152,15 @@ def instrumented_batch_collector(child, record, state, sizes, count):
         return original(self, observations)
     Actor.forward = forward
     collector_main(child, record, state, env_factory='worker_fixtures:ControlledEnv')
+
+
+class ControlledUncancelableResetEnv(ControlledEnv):
+    """Native-like reset that cannot observe cancellation until it returns."""
+    def reset(self, *args, **kwargs):
+        import time
+        self.reset_started = True
+        time.sleep(60.)
+        return super().reset(*args, **kwargs)
+
+    def progress(self):
+        return dict(super().progress(), reset_started=getattr(self, 'reset_started', False))

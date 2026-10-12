@@ -435,3 +435,45 @@ def test_duplex_delivers_final_large_completion_before_peer_eof():
         endpoint.close(flush=False)
         sender.join(2)
     assert not sender.is_alive()
+
+
+def test_twelve_uncancelable_resets_stop_with_shared_deadline():
+    import os, signal, pickle
+    from dataclasses import replace
+    import torch
+    from lunar_drl_exploration.collector import collector_main
+    from lunar_drl_exploration.sac import SACLearner
+    config=replace(TrainingConfig(), environments=12)
+    actor=SACLearner().actor_state()
+    parent,child=mp.get_context('spawn').Pipe()
+    process=mp.get_context('spawn').Process(target=collector_main,
+        args=(child,config_record(config),pickle.dumps(dict(actor_record=actor,
+            actor_version=0,policy_rng=torch.get_rng_state(),sequences={}))),
+        kwargs=dict(env_factory='worker_fixtures:ControlledUncancelableResetEnv',stop_timeout_s=.1))
+    process.start();child.close();pids={};started=set()
+    try:
+        deadline=time.monotonic()+30
+        while len(started)<12 and time.monotonic()<deadline:
+            if not parent.poll(.1):continue
+            message=parent.recv();kind=message['kind']
+            if kind=='WORKER_HELLO':
+                pids[message['env']]=message['pid']
+                parent.send(dict(kind='RESET',env=message['env'],spec=dict(seed=7,
+                    family='moon',extent=40,episode_budget=3)))
+            elif kind=='STATUS' and message['progress'].get('reset_started'):
+                started.add(message['env'])
+            elif kind=='FATAL':pytest.fail(message['reason'])
+        assert len(started)==12
+        before=time.monotonic();parent.send(dict(kind='STOP'))
+        receive(parent,'STOPPED',timeout=2.)
+        process.join(2.)
+        assert process.exitcode==0 and time.monotonic()-before<2.
+        from pathlib import Path
+        assert all(not (Path('/proc')/str(pid)).exists() for pid in pids.values())
+    finally:
+        if process.is_alive():process.kill()
+        process.join(3.)
+        for pid in pids.values():
+            try:os.kill(pid,signal.SIGKILL)
+            except ProcessLookupError:pass
+        parent.close()

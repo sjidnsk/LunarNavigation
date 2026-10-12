@@ -201,6 +201,13 @@ class TrainingConfig:
     seed: int = 20260915
     paired_scene_sequence: bool = False
     ordered_curriculum: bool = False
+    course_two: bool = False
+    course_two_variant: str = ''
+    course_two_catalog: str = ''
+    course_two_catalog_sha: str = ''
+    course_two_task_scope: str = ''
+    course_two_sampling: str = ''
+    course_two_scene_profile: str = ''
     ordered_rehearsal_fraction: float = .2
     ordered_rehearsal_by_phase: tuple | None = None
     ordered_budget_rule: dict | None = None
@@ -251,6 +258,25 @@ class TrainingConfig:
             raise ValueError('remote_frontier_positions must be an integer in [0,32]')
         if type(self.ordered_curriculum) is not bool:
             raise ValueError('ordered_curriculum must be boolean')
+        if type(self.course_two) is not bool or (self.course_two and self.ordered_curriculum):
+            raise ValueError('course_two must be boolean and exclusive with ordered_curriculum')
+        if self.course_two_variant:
+            if (not self.course_two or self.course_two_variant not in ('C0','C1','C2','C3') or
+                    (self.course_two_sampling!='scene_episode_v1' and
+                        (not self.course_two_catalog or len(self.course_two_catalog_sha)!=64)) or
+                    self.learning.batch_size!=64 or self.learning.return_steps!=1):
+                raise ValueError('rebalance variant requires qualified catalog and one-step batch 64')
+        elif self.course_two_catalog or self.course_two_catalog_sha:
+            raise ValueError('catalog requires explicit rebalance variant')
+        if self.course_two_task_scope not in ('','whole_cave_v1') or (
+                self.course_two_task_scope and self.course_two_variant!='C3'):
+            raise ValueError('whole-cave task scope requires C3')
+        if self.course_two_sampling not in ('','scene_episode_v1') or (self.course_two_sampling and
+                (self.course_two_variant!='C3' or self.course_two_task_scope!='whole_cave_v1')):
+            raise ValueError('scene episode sampling requires whole-cave C3')
+        if self.course_two_scene_profile not in ('','distance_sensor_10_30_v1') or (
+                self.course_two_scene_profile and self.course_two_sampling!='scene_episode_v1'):
+            raise ValueError('distance/sensor scene profile requires three-scene sampling')
         if (type(self.ordered_rehearsal_fraction) not in (int, float) or
                 not np.isfinite(self.ordered_rehearsal_fraction) or
                 not 0 <= self.ordered_rehearsal_fraction < 1):
@@ -369,6 +395,27 @@ def resume_semantics(config):
     if config.policy_graph_mode == 'a2':
         result['policy_graph'] = dict(version='a2_region_remote_frontier_v1',
             remote_frontier_positions=config.remote_frontier_positions)
+    if config.course_two:
+        result['course_two']=dict(version='region_sensor_course_two_v1',
+            scene='region_sensor_course_two_scene_v1',sensor_scope='immutable_scenario',
+            range_m=[10,100],fov_deg=[60,90,120,180,360],max_blind_gap_m=20,
+            stages=['A1','A2','B','C','D'],old_rehearsal=.2)
+        if config.course_two_variant:
+            result['course_two'].update(version='region_sensor_rebalance_v2',
+                variant=config.course_two_variant,catalog_sha=config.course_two_catalog_sha,
+                scene='region_sensor_rebalanced_scene_v2' if config.course_two_variant in ('C2','C3')
+                    else 'region_sensor_course_two_scene_v1',old_rehearsal=.5,
+                stages=['A1'],learning_protocol='phase_episode_v2' if config.course_two_variant=='C3'
+                    else 'task_weighted_v2')
+            if config.course_two_task_scope:
+                result['course_two'].update(task_scope=config.course_two_task_scope,
+                    scene='region_sensor_rebalanced_scene_v3',replay_scope='exclude_legacy_cave_v1')
+            if config.course_two_sampling:
+                result['course_two'].update(learning_protocol=config.course_two_sampling,
+                    scene='three_ordinary_scenes_v1',old_rehearsal=0.,tasks=['moon_outside','moon_inside','cave_inside'])
+            if config.course_two_scene_profile:
+                from .course_two_sensors import semantics
+                result['course_two'].update(semantics())
     if config.paired_scene_sequence:
         result['scene_sequence'] = dict(mode='paired_slot_episode_v1',
             seed=config.seed, environments=config.environments)

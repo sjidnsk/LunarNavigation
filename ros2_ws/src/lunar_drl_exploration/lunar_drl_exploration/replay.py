@@ -262,6 +262,7 @@ class ReplayBuffer:
         self._task_entries = {}; self._task_positions = {}; self._task_bytes = 0
         self._ledger = _Ledger()
         self._entry_bytes = self._refcount_bytes = self._sequence_bytes = 0
+        self.course_two_index = None
 
     @property
     def bytes_used(self):
@@ -274,7 +275,8 @@ class ReplayBuffer:
         tables += sum(sys.getsizeof(task) + sys.getsizeof(entries)
                       for task, entries in self._task_entries.items())
         return (self._ledger.bytes + self._ledger.membership_bytes + tables +
-                self._entry_bytes + self._refcount_bytes + self._sequence_bytes + self._task_bytes)
+                self._entry_bytes + self._refcount_bytes + self._sequence_bytes + self._task_bytes +
+                (self.course_two_index.bytes_used if self.course_two_index is not None else 0))
 
     @property
     def buffer_bytes(self):
@@ -341,6 +343,10 @@ class ReplayBuffer:
         # Validate one whole admission before evicting anything. Oversized complete
         # messages stay with the collector until the caller handles this failure.
         single = ReplayBuffer(self.max_bytes)
+        if self.course_two_index is not None:
+            single.enable_course_two_sampling(completion_bonus=self.course_two_index.completion_bonus,
+                task_scope=self.course_two_index.task_scope,sampling=self.course_two_index.sampling,
+                scene_profile=getattr(self.course_two_index,'scene_profile',''))
         single._first = single._next = self._next
         single._append(transition, selected, ids)
         if single.bytes_used > self.max_bytes:
@@ -373,6 +379,8 @@ class ReplayBuffer:
         self._task_positions[self._next] = position
         self._task_bytes += 2 * sys.getsizeof(self._next) + sys.getsizeof(position)
         self._entry_bytes += self._entry_size(self._next, entry)
+        if self.course_two_index is not None:
+            self.course_two_index.add(self._next, transition, self._scenes)
         if transition.step_index is not None:
             key = (transition.episode_id, transition.step_index)
             self._sequence_index[key] = self._next
@@ -392,6 +400,8 @@ class ReplayBuffer:
 
     def evict_oldest(self):
         entry = self._entries.pop(self._first)
+        if self.course_two_index is not None:
+            self.course_two_index.remove(self._first)
         self._entry_bytes -= self._entry_size(self._first, entry)
         transition, ids, keys = entry
         task = transition_task(transition, self._scenes)
@@ -437,6 +447,46 @@ class ReplayBuffer:
         # constrained restore retained fewer than 64 complete transitions.
         indices = rng.integers(0, len(self._entries), size=batch_size)
         return [self._entries[self._first + int(index)][0] for index in indices]
+
+    def enable_course_two_sampling(self, *, completion_bonus=20., task_scope='', sampling='', scene_profile=''):
+        from .course_two_replay import PhaseIndex
+        if scene_profile and sampling!='scene_episode_v1':raise ValueError('scene profile requires scene sampler')
+        if self.course_two_index is None:
+            if sampling=='scene_episode_v1':
+                from .course_two_simple import SceneIndex
+                index=SceneIndex(completion_bonus,task_scope,scene_profile)
+            elif not sampling:index = PhaseIndex(completion_bonus, task_scope)
+            else:raise ValueError('unknown course-two sampler')
+            for key, entry in self._entries.items():
+                index.add(key, entry[0], self._scenes)
+            self.course_two_index = index
+            while self.bytes_used > self.max_bytes:
+                self.evict_oldest()
+        elif (self.course_two_index.completion_bonus != completion_bonus or self.course_two_index.task_scope != task_scope
+                or self.course_two_index.sampling!=sampling
+                or getattr(self.course_two_index,'scene_profile','')!=scene_profile):
+            raise ValueError('course-two success bonus or task scope changed')
+        return self.course_two_index
+
+    def sample_course_two(self, rng):
+        if self.course_two_index is None:
+            raise ValueError('course-two sampler is not enabled')
+        return [self._entries[k][0] for k in self.course_two_index.sample_indices(rng)]
+
+    def sample_course_two_control(self,rng):
+        """C2: fixed old-task half and a joint uniform new-transition half."""
+        from .course_two_replay import OLD
+        result=self.sample_stratified(32,rng,dict.fromkeys(OLD,1.))
+        tasks=[t for t in self._task_entries if t.startswith('c2_')]
+        counts=np.array([len(self._task_entries[t]) for t in tasks])
+        if not len(tasks) or not counts.sum():raise ValueError('control replay missing new data')
+        ends=np.cumsum(counts)
+        for n in rng.integers(int(ends[-1]),size=32):
+            bucket=int(np.searchsorted(ends,n,side='right'))
+            offset=int(n-(ends[bucket-1] if bucket else 0))
+            result.append(self._entries[self._task_entries[tasks[bucket]][offset]][0])
+        rng.shuffle(result)
+        return result
 
     def sample_stratified(self, batch_size, rng, weights):
         """Integer largest-remainder quotas, O(tasks + batch), with replacement."""
@@ -507,12 +557,15 @@ class ReplayBuffer:
             result.append(tuple(sequence))
         return result
 
-    def snapshot(self, max_bytes=2 * 1024**3, *, require_sample=False):
+    def snapshot(self, max_bytes=2 * 1024**3, *, require_sample=False, required_indices=()):
         selected = ReplayBuffer(max(1, max_bytes))
+        required_indices = set(required_indices)
+        if not required_indices.issubset(self._entries):
+            raise ValueError('required replay snapshot index is absent')
         active_tasks = set(self._task_entries) - {'unclassified'}
         # Put one recent representative of each course task last. Bounded FIFO
         # trimming then retains every class, or explicitly rejects the snapshot.
-        reserved = set()
+        reserved = set(required_indices)
         for task in active_tasks:
             # An unusually large recent transition must not mask a fitting old
             # representative from the same task.
@@ -540,6 +593,9 @@ class ReplayBuffer:
             except ValueError as error:
                 if 'exceed replay budget' not in str(error): raise
         while True:
+            if not required_indices.issubset({source_indices[k] for k in selected._entries}):
+                raise ResourceLimitError('replay snapshot cannot preserve required diverse samples within budget',
+                    len(selected), len(required_indices))
             if not active_tasks.issubset(selected.task_counts):
                 raise ResourceLimitError(
                     f'replay snapshot cannot preserve active task samples within {max_bytes} bytes',

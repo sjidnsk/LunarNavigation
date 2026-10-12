@@ -23,16 +23,28 @@ def _segment_distance(x, y, ax, ay, bx, by):
     return np.hypot(x - ax - t * dx, y - ay - t * dy)
 
 
+def polygon_boundary_distance(x,y,polygon):
+    """Euclidean distance to finite edges, including corners; no raster offset."""
+    result=np.full(np.broadcast_shapes(np.shape(x),np.shape(y)),np.inf)
+    for a,b in zip(polygon,np.roll(polygon,-1,axis=0)):
+        result=np.minimum(result,_segment_distance(x,y,*a,*b))
+    return result
+
+
 class Scene:
     GENERATOR_VERSION = 5
 
-    def __init__(self, seed, family, extent_m, resolution_m=0.2, platform=None):
+    def __init__(self, seed, family, extent_m, resolution_m=0.2, platform=None, *, context_margin_m=12.):
         if family not in ("moon", "cave"):
             raise ValueError("family must be moon or cave")
         if not math.isfinite(extent_m) or not 20 <= extent_m <= 1000:
             raise ValueError("extent_m must be in [20,1000]")
         if not math.isfinite(resolution_m) or resolution_m <= 0:
             raise ValueError("resolution_m must be positive")
+        if not math.isfinite(context_margin_m) or not 12.<=context_margin_m<=200.:
+            raise ValueError('context margin must be in [12,200]')
+        if context_margin_m!=12. and family!='moon':
+            raise ValueError('expanded context is only for ordinary moon scenes')
         if platform is None:
             from .config import load_platform_config
 
@@ -43,7 +55,7 @@ class Scene:
         self.resolution_m = float(resolution_m)
         self.platform = platform
         e = self.extent_m
-        margin = 12.0
+        margin = self.context_margin_m = float(context_margin_m)
         identity = dict(
             version=self.GENERATOR_VERSION,
             seed=self.seed,
@@ -53,6 +65,7 @@ class Scene:
             capability=dict(platform.capability),
             observation_model_version=OBSERVATION_MODEL_VERSION,
         )
+        if margin!=12.:identity['context_margin_m']=margin
         self.scene_id = hashlib.sha256(
             json.dumps(identity, sort_keys=True).encode()
         ).hexdigest()
@@ -128,7 +141,7 @@ class Scene:
                 (min(ax, bx) - r, min(ay, by) - r, max(ax, bx) + r, max(ay, by) + r)
             )
         boxes = np.asarray(boxes)
-        old_origin = np.array([-e / 2 - margin, -e / 2 - margin])
+        old_origin = np.array([-e / 2 - 12., -e / 2 - 12.])
         low = boxes[:, :2].min(axis=0) - margin
         high = boxes[:, 2:].max(axis=0) + margin
         origin = old_origin + np.floor((low - old_origin) / resolution_m) * resolution_m
@@ -210,10 +223,18 @@ class Scene:
             z = np.where(inside, 0.0, 2.0)
         return np.asarray(z, np.float32)
 
-    def initial_pose(self, terrain, start_mode='any'):
+    def initial_pose(self, terrain, start_mode='any', *, outside_distance_max_m=None,
+                     outside_distance_min_m=None):
         """Uniform seeded native stance in the main component; yaw is unchanged."""
         if start_mode not in ('any', 'inside', 'outside'):
             raise ValueError('start_mode must be any, inside or outside')
+        if outside_distance_max_m is not None and (self.family!='moon' or start_mode!='outside'
+                or not math.isfinite(outside_distance_max_m) or outside_distance_max_m<=0):
+            raise ValueError('bounded outside distance requires an outside moon start and positive distance')
+        if outside_distance_min_m is not None and (outside_distance_max_m is None or
+                not math.isfinite(outside_distance_min_m) or
+                not 0<=outside_distance_min_m<outside_distance_max_m):
+            raise ValueError('outside distance band requires finite 0 <= min < max')
         if terrain.terrain_id != self.scene_id:
             raise ValueError("terrain belongs to different scene")
         if self.family == "moon":
@@ -245,7 +266,18 @@ class Scene:
         if start_mode != 'any':
             task_mask = polygon_mask(terrain.shape, terrain.origin,
                                      terrain.resolution_m, self.task.polygon)
+            if outside_distance_min_m is not None and not np.any((component!=0)&task_mask):
+                raise ValueError('outside component cannot reach the task')
             component = (component != 0) & (task_mask if start_mode == 'inside' else ~task_mask)
+            if outside_distance_min_m is not None:
+                rows,cols=np.nonzero(component)
+                distances=polygon_boundary_distance(
+                    terrain.origin[0]+(cols+.5)*terrain.resolution_m,
+                    terrain.origin[1]+(rows+.5)*terrain.resolution_m,self.task.polygon)
+                component[rows,cols]=(distances>=outside_distance_min_m)&(distances<=outside_distance_max_m)
+            elif outside_distance_max_m is not None:
+                from scipy.ndimage import distance_transform_edt
+                component &= distance_transform_edt(~task_mask)*terrain.resolution_m<=outside_distance_max_m
             if not np.any(component):
                 raise ValueError(f'generated main terrain has no legal {start_mode} start')
         row_counts = np.count_nonzero(component, axis=1)
