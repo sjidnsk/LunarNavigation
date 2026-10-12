@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A0 / A2 · 多场景压力测试</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0d1521; color: #dfe8f3; }
+    * { box-sizing: border-box; }
+    body { margin: 0 auto; max-width: 1640px; padding: 28px; }
+    h1 { margin: 0 0 8px; font-size: 25px; letter-spacing: .02em; }
+    h2 { font-size: 18px; margin: 0 0 14px; }
+    p { line-height: 1.65; }
+    header { margin-bottom: 22px; }
+    .muted { color: #9caec4; font-size: 13px; }
+    .bar { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin: 16px 0; }
+    .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+    .card, section, .panel { background: #142031; border: 1px solid #2b3d53; border-radius: 10px; }
+    .card { padding: 17px; }
+    .number { display: block; margin-top: 8px; font-size: 27px; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .green { color: #57d9ac; } .amber { color: #f5c570; } .red { color: #fb9090; }
+    section { padding: 19px; margin: 18px 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+    caption { text-align: left; margin-bottom: 12px; color: #9caec4; }
+    th, td { text-align: left; padding: 10px 9px; border-bottom: 1px solid #293a50; white-space: nowrap; }
+    th { color: #a7bad0; font-weight: 550; } tr.active { background: #1e3550; }
+    .table-wrap { overflow: auto; }
+    .status { display: inline-block; border-radius: 5px; padding: 3px 7px; background: #233349; }
+    .status.running { background: #15433d; color: #72e2bd; }
+    .status.infrastructure, .status.error { background: #4e2a32; color: #ffaaaa; }
+    .status.finished { color: #7bcbff; }
+    button, select, input { font: inherit; }
+    button, select { border: 1px solid #435b78; background: #1b2b40; color: #dfe8f3; border-radius: 6px; padding: 8px 11px; }
+    button { cursor: pointer; } button:hover { background: #2c4665; }
+    button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid #75c4ff; outline-offset: 3px; }
+    select { max-width: 370px; } input[type="range"] { flex: 1; min-width: 200px; accent-color: #75c4ff; }
+    input[type="checkbox"] { accent-color: #75c4ff; }
+    label { display: inline-flex; align-items: center; gap: 7px; }
+    a { color: #83c9ff; } .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .panel { padding: 13px; } .panel b { display: block; margin-bottom: 10px; }
+    canvas { width: 100%; height: auto; display: block; background: #0a1320; border-radius: 6px; }
+    .legend { display: flex; gap: 19px; flex-wrap: wrap; font-size: 12px; margin: 13px 0; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+    #error, #replay-error { color: #ffaaaa; white-space: pre-wrap; }
+    #replay-metric { color: #f5c570; font-variant-numeric: tabular-nums; min-height: 22px; }
+    #updated { margin-left: auto; } .empty { color: #9caec4; text-align: center; padding: 24px; }
+    .row-button { padding: 3px 8px; font-size: 12px; }
+    @media (max-width: 1050px) { .cards { grid-template-columns: repeat(3, 1fr); } .panels { grid-template-columns: 1fr; } }
+    @media (max-width: 650px) { body { padding: 12px; } .cards { grid-template-columns: repeat(2, 1fr); } section { padding: 12px; } h1 { font-size: 21px; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>A0 / A2 · 多场景压力测试</h1>
+  <div class="muted" id="protocol-note">读取冻结协议…</div>
+  <div class="bar">
+    <button id="refresh" type="button">立即刷新</button>
+    <label><input id="follow-active" type="checkbox" checked>跟随最新活动回合</label>
+    <span class="muted" id="run-note"></span>
+    <span class="muted" id="updated" aria-live="polite"></span>
+  </div>
+</header>
+<main>
+  <div class="cards" aria-label="压力测试总览">
+    <div class="card"><span class="muted">有效结束 / 计划回合</span><strong class="number" id="ended">—</strong></div>
+    <div class="card"><span class="muted">99%成功 / 有效结束</span><strong class="number green" id="successes">—</strong></div>
+    <div class="card"><span class="muted">基础设施错误</span><strong class="number red" id="infra">—</strong></div>
+    <div class="card"><span class="muted">运行中 / 等待</span><strong class="number amber" id="running">—</strong></div>
+    <div class="card"><span class="muted">身份一致的完整配对</span><strong class="number" id="pairs">—</strong></div>
+  </div>
+  <p class="muted" id="denominator-note">基础设施异常和未结束回合不计成功率分母。成功以原环境记录的无碰撞终止且覆盖率≥99%为准。</p>
+  <div id="error" role="status"></div>
+
+  <section aria-labelledby="group-title">
+    <h2 id="group-title">按场景尺度分档</h2>
+    <div class="table-wrap">
+      <table>
+        <caption>A0保留原图与原动作；A2使用收缩图和可达远程前沿站位。各行仅汇总有效结束回合。</caption>
+        <thead><tr><th>尺度</th><th>组别</th><th>有效结束 / 计划</th><th>成功 / 有效结束</th><th>成功率</th><th>平均覆盖</th><th>基础设施错误</th><th>运行 / 等待</th></tr></thead>
+        <tbody id="groups"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="case-title">
+    <h2 id="case-title">各回合进度</h2>
+    <div class="table-wrap">
+      <table>
+        <caption>活动回合自动刷新；节点规模取最新保存帧，耗时取回合状态。状态超过30秒未更新会明确标记。</caption>
+        <thead><tr><th>场景 / 种子</th><th>组别</th><th>状态 / 阶段</th><th>覆盖</th><th>决策 / 预算</th><th>节点 细→策略</th><th>边 细→策略</th><th>回合耗时</th><th>最长零面积段</th><th>配对身份</th><th>回放</th></tr></thead>
+        <tbody id="cases"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="replay-title">
+    <h2 id="replay-title">实测决策图回放</h2>
+    <div class="bar">
+      <label>场景 <select id="case-select" aria-label="选择场景"></select></label>
+      <label>组别 <select id="mode-select"><option value="baseline">A0 原图原动作</option><option value="remote">A2 收缩图远程站位</option></select></label>
+      <button id="play" type="button">播放</button>
+      <label><input id="follow-frame" type="checkbox" checked>跟随最新帧</label>
+      <label><input id="edges" type="checkbox">连边</label>
+      <label><input id="gains" type="checkbox" checked>前沿收益</label>
+    </div>
+    <div id="replay-metric" aria-live="polite">等待所选回合生成首帧。</div>
+    <div class="bar"><span id="frame-step">决策 —</span><input id="slider" type="range" min="0" max="0" value="0" aria-label="回放帧"><span id="frame-coverage">覆盖 —</span></div>
+    <div class="panels">
+      <div class="panel"><b>原始细图 · 真实站位</b><canvas id="fine" width="800" height="650" aria-label="原始细图"></canvas></div>
+      <div class="panel"><b>Actor图 · 虚拟区域用金色标记</b><canvas id="coarse" width="800" height="650" aria-label="策略收缩图"></canvas></div>
+    </div>
+    <div class="legend">
+      <span><i class="dot" style="background:#52d7a6"></i>任务内前沿收益</span>
+      <span><i class="dot" style="background:#c490ed"></i>任务外前沿收益</span>
+      <span><i class="dot" style="background:#f5c570"></i>虚拟区域中转</span>
+      <span><i class="dot" style="background:#64b7ff"></i>实际决策站位轨迹</span>
+      <span><i class="dot" style="background:#ff817d"></i>所选真实目标</span>
+    </div>
+    <div id="replay-error" role="status"></div>
+    <p class="muted">轨迹连接实际决策站位，实际路程由原导航环境累计。抽象边只供Actor传递信息，虚拟区域从不作为导航目标；背景为离线采样真值，仅用于显示。</p>
+  </section>
+  <p class="muted">此页显示冻结模型的逐项压力测试证据。A2同时改变策略图和动作集；未完成或身份不一致的两组回合不构成严格配对结论。</p>
+  <p><a href="data/protocol.json" target="_blank" rel="noopener">冻结协议</a> · <a href="data/provenance.json" target="_blank" rel="noopener">模型与源码身份</a> · <a href="data/run-state.json" target="_blank" rel="noopener">调度状态</a></p>
+</main>
+<script>
+'use strict';
+const MODES = ['baseline', 'remote'];
+const MODE_LABELS = {baseline: 'A0 原图', remote: 'A2 远程'};
+const STATUS_LABELS = {finished: '已结束', running: '运行中', pending: '等待', infrastructure: '基础设施异常', error: '执行错误'};
+const PHASE_LABELS = {initializing: '初始化', reset: '生成场景与扫描', policy: 'Actor决策', native_step: '原生导航', finished: '结束', error: '异常'};
+const $ = id => document.getElementById(id);
+let overview = null;
+let frames = [];
+let staticData = null;
+let frame = null;
+let loadedPrefix = '';
+let loadedFrameKey = '';
+let refreshBusy = false;
+let replayGeneration = 0;
+let playTimer = null;
+
+function numeric(value) { return typeof value === 'number' && Number.isFinite(value); }
+function fmt(value, decimals = 1) { return numeric(value) ? value.toFixed(decimals) : '—'; }
+function percent(value) { return numeric(value) ? fmt(value * 100, 2) + '%' : '—'; }
+function duration(seconds) {
+  if (!numeric(seconds)) return '—';
+  const total = Math.max(0, Math.floor(seconds));
+  if (total < 60) return total + '秒';
+  if (total < 3600) return Math.floor(total / 60) + '分' + total % 60 + '秒';
+  return Math.floor(total / 3600) + '时' + Math.floor(total % 3600 / 60) + '分';
+}
+function extentOf(caseRow) { return caseRow.extent ?? caseRow.extent_m; }
+function caseLabel(caseRow) {
+  const family = caseRow.family === 'moon' ? '月表' : caseRow.family === 'cave' ? '洞穴' : caseRow.family;
+  return `${family} ${extentOf(caseRow)}m · seed ${caseRow.seed} · ${caseRow.name}`;
+}
+function cell(row, value, className = '') {
+  const td = document.createElement('td');
+  td.textContent = value == null ? '—' : String(value);
+  td.className = className;
+  row.appendChild(td);
+  return td;
+}
+async function getJSON(path, optional = false) {
+  const response = await fetch(path, {cache: 'no-store'});
+  if (!response.ok) {
+    if (optional && response.status === 404) return null;
+    throw new Error(`${path}：HTTP ${response.status}`);
+  }
+  return response.json();
+}
+function prefix() {
+  return `data/${encodeURIComponent($('case-select').value)}/${$('mode-select').value}`;
+}
+function selectedRecord() {
+  return (overview?.records || []).find(row => row.case.name === $('case-select').value && row.mode === $('mode-select').value);
+}
+function stopPlaying() {
+  if (playTimer !== null) clearInterval(playTimer);
+  playTimer = null;
+  $('play').textContent = '播放';
+}
+function choose(caseName, mode, manual = false) {
+  if (manual) $('follow-active').checked = false;
+  const changed = $('case-select').value !== caseName || $('mode-select').value !== mode;
+  $('case-select').value = caseName;
+  $('mode-select').value = mode;
+  if (changed) {
+    stopPlaying();
+    $('slider').value = 0;
+    $('follow-frame').checked = true;
+    frames = [];
+    frame = null;
+    loadedFrameKey = '';
+    clearCanvases();
+  }
+}
+function populateCases(protocol) {
+  const previous = $('case-select').value;
+  $('case-select').replaceChildren();
+  for (const caseRow of protocol.cases || []) {
+    const option = document.createElement('option');
+    option.value = caseRow.name;
+    option.textContent = caseLabel(caseRow);
+    $('case-select').appendChild(option);
+  }
+  if ((protocol.cases || []).some(row => row.name === previous)) $('case-select').value = previous;
+}
+function followActive() {
+  if (!$('follow-active').checked || !overview) return;
+  const active = overview.records.filter(row => row.classification === 'running');
+  active.sort((a, b) => (b.status?.updated_unix || 0) - (a.status?.updated_unix || 0));
+  if (active.length) choose(active[0].case.name, active[0].mode);
+}
+function renderOverview(value) {
+  const all = value.overall;
+  $('ended').textContent = `${all.ended} / ${all.planned}`;
+  $('successes').textContent = `${all.successes} / ${all.ended}`;
+  $('infra').textContent = all.infrastructure;
+  $('running').textContent = `${all.running} / ${all.pending}`;
+  const pairs = Object.values(value.pairs || {});
+  $('pairs').textContent = `${pairs.filter(pair => pair.status === 'matched').length} / ${pairs.length}`;
+  $('denominator-note').textContent = `成功率 ${percent(all.success_rate)}。终态产物 ${all.terminal}/${all.planned}，其他执行错误 ${all.other_errors}。基础设施异常和未结束回合不计成功率分母。`;
+  const cases = value.protocol.cases || [];
+  const extents = cases.map(extentOf).filter(numeric);
+  const minimum = extents.length ? Math.min(...extents) : '—';
+  const maximum = extents.length ? Math.max(...extents) : '—';
+  const proof = value.provenance || {};
+  const actorSha = proof.actor_sha || proof.actor?.sha || value.protocol.actor_sha;
+  $('protocol-note').textContent = `${cases.length}个场景，${minimum}–${maximum}m，A0 / A2共${all.planned}回合。${actorSha ? '冻结Actor ' + actorSha.slice(0, 12) + '…' : '冻结身份见协议与provenance.json'}`;
+  const run = value.run_state || {};
+  $('run-note').textContent = run.status ? `调度：${run.status}${run.parallel ? ' · 并发' + run.parallel : ''}` : '';
+  $('updated').textContent = '更新于 ' + new Date(value.updated_unix * 1000).toLocaleTimeString('zh-CN');
+
+  $('groups').replaceChildren();
+  for (const group of value.groups) for (const mode of MODES) {
+    const data = group.modes[mode];
+    const row = document.createElement('tr');
+    for (const item of [`${group.extent_m}m`, MODE_LABELS[mode], `${data.ended} / ${data.planned}`,
+      `${data.successes} / ${data.ended}`, percent(data.success_rate), percent(data.mean_coverage),
+      data.infrastructure, `${data.running} / ${data.pending}`]) cell(row, item);
+    $('groups').appendChild(row);
+  }
+  $('cases').replaceChildren();
+  for (const record of value.records) {
+    const summary = record.summary || {};
+    const status = record.status || {};
+    const latest = record.latest_step || {};
+    const graph = record.classification === 'finished' ? {
+      fine_nodes: summary.graph?.mean_fine_nodes, policy_nodes: summary.graph?.mean_policy_nodes,
+      fine_edges: summary.graph?.mean_fine_edges, policy_edges: summary.graph?.mean_policy_edges
+    } : record.latest_frame || latest;
+    const isRunning = record.classification === 'running';
+    const row = document.createElement('tr');
+    if (record.case.name === $('case-select').value && record.mode === $('mode-select').value) row.className = 'active';
+    cell(row, `${record.case.family === 'moon' ? '月表' : '洞穴'} ${extentOf(record.case)}m / ${record.case.seed}`);
+    cell(row, MODE_LABELS[record.mode]);
+    const stateCell = cell(row, '');
+    const badge = document.createElement('span');
+    badge.className = 'status ' + record.classification;
+    badge.textContent = STATUS_LABELS[record.classification];
+    stateCell.appendChild(badge);
+    if (isRunning) {
+      const phase = document.createElement('span');
+      phase.textContent = ' · ' + (PHASE_LABELS[status.phase] || status.phase || '执行中');
+      stateCell.appendChild(phase);
+      if (numeric(status.updated_unix) && Date.now() / 1000 - status.updated_unix > 30) {
+        const stale = document.createElement('span');
+        stale.className = 'red';
+        stale.textContent = ' · 状态未更新';
+        stateCell.appendChild(stale);
+      }
+    } else if (record.classification === 'finished') {
+      stateCell.appendChild(document.createTextNode(summary.completed && !summary.collisions ? ' · 成功' : ' · 未达成功'));
+    }
+    if (summary.error || status.error) stateCell.title = summary.error || status.error;
+    cell(row, percent(summary.final_coverage ?? status.coverage ?? graph.coverage ?? latest.coverage));
+    cell(row, `${summary.decisions ?? status.step ?? latest.step ?? 0} / ${record.case.budget}`);
+    const meanGraph = summary.graph || {};
+    cell(row, `${fmt(graph.fine_nodes ?? meanGraph.mean_fine_nodes, 0)} → ${fmt(graph.policy_nodes ?? meanGraph.mean_policy_nodes, 0)}${record.classification === 'finished' ? ' (均)' : ''}`);
+    cell(row, `${fmt(graph.fine_edges ?? meanGraph.mean_fine_edges, 0)} → ${fmt(graph.policy_edges ?? meanGraph.mean_policy_edges, 0)}${record.classification === 'finished' ? ' (均)' : ''}`);
+    cell(row, duration(summary.timing?.episode_wall_seconds ?? status.episode_wall_s ?? status.episode_wall_seconds));
+    cell(row, summary.max_zero_gain_run ?? latest.loop_metrics?.max_zero_gain_run);
+    const pair = value.pairs[record.case.name] || {status: 'incomplete'};
+    const pairCell = cell(row, {matched: '一致', mismatch: '不一致', missing_identity: '缺身份', incomplete: '待两组结束'}[pair.status]);
+    pairCell.title = (pair.differences || pair.missing || []).join(', ');
+    const action = cell(row, '');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'row-button';
+    button.textContent = '查看';
+    button.addEventListener('click', () => {
+      choose(record.case.name, record.mode, true);
+      renderOverview(overview);
+      refreshReplay();
+      $('replay-title').scrollIntoView({behavior: 'smooth', block: 'start'});
+    });
+    action.appendChild(button);
+    $('cases').appendChild(row);
+  }
+}
+async function refresh() {
+  if (refreshBusy) return;
+  refreshBusy = true;
+  try {
+    const value = await getJSON('api/overview');
+    if (!value.protocol) throw new Error('等待压力测试根目录生成 protocol.json。');
+    const changed = JSON.stringify(value.protocol.cases) !== JSON.stringify(overview?.protocol?.cases);
+    overview = value;
+    if (changed) populateCases(value.protocol);
+    followActive();
+    renderOverview(value);
+    $('error').textContent = (value.warnings || []).join('\n');
+    await refreshReplay();
+  } catch (error) {
+    $('error').textContent = error.message;
+  } finally {
+    refreshBusy = false;
+  }
+}
+function clearCanvases() {
+  for (const id of ['fine', 'coarse']) $(id).getContext('2d').clearRect(0, 0, $(id).width, $(id).height);
+}
+async function refreshReplay() {
+  const generation = ++replayGeneration;
+  const selected = prefix();
+  if (!$('case-select').value) return;
+  try {
+    if (loadedPrefix !== selected) {
+      loadedPrefix = selected;
+      staticData = null;
+      frame = null;
+      frames = [];
+      loadedFrameKey = '';
+      clearCanvases();
+    }
+    const [scene, index] = await Promise.all([
+      staticData ? Promise.resolve(staticData) : getJSON(selected + '/static.json', true),
+      getJSON(selected + '/frames/index.json', true)
+    ]);
+    if (generation !== replayGeneration || selected !== prefix()) return;
+    staticData = scene;
+    frames = Array.isArray(index) ? index : index?.frames || [];
+    $('slider').max = Math.max(0, frames.length - 1);
+    const current = Math.min(Number($('slider').value), Math.max(0, frames.length - 1));
+    $('slider').value = $('follow-frame').checked ? Math.max(0, frames.length - 1) : current;
+    if (!frames.length || !staticData) {
+      $('replay-metric').textContent = '所选回合尚未生成可视化帧；初始化状态可在上方查看。';
+      $('frame-step').textContent = '决策 —';
+      $('frame-coverage').textContent = '覆盖 —';
+      $('replay-error').textContent = '';
+      return;
+    }
+    await showFrame(generation);
+  } catch (error) {
+    if (generation === replayGeneration) $('replay-error').textContent = error.message;
+  }
+}
+async function showFrame(generation = replayGeneration) {
+  const selected = prefix();
+  const row = frames[Number($('slider').value)];
+  if (!row) return;
+  const relative = row.path || row.file;
+  const key = selected + '/' + relative + ':' + (row.sha || row.step);
+  if (loadedFrameKey !== key) {
+    const path = selected + '/' + (relative.startsWith('frames/') ? relative : 'frames/' + relative);
+    const response = await fetch(path, {cache: 'no-store'});
+    if (!response.ok) throw new Error(`帧读取失败：HTTP ${response.status}`);
+    const bytes = await response.arrayBuffer();
+    let text;
+    if (bytes.byteLength > 2 && new Uint8Array(bytes)[0] === 0x1f && new Uint8Array(bytes)[1] === 0x8b) {
+      if (typeof DecompressionStream !== 'function') throw new Error('此浏览器不支持gzip帧解压，请使用当前版本的Chrome或Edge。');
+      const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+      text = await new Response(stream).text();
+    } else {
+      text = new TextDecoder().decode(bytes);
+    }
+    const result = JSON.parse(text);
+    if (generation !== replayGeneration || selected !== prefix()) return;
+    frame = result;
+    loadedFrameKey = key;
+  }
+  if (!frame) return;
+  draw();
+  $('frame-step').textContent = `决策 ${frame.step} · 帧 ${Number($('slider').value) + 1}/${frames.length}`;
+  $('frame-coverage').textContent = '覆盖 ' + percent(frame.coverage);
+  const fine = frame.fine_nodes.length;
+  const coarse = frame.coarse_nodes.length;
+  const virtual = frame.virtual_mask.filter(Boolean).length;
+  $('replay-metric').textContent = `${$('case-select').value} · ${MODE_LABELS[$('mode-select').value]} · ${fine} → ${coarse}节点，减少 ${fine ? fmt(100 * (1 - coarse / fine)) : '0'}% · 虚拟区域 ${virtual} · 真实动作 ${frame.action_goals.length}`;
+  $('replay-error').textContent = '';
+}
+function bounds() {
+  const points = [...(staticData.task_polygon || [])];
+  const terrain = staticData.terrain;
+  if (terrain?.shape && terrain.origin) {
+    const [rows, columns] = terrain.shape;
+    points.push(terrain.origin, [terrain.origin[0] + columns * terrain.resolution_m, terrain.origin[1] + rows * terrain.resolution_m]);
+  } else {
+    points.push(...frame.fine_nodes, ...(frame.trajectory || []));
+  }
+  let lowX = Infinity, lowY = Infinity, highX = -Infinity, highY = -Infinity;
+  for (const point of points) {
+    lowX = Math.min(lowX, point[0]); lowY = Math.min(lowY, point[1]);
+    highX = Math.max(highX, point[0]); highY = Math.max(highY, point[1]);
+  }
+  return {center: [(lowX + highX) / 2, (lowY + highY) / 2], width: Math.max(1, highX - lowX), height: Math.max(1, highY - lowY)};
+}
+function draw() {
+  if (!frame || !staticData) return;
+  const world = bounds();
+  const polygon = staticData.task_polygon || [];
+  for (const key of ['fine', 'coarse']) {
+    const canvas = $(key), context = canvas.getContext('2d');
+    const width = canvas.width, height = canvas.height;
+    const scale = Math.min(width / world.width, height / world.height) / 1.08;
+    const project = point => [width / 2 + (point[0] - world.center[0]) * scale, height / 2 - (point[1] - world.center[1]) * scale];
+    context.clearRect(0, 0, width, height);
+    const terrain = staticData.terrain;
+    if (terrain?.navigation) {
+      const cellSize = terrain.resolution_m * scale;
+      for (let y = 0; y < terrain.navigation.length; y++) for (let x = 0; x < terrain.navigation[y].length; x++) {
+        const point = project([terrain.origin[0] + x * terrain.resolution_m, terrain.origin[1] + (y + 1) * terrain.resolution_m]);
+        context.fillStyle = terrain.navigation[y][x] === 1 ? (terrain.target?.[y]?.[x] ? '#142a32' : '#111f2c') : '#273446';
+        context.fillRect(point[0], point[1], Math.max(1, cellSize), Math.max(1, cellSize));
+      }
+    }
+    context.strokeStyle = '#c9a65d'; context.lineWidth = 1.6; context.setLineDash([7, 5]);
+    context.beginPath();
+    polygon.forEach((point, index) => index ? context.lineTo(...project(point)) : context.moveTo(...project(point)));
+    context.closePath(); context.stroke(); context.setLineDash([]);
+    const coarse = key === 'coarse';
+    const nodes = coarse ? frame.coarse_nodes : frame.fine_nodes;
+    const edges = coarse ? frame.coarse_edges : frame.fine_edges;
+    const inside = coarse ? frame.coarse_inside_gain : frame.inside_gain;
+    const outside = coarse ? frame.coarse_outside_gain : frame.outside_gain;
+    if ($('edges').checked) {
+      context.strokeStyle = '#35516d'; context.lineWidth = .65; context.beginPath();
+      for (const [a, b] of edges) {
+        if (!nodes[a] || !nodes[b]) continue;
+        context.moveTo(...project(nodes[a])); context.lineTo(...project(nodes[b]));
+      }
+      context.stroke();
+    }
+    nodes.forEach((point, index) => {
+      const virtual = coarse && frame.virtual_mask[index];
+      context.fillStyle = virtual ? '#f5c570' : $('gains').checked && inside[index] > 0 ? '#52d7a6' : $('gains').checked && outside[index] > 0 ? '#c490ed' : '#58708c';
+      context.beginPath(); context.arc(...project(point), virtual ? 5.2 : 2.2, 0, Math.PI * 2); context.fill();
+    });
+    context.strokeStyle = '#64b7ff'; context.lineWidth = 2; context.beginPath();
+    (frame.trajectory || []).forEach((point, index) => index ? context.lineTo(...project(point)) : context.moveTo(...project(point)));
+    context.stroke();
+    if (frame.selected_goal) {
+      const [x, y] = project(frame.selected_goal);
+      context.strokeStyle = '#ff817d'; context.lineWidth = 2.5; context.beginPath();
+      context.moveTo(x - 6, y - 6); context.lineTo(x + 6, y + 6);
+      context.moveTo(x - 6, y + 6); context.lineTo(x + 6, y - 6); context.stroke();
+    }
+    if (frame.current_position) {
+      context.fillStyle = '#f6faff'; context.beginPath(); context.arc(...project(frame.current_position), 5.5, 0, Math.PI * 2); context.fill();
+    }
+  }
+}
+$('refresh').addEventListener('click', refresh);
+$('follow-active').addEventListener('change', () => { followActive(); if (overview) renderOverview(overview); refreshReplay(); });
+for (const id of ['case-select', 'mode-select']) $(id).addEventListener('change', () => {
+  $('follow-active').checked = false;
+  stopPlaying();
+  $('follow-frame').checked = true;
+  $('slider').value = 0;
+  if (overview) renderOverview(overview);
+  refreshReplay();
+});
+$('slider').addEventListener('input', () => {
+  $('follow-frame').checked = false;
+  $('follow-active').checked = false;
+  showFrame(++replayGeneration).catch(error => { $('replay-error').textContent = error.message; });
+});
+$('follow-frame').addEventListener('change', refreshReplay);
+for (const id of ['edges', 'gains']) $(id).addEventListener('change', draw);
+$('play').addEventListener('click', () => {
+  if (playTimer !== null) { stopPlaying(); return; }
+  if (!frames.length) return;
+  $('follow-frame').checked = false;
+  $('follow-active').checked = false;
+  if (Number($('slider').value) >= frames.length - 1) $('slider').value = 0;
+  $('play').textContent = '暂停';
+  playTimer = setInterval(() => {
+    if (Number($('slider').value) >= Number($('slider').max)) { stopPlaying(); return; }
+    $('slider').value = Number($('slider').value) + 1;
+    showFrame(++replayGeneration).catch(error => { stopPlaying(); $('replay-error').textContent = error.message; });
+  }, 500);
+});
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>
