@@ -15,6 +15,6 @@
 
 验证：JavaScript `node --check` 通过；内置浏览器实际刷新后核对图例与画面。显示文件 SHA256：`0dd376eb0b8aa0f53c034efdfe7af33ad4226194a6a19add8a9d942a52a0c03d`。
 
-![修正后的站位连线图例](pressure-trajectory-clarification-20261006.jpg)
+![修正后的站位连线图例](/home/kai/CodexDownloads/lunar_navigation/drl-integration-20261012/evidence/pressure-trajectory-clarification-20261006.jpg)
 
 这份记录只验证显示语义修正，不是全部 40 回合完成或 A2 效果提升的验收证明。
