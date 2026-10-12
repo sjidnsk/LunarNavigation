@@ -9,7 +9,7 @@
 | 分支 | 原 HEAD | 未提交文件 | 处理 |
 |---|---|---:|---|
 | `feat/drl-exploration-complete-design` | `a0f190c88f1a` | 0 | 历史连续训练设计已收录并标注旧版本 |
-| `dev/drl-exploration` | `32155954f14b` | 0 | 统一开发线；验证后快进至整合结果 |
+| `dev/drl-exploration` | `32155954f14b` | 0 | 统一开发线；已快进至通过验收的整合结果 |
 | `feat/drl-exploration-training` | `c6473ae70eb4` | 0 | 旧版训练器/接口为历史原型，当前图与 checkpoint 格式已替代；历史文档补齐 |
 | `feat/drl-factorized-entropy` | `96778aeb99f6` | 0 | 分离熵已有当前实现；补齐缺失历史验证文档；原分支保留 |
 | `test/drl-loop-learning` | `d5de79c0b157` | 0 | 旧模型诊断/softsign 数值实验保留原 Git 实现与历史记录，未覆盖当前模型和奖励 |
@@ -27,4 +27,8 @@
 
 新隔离缓存 `/home/kai/.cache/lunar-drl-consolidation/jazzy-20261012` 绑定新增整合树；6 个 Jazzy 包构建成功，约 68 秒。167 个当前 DRL 实现文件与正在训练的 source 树逐字节一致；98 个源树未提交文件 SHA 未变化，训练 source HEAD 仍为 6d29042d。
 
-完整 DRL 包及压力工具首次联合测试为 1395 passed / 1 failed / 2 skipped；唯一失败是绘图工具按训练 venv 运行时没有 Matplotlib。该工具明确要求 system Python，随后按其规定环境独立补验全部绘图测试。包代码与测试没有为此改动，运行中的训练依赖未安装或变更。去重后的全部 1396 项测试已通过，另 2 项跳过；系统绘图日志与首次环境错误均保留。随后快进唯一 `dev/drl-exploration` 工作树并核对 Git 与训练状态。构建、包测试属于本机 Jazzy 证据，Humble/Orin/实车未重新验收；源码整合不宣称策略已改善。
+完整 DRL 包及压力工具首次联合测试为 1395 passed / 1 failed / 2 skipped；唯一失败是绘图工具按训练 venv 运行时没有 Matplotlib。该工具明确要求 system Python，随后按其规定环境独立补验全部绘图测试。包代码与测试没有为此改动，运行中的训练依赖未安装或变更。去重后的全部 1396 项测试已通过，另 2 项跳过；系统绘图日志与首次环境错误均保留。已快进唯一 `dev/drl-exploration` 工作树；开发线和整合树均干净，相关源分支与目录原位保留，Git connectivity 检查通过。构建、包测试属于本机 Jazzy 证据，Humble/Orin/实车未重新验收；源码整合不宣称策略已改善。
+
+## 完成状态
+
+已整合并更新统一入口。旧工作树/分支按历史、实验和运行冻结状态保留；未执行删除、移动、远端推送或公共 integration/pure-planner-orin 合并。当前追加课程二继续使用原 task-frontier 源与缓存，代码内容未改变，进度仍更新。最终源文件 SHA、分支和活进程检查见外部证据目录 postflight.json。
