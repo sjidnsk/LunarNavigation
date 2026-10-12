@@ -113,11 +113,11 @@
       <span><i class="dot" style="background:#52d7a6"></i>任务内前沿收益</span>
       <span><i class="dot" style="background:#c490ed"></i>任务外前沿收益</span>
       <span><i class="dot" style="background:#f5c570"></i>虚拟区域中转</span>
-      <span><i class="dot" style="background:#64b7ff"></i>实际决策站位轨迹</span>
+      <span><i class="dot" style="background:#64b7ff"></i>决策站位连线（非行驶轨迹）</span>
       <span><i class="dot" style="background:#ff817d"></i>所选真实目标</span>
     </div>
     <div id="replay-error" role="status"></div>
-    <p class="muted">轨迹连接实际决策站位，实际路程由原导航环境累计。抽象边只供Actor传递信息，虚拟区域从不作为导航目标；背景为离线采样真值，仅用于显示。</p>
+    <p class="muted">蓝色虚线只连接每次动作结束的实际站位，不表示中途的避障路线，连线可能穿过障碍。实际路程由平台物理运动累计；本轮未记录完整逐步行驶轨迹。抽象边供Actor传递信息；背景为离线采样真值，仅用于显示。</p>
   </section>
   <p class="muted">此页显示冻结模型的逐项压力测试证据。A2同时改变策略图和动作集；未完成或身份不一致的两组回合不构成严格配对结论。</p>
   <p><a href="data/protocol.json" target="_blank" rel="noopener">冻结协议</a> · <a href="data/provenance.json" target="_blank" rel="noopener">模型与源码身份</a> · <a href="data/run-state.json" target="_blank" rel="noopener">调度状态</a></p>
@@ -229,7 +229,9 @@ function renderOverview(value) {
   const actorSha = proof.actor_sha || proof.actor?.sha || value.protocol.actor_sha;
   $('protocol-note').textContent = `${cases.length}个场景，${minimum}–${maximum}m，A0 / A2共${all.planned}回合。${actorSha ? '冻结Actor ' + actorSha.slice(0, 12) + '…' : '冻结身份见协议与provenance.json'}`;
   const run = value.run_state || {};
-  $('run-note').textContent = run.status ? `调度：${run.status}${run.parallel ? ' · 并发' + run.parallel : ''}` : '';
+  const parallelLimit = run.parallel_workers || run.parallel;
+  const activeCount = Array.isArray(run.active) ? run.active.length : all.running;
+  $('run-note').textContent = run.status ? `调度：${run.status}${parallelLimit ? ' · 当前并发 ' + activeCount + ' / 上限 ' + parallelLimit : ''}` : '';
   $('updated').textContent = '更新于 ' + new Date(value.updated_unix * 1000).toLocaleTimeString('zh-CN');
 
   $('groups').replaceChildren();
@@ -447,9 +449,10 @@ function draw() {
       context.fillStyle = virtual ? '#f5c570' : $('gains').checked && inside[index] > 0 ? '#52d7a6' : $('gains').checked && outside[index] > 0 ? '#c490ed' : '#58708c';
       context.beginPath(); context.arc(...project(point), virtual ? 5.2 : 2.2, 0, Math.PI * 2); context.fill();
     });
+    context.save(); context.setLineDash([4, 5]);
     context.strokeStyle = '#64b7ff'; context.lineWidth = 2; context.beginPath();
     (frame.trajectory || []).forEach((point, index) => index ? context.lineTo(...project(point)) : context.moveTo(...project(point)));
-    context.stroke();
+    context.stroke(); context.restore();
     if (frame.selected_goal) {
       const [x, y] = project(frame.selected_goal);
       context.strokeStyle = '#ff817d'; context.lineWidth = 2.5; context.beginPath();
