@@ -106,7 +106,8 @@ def test_speed_is_clamped_to_policy_limit() -> None:
 
 
 def test_reached_goal_requires_position_and_yaw_tolerances() -> None:
-    assert track_path(((1.0, 0.0, 0.0),), state(0.9, 0.1, 0.0), policy()).complete
+    # Final execution targets half the public band to allow stopping drift.
+    assert track_path(((1.0, 0.0, 0.0),), state(0.95, 0.05, 0.0), policy()).complete
 
     not_aligned = track_path(((1.0, 0.0, 0.0),), state(0.9, 0.1, math.pi), policy())
     assert not not_aligned.complete
