@@ -1427,4 +1427,21 @@ TEST(PlanningSessionCoordinator, FinalArrivalDoesNotExpandToHalfTheMapCell) {
   EXPECT_EQ(reached.terminal->result.outcome,SessionOutcome::kGoalReached);
 }
 
+TEST(PlanningSessionCoordinator, PosePollingWithoutExecutionFeedbackDoesNotConsumeCorrectionBudget) {
+  FakePorts ports;ports.reaches_final_goal=true;
+  auto cfg=Config();cfg.require_execution_confirmation=false;
+  PlanningSessionCoordinator c(Wheel(),{},cfg,ports.Bind());auto fine=MakeFine();
+  ASSERT_TRUE(c.Start(SessionId{{107U}},
+      {.target_x_m=6.5,.target_y_m=1.5,.has_target_yaw=true,.target_yaw_rad=0.}).accepted);
+  ASSERT_TRUE(c.PlanCycle(At(1.5,1.5),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max()).path_reference);
+  for(int i=0;i<3;++i) {
+    const auto waiting=c.PlanCycle(At(6.49,1.5,.2),{.fine=fine},CycleTrigger::kSegmentEnd,SearchDeadline::max());
+    ASSERT_FALSE(waiting.terminal);
+    ASSERT_TRUE(waiting.path_reference);
+  }
+  const auto reached=c.PlanCycle(At(6.49,1.5,.02),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max());
+  ASSERT_TRUE(reached.terminal);
+  EXPECT_EQ(reached.terminal->result.outcome,SessionOutcome::kGoalReached);
+}
+
 }
