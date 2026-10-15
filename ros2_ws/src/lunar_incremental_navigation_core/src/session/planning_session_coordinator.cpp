@@ -52,35 +52,6 @@ namespace {
   return SessionState::kPlanning;
 }
 
-class CurrentCycleStopRegistration final {
- public:
-  explicit CurrentCycleStopRegistration(
-      std::shared_ptr<std::stop_source>& slot)
-      : slot_(slot), source_(std::make_shared<std::stop_source>()) {
-    std::atomic_store_explicit(&slot_, source_, std::memory_order_release);
-  }
-
-  ~CurrentCycleStopRegistration() {
-    auto expected = source_;
-    static_cast<void>(std::atomic_compare_exchange_strong_explicit(
-        &slot_, &expected, std::shared_ptr<std::stop_source>{},
-        std::memory_order_acq_rel, std::memory_order_acquire));
-  }
-
-  [[nodiscard]] const StopToken& token() {
-    token_ = source_->get_token();
-    return token_;
-  }
-
-  [[nodiscard]] bool stop_requested() const noexcept {
-    return source_->stop_requested();
-  }
-
- private:
-  std::shared_ptr<std::stop_source>& slot_;
-  std::shared_ptr<std::stop_source> source_;
-  StopToken token_;
-};
 
 }  // namespace
 
@@ -113,9 +84,22 @@ struct PlanningSessionCoordinator::Impl final {
     std::uint64_t guidance_revision{};
     std::string frame_id;
     Pose2 pose;
+    SearchDeadline deadline;
   };
   std::optional<WaitingInput> waiting_input;
+  std::shared_ptr<const FineTraversabilitySnapshot> waiting_evidence;
+  std::optional<SearchDeadline> map_wait_deadline;
+  std::optional<SearchDeadline> representation_deadline;
   std::shared_ptr<std::stop_source> current_cycle_stop;
+  std::optional<CycleRequest> pending;
+  std::uint64_t request_sequence{};
+  CycleTrigger pending_trigger{CycleTrigger::kContinue};
+  bool final_alignment{};
+  void DropPending() {
+    if (auto source = std::atomic_load_explicit(&current_cycle_stop, std::memory_order_acquire))
+      source->request_stop();
+    pending.reset();
+  }
 
   [[nodiscard]] SteadyClock::time_point Now() const {
     return config.now ? config.now() : SteadyClock::now();
@@ -133,6 +117,8 @@ struct PlanningSessionCoordinator::Impl final {
 
   [[nodiscard]] std::optional<PathReference> Invalidate(
       const std::uint64_t evaluated_fine_revision) {
+    DropPending();
+    final_alignment = false;
     if (!active_path) {
       return std::nullopt;
     }
@@ -194,14 +180,18 @@ struct PlanningSessionCoordinator::Impl final {
   };
 
   [[nodiscard]] RemainingPathEvaluation EvaluateRemainingPath(
-      const FineTraversabilitySnapshot& fine) const noexcept {
-    if (!active_path || active_path->path.poses.empty()) {
-      return {};
-    }
-    const auto& poses = active_path->path.poses;
+      const FineTraversabilitySnapshot& fine,
+      const PathReference* candidate = nullptr,
+      const RequestLocalPlanningView* certified_view = nullptr) const noexcept {
+    const auto* reference = candidate ? candidate : (active_path ? &*active_path : nullptr);
+    if (!reference || reference->path.poses.empty()) return {};
+    const auto& poses = reference->path.poses;
     std::size_t first_segment = 0U;
     double first_fraction = 0.0;
-    if (latest_state.has_value()) {
+    // Newly computed candidates have not been executed. Validate their whole
+    // path so a nearby later branch cannot hide an obstacle on the first one.
+    // Only the already active reference may discard its completed prefix.
+    if (!candidate && latest_state.has_value()) {
       double nearest = std::numeric_limits<double>::infinity();
       for (std::size_t index = 0U; index + 1U < poses.size(); ++index) {
         const Vec3& begin = poses[index].position_m;
@@ -235,7 +225,10 @@ struct PlanningSessionCoordinator::Impl final {
 
     bool blocked = false;
     const auto visit = [&](const GridIndex index) {
-      if (fine.State(index) == FineCellState::kBlocked) {
+      const auto state = fine.State(index);
+      if (state == FineCellState::kBlocked ||
+          (candidate && state != FineCellState::kFree &&
+           (!certified_view || certified_view->Source(index) != LocalCellSource::kStartAssumedFree))) {
         blocked = true;
         return false;
       }
@@ -313,8 +306,13 @@ StartSessionResult PlanningSessionCoordinator::Start(const SessionId id,
         impl_->last_safety_evaluated_fine_revision);
   }
 
+  impl_->DropPending();
+  impl_->final_alignment = false;
   impl_->session_id = id;
   impl_->goal = goal;
+  impl_->representation_deadline.reset();
+  impl_->map_wait_deadline.reset();
+  impl_->waiting_evidence.reset();
   impl_->planning_cycle = 0U;
   impl_->segment_revision = 0U;
   impl_->captured_fine_revision = 0U;
@@ -327,15 +325,15 @@ StartSessionResult PlanningSessionCoordinator::Start(const SessionId id,
   return result;
 }
 
-CycleOutput PlanningSessionCoordinator::PlanCycle(
+PreparedCycle PlanningSessionCoordinator::PrepareCycle(
     const StateInput state, const SnapshotBundle snapshots,
-    const CycleTrigger trigger, const SearchDeadline deadline) {
-  CycleOutput output;
+    const CycleTrigger trigger, const SearchDeadline deadline, const bool rolling) {
+  PreparedCycle prepared;
+  auto& output = prepared.immediate;
   if (impl_->state == CoordinatorState::kIdle || !impl_->session_id ||
       !impl_->goal) {
-    return output;
+    return prepared;
   }
-  CurrentCycleStopRegistration cycle_stop(impl_->current_cycle_stop);
   ++impl_->planning_cycle;
   impl_->latest_state = state;
   if (snapshots.fine) {
@@ -349,7 +347,7 @@ CycleOutput PlanningSessionCoordinator::PlanCycle(
                                     "INVALID_STATE",
                                     impl_->last_safety_evaluated_fine_revision);
     output.feedback = impl_->Feedback("INVALID_STATE");
-    return output;
+    return prepared;
   }
 
   // A waiting session remains cancelable, but unchanged evidence cannot help search.
@@ -364,8 +362,12 @@ CycleOutput PlanningSessionCoordinator::PlanCycle(
         WithinArrivalTolerance(std::hypot(pose.position_m.x-waiting.pose.position_m.x,
                                          pose.position_m.y-waiting.pose.position_m.y), 0.0) &&
         WithinArrivalTolerance(std::abs(NormalizeAngle(pose.yaw_rad-waiting.pose.yaw_rad)), 0.0)) {
-      output.feedback = impl_->Feedback("WAITING_FOR_MAP");
-      return output;
+      if (impl_->Now() >= waiting.deadline) {
+        output.terminal = impl_->Finish(SessionOutcome::kMapUnavailable, "MAP_WAIT_TIMEOUT",
+            impl_->last_safety_evaluated_fine_revision);
+        output.feedback = impl_->Feedback("MAP_WAIT_TIMEOUT");
+      } else output.feedback = impl_->Feedback("WAITING_FOR_MAP");
+      return prepared;
     }
     impl_->waiting_input.reset();
     impl_->state = CoordinatorState::kReplanning;
@@ -377,7 +379,7 @@ CycleOutput PlanningSessionCoordinator::PlanCycle(
                                     "GOAL_REACHED",
                                     impl_->last_safety_evaluated_fine_revision);
     output.feedback = impl_->Feedback("GOAL_REACHED");
-    return output;
+    return prepared;
   }
 
   if (trigger == CycleTrigger::kDeviation && impl_->active_path) {
@@ -385,18 +387,19 @@ CycleOutput PlanningSessionCoordinator::PlanCycle(
         impl_->Invalidate(impl_->last_safety_evaluated_fine_revision);
     impl_->state = CoordinatorState::kReplanning;
     output.feedback = impl_->Feedback("PATH_DEVIATED");
-    return output;
+    return prepared;
   }
 
   const bool planning_required =
       impl_->state == CoordinatorState::kPlanning ||
       impl_->state == CoordinatorState::kReplanning ||
-      trigger == CycleTrigger::kSegmentEnd;
-  if (!planning_required) {
+      trigger == CycleTrigger::kSegmentEnd || rolling;
+  if (!planning_required || impl_->pending || (rolling && impl_->final_alignment)) {
     output.feedback = impl_->Feedback("EXECUTING");
-    return output;
+    return prepared;
   }
   if (trigger == CycleTrigger::kSegmentEnd) {
+    impl_->final_alignment = false;
     impl_->state = CoordinatorState::kReplanning;
   }
 
@@ -405,7 +408,7 @@ CycleOutput PlanningSessionCoordinator::PlanCycle(
                                     "MAP_UNAVAILABLE",
                                     impl_->last_safety_evaluated_fine_revision);
     output.feedback = impl_->Feedback("MAP_UNAVAILABLE");
-    return output;
+    return prepared;
   }
 
   try {
@@ -413,170 +416,106 @@ CycleOutput PlanningSessionCoordinator::PlanCycle(
       output.terminal = impl_->Finish(SessionOutcome::kTimeout, "TIMEOUT",
                                       impl_->last_safety_evaluated_fine_revision);
       output.feedback = impl_->Feedback("TIMEOUT");
-      return output;
+      return prepared;
     }
   } catch (...) {
     output.terminal = impl_->Finish(SessionOutcome::kInternalError,
                                     "INTERNAL_ERROR",
                                     impl_->last_safety_evaluated_fine_revision);
     output.feedback = impl_->Feedback("INTERNAL_ERROR");
-    return output;
+    return prepared;
   }
 
-  const Point2 start = state.base_link_pose.position_m;
-  const Point2 final_goal{.x = impl_->goal->target_x_m,
-                          .y = impl_->goal->target_y_m};
-  std::optional<GlobalRoute> guidance_route;
-  output.guidance_status = GuidanceStatus::kUnavailable;
-  if (snapshots.guidance && impl_->ports.plan_global) {
-    try {
-      const SearchDeadline global_deadline = std::min(
-          deadline, impl_->Now() + impl_->config.global_subdeadline);
-      GlobalRouteResult global = impl_->ports.plan_global(
-          *snapshots.guidance, start, final_goal, global_deadline,
-          cycle_stop.token());
-      output.guidance_status = global.status;
-      if (global.status == GuidanceStatus::kAvailable && global.route) {
-        guidance_route = std::move(global.route);
-        output.global_route = guidance_route;
-      }
-    } catch (...) {
-      output.guidance_status = GuidanceStatus::kUnavailable;
+  if (impl_->ports.plan_adaptive_global || impl_->config.adaptive_global) {
+    if (!snapshots.navigation || snapshots.navigation->fine_ptr() != snapshots.fine) {
+      if (!impl_->representation_deadline)
+        impl_->representation_deadline = std::min(deadline, impl_->Now() + impl_->config.map_wait_timeout);
+      output.global_reason = impl_->Now() >= *impl_->representation_deadline
+          ? "NAVIGATION_MAP_TIMEOUT" : "NAVIGATION_MAP_PENDING";
+      if (output.global_reason == "NAVIGATION_MAP_TIMEOUT")
+        output.terminal = impl_->Finish(SessionOutcome::kMapUnavailable, output.global_reason,
+            impl_->last_safety_evaluated_fine_revision);
+      output.feedback = impl_->Feedback(output.global_reason);
+      return prepared;
     }
+    impl_->representation_deadline.reset();
   }
-  if (cycle_stop.stop_requested()) {
+  auto source = std::make_shared<std::stop_source>();
+  std::atomic_store_explicit(&impl_->current_cycle_stop, source, std::memory_order_release);
+  impl_->pending = CycleRequest{
+      .request_id = ++impl_->request_sequence,
+      .session_id = *impl_->session_id, .state = state, .goal = *impl_->goal,
+      .snapshots = snapshots, .capability = impl_->capability, .profile = impl_->profile,
+      .local_window_size_m = impl_->config.local_window_size_m,
+      .goal_position_tolerance_m = impl_->config.goal_position_tolerance_m,
+      .global_subdeadline = impl_->config.global_subdeadline,
+      .deadline = deadline, .rolling = rolling, .stop_token = source->get_token()};
+  impl_->pending_trigger = trigger;
+  prepared.request = impl_->pending;
+  return prepared;
+}
+
+CycleOutput PlanningSessionCoordinator::PlanCycle(
+    StateInput state, SnapshotBundle snapshots, CycleTrigger trigger, SearchDeadline deadline) {
+  auto prepared = PrepareCycle(state, snapshots, trigger, deadline);
+  if (!prepared.request) return prepared.immediate;
+  auto candidate = ComputeCycle(*prepared.request, impl_->ports, impl_->config.now,
+                                prepared.request->stop_token);
+  return ApplyCycle(std::move(candidate), state, snapshots);
+}
+
+CycleOutput PlanningSessionCoordinator::ApplyCycle(
+    CycleCandidate candidate, StateInput current_state, SnapshotBundle current_snapshots) {
+  CycleOutput output;
+  if (!impl_->pending || !impl_->session_id ||
+      candidate.session_id != *impl_->session_id ||
+      candidate.request_id != impl_->pending->request_id) return output;
+  const auto request = *impl_->pending;
+  impl_->pending.reset();
+  const auto trigger = impl_->pending_trigger;
+  const auto& state = request.state;
+  const auto& snapshots = request.snapshots;
+  const auto deadline = request.deadline;
+  const Point2 start = state.base_link_pose.position_m;
+  impl_->latest_state = current_state;
+  output.global_reason = std::move(candidate.global_reason);
+  output.guidance_status = candidate.guidance_status;
+  output.global_route = std::move(candidate.global_route);
+  if (candidate.stopped || request.stop_token.stop_requested()) {
     output.feedback = impl_->Feedback("CYCLE_STOPPED");
     return output;
   }
-
-  if (!impl_->ports.select_target || !impl_->ports.build_start_patch) {
-    output.terminal = impl_->Finish(SessionOutcome::kInternalError,
-                                    "INTERNAL_ERROR",
-                                    impl_->last_safety_evaluated_fine_revision);
-    output.feedback = impl_->Feedback("INTERNAL_ERROR");
-    return output;
-  }
-
-  const LocalPlanningWindowResult local_window = BuildLocalPlanningWindow(
-      *snapshots.fine, start, impl_->config.local_window_size_m);
-  if (!local_window.geometry) {
-    const std::string reason =
-        local_window.status == LocalPlanningWindowStatus::kCapacityExceeded
-            ? "LOCAL_WINDOW_CAPACITY_EXCEEDED"
-            : "START_OUTSIDE_FINE_MAP";
-    output.terminal = impl_->Finish(
-        SessionOutcome::kNoPath, reason,
-        impl_->last_safety_evaluated_fine_revision);
+  auto fail = [&](SessionOutcome outcome, const std::string& reason) {
+    if (!(request.rolling && impl_->active_path)) {
+      output.terminal = impl_->Finish(outcome, reason, impl_->last_safety_evaluated_fine_revision);
+    }
     output.feedback = impl_->Feedback(reason);
     return output;
+  };
+  if (!FinitePose(current_state.base_link_pose)) return fail(SessionOutcome::kInternalError, "INVALID_STATE");
+  if (candidate.failure) return fail(*candidate.failure, candidate.reason_code);
+  auto& local = candidate.local;
+  if (request.rolling && impl_->active_path && local.status != LocalPlanResult::Status::kPlanFound) {
+    return fail(local.status == LocalPlanResult::Status::kTimeout ? SessionOutcome::kTimeout : SessionOutcome::kNoPath,
+                local.status == LocalPlanResult::Status::kTimeout ? "TIMEOUT" :
+                (local.reason_code.empty() ? "NO_PATH" : local.reason_code));
   }
-
-  std::optional<LocalTarget> target;
-  try {
-    target = impl_->ports.select_target(*snapshots.fine, *local_window.geometry, start,
-                                        *impl_->goal, guidance_route);
-  } catch (...) {
-    output.terminal = impl_->Finish(SessionOutcome::kInternalError,
-                                    "INTERNAL_ERROR",
-                                    impl_->last_safety_evaluated_fine_revision);
-    output.feedback = impl_->Feedback("INTERNAL_ERROR");
-    return output;
-  }
-  if (cycle_stop.stop_requested()) {
-    output.feedback = impl_->Feedback("CYCLE_STOPPED");
-    return output;
-  }
-  if (!target) {
-    output.terminal = impl_->Finish(SessionOutcome::kNoPath, "NO_PATH",
-                                    impl_->last_safety_evaluated_fine_revision);
-    output.feedback = impl_->Feedback("NO_PATH");
-    return output;
-  }
-  // Keep planning termination and execution completion on one internal
-  // contract.  Obstacle inflation has already been consumed by the fine-map
-  // state and must not enlarge this arrival region.
-  target->position_tolerance_m = GoalPositionTolerance(
-      *snapshots.fine, impl_->config.goal_position_tolerance_m);
-
-  StartPatchResult patch;
-  try {
-    patch = impl_->ports.build_start_patch(
-        snapshots.fine, *local_window.geometry, state.base_link_pose, impl_->capability,
-        impl_->profile);
-  } catch (...) {
-    output.terminal = impl_->Finish(SessionOutcome::kInternalError,
-                                    "INTERNAL_ERROR",
-                                    impl_->last_safety_evaluated_fine_revision);
-    output.feedback = impl_->Feedback("INTERNAL_ERROR");
-    return output;
-  }
-  if (cycle_stop.stop_requested()) {
-    output.feedback = impl_->Feedback("CYCLE_STOPPED");
-    return output;
-  }
-  if (patch.status == StartPatchResult::Status::kStartBlocked) {
-    output.terminal = impl_->Finish(SessionOutcome::kNoPath, "START_BLOCKED",
-                                    impl_->last_safety_evaluated_fine_revision);
-    output.feedback = impl_->Feedback("START_BLOCKED");
-    return output;
-  }
-  if (patch.status == StartPatchResult::Status::kUnresolved || !patch.view) {
-    output.terminal = impl_->Finish(SessionOutcome::kNoPath,
-                                    "START_BLIND_ZONE_UNRESOLVED",
-                                    impl_->last_safety_evaluated_fine_revision);
-    output.feedback = impl_->Feedback("START_BLIND_ZONE_UNRESOLVED");
-    return output;
-  }
-
-  LocalPlanResult local;
-  const PlatformType platform = CapabilityPlatform(impl_->capability);
-  try {
-    if (platform == PlatformType::kWheeled && impl_->ports.plan_wheel) {
-      local = impl_->ports.plan_wheel(
-          *patch.view, state.base_link_pose, *target, deadline,
-          cycle_stop.token());
-    } else if (platform == PlatformType::kLegged &&
-               impl_->ports.plan_legged) {
-      local = impl_->ports.plan_legged(
-          *patch.view, state.base_link_pose, *target, deadline,
-          cycle_stop.token());
-    } else {
-      output.terminal = impl_->Finish(SessionOutcome::kInternalError,
-                                      "INTERNAL_ERROR",
-                                      impl_->last_safety_evaluated_fine_revision);
-      output.feedback = impl_->Feedback("INTERNAL_ERROR");
-      return output;
-    }
-  } catch (...) {
-    output.terminal = impl_->Finish(SessionOutcome::kInternalError,
-                                    "INTERNAL_ERROR",
-                                    impl_->last_safety_evaluated_fine_revision);
-    output.feedback = impl_->Feedback("INTERNAL_ERROR");
-    return output;
-  }
-  if (cycle_stop.stop_requested()) {
-    output.feedback = impl_->Feedback("CYCLE_STOPPED");
-    return output;
-  }
-
-  try {
-    if (impl_->Now() >= deadline &&
-        local.status != LocalPlanResult::Status::kCanceled) {
-      local.status = LocalPlanResult::Status::kTimeout;
-    }
-  } catch (...) {
-    local.status = LocalPlanResult::Status::kTimeout;
-  }
-
   if (local.status == LocalPlanResult::Status::kNoPath &&
-      local.reason_code == "LOCAL_WAITING_FOR_MAP" && target->region) {
+      candidate.waiting_for_map) {
     output.path_reference = impl_->Invalidate(impl_->last_safety_evaluated_fine_revision);
+    if (impl_->waiting_evidence != snapshots.fine || !impl_->map_wait_deadline) {
+      impl_->waiting_evidence = snapshots.fine;
+      impl_->map_wait_deadline = impl_->Now() + impl_->config.map_wait_timeout;
+    }
+    if (impl_->Now() >= *impl_->map_wait_deadline)
+      return fail(SessionOutcome::kMapUnavailable, "MAP_WAIT_TIMEOUT");
     impl_->waiting_input = Impl::WaitingInput{
         .fine_revision = snapshots.fine->fine_traversability_revision(),
         .guidance_revision = snapshots.guidance
             ? snapshots.guidance->global_guidance_revision() : 0U,
         .frame_id = snapshots.fine->geometry().frame_id(),
-        .pose = state.base_link_pose};
+        .pose = state.base_link_pose,
+        .deadline = *impl_->map_wait_deadline};
     impl_->state = CoordinatorState::kPlanning;
     output.feedback = impl_->Feedback("WAITING_FOR_MAP");
     return output;
@@ -603,11 +542,7 @@ CycleOutput PlanningSessionCoordinator::PlanCycle(
   const std::vector<PathPoint>& selected_path =
       local.path.empty() ? local.raw_path : local.path;
   if (selected_path.empty()) {
-    output.terminal = impl_->Finish(SessionOutcome::kInternalError,
-                                    "EMPTY_LOCAL_PATH",
-                                    impl_->last_safety_evaluated_fine_revision);
-    output.feedback = impl_->Feedback("EMPTY_LOCAL_PATH");
-    return output;
+    return fail(SessionOutcome::kInternalError, "EMPTY_LOCAL_PATH");
   }
 
   // A non-final reference consisting only of the current pose cannot advance
@@ -637,10 +572,7 @@ CycleOutput PlanningSessionCoordinator::PlanCycle(
             GoalPositionTolerance(*snapshots.fine, impl_->config.goal_position_tolerance_m);
   }
   if (!local.reaches_final_goal && (stationary || repeated_completed_target)) {
-    output.terminal = impl_->Finish(SessionOutcome::kNoPath, "NO_LOCAL_PROGRESS",
-                                    impl_->last_safety_evaluated_fine_revision);
-    output.feedback = impl_->Feedback("NO_LOCAL_PROGRESS");
-    return output;
+    return fail(SessionOutcome::kNoPath, "NO_LOCAL_PROGRESS");
   }
 
   PathReference reference{
@@ -657,24 +589,25 @@ CycleOutput PlanningSessionCoordinator::PlanCycle(
   }
   try {
     if (impl_->Now() >= deadline) {
-      output.terminal = impl_->Finish(
-          SessionOutcome::kTimeout, "TIMEOUT",
-          impl_->last_safety_evaluated_fine_revision);
-      output.feedback = impl_->Feedback("TIMEOUT");
-      return output;
+      return fail(SessionOutcome::kTimeout, "TIMEOUT");
     }
   } catch (...) {
-    output.terminal = impl_->Finish(
-        SessionOutcome::kTimeout, "TIMEOUT",
-        impl_->last_safety_evaluated_fine_revision);
-    output.feedback = impl_->Feedback("TIMEOUT");
-    return output;
+    return fail(SessionOutcome::kTimeout, "TIMEOUT");
   }
-  impl_->last_safety_evaluated_fine_revision =
-      snapshots.fine->fine_traversability_revision();
+  if (current_snapshots.fine && current_snapshots.fine->fine_traversability_revision() >
+      snapshots.fine->fine_traversability_revision()) {
+    const auto evaluation = impl_->EvaluateRemainingPath(
+        *current_snapshots.fine, &reference, candidate.view.get());
+    if (!evaluation.complete || evaluation.blocked)
+      return fail(SessionOutcome::kNoPath, "CANDIDATE_PATH_BLOCKED");
+    reference.traversability_revision = current_snapshots.fine->fine_traversability_revision();
+  }
+  impl_->last_safety_evaluated_fine_revision = reference.traversability_revision;
   impl_->segment_revision = reference.segment_revision;
+  impl_->map_wait_deadline.reset();
+  impl_->waiting_evidence.reset();
   impl_->active_path = reference;
-  impl_->active_view = std::move(patch.view);
+  impl_->active_view = std::move(candidate.view);
   impl_->state = CoordinatorState::kExecuting;
   output.path_reference = std::move(reference);
   output.feedback = impl_->Feedback("PLAN_FOUND");
@@ -746,3 +679,26 @@ std::uint64_t PlanningSessionCoordinator::active_segment_revision()
 }
 
 }  // namespace lunar::incremental_navigation
+
+namespace lunar::incremental_navigation {
+void PlanningSessionCoordinator::StopPendingCycle() { impl_->DropPending(); }
+void PlanningSessionCoordinator::SetFinalAlignment(bool value) {
+  if (value && !impl_->final_alignment) impl_->DropPending();
+  impl_->final_alignment = value;
+}
+double PlanningSessionCoordinator::remaining_path_m() const noexcept {
+  if (!impl_->active_path || !impl_->latest_state) return 0.;
+  const auto& poses = impl_->active_path->path.poses;
+  double total=0., progress=0., nearest=std::numeric_limits<double>::infinity();
+  const auto p=impl_->latest_state->base_link_pose.position_m;
+  for (std::size_t i=1;i<poses.size();++i) {
+    const auto a=poses[i-1].position_m, b=poses[i].position_m;
+    const double dx=b.x-a.x, dy=b.y-a.y, len=std::hypot(dx,dy);
+    const double t=len>0.?std::clamp(((p.x-a.x)*dx+(p.y-a.y)*dy)/(len*len),0.,1.):0.;
+    const double d=std::hypot(p.x-a.x-t*dx,p.y-a.y-t*dy);
+    if (d<nearest) { nearest=d; progress=total+t*len; }
+    total+=len;
+  }
+  return total-progress;
+}
+}

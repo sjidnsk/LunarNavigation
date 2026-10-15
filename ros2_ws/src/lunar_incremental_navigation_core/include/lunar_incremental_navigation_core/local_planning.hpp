@@ -258,9 +258,12 @@ class RequestLocalPlanningView final {
   std::vector<LocalCellOverride> overrides_;
 };
 
+class AdaptiveNavigationSnapshot;
+
 struct SnapshotBundle final {
   std::shared_ptr<const FineTraversabilitySnapshot> fine;
   std::shared_ptr<const GlobalGuidanceSnapshot> guidance;
+  std::shared_ptr<const AdaptiveNavigationSnapshot> navigation;
 };
 
 }  // namespace lunar::incremental_navigation
