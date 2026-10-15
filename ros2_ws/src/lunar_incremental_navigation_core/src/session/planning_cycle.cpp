@@ -119,9 +119,9 @@ CycleCandidate ComputeCycle(const CycleRequest& request, PlanningSessionPorts& p
     output.reason_code = "NO_PATH";
     return output;
   }
-  // Keep planning termination and execution completion on one internal
-  // contract.  Obstacle inflation has already been consumed by the fine-map
-  // state and must not enlarge this arrival region.
+  // Search termination accounts for map discretization. Final measured
+  // arrival is checked separately against the public configured tolerance;
+  // obstacle inflation must not enlarge that public acceptance band.
   target->position_tolerance_m = GoalPositionTolerance(
       *snapshots.fine, request.goal_position_tolerance_m);
 
