@@ -23,6 +23,8 @@ enum class PlanningCycleLatencyClass : std::uint8_t {
     PlanningCycleLatencyClass latency_class) noexcept;
 
 struct MapDiagnosticsRecord final {
+  double navigation_map_build_ms{};
+  std::size_t navigation_map_regions{},navigation_map_cache_bytes{};
   std::string platform;
   std::uint64_t raw_elevation_revision{};
   std::uint64_t fine_traversability_revision{};
@@ -43,6 +45,7 @@ struct MapDiagnosticsRecord final {
 };
 
 struct PlanningCycleDiagnosticsRecord final {
+  std::string global_planner_mode,global_reason;
   std::string session_id;
   std::uint64_t planning_cycle{};
   std::uint64_t segment_revision{};

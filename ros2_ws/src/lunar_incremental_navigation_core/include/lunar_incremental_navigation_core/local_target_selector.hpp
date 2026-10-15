@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "lunar_incremental_navigation_core/traversability_snapshot.hpp"
+#include "lunar_incremental_navigation_core/search_control.hpp"
 #include "lunar_incremental_navigation_core/types/global_route.hpp"
 #include "lunar_incremental_navigation_core/types/planning_cycle.hpp"
 #include "lunar_incremental_navigation_core/types/platform_capability.hpp"
@@ -27,6 +28,13 @@ class LocalTargetSelector final {
       const SparseGridGeometry& local_window, Point2 start,
       const FinalGoal& final_goal,
       const std::optional<GlobalRoute>& guidance) const;
+
+  [[nodiscard]] std::optional<LocalTarget> SelectRolling(
+      const FineTraversabilitySnapshot& fine,
+      const SparseGridGeometry& local_window, Point2 start,
+      const FinalGoal& final_goal,
+      const std::optional<GlobalRoute>& guidance,
+      const SearchControl& control) const;
 
   [[nodiscard]] std::optional<LocalTarget> Select(
       const FineTraversabilitySnapshot& fine,

@@ -49,6 +49,10 @@ struct IncrementalNavigationNodeDependencies final {
   std::function<void(const std::string&)> event_sink;
   std::function<void()> before_goal_processing;
   std::function<void()> before_terminal_commit;
+  std::function<lunar::incremental_navigation::AdaptiveMapBuildResult(
+      std::shared_ptr<const lunar::incremental_navigation::FineTraversabilitySnapshot>,
+      lunar::incremental_navigation::SearchDeadline,
+      const lunar::incremental_navigation::StopToken&)> navigation_map_builder;
 };
 
 [[nodiscard]] std::unique_ptr<rclcpp::Executor> MakeIncrementalNavigationExecutor();

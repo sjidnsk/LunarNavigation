@@ -21,15 +21,19 @@ endfunction()
 
 set(LUNAR_INCREMENTAL_NAVIGATION_PRODUCTION_SOURCES
   src/map/global_guidance_builder.cpp
+  src/map/adaptive_navigation_map.cpp
   src/map/persistent_elevation_map.cpp
   src/map/platform_elevation_physics.cpp
   src/map/fine_traversability_builder.cpp
   src/global/global_route_planner.cpp
+  src/global/adaptive_route_planner.cpp
   src/local/local_planning_window.cpp
   src/local/local_target_selector.cpp
   src/local/local_goal_region.cpp
   src/local/request_local_start_patch.cpp
   src/local/phase_aware_path_simplifier.cpp
+  src/session/planning_cycle.cpp
+  src/session/rolling_update_policy.cpp
   src/session/planning_session_coordinator.cpp
   src/session/planning_cycle.cpp
   src/session/rolling_update_policy.cpp
@@ -90,12 +94,10 @@ if(BUILD_TESTING)
     lunar_incremental_navigation_core_local_query_cache_test
     test/local_query_cache_test.cpp)
 
+  lunar_add_core_gtest(lunar_incremental_navigation_core_rolling_update_policy_test test/rolling_update_policy_test.cpp)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_planning_contract_test
     test/planning_contract_test.cpp)
-  lunar_add_core_gtest(
-    lunar_incremental_navigation_core_rolling_update_policy_test
-    test/rolling_update_policy_test.cpp)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_persistent_elevation_map_test
     test/persistent_elevation_map_test.cpp)
@@ -117,6 +119,11 @@ if(BUILD_TESTING)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_global_guidance_builder_test
     test/global_guidance_builder_test.cpp)
+  lunar_add_core_gtest(
+    lunar_incremental_navigation_core_adaptive_route_planner_test
+    test/adaptive_route_planner_test.cpp)
+  target_link_libraries(lunar_incremental_navigation_core_adaptive_route_planner_test
+    ${PROJECT_NAME}_test_support)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_global_route_planner_v2_test
     test/global_route_planner_v2_test.cpp)
@@ -153,6 +160,11 @@ if(BUILD_TESTING)
   target_link_libraries(
     lunar_incremental_navigation_core_complex_terrain_benchmark_test
     ${PROJECT_NAME}_test_support)
+
+  add_executable(lunar_adaptive_navigation_benchmark benchmark/adaptive_navigation_benchmark.cpp)
+  target_compile_features(lunar_adaptive_navigation_benchmark PRIVATE cxx_std_20)
+  target_include_directories(lunar_adaptive_navigation_benchmark PRIVATE test)
+  target_link_libraries(lunar_adaptive_navigation_benchmark ${PROJECT_NAME}_test_support)
 
   add_executable(${PROJECT_NAME}_complex_terrain_benchmark
     benchmark/complex_terrain_benchmark_main.cpp)

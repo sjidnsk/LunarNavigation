@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "lunar_incremental_navigation_core/global_route_planner.hpp"
+#include "lunar_incremental_navigation_core/adaptive_route_planner.hpp"
 #include "lunar_incremental_navigation_core/legged_local_planner.hpp"
 #include "lunar_incremental_navigation_core/local_planning_window.hpp"
 #include "lunar_incremental_navigation_core/local_target_selector.hpp"
@@ -41,6 +42,15 @@ struct PlanningSessionPorts final {
       const RequestLocalPlanningView&, const Pose2&, const LocalTarget&,
       SearchDeadline, const StopToken&)>
       plan_legged;
+  // Optional known-space navigation; independent of exploration inputs.
+  std::function<AdaptiveRouteResult(const AdaptiveNavigationSnapshot&, Point2,
+      Point2, SearchDeadline, const StopToken&)> plan_adaptive_global;
+  // Appended for callers that can interrupt regional target construction.
+  // Existing integrations may keep supplying select_target above.
+  std::function<std::optional<LocalTarget>(
+      const FineTraversabilitySnapshot&, const SparseGridGeometry&, Point2,
+      const FinalGoal&, const std::optional<GlobalRoute>&, const SearchControl&)>
+      select_target_controlled;
 };
 
 
@@ -68,6 +78,7 @@ struct CycleCandidate final {
   std::shared_ptr<const RequestLocalPlanningView> view;
   std::optional<SessionOutcome> failure;
   std::string reason_code;
+  std::string global_reason;
   bool waiting_for_map{};
   bool stopped{};
 };

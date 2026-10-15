@@ -79,6 +79,7 @@ struct RuntimeParameters final {
   std::chrono::milliseconds planning_sla;
   std::chrono::milliseconds planning_hard_timeout;
   std::chrono::milliseconds global_subdeadline;
+  std::string global_planner_mode;
   double coarse_resolution_m;
   double local_window_size_m;
   std::string odometry_topic;
@@ -136,6 +137,10 @@ struct RuntimeParameters final {
       node.declare_parameter<std::int64_t>("planning_hard_timeout_ms", 3000);
   const std::int64_t global_subdeadline_ms =
       node.declare_parameter<std::int64_t>("global_subdeadline_ms", 500);
+  const auto global_planner_mode = node.declare_parameter<std::string>("global_planner_mode", "adaptive_known");
+  if (global_planner_mode != "adaptive_known" && global_planner_mode != "legacy_coarse") {
+    throw std::runtime_error("global_planner_mode must be adaptive_known or legacy_coarse");
+  }
   const double coarse_resolution_m =
       node.declare_parameter<double>("coarse_resolution_m", 1.0);
   const double local_window_size_m =
@@ -170,6 +175,7 @@ struct RuntimeParameters final {
           std::chrono::milliseconds{planning_hard_timeout_ms},
       .global_subdeadline =
           std::chrono::milliseconds{global_subdeadline_ms},
+      .global_planner_mode = global_planner_mode,
       .coarse_resolution_m = coarse_resolution_m,
       .local_window_size_m = local_window_size_m,
       .odometry_topic = node.declare_parameter<std::string>(
@@ -422,7 +428,7 @@ std::unique_ptr<rclcpp::Executor> MakeIncrementalNavigationExecutor() {
 
 core::PlanningSessionPorts RealSessionPorts(
     const core::PlatformCapability& capability,
-    const core::TraversabilityProfile& profile) {
+    const core::TraversabilityProfile& profile, const std::string& mode) {
   auto global = std::make_shared<core::GlobalRoutePlanner>();
   auto selector = std::make_shared<core::LocalTargetSelector>();
   auto patch = std::make_shared<core::RequestLocalStartPatchBuilder>();
@@ -440,7 +446,7 @@ core::PlanningSessionPorts RealSessionPorts(
                               .terminal_yaw_tolerance_rad =
                                   0.5 * profile.goal_yaw_tolerance_rad})
                     : nullptr;
-  return core::PlanningSessionPorts{
+  core::PlanningSessionPorts ports{
       .plan_global =
           [global](const core::GlobalGuidanceSnapshot& snapshot,
                    const core::Point2 start, const core::Point2 goal,
@@ -482,6 +488,27 @@ core::PlanningSessionPorts RealSessionPorts(
                           : core::LocalPlanResult{};
           },
   };
+  ports.select_target_controlled =
+      [selector](const core::FineTraversabilitySnapshot& fine,
+                 const core::SparseGridGeometry& window, core::Point2 start,
+                 const core::FinalGoal& goal,
+                 const std::optional<core::GlobalRoute>& guidance,
+                 const core::SearchControl& control) {
+        return selector->SelectRolling(fine, window, start, goal, guidance, control);
+      };
+  if (mode == "adaptive_known") {
+    auto planner = std::make_shared<core::AdaptiveRoutePlanner>();
+    ports.plan_adaptive_global = [planner](const core::AdaptiveNavigationSnapshot& map,
+        core::Point2 start, core::Point2 goal, core::SearchDeadline deadline, const core::StopToken& stop) {
+      return planner->Plan(map,start,goal,deadline,stop);
+    };
+  }
+  return ports;
+}
+
+core::PlanningSessionPorts RealSessionPorts(const core::PlatformCapability& capability,
+    const core::TraversabilityProfile& profile) {
+  return RealSessionPorts(capability, profile, "adaptive_known");
 }
 
 struct IncrementalNavigationNode::Impl final {
@@ -514,11 +541,12 @@ struct IncrementalNavigationNode::Impl final {
             std::move(dependencies.before_goal_processing)),
         before_terminal_commit(
             std::move(dependencies.before_terminal_commit)) {
+    navigation_build = std::move(dependencies.navigation_map_builder);
     state_changed = latest_state.has_value();
     SessionPortsFactory factory = std::move(dependencies.ports_factory);
     core::PlanningSessionPorts ports =
         factory ? factory(parameters.capability)
-                : RealSessionPorts(parameters.capability, parameters.profile);
+                : RealSessionPorts(parameters.capability, parameters.profile, parameters.global_planner_mode);
     tracking_feedback_enabled = node.declare_parameter<bool>("enable_tracking_feedback", true);
     rolling_period_s = node.declare_parameter<double>("rolling_replan_period_s",
         tracking_feedback_enabled ? 0.5 : 0.0);
@@ -539,7 +567,9 @@ struct IncrementalNavigationNode::Impl final {
                 parameters.profile.goal_yaw_tolerance_rad,
             .local_window_size_m = parameters.local_window_size_m,
             .global_subdeadline = parameters.global_subdeadline,
-            .require_execution_confirmation = tracking_feedback_enabled},
+            .require_execution_confirmation = tracking_feedback_enabled,
+            .adaptive_global = rolling_enabled ? bool(worker_ports.plan_adaptive_global) : bool(ports.plan_adaptive_global),
+            .map_wait_timeout = parameters.planning_hard_timeout},
         rolling_enabled ? core::PlanningSessionPorts{} : Instrument(std::move(ports), cycle_metrics));
 
     action_group = node.create_callback_group(
@@ -549,6 +579,8 @@ struct IncrementalNavigationNode::Impl final {
     state_group = node.create_callback_group(
         rclcpp::CallbackGroupType::MutuallyExclusive);
     fine_derivation_group = node.create_callback_group(
+        rclcpp::CallbackGroupType::MutuallyExclusive);
+    navigation_derivation_group = node.create_callback_group(
         rclcpp::CallbackGroupType::MutuallyExclusive);
     guidance_derivation_group = node.create_callback_group(
         rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -688,6 +720,8 @@ struct IncrementalNavigationNode::Impl final {
         10ms, [this] { PlanningTick(); }, planning_group);
     fine_derivation_timer = node.create_wall_timer(
         10ms, [this] { RunFineDerivationWorker(); }, fine_derivation_group);
+    navigation_derivation_timer = node.create_wall_timer(
+        10ms, [this] { RunNavigationDerivationWorker(); }, navigation_derivation_group);
     guidance_derivation_timer = node.create_wall_timer(
         10ms, [this] { RunGuidanceDerivationWorker(); },
         guidance_derivation_group);
@@ -711,7 +745,19 @@ struct IncrementalNavigationNode::Impl final {
             return result;
           };
     }
+    if (ports.plan_adaptive_global) {
+      wrapped.plan_adaptive_global = [this, &metrics, function=std::move(ports.plan_adaptive_global)](
+          const core::AdaptiveNavigationSnapshot& map, core::Point2 start, core::Point2 goal,
+          core::SearchDeadline deadline, const core::StopToken& stop) {
+        core::AdaptiveRouteResult result;
+        metrics.global_elapsed_ms = MeasureMilliseconds([&]{result=function(map,start,goal,deadline,stop);});
+        metrics.global_statistics=result.route.statistics;
+        metrics.global_route_reused=false;
+        return result;
+      };
+    }
     wrapped.select_target = std::move(ports.select_target);
+    wrapped.select_target_controlled = std::move(ports.select_target_controlled);
     if (ports.build_start_patch) {
       wrapped.build_start_patch =
           [this, &metrics, function = std::move(ports.build_start_patch)](
@@ -840,7 +886,7 @@ struct IncrementalNavigationNode::Impl final {
     double fine_ms{};
     try {
       const auto fine_begin = std::chrono::steady_clock::now();
-      fine_updated = pipeline.RunFineDerivation();
+      if (pipeline.PendingFineDirtyTileCount() != 0U) fine_updated = pipeline.RunFineDerivation();
       fine_ms = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - fine_begin)
                     .count();
@@ -856,6 +902,34 @@ struct IncrementalNavigationNode::Impl final {
     }
     if (const auto update = LatestMapUpdate()) {
       PublishMapDiagnostics(*update, 0.0, fine_ms, 0.0);
+    }
+  }
+
+  void RunNavigationDerivationWorker() {
+    if (parameters.global_planner_mode != "adaptive_known") return;
+    { std::scoped_lock lock{snapshot_mutex};
+      if (test_snapshots && !navigation_build) return; }
+    const auto bundle = CaptureBundle();
+    const auto fine = bundle.fine;
+    if (!fine || (bundle.navigation && bundle.navigation->fine_ptr() == fine)) return;
+    {
+      std::scoped_lock lock{navigation_map_mutex};
+      if (navigation_map && navigation_map->fine_ptr() == fine) return;
+    }
+    try {
+      const auto deadline = core::SteadyClock::now() + parameters.global_subdeadline;
+      const auto built = navigation_build
+          ? navigation_build(fine, deadline, core::StopToken{})
+          : navigation_map_builder.Update(fine, deadline, core::StopToken{});
+      if (!built.snapshot || built.snapshot->fine_ptr() != fine || CaptureBundle().fine != fine) return;
+      {
+        std::scoped_lock lock{navigation_map_mutex};
+        navigation_map = built.snapshot;
+      }
+      std::scoped_lock lock{event_mutex};
+      navigation_changed = true;
+    } catch (const std::exception& error) {
+      RCLCPP_WARN(node.get_logger(), "navigation representation deferred: %s", error.what());
     }
   }
 
@@ -888,7 +962,12 @@ struct IncrementalNavigationNode::Impl final {
                              const double guidance_ms) {
     const core::ElevationMapCounters local = pipeline.LocalCounters();
     const core::SnapshotBundle bundle = CaptureBundle();
+    core::AdaptiveMapMetrics adaptive_metrics;
+    {std::scoped_lock lock{navigation_map_mutex};if(navigation_map)adaptive_metrics=navigation_map->metrics();}
     diagnostics_publisher->publish(MakeMapDiagnostics(MapDiagnosticsRecord{
+        .navigation_map_build_ms = adaptive_metrics.build_ms,
+        .navigation_map_regions = adaptive_metrics.regions,
+        .navigation_map_cache_bytes = adaptive_metrics.cached_bytes,
         .platform = PlatformName(parameters.platform_type),
         .raw_elevation_revision = update.raw_elevation_revision,
         .fine_traversability_revision =
@@ -935,7 +1014,12 @@ struct IncrementalNavigationNode::Impl final {
   }
 
   [[nodiscard]] core::SnapshotBundle CaptureBundle() const {
-    return test_snapshots ? *test_snapshots : pipeline.CaptureBundle();
+    core::SnapshotBundle bundle;
+    { std::scoped_lock lock{snapshot_mutex};
+      bundle = test_snapshots ? *test_snapshots : pipeline.CaptureBundle(); }
+    std::scoped_lock lock{navigation_map_mutex};
+    if (navigation_map && navigation_map->fine_ptr()==bundle.fine) bundle.navigation=navigation_map;
+    return bundle;
   }
 
   void PlanningTick() {
@@ -948,7 +1032,7 @@ struct IncrementalNavigationNode::Impl final {
     }
     if (snapshot_source) {
       if (auto injected = snapshot_source()) {
-        test_snapshots = std::move(*injected);
+        { std::scoped_lock lock{snapshot_mutex}; test_snapshots = std::move(*injected); }
         std::scoped_lock lock{event_mutex};
         fine_changed = true;
       }
@@ -964,6 +1048,7 @@ struct IncrementalNavigationNode::Impl final {
       tracking = std::exchange(pending_tracking, std::nullopt);
       process_fine = std::exchange(fine_changed, false);
       process_state = std::exchange(state_changed, false);
+      process_state |= std::exchange(navigation_changed, false);
       state = latest_state;
     }
     for (auto& event : local_events) {
@@ -1033,7 +1118,8 @@ struct IncrementalNavigationNode::Impl final {
       RunCycle(state.value_or(MissingState()), core::CycleTrigger::kContinue);
       return;
     }
-    if (process_state && active_goal && active_goal->is_active()) {
+    if ((process_state || coordinator->state() == core::CoordinatorState::kPlanning ||
+         coordinator->state() == core::CoordinatorState::kReplanning) && active_goal && active_goal->is_active()) {
       core::CycleTrigger trigger = core::CycleTrigger::kContinue;
       if (state && active_reference && bundle.fine) {
         trigger = TriggerForState(*state, *bundle.fine, *active_reference);
@@ -1377,6 +1463,8 @@ struct IncrementalNavigationNode::Impl final {
                                    : output.feedback.reason_code;
     diagnostics_publisher->publish(MakePlanningCycleDiagnostics(
         PlanningCycleDiagnosticsRecord{
+            .global_planner_mode = parameters.global_planner_mode,
+            .global_reason = output.global_reason,
             .session_id = output.terminal
                 ? SessionHex(output.terminal->session_id)
                 : (active_goal
@@ -1602,8 +1690,14 @@ struct IncrementalNavigationNode::Impl final {
   RuntimeParameters parameters;
   InputStore input_store;
   ElevationPipeline pipeline;
+  core::AdaptiveNavigationMapBuilder navigation_map_builder;
+  mutable std::mutex navigation_map_mutex;
+  std::shared_ptr<const core::AdaptiveNavigationSnapshot> navigation_map;
   IncrementalMapPublisher exploration_map_publisher;
   std::optional<core::SnapshotBundle> test_snapshots;
+  mutable std::mutex snapshot_mutex;
+  decltype(IncrementalNavigationNodeDependencies::navigation_map_builder) navigation_build;
+  bool navigation_changed{};
   std::unique_ptr<core::PlanningSessionCoordinator> coordinator;
   CycleMetrics cycle_metrics;
   CycleMetrics worker_metrics;
@@ -1624,6 +1718,7 @@ struct IncrementalNavigationNode::Impl final {
   rclcpp::CallbackGroup::SharedPtr state_group;
   rclcpp::CallbackGroup::SharedPtr fine_derivation_group;
   rclcpp::CallbackGroup::SharedPtr guidance_derivation_group;
+  rclcpp::CallbackGroup::SharedPtr navigation_derivation_group;
   rclcpp::CallbackGroup::SharedPtr planning_group;
   rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr
       local_subscription;
@@ -1644,6 +1739,7 @@ struct IncrementalNavigationNode::Impl final {
   rclcpp::TimerBase::SharedPtr planning_timer;
   rclcpp::TimerBase::SharedPtr fine_derivation_timer;
   rclcpp::TimerBase::SharedPtr guidance_derivation_timer;
+  rclcpp::TimerBase::SharedPtr navigation_derivation_timer;
 
   rclcpp::Subscription<lunar_planning_msgs::msg::TrackingStatus>::SharedPtr tracking_subscription;
   std::optional<lunar_planning_msgs::msg::TrackingStatus> pending_tracking;

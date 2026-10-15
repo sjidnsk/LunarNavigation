@@ -84,8 +84,12 @@ struct PlanningSessionCoordinator::Impl final {
     std::uint64_t guidance_revision{};
     std::string frame_id;
     Pose2 pose;
+    SearchDeadline deadline;
   };
   std::optional<WaitingInput> waiting_input;
+  std::shared_ptr<const FineTraversabilitySnapshot> waiting_evidence;
+  std::optional<SearchDeadline> map_wait_deadline;
+  std::optional<SearchDeadline> representation_deadline;
   std::shared_ptr<std::stop_source> current_cycle_stop;
   std::optional<CycleRequest> pending;
   std::uint64_t request_sequence{};
@@ -306,6 +310,9 @@ StartSessionResult PlanningSessionCoordinator::Start(const SessionId id,
   impl_->final_alignment = false;
   impl_->session_id = id;
   impl_->goal = goal;
+  impl_->representation_deadline.reset();
+  impl_->map_wait_deadline.reset();
+  impl_->waiting_evidence.reset();
   impl_->planning_cycle = 0U;
   impl_->segment_revision = 0U;
   impl_->captured_fine_revision = 0U;
@@ -355,7 +362,11 @@ PreparedCycle PlanningSessionCoordinator::PrepareCycle(
         WithinArrivalTolerance(std::hypot(pose.position_m.x-waiting.pose.position_m.x,
                                          pose.position_m.y-waiting.pose.position_m.y), 0.0) &&
         WithinArrivalTolerance(std::abs(NormalizeAngle(pose.yaw_rad-waiting.pose.yaw_rad)), 0.0)) {
-      output.feedback = impl_->Feedback("WAITING_FOR_MAP");
+      if (impl_->Now() >= waiting.deadline) {
+        output.terminal = impl_->Finish(SessionOutcome::kMapUnavailable, "MAP_WAIT_TIMEOUT",
+            impl_->last_safety_evaluated_fine_revision);
+        output.feedback = impl_->Feedback("MAP_WAIT_TIMEOUT");
+      } else output.feedback = impl_->Feedback("WAITING_FOR_MAP");
       return prepared;
     }
     impl_->waiting_input.reset();
@@ -415,6 +426,20 @@ PreparedCycle PlanningSessionCoordinator::PrepareCycle(
     return prepared;
   }
 
+  if (impl_->ports.plan_adaptive_global || impl_->config.adaptive_global) {
+    if (!snapshots.navigation || snapshots.navigation->fine_ptr() != snapshots.fine) {
+      if (!impl_->representation_deadline)
+        impl_->representation_deadline = std::min(deadline, impl_->Now() + impl_->config.map_wait_timeout);
+      output.global_reason = impl_->Now() >= *impl_->representation_deadline
+          ? "NAVIGATION_MAP_TIMEOUT" : "NAVIGATION_MAP_PENDING";
+      if (output.global_reason == "NAVIGATION_MAP_TIMEOUT")
+        output.terminal = impl_->Finish(SessionOutcome::kMapUnavailable, output.global_reason,
+            impl_->last_safety_evaluated_fine_revision);
+      output.feedback = impl_->Feedback(output.global_reason);
+      return prepared;
+    }
+    impl_->representation_deadline.reset();
+  }
   auto source = std::make_shared<std::stop_source>();
   std::atomic_store_explicit(&impl_->current_cycle_stop, source, std::memory_order_release);
   impl_->pending = CycleRequest{
@@ -453,6 +478,7 @@ CycleOutput PlanningSessionCoordinator::ApplyCycle(
   const auto deadline = request.deadline;
   const Point2 start = state.base_link_pose.position_m;
   impl_->latest_state = current_state;
+  output.global_reason = std::move(candidate.global_reason);
   output.guidance_status = candidate.guidance_status;
   output.global_route = std::move(candidate.global_route);
   if (candidate.stopped || request.stop_token.stop_requested()) {
@@ -477,12 +503,19 @@ CycleOutput PlanningSessionCoordinator::ApplyCycle(
   if (local.status == LocalPlanResult::Status::kNoPath &&
       candidate.waiting_for_map) {
     output.path_reference = impl_->Invalidate(impl_->last_safety_evaluated_fine_revision);
+    if (impl_->waiting_evidence != snapshots.fine || !impl_->map_wait_deadline) {
+      impl_->waiting_evidence = snapshots.fine;
+      impl_->map_wait_deadline = impl_->Now() + impl_->config.map_wait_timeout;
+    }
+    if (impl_->Now() >= *impl_->map_wait_deadline)
+      return fail(SessionOutcome::kMapUnavailable, "MAP_WAIT_TIMEOUT");
     impl_->waiting_input = Impl::WaitingInput{
         .fine_revision = snapshots.fine->fine_traversability_revision(),
         .guidance_revision = snapshots.guidance
             ? snapshots.guidance->global_guidance_revision() : 0U,
         .frame_id = snapshots.fine->geometry().frame_id(),
-        .pose = state.base_link_pose};
+        .pose = state.base_link_pose,
+        .deadline = *impl_->map_wait_deadline};
     impl_->state = CoordinatorState::kPlanning;
     output.feedback = impl_->Feedback("WAITING_FOR_MAP");
     return output;
@@ -571,6 +604,8 @@ CycleOutput PlanningSessionCoordinator::ApplyCycle(
   }
   impl_->last_safety_evaluated_fine_revision = reference.traversability_revision;
   impl_->segment_revision = reference.segment_revision;
+  impl_->map_wait_deadline.reset();
+  impl_->waiting_evidence.reset();
   impl_->active_path = reference;
   impl_->active_view = std::move(candidate.view);
   impl_->state = CoordinatorState::kExecuting;

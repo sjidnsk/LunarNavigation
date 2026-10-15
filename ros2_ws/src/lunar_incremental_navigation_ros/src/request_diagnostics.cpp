@@ -67,6 +67,9 @@ diagnostic_msgs::msg::DiagnosticArray MakeMapDiagnostics(
   status.level = record.incompatible_qos_count == 0U
                      ? diagnostic_msgs::msg::DiagnosticStatus::OK
                      : diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+  Add(status, "navigation_map_build_ms", Decimal(record.navigation_map_build_ms));
+  Add(status, "navigation_map_regions", std::to_string(record.navigation_map_regions));
+  Add(status, "navigation_map_cache_bytes", std::to_string(record.navigation_map_cache_bytes));
   Add(status, "platform", record.platform);
   Add(status, "raw_elevation_revision",
       std::to_string(record.raw_elevation_revision));
@@ -102,6 +105,8 @@ diagnostic_msgs::msg::DiagnosticArray MakePlanningCycleDiagnostics(
   status.level = plan_found_within_sla
                      ? diagnostic_msgs::msg::DiagnosticStatus::OK
                      : diagnostic_msgs::msg::DiagnosticStatus::WARN;
+  Add(status, "global_planner_mode", record.global_planner_mode);
+  Add(status, "global_reason", record.global_reason);
   Add(status, "session_id", record.session_id);
   Add(status, "planning_cycle", std::to_string(record.planning_cycle));
   Add(status, "segment_revision", std::to_string(record.segment_revision));

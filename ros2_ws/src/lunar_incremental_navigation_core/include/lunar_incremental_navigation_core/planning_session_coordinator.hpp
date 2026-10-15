@@ -9,6 +9,7 @@
 #include <optional>
 
 #include "lunar_incremental_navigation_core/global_route_planner.hpp"
+#include "lunar_incremental_navigation_core/adaptive_route_planner.hpp"
 #include "lunar_incremental_navigation_core/legged_local_planner.hpp"
 #include "lunar_incremental_navigation_core/local_planning_window.hpp"
 #include "lunar_incremental_navigation_core/local_target_selector.hpp"
@@ -54,6 +55,7 @@ struct CycleOutput final {
   std::optional<GlobalRoute> global_route;
   std::optional<PathReference> path_reference;
   std::optional<SessionTerminal> terminal;
+  std::string global_reason;
 };
 
 struct PlanningSessionCoordinatorConfig final {
@@ -63,6 +65,8 @@ struct PlanningSessionCoordinatorConfig final {
   std::chrono::nanoseconds global_subdeadline{std::chrono::milliseconds(500)};
   NowFn now{[] { return SteadyClock::now(); }};
   bool require_execution_confirmation{false};
+  bool adaptive_global{false};
+  std::chrono::nanoseconds map_wait_timeout{std::chrono::seconds(3)};
 };
 
 struct PreparedCycle final {
