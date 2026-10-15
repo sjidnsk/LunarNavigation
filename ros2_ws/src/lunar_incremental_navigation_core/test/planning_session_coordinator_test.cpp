@@ -1333,4 +1333,83 @@ TEST(PlanningSessionCoordinator, PoseJitterDoesNotRenewMapWaitDeadline) {
   ASSERT_TRUE(out.terminal);
   EXPECT_EQ(out.terminal->result.reason_code,"MAP_WAIT_TIMEOUT");
 }
+
+TEST(PlanningSessionCoordinator, ExecutionHoldPreservesRequiredSegmentComputation) {
+  FakePorts fake;
+  auto ports = fake.Bind();
+  PlanningSessionCoordinator coordinator(Wheel(), {}, Config(), ports);
+  ASSERT_TRUE(coordinator.Start(SessionId{{102}},
+      {.target_x_m=6.5, .target_y_m=1.5}).accepted);
+  const SnapshotBundle bundle{.fine=MakeFine()};
+  auto request = coordinator.PrepareCycle(At(1.5, 1.5), bundle,
+      CycleTrigger::kContinue, SearchDeadline::max());
+  ASSERT_TRUE(request.request);
+  coordinator.SetFinalAlignment(true);
+  EXPECT_FALSE(request.request->stop_token.stop_requested());
+  auto candidate = ComputeCycle(*request.request, ports, {}, request.request->stop_token);
+  auto output = coordinator.ApplyCycle(std::move(candidate), At(1.5, 1.5), bundle);
+  ASSERT_TRUE(output.path_reference);
+  EXPECT_EQ(output.path_reference->state, PathState::kActive);
+}
+
+TEST(PlanningSessionCoordinator, RepeatedFinalPoseMissTerminatesAfterOneCorrection) {
+  FakePorts fake;
+  fake.reaches_final_goal = true;
+  auto config = Config();
+  config.require_execution_confirmation = true;
+  PlanningSessionCoordinator coordinator(Wheel(), {}, config, fake.Bind());
+  ASSERT_TRUE(coordinator.Start(SessionId{{103}},
+      {.target_x_m=6.5, .target_y_m=1.5, .has_target_yaw=true, .target_yaw_rad=0.}).accepted);
+  const SnapshotBundle bundle{.fine=MakeFine()};
+  ASSERT_TRUE(coordinator.PlanCycle(At(1.5, 1.5), bundle,
+      CycleTrigger::kContinue, SearchDeadline::max()).path_reference);
+  auto correction = coordinator.PlanCycle(At(6.49, 1.5, .2), bundle,
+      CycleTrigger::kSegmentEnd, SearchDeadline::max());
+  ASSERT_TRUE(correction.path_reference);
+  EXPECT_FALSE(correction.terminal);
+  auto failed = coordinator.PlanCycle(At(6.49, 1.5, .2), bundle,
+      CycleTrigger::kSegmentEnd, SearchDeadline::max());
+  ASSERT_TRUE(failed.terminal);
+  EXPECT_EQ(failed.terminal->result.reason_code, "FINAL_POSE_NOT_REACHED");
+  EXPECT_EQ(failed.terminal->result.outcome, SessionOutcome::kNoPath);
+}
+TEST(PlanningSessionCoordinator, FinalPoseLossCannotSucceedUsingOlderInBandOdometry) {
+  FakePorts ports;
+  ports.reaches_final_goal = true;
+  auto cfg = Config();
+  cfg.require_execution_confirmation = true;
+  PlanningSessionCoordinator coordinator(Wheel(), {}, cfg, ports.Bind());
+  auto fine = MakeFine();
+  ASSERT_TRUE(coordinator.Start(SessionId{{104U}},
+      FinalGoal{.target_x_m=6.5, .target_y_m=1.5}).accepted);
+  ASSERT_TRUE(coordinator.PlanCycle(At(1.5,1.5), {.fine=fine},
+      CycleTrigger::kContinue, SearchDeadline::max()).path_reference);
+  auto correction = coordinator.PlanCycle(At(6.5,1.5), {.fine=fine},
+      CycleTrigger::kFinalPoseLost, SearchDeadline::max());
+  ASSERT_TRUE(correction.path_reference);
+  EXPECT_FALSE(correction.terminal);
+  auto failure = coordinator.PlanCycle(At(6.5,1.5), {.fine=fine},
+      CycleTrigger::kFinalPoseLost, SearchDeadline::max());
+  ASSERT_TRUE(failure.terminal);
+  EXPECT_EQ(failure.terminal->result.reason_code, "FINAL_POSE_NOT_REACHED");
+}
+
+TEST(PlanningSessionCoordinator, FailedFinalCorrectionCannotBypassRetryLimit) {
+  FakePorts ports;
+  ports.reaches_final_goal = true;
+  auto cfg = Config(); cfg.require_execution_confirmation = true;
+  PlanningSessionCoordinator coordinator(Wheel(), {}, cfg, ports.Bind());
+  auto fine = MakeFine();
+  ASSERT_TRUE(coordinator.Start(SessionId{{105U}},
+      FinalGoal{.target_x_m=6.5,.target_y_m=1.5,.has_target_yaw=true,.target_yaw_rad=0.}).accepted);
+  ASSERT_TRUE(coordinator.PlanCycle(At(1.5,1.5), {.fine=fine},
+      CycleTrigger::kContinue, SearchDeadline::max()).path_reference);
+  ASSERT_TRUE(coordinator.PlanCycle(At(6.5,1.5,.2), {.fine=fine},
+      CycleTrigger::kSegmentEnd, SearchDeadline::max()).path_reference);
+  auto failed = coordinator.PlanCycle(At(6.5,1.5,.2), {.fine=fine},
+      CycleTrigger::kDeviation, SearchDeadline::max());
+  ASSERT_TRUE(failed.terminal);
+  EXPECT_EQ(failed.terminal->result.reason_code, "FINAL_POSE_NOT_REACHED");
+}
+
 }
