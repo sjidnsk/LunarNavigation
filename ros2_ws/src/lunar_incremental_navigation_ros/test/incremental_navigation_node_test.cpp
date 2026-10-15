@@ -2204,6 +2204,86 @@ TEST(IncrementalNavigationNode, RollingDestructionStopsBlockedWorker) {
 }
 
 namespace lunar::incremental_navigation_ros {
+TEST(IncrementalNavigationNode, RepeatedCompletionDoesNotStarveRequiredCorrection) {
+  auto control = std::make_shared<FakeControl>();
+  control->reaches_final_goal = true;
+  control->local_delay = 40ms;
+  auto states = std::make_shared<StateQueue>();
+  RunningSystem system("tracking_rolling_terminal_receipt", IncrementalNavigationNodeDependencies{
+      .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
+      .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}},
+      .state_source=[states] { return states->Take(); }},
+      false, TimingOverrides{100, 500, 50, 60.0});
+  auto producer = rclcpp::Node::make_shared("terminal_receipt_publisher");
+  auto publisher = producer->create_publisher<lunar_planning_msgs::msg::TrackingStatus>(
+      "/test/tracking_rolling_terminal_receipt/tracking", 10);
+  ASSERT_TRUE(WaitFor([&] { return publisher->get_subscription_count() > 0; }));
+  auto goal = system.Send(3.5, .5);
+  ASSERT_TRUE(goal);
+  ASSERT_TRUE(WaitFor([&] { return !system.Paths().empty(); }));
+  auto result = system.Result(goal);
+  states->Push({.position_m={.x=2.5,.y=.5}});
+  lunar_planning_msgs::msg::TrackingStatus status;
+  status.session_id.uuid=goal->get_goal_id(); status.segment_revision=1;
+  status.state=status.COMPLETED;
+  std::jthread repeated([&](std::stop_token stop) {
+    while (!stop.stop_requested()) {
+      publisher->publish(status);
+      std::this_thread::sleep_for(1ms);
+    }
+  });
+  const bool corrected = WaitFor([&] { return system.Paths().size() >= 2; });
+  repeated.request_stop();
+  repeated.join();
+  ASSERT_TRUE(corrected);
+  EXPECT_EQ(system.Paths()[1].segment_revision, 2U);
+  states->Push({.position_m={.x=3.5,.y=.5}});
+  status.segment_revision=2;
+  publisher->publish(status);
+  ASSERT_EQ(result.wait_for(3s), std::future_status::ready);
+  EXPECT_EQ(result.get().result->reason_code, "GOAL_REACHED");
+}
+
+TEST(IncrementalNavigationNode, RepeatedFinalPositionLossHasBoundedCorrection) {
+  auto control = std::make_shared<FakeControl>();
+  control->reaches_final_goal = true;
+  control->local_delay = 40ms;
+  auto states = std::make_shared<StateQueue>();
+  RunningSystem system("tracking_rolling_final_pose_loss", IncrementalNavigationNodeDependencies{
+      .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
+      .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}},
+      .state_source=[states] { return states->Take(); }},
+      false, TimingOverrides{100, 500, 50, 60.0});
+  auto producer = rclcpp::Node::make_shared("final_pose_loss_publisher");
+  auto publisher = producer->create_publisher<lunar_planning_msgs::msg::TrackingStatus>(
+      "/test/tracking_rolling_final_pose_loss/tracking", 10);
+  ASSERT_TRUE(WaitFor([&] { return publisher->get_subscription_count() > 0; }));
+  auto goal = system.Send(3.5, .5);
+  ASSERT_TRUE(goal);
+  ASSERT_TRUE(WaitFor([&] { return !system.Paths().empty(); }));
+  auto result = system.Result(goal);
+  states->Push({.position_m={.x=2.5,.y=.5}});
+  lunar_planning_msgs::msg::TrackingStatus status;
+  status.session_id.uuid=goal->get_goal_id(); status.segment_revision=1;
+  status.state=status.FAILED;
+  status.reason="GOAL_POSITION_LOST";
+  std::jthread repeated([&](std::stop_token stop) {
+    while (!stop.stop_requested()) {
+      publisher->publish(status);
+      std::this_thread::sleep_for(1ms);
+    }
+  });
+  const bool corrected = WaitFor([&] { return system.Paths().size() >= 2; });
+  repeated.request_stop();
+  repeated.join();
+  ASSERT_TRUE(corrected);
+  EXPECT_EQ(system.Paths()[1].segment_revision, 2U);
+  status.segment_revision=2;
+  publisher->publish(status);
+  ASSERT_EQ(result.wait_for(3s), std::future_status::ready);
+  EXPECT_EQ(result.get().result->reason_code, "FINAL_POSE_NOT_REACHED");
+}
+
 TEST(IncrementalNavigationNode, InstrumentForwardsControlledTargetInBothCycleModes) {
   for (const auto& suffix : {"controlled_target_sync", "tracking_rolling_controlled_target"}) {
     auto control = std::make_shared<FakeControl>();

@@ -29,6 +29,7 @@ enum class CoordinatorState : std::uint8_t {
 enum class CycleTrigger : std::uint8_t {
   kContinue,
   kSegmentEnd,
+  kFinalPoseLost,
   kDeviation,
 };
 

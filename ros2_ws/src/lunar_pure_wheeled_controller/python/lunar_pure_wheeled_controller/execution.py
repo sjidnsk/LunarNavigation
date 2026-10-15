@@ -142,7 +142,7 @@ class PathExecutor:
         p = self.policy
         self.heading_error = error
         tolerance = (
-            p.goal_yaw_tolerance_rad
+            p.goal_yaw_tolerance_rad * (0.5 if self.final else 1.0)
             if self.phase == "FINAL_ALIGN"
             else p.alignment_tolerance_rad
         )
@@ -190,9 +190,22 @@ class PathExecutor:
             self.phase = "FAILED"
             return self._result()
         dt = min(dt, 0.2)
-        if self.path is None or self.phase in ("COMPLETED", "FAILED"):
+        if self.path is None or self.phase == "FAILED":
             return self._result()
         line = self.path
+        if self.phase == "COMPLETED":
+            # Completion feedback may be repeated while navigation verifies the
+            # latest odometry. Never latch success after measured pose drifts
+            # outside the public arrival contract.
+            if self.final:
+                x, y = line.point_at(line.length)
+                if math.hypot(x - state.x_m, y - state.y_m) > p.goal_position_tolerance_m:
+                    self.failure = "GOAL_POSITION_LOST"
+                elif abs(angle(line.final_yaw - state.yaw_rad)) > p.goal_yaw_tolerance_rad:
+                    self.failure = "GOAL_YAW_LOST"
+                if self.failure:
+                    self.phase = "FAILED" if self._stopped(state) else "BRAKING"
+            return self._result()
         initial_reach = None
         if self._reproject:
             initial_reach = math.hypot(state.x_m-line.points[0][0], state.y_m-line.points[0][1]) + p.lookahead_m
@@ -240,14 +253,19 @@ class PathExecutor:
         stop_xy = line.point_at(stop_s)
         at_end = self._stop_index == len(self.stops) - 1
         tolerance = (
-            p.goal_position_tolerance_m
+            p.goal_position_tolerance_m * 0.5
             if at_end and self.final
             else p.corner_position_tolerance_m
         )
         distance = math.hypot(stop_xy[0] - state.x_m, stop_xy[1] - state.y_m)
         arrived = distance <= tolerance and stop_s - self.progress_m <= tolerance
+        yaw_tolerance = p.goal_yaw_tolerance_rad * (0.5 if self.final else 1.0)
         if self.phase == "FINAL_ALIGN":
-            if not arrived:
+            # Use the public position band as hysteresis during rotation; the
+            # tighter control target above leaves room for settling motion.
+            retained = (distance <= p.goal_position_tolerance_m and
+                        stop_s - self.progress_m <= p.goal_position_tolerance_m)
+            if not (retained if self.final else arrived):
                 # Localization can move along the path without cross-track
                 # error. Stop and request a newly certified reference when
                 # the position accepted before final alignment is lost.
@@ -264,7 +282,7 @@ class PathExecutor:
                 self.failure = "ALIGNMENT_STALLED"
                 self.phase = "BRAKING"
                 return self._result()
-            if abs(error) <= p.goal_yaw_tolerance_rad and self._stopped(state):
+            if abs(error) <= yaw_tolerance and self._stopped(state):
                 self.phase = "COMPLETED"
                 return self._result()
             return self._rotation(state, error, dt)
@@ -277,7 +295,7 @@ class PathExecutor:
                     self.phase = "COMPLETED"
                     return self._result()
                 error = angle(line.final_yaw - state.yaw_rad)
-                if abs(error) <= p.goal_yaw_tolerance_rad:
+                if abs(error) <= yaw_tolerance:
                     self.phase = "COMPLETED"
                     return self._result()
                 self.phase = "FINAL_ALIGN"

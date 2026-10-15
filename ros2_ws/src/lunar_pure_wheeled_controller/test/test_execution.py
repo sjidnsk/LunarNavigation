@@ -44,6 +44,39 @@ def test_completion_waits_for_measured_stop():
     assert result.command.complete
 
 
+def test_final_yaw_control_leaves_margin_inside_public_acceptance():
+    executor = PathExecutor(replace(TrackingPolicy(), goal_yaw_tolerance_rad=0.05))
+    executor.set_path(((0., 0., 0.), (0., 0., 0.)), final=True)
+    result = executor.update(TrackingState(0., 0., -0.049), 0.05)
+    assert not result.command.complete
+    assert result.command.angular_z_radps > 0.
+    assert executor.update(TrackingState(0., 0., -0.02), 0.05).command.complete
+
+
+def test_final_position_control_leaves_margin_inside_public_acceptance():
+    executor = PathExecutor(replace(TrackingPolicy(), goal_position_tolerance_m=0.10))
+    executor.set_path(((0., 0., 0.), (1., 0., 0.)), final=True)
+    result = executor.update(TrackingState(0.925, 0., 0.), 0.05)
+    assert not result.command.complete
+    assert result.command.linear_x_mps > 0.
+    assert executor.update(TrackingState(0.96, 0., 0.), 0.05).command.complete
+
+
+@pytest.mark.parametrize('x,yaw,reason', [
+    (1.11, 0., 'GOAL_POSITION_LOST'),
+    (1., 0.0505, 'GOAL_YAW_LOST'),
+])
+def test_completed_reference_rechecks_new_stopped_pose(x, yaw, reason):
+    executor = PathExecutor(replace(TrackingPolicy(), goal_position_tolerance_m=0.10,
+                                   goal_yaw_tolerance_rad=0.05))
+    executor.set_path(((0., 0., 0.), (1., 0., 0.)), identity=('goal', 1), final=True)
+    assert executor.update(TrackingState(1., 0., 0.), 0.05).command.complete
+    result = executor.update(TrackingState(x, 0., yaw), 0.05)
+    assert not result.command.complete
+    assert result.command.failure_reason == reason
+    assert result.command.linear_x_mps == result.command.angular_z_radps == 0.
+
+
 def test_old_revision_and_duplicate_do_not_reset_execution():
     executor = PathExecutor(TrackingPolicy())
     path = ((0, 0, 0), (3, 0, 0))
