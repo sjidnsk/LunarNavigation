@@ -1310,6 +1310,81 @@ TEST(IncrementalNavigationNode,
   }));
 }
 
+TEST(IncrementalNavigationNode, PreparedMapWakesPendingGoalWithoutNewOdometry) {
+  auto fine=MakeFine();core::AdaptiveNavigationMapBuilder builder;
+  auto nav=builder.Update(fine,core::SearchDeadline::max(),{}).snapshot;
+  auto ready=std::make_shared<std::atomic_bool>(false);auto control=std::make_shared<FakeControl>();
+  auto factory=[control](const core::PlatformCapability& capability){auto ports=FakePorts(control)(capability);
+    ports.plan_adaptive_global=[](const auto&,auto,auto,auto,const auto&){core::AdaptiveRouteResult r;r.route.status=core::GuidanceStatus::kAvailable;r.route.route=core::GlobalRoute{};return r;};return ports;};
+  RunningSystem system("map_ready_wakeup",IncrementalNavigationNodeDependencies{
+    .ports_factory=factory,.snapshots=core::SnapshotBundle{.fine=fine},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}},
+    .snapshot_source=[ready,fine,nav]()->std::optional<core::SnapshotBundle>{
+      if(ready->exchange(false))return core::SnapshotBundle{.fine=fine,.navigation=nav};return std::nullopt;}});
+  auto handle=system.Send(3.5,.5);ASSERT_TRUE(handle);
+  ASSERT_TRUE(WaitFor([&]{auto d=system.Diagnostics();return !d.empty()&&FindDiagnosticValue(d.back(),"reason_code")=="NAVIGATION_MAP_PENDING";}));
+  ready->store(true);
+  EXPECT_TRUE(WaitFor([&]{return !system.Paths().empty();},1s));
+  static_cast<void>(system.Cancel(handle));
+}
+TEST(IncrementalNavigationNode, PendingMapTimesOutWithoutNewOdometry) {
+  auto factory=[](const core::PlatformCapability&){core::PlanningSessionPorts p;
+    p.plan_adaptive_global=[](const auto&,auto,auto,auto,const auto&){return core::AdaptiveRouteResult{};};return p;};
+  RunningSystem system("map_wait_bounded",IncrementalNavigationNodeDependencies{
+    .ports_factory=factory,.snapshots=core::SnapshotBundle{.fine=MakeFine()},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}}},false,
+    TimingOverrides{.planning_sla_ms=50,.planning_hard_timeout_ms=200,.global_subdeadline_ms=100});
+  auto handle=system.Send(3.5,.5);ASSERT_TRUE(handle);auto future=system.Result(handle);
+  ASSERT_EQ(future.wait_for(1s),std::future_status::ready);
+  EXPECT_EQ(future.get().result->reason_code,"NAVIGATION_MAP_TIMEOUT");
+}
+TEST(IncrementalNavigationNode, PendingMapDuringReplanningTimesOutWithoutOdometry) {
+  auto fine = MakeFine();
+  core::AdaptiveNavigationMapBuilder builder;
+  auto nav = builder.Update(fine, core::SearchDeadline::max(), {}).snapshot;
+  auto changed = MakeFine(2, core::GridIndex{2, 0});
+  auto update = std::make_shared<std::atomic_bool>(false);
+  auto control = std::make_shared<FakeControl>();
+  auto factory = [control](const core::PlatformCapability& capability) {
+    auto ports = FakePorts(control)(capability);
+    ports.plan_adaptive_global = [](const auto&, auto, auto, auto, const auto&) {
+      core::AdaptiveRouteResult r;
+      r.route.status = core::GuidanceStatus::kAvailable;
+      r.route.route = core::GlobalRoute{};
+      return r;
+    };
+    return ports;
+  };
+  RunningSystem system("replanning_map_wait", IncrementalNavigationNodeDependencies{
+      .ports_factory = factory,
+      .snapshots = core::SnapshotBundle{.fine = fine, .navigation = nav},
+      .state = core::StateInput{.base_link_pose = {.position_m = {.x = .5, .y = .5}}},
+      .snapshot_source = [update, changed]() -> std::optional<core::SnapshotBundle> {
+        if (update->exchange(false)) return core::SnapshotBundle{.fine = changed};
+        return std::nullopt;
+      }}, false, TimingOverrides{.planning_sla_ms = 50,
+          .planning_hard_timeout_ms = 200, .global_subdeadline_ms = 100});
+  auto handle = system.Send(3.5, .5);
+  ASSERT_TRUE(handle);
+  ASSERT_TRUE(WaitFor([&] { return !system.Paths().empty(); }));
+  auto future = system.Result(handle);
+  update->store(true);
+  ASSERT_TRUE(WaitFor([&] {
+    const auto d = system.Diagnostics();
+    return !d.empty() && FindDiagnosticValue(d.back(), "reason_code") == "NAVIGATION_MAP_PENDING";
+  }));
+  ASSERT_EQ(future.wait_for(1s), std::future_status::ready);
+  EXPECT_EQ(future.get().result->reason_code, "NAVIGATION_MAP_TIMEOUT");
+}
+
+TEST(IncrementalNavigationNode, RejectsUnknownGlobalPlannerMode) {
+  auto options=ServerOptions("bad_global_mode");
+  auto values=options.parameter_overrides();values.emplace_back("global_planner_mode","bad_mode");
+  options.parameter_overrides(values);
+  EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(options,
+      IncrementalNavigationNodeDependencies{}),std::runtime_error);
+}
+
 TEST(IncrementalNavigationNode, RejectsInvalidPlanningTimingParameters) {
   EXPECT_NO_THROW(std::make_shared<IncrementalNavigationNode>(
       ServerOptions("global_after_sla", false,
@@ -2123,5 +2198,103 @@ TEST(IncrementalNavigationNode, RollingDestructionStopsBlockedWorker) {
   }
   EXPECT_EQ(control->active_local_calls.load(),0);
   EXPECT_EQ(control->completed_local_calls.load(),2);
+}
+}
+
+namespace lunar::incremental_navigation_ros {
+TEST(IncrementalNavigationNode, InstrumentForwardsControlledTargetInBothCycleModes) {
+  for (const auto& suffix : {"controlled_target_sync", "tracking_rolling_controlled_target"}) {
+    auto control = std::make_shared<FakeControl>();
+    auto calls = std::make_shared<std::atomic<int>>(0);
+    auto factory = [base = FakePorts(control), calls](const auto& cap) {
+      auto ports = base(cap);
+      auto select = ports.select_target;
+      ports.select_target_controlled = [select, calls](const auto& fine, const auto& window,
+          auto start, const auto& goal, const auto& route, const core::SearchControl& budget) {
+        EXPECT_GT(budget.deadline, core::SteadyClock::now());
+        EXPECT_FALSE(budget.stop_token.stop_requested());
+        ++*calls;
+        return select(fine, window, start, goal, route);
+      };
+      return ports;
+    };
+    RunningSystem system(suffix, IncrementalNavigationNodeDependencies{
+        .ports_factory = factory, .snapshots = core::SnapshotBundle{.fine = MakeFine()},
+        .state = core::StateInput{.base_link_pose = {.position_m = {.5, .5}}}});
+    auto goal = system.Send(5.5, .5);
+    ASSERT_TRUE(goal);
+    ASSERT_TRUE(WaitFor([&] {return !system.Paths().empty();}));
+    EXPECT_GT(calls->load(), 0) << suffix;
+    system.Cancel(goal);
+  }
+}
+}
+namespace lunar::incremental_navigation_ros {
+TEST(IncrementalNavigationNode, FineSafetyInvalidationDoesNotWaitForNavigationBuild) {
+  const auto fine=MakeFine(); const auto blocked=MakeFine(2,core::GridIndex{3,0});
+  core::AdaptiveNavigationMapBuilder initial;
+  const auto nav=initial.Update(fine,core::SearchDeadline::max(),{}).snapshot;
+  auto inject=std::make_shared<std::atomic_bool>(false);
+  auto building=std::make_shared<std::atomic_bool>(false);
+  auto release=std::make_shared<std::atomic_bool>(false);
+  auto control=std::make_shared<FakeControl>();
+  auto builder=std::make_shared<core::AdaptiveNavigationMapBuilder>();
+  auto factory=[control](const auto& cap) {
+    auto ports=FakePorts(control)(cap);
+    ports.plan_adaptive_global=[](const auto&,auto,auto,auto,const auto&) {
+      core::AdaptiveRouteResult r; r.route.status=core::GuidanceStatus::kAvailable;
+      r.route.route=core::GlobalRoute{}; return r;
+    };return ports;
+  };
+  RunningSystem system("tracking_rolling_build_safety",IncrementalNavigationNodeDependencies{
+    .ports_factory=factory,.snapshots=core::SnapshotBundle{.fine=fine,.navigation=nav},
+    .state=core::StateInput{.base_link_pose={.position_m={.5,.5}}},
+    .snapshot_source=[inject,blocked]() -> std::optional<core::SnapshotBundle> {
+      if(inject->exchange(false)) return core::SnapshotBundle{.fine=blocked}; return std::nullopt;},
+    .navigation_map_builder=[building,release,builder](auto f,auto deadline,const auto& stop) {
+      building->store(true);
+      while(!release->load() && core::SteadyClock::now()<deadline) std::this_thread::sleep_for(1ms);
+      return builder->Update(f,deadline,stop);
+    }});
+  auto goal=system.Send(5.5,.5); ASSERT_TRUE(goal);
+  ASSERT_TRUE(WaitFor([&]{return !system.Paths().empty();}));
+  inject->store(true);
+  const bool began=WaitFor([&]{return building->load();});
+  const bool invalidated=WaitFor([&] {
+    const auto paths=system.Paths(); return std::any_of(paths.begin(),paths.end(),[](const auto& p) {
+      return p.state==p.INVALIDATED && p.traversability_revision==2; }); },300ms);
+  release->store(true);
+  EXPECT_TRUE(began); EXPECT_TRUE(invalidated);
+  system.Cancel(goal);
+}
+}
+namespace lunar::incremental_navigation_ros {
+TEST(IncrementalNavigationNode, ControlledTargetCancellationAndExpiryNeverPublishActivePath) {
+  for (bool cancel : {false,true}) for (bool rolling : {false,true}) {
+    auto entered=std::make_shared<std::atomic_bool>(false);
+    auto control=std::make_shared<FakeControl>();
+    auto factory=[entered,base=FakePorts(control)](const auto& cap) {
+      auto p=base(cap);
+      p.select_target_controlled=[entered](const auto&,const auto&,auto,const auto&,
+          const auto&,const core::SearchControl& budget) -> std::optional<core::LocalTarget> {
+        entered->store(true);
+        while(!budget.stop_token.stop_requested() && budget.now()<budget.deadline)
+          std::this_thread::sleep_for(1ms);
+        return std::nullopt;
+      }; return p;
+    };
+    const std::string suffix=std::string(rolling?"tracking_rolling_":"")+"target_"+(cancel?"cancel":"expire");
+    RunningSystem system(suffix,IncrementalNavigationNodeDependencies{
+      .ports_factory=factory,.snapshots=core::SnapshotBundle{.fine=MakeFine()},
+      .state=core::StateInput{.base_link_pose={.position_m={.5,.5}}}},false,
+      TimingOverrides{.planning_sla_ms=50,.planning_hard_timeout_ms=300,.global_subdeadline_ms=50});
+    auto goal=system.Send(5.5,.5); ASSERT_TRUE(goal);
+    ASSERT_TRUE(WaitFor([&]{return entered->load();}));
+    auto future=system.Result(goal);
+    if(cancel) system.Cancel(goal);
+    ASSERT_EQ(future.wait_for(2s),std::future_status::ready);
+    EXPECT_EQ(future.get().result->reason_code,cancel?"CANCELED":"TIMEOUT");
+    for(const auto& p:system.Paths()) EXPECT_NE(p.state,p.ACTIVE);
+  }
 }
 }
