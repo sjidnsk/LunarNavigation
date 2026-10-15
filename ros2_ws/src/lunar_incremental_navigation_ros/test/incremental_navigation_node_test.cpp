@@ -32,6 +32,7 @@
 #include "lunar_incremental_navigation_ros/planning_debug_publisher.hpp"
 #endif
 #include "lunar_incremental_navigation_ros/request_diagnostics.hpp"
+#include "lunar_incremental_navigation_ros/platform_config.hpp"
 
 namespace lunar::incremental_navigation_ros {
 namespace {
@@ -397,6 +398,7 @@ struct FakeControl final {
           };
           return result;
         };
+    ports.plan_legged = ports.plan_wheel;
     return ports;
   };
 }
@@ -461,6 +463,11 @@ struct TimingOverrides final {
       rclcpp::Parameter{"odometry_topic", "/test/" + suffix + "/odom"},
       rclcpp::Parameter{"tf_topic", "/test/" + suffix + "/tf"},
   });
+  if (suffix.find("rolling_legged") != std::string::npos) {
+    options.append_parameter_override("platform_type", "legged");
+    options.append_parameter_override("platform_config",
+        std::string{LUNAR_INCREMENTAL_NAVIGATION_CONFIG_DIR} + "/legged_orin.yaml");
+  }
   if (timing) {
     if (timing->rolling_period_s) options.append_parameter_override("rolling_replan_period_s", *timing->rolling_period_s);
     options.append_parameter_override("planning_sla_ms",
@@ -821,6 +828,30 @@ TEST(IncrementalNavigationNode, TerrainBackgroundWidthIsAValidatedStartupParamet
   }
 }
 
+TEST(IncrementalNavigationNode, DirectDeploymentDefaultsAndExplicitOverrides) {
+  auto defaults = std::make_shared<IncrementalNavigationNode>();
+  EXPECT_EQ(defaults->get_parameter("platform_type").as_string(), "wheel");
+  EXPECT_FALSE(defaults->get_parameter("platform_config").as_string().empty());
+  EXPECT_TRUE(defaults->get_parameter("enable_tracking_feedback").as_bool());
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("rolling_replan_period_s").as_double(), 0.5);
+  EXPECT_EQ(defaults->get_parameter("tf_topic").as_string(), "/tf");
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("goal_position_tolerance_m").as_double(), 0.1);
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("goal_yaw_tolerance_rad").as_double(), 0.05);
+  rclcpp::NodeOptions wheel_options;
+  wheel_options.append_parameter_override("platform_type", "wheel");
+  auto wheel_defaults = std::make_shared<IncrementalNavigationNode>(wheel_options);
+  EXPECT_NE(wheel_defaults->get_parameter("platform_config").as_string().find("wheel_orin.yaml"), std::string::npos);
+  EXPECT_TRUE(wheel_defaults->get_parameter("enable_tracking_feedback").as_bool());
+  EXPECT_DOUBLE_EQ(wheel_defaults->get_parameter("goal_yaw_tolerance_rad").as_double(), 0.05);
+  auto options = ServerOptions("deployment_override");
+  options.append_parameter_override("goal_position_tolerance_m", 0.3);
+  options.append_parameter_override("goal_yaw_tolerance_rad", 0.2);
+  auto overridden = std::make_shared<IncrementalNavigationNode>(options);
+  EXPECT_FALSE(overridden->get_parameter("enable_tracking_feedback").as_bool());
+  EXPECT_DOUBLE_EQ(overridden->get_parameter("goal_position_tolerance_m").as_double(), 0.3);
+  EXPECT_DOUBLE_EQ(overridden->get_parameter("goal_yaw_tolerance_rad").as_double(), 0.2);
+}
+
 TEST(IncrementalNavigationNode, ClearanceCostHasCalibratedDefaultAndStartupOverride) {
   auto defaults = std::make_shared<IncrementalNavigationNode>(
       ServerOptions("clearance_default"), IncrementalNavigationNodeDependencies{});
@@ -1058,24 +1089,81 @@ TEST(IncrementalNavigationNode,
 }
 #endif
 
-TEST(IncrementalNavigationNode, GoalTolerancesAreFrozenPerPlatformProfile) {
+TEST(IncrementalNavigationNode, LeggedPlannerCannotAcceptStationaryYawOutsideNavigationBudget) {
+  const auto loaded = LoadPlatformConfig(
+      std::string{LUNAR_INCREMENTAL_NAVIGATION_CONFIG_DIR} + "/legged_orin.yaml", "legged");
+  ASSERT_TRUE(loaded.capability);
+  auto profile = PlatformProfileFor(*loaded.capability, 3.0);
+  profile.goal_yaw_tolerance_rad = 0.05;
+  auto ports = RealSessionPorts(*loaded.capability, profile);
+  const core::Pose2 start{.position_m = {.x = 3.5, .y = 3.5}, .yaw_rad = 1.5036};
+  const core::RequestLocalPlanningView view{MakeFine(), start, 0.0, {}};
+  const core::LocalTarget target{.center = start.position_m,
+                                .position_tolerance_m = 0.1,
+                                .is_final_goal = true,
+                                .terminal_yaw_rad = 1.5707963267948966};
+  const auto result = ports.plan_legged(view, start, target,
+      std::chrono::steady_clock::now() + 1s, {});
+  ASSERT_NE(result.status, core::LocalPlanResult::Status::kTimeout);
+  if (result.status == core::LocalPlanResult::Status::kPlanFound) {
+    ASSERT_FALSE(result.path.empty());
+    const auto& q = result.path.back().pose.orientation;
+    const double yaw = std::atan2(2.0*(q.w*q.z+q.x*q.y), 1.0-2.0*(q.y*q.y+q.z*q.z));
+    EXPECT_LE(std::abs(std::atan2(std::sin(yaw-*target.terminal_yaw_rad),
+                                 std::cos(yaw-*target.terminal_yaw_rad))), 0.025);
+  } else {
+    EXPECT_EQ(result.status, core::LocalPlanResult::Status::kNoPath);
+  }
+}
+
+TEST(IncrementalNavigationNode, WheelPlannerCannotAcceptStationaryYawOutsideNavigationBudget) {
+  const auto loaded = LoadPlatformConfig(
+      std::string{LUNAR_INCREMENTAL_NAVIGATION_CONFIG_DIR} + "/wheel_orin.yaml", "wheel");
+  ASSERT_TRUE(loaded.capability);
+  auto profile = PlatformProfileFor(*loaded.capability, 3.0);
+  for (const double yaw_budget : {0.05, 0.2}) {
+    profile.goal_yaw_tolerance_rad = yaw_budget;
+    auto ports = RealSessionPorts(*loaded.capability, profile);
+    const core::Pose2 start{.position_m = {.x = 3.5, .y = 3.5}, .yaw_rad = 1.5036};
+    const core::RequestLocalPlanningView view{MakeFine(), start, 0.0, {}};
+    const core::LocalTarget target{.center = start.position_m,
+                                  .position_tolerance_m = 0.1,
+                                  .is_final_goal = true,
+                                  .terminal_yaw_rad = 1.5707963267948966};
+    const auto result = ports.plan_wheel(view, start, target,
+        std::chrono::steady_clock::now() + 1s, {});
+    ASSERT_EQ(result.status, core::LocalPlanResult::Status::kPlanFound) << result.reason_code;
+    if (result.status == core::LocalPlanResult::Status::kPlanFound) {
+      if (yaw_budget == 0.05) {
+        ASSERT_GE(result.path.size(), 2U) << "Yaw outside the navigation budget must retain an explicit spin segment";
+      } else {
+        EXPECT_EQ(result.path.size(), 1U) << "Explicit wider navigation tolerance must also reach the local planner";
+      }
+      const auto& q = result.path.back().pose.orientation;
+      const double yaw = std::atan2(2.0*(q.w*q.z+q.x*q.y), 1.0-2.0*(q.y*q.y+q.z*q.z));
+      EXPECT_LE(std::abs(std::atan2(std::sin(yaw-*target.terminal_yaw_rad),
+                                   std::cos(yaw-*target.terminal_yaw_rad))), 0.5 * yaw_budget);
+    } else {
+      EXPECT_EQ(result.status, core::LocalPlanResult::Status::kNoPath);
+    }
+  }
+}
+
+TEST(IncrementalNavigationNode, DeploymentGoalTolerancesAreUnifiedAcrossPlatforms) {
   const auto wheel = PlatformProfileFor(
       core::WheeledCapability{.minimum_clearance_m = 0.2}, 0.4);
   const auto legged = PlatformProfileFor(
       core::LeggedCapability{.minimum_body_clearance_m = 0.3}, 0.6);
-  EXPECT_GT(wheel.goal_position_tolerance_m, 0.0);
-  EXPECT_GT(wheel.goal_yaw_tolerance_rad, 0.0);
-  EXPECT_GT(legged.goal_position_tolerance_m, 0.0);
-  EXPECT_GT(legged.goal_yaw_tolerance_rad, 0.0);
-  EXPECT_NE(wheel.goal_position_tolerance_m,
-            legged.goal_position_tolerance_m);
-  EXPECT_NE(wheel.goal_yaw_tolerance_rad, legged.goal_yaw_tolerance_rad);
+  EXPECT_DOUBLE_EQ(wheel.goal_position_tolerance_m, 0.1);
+  EXPECT_DOUBLE_EQ(legged.goal_position_tolerance_m, 0.1);
+  EXPECT_DOUBLE_EQ(wheel.goal_yaw_tolerance_rad, 0.05);
+  EXPECT_DOUBLE_EQ(legged.goal_yaw_tolerance_rad, 0.05);
   EXPECT_DOUBLE_EQ(wheel.start_blind_zone_margin_m, 0.4);
   EXPECT_DOUBLE_EQ(legged.start_blind_zone_margin_m, 0.6);
   EXPECT_DOUBLE_EQ(wheel.preferred_clearance_m, 0.2);
   EXPECT_DOUBLE_EQ(legged.preferred_clearance_m, 0.3);
   EXPECT_DOUBLE_EQ(wheel.clearance_weight, 2.0);
-  EXPECT_DOUBLE_EQ(legged.clearance_weight, 0.0);
+  EXPECT_DOUBLE_EQ(legged.clearance_weight, 2.0);
 }
 
 TEST(IncrementalNavigationNode,
@@ -1235,6 +1323,81 @@ TEST(IncrementalNavigationNode,
   }));
 }
 
+TEST(IncrementalNavigationNode, PreparedMapWakesPendingGoalWithoutNewOdometry) {
+  auto fine=MakeFine();core::AdaptiveNavigationMapBuilder builder;
+  auto nav=builder.Update(fine,core::SearchDeadline::max(),{}).snapshot;
+  auto ready=std::make_shared<std::atomic_bool>(false);auto control=std::make_shared<FakeControl>();
+  auto factory=[control](const core::PlatformCapability& capability){auto ports=FakePorts(control)(capability);
+    ports.plan_adaptive_global=[](const auto&,auto,auto,auto,const auto&){core::AdaptiveRouteResult r;r.route.status=core::GuidanceStatus::kAvailable;r.route.route=core::GlobalRoute{};return r;};return ports;};
+  RunningSystem system("map_ready_wakeup",IncrementalNavigationNodeDependencies{
+    .ports_factory=factory,.snapshots=core::SnapshotBundle{.fine=fine},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}},
+    .snapshot_source=[ready,fine,nav]()->std::optional<core::SnapshotBundle>{
+      if(ready->exchange(false))return core::SnapshotBundle{.fine=fine,.navigation=nav};return std::nullopt;}});
+  auto handle=system.Send(3.5,.5);ASSERT_TRUE(handle);
+  ASSERT_TRUE(WaitFor([&]{auto d=system.Diagnostics();return !d.empty()&&FindDiagnosticValue(d.back(),"reason_code")=="NAVIGATION_MAP_PENDING";}));
+  ready->store(true);
+  EXPECT_TRUE(WaitFor([&]{return !system.Paths().empty();},1s));
+  static_cast<void>(system.Cancel(handle));
+}
+TEST(IncrementalNavigationNode, PendingMapTimesOutWithoutNewOdometry) {
+  auto factory=[](const core::PlatformCapability&){core::PlanningSessionPorts p;
+    p.plan_adaptive_global=[](const auto&,auto,auto,auto,const auto&){return core::AdaptiveRouteResult{};};return p;};
+  RunningSystem system("map_wait_bounded",IncrementalNavigationNodeDependencies{
+    .ports_factory=factory,.snapshots=core::SnapshotBundle{.fine=MakeFine()},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}}},false,
+    TimingOverrides{.planning_sla_ms=50,.planning_hard_timeout_ms=200,.global_subdeadline_ms=100});
+  auto handle=system.Send(3.5,.5);ASSERT_TRUE(handle);auto future=system.Result(handle);
+  ASSERT_EQ(future.wait_for(1s),std::future_status::ready);
+  EXPECT_EQ(future.get().result->reason_code,"NAVIGATION_MAP_TIMEOUT");
+}
+TEST(IncrementalNavigationNode, PendingMapDuringReplanningTimesOutWithoutOdometry) {
+  auto fine = MakeFine();
+  core::AdaptiveNavigationMapBuilder builder;
+  auto nav = builder.Update(fine, core::SearchDeadline::max(), {}).snapshot;
+  auto changed = MakeFine(2, core::GridIndex{2, 0});
+  auto update = std::make_shared<std::atomic_bool>(false);
+  auto control = std::make_shared<FakeControl>();
+  auto factory = [control](const core::PlatformCapability& capability) {
+    auto ports = FakePorts(control)(capability);
+    ports.plan_adaptive_global = [](const auto&, auto, auto, auto, const auto&) {
+      core::AdaptiveRouteResult r;
+      r.route.status = core::GuidanceStatus::kAvailable;
+      r.route.route = core::GlobalRoute{};
+      return r;
+    };
+    return ports;
+  };
+  RunningSystem system("replanning_map_wait", IncrementalNavigationNodeDependencies{
+      .ports_factory = factory,
+      .snapshots = core::SnapshotBundle{.fine = fine, .navigation = nav},
+      .state = core::StateInput{.base_link_pose = {.position_m = {.x = .5, .y = .5}}},
+      .snapshot_source = [update, changed]() -> std::optional<core::SnapshotBundle> {
+        if (update->exchange(false)) return core::SnapshotBundle{.fine = changed};
+        return std::nullopt;
+      }}, false, TimingOverrides{.planning_sla_ms = 50,
+          .planning_hard_timeout_ms = 200, .global_subdeadline_ms = 100});
+  auto handle = system.Send(3.5, .5);
+  ASSERT_TRUE(handle);
+  ASSERT_TRUE(WaitFor([&] { return !system.Paths().empty(); }));
+  auto future = system.Result(handle);
+  update->store(true);
+  ASSERT_TRUE(WaitFor([&] {
+    const auto d = system.Diagnostics();
+    return !d.empty() && FindDiagnosticValue(d.back(), "reason_code") == "NAVIGATION_MAP_PENDING";
+  }));
+  ASSERT_EQ(future.wait_for(1s), std::future_status::ready);
+  EXPECT_EQ(future.get().result->reason_code, "NAVIGATION_MAP_TIMEOUT");
+}
+
+TEST(IncrementalNavigationNode, RejectsUnknownGlobalPlannerMode) {
+  auto options=ServerOptions("bad_global_mode");
+  auto values=options.parameter_overrides();values.emplace_back("global_planner_mode","bad_mode");
+  options.parameter_overrides(values);
+  EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(options,
+      IncrementalNavigationNodeDependencies{}),std::runtime_error);
+}
+
 TEST(IncrementalNavigationNode, RejectsInvalidPlanningTimingParameters) {
   EXPECT_NO_THROW(std::make_shared<IncrementalNavigationNode>(
       ServerOptions("global_after_sla", false,
@@ -1260,6 +1423,15 @@ TEST(IncrementalNavigationNode, RejectsInvalidPlanningTimingParameters) {
             IncrementalNavigationNodeDependencies{}),
         std::runtime_error)
         << suffix;
+  }
+}
+
+TEST(IncrementalNavigationNode, RejectsNonpositiveConfiguredGoalTolerances) {
+  for (const auto* name : {"goal_position_tolerance_m", "goal_yaw_tolerance_rad"}) {
+    auto options = ServerOptions(name, false);
+    options.append_parameter_override(name, 0.0);
+    EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(
+        options, IncrementalNavigationNodeDependencies{}), std::runtime_error);
   }
 }
 
@@ -1931,6 +2103,29 @@ TEST(IncrementalNavigationNode, RollingUpdatesBeforeLocalArrival) {
   EXPECT_NEAR(system.Paths()[1].path.poses.front().pose.position.x,.7,1e-6);
   system.Cancel(goal);
 }
+TEST(IncrementalNavigationNode, LeggedRollingUpdatesBeforeLocalArrival) {
+  auto control=std::make_shared<FakeControl>();
+  auto states=std::make_shared<StateQueue>();
+  RunningSystem system("tracking_rolling_legged_updates", IncrementalNavigationNodeDependencies{
+    .ports_factory=FakePorts(control), .snapshots=core::SnapshotBundle{.fine=MakeFine()},
+    .state=core::StateInput{.base_link_pose={.position_m={.x=.5,.y=.5}}},
+    .state_source=[states]{return states->Take();}});
+  auto goal=system.Send(7.5,.5); ASSERT_TRUE(goal);
+  ASSERT_TRUE(WaitFor([&]{return !system.Paths().empty();}));
+  states->Push({.position_m={.x=.7,.y=.5}});
+  ASSERT_TRUE(WaitFor([&]{return system.Paths().size()>=2;}));
+  EXPECT_EQ(system.Paths()[1].state,system.Paths()[1].ACTIVE);
+  EXPECT_EQ(system.Paths()[1].segment_revision,2U);
+  ASSERT_TRUE(WaitFor([&] {
+    for (const auto& item : system.Diagnostics()) {
+      if (FindDiagnosticValue(item, "trigger") == "ROLLING_PERIOD_OR_DISTANCE" &&
+          FindDiagnosticValue(item, "candidate_disposition") == "ADOPTED") return true;
+    }
+    return false;
+  }));
+  EXPECT_NEAR(system.Paths()[1].path.poses.front().pose.position.x,.7,1e-6);
+  system.Cancel(goal);
+}
 TEST(IncrementalNavigationNode, RollingCancelDuringSearchStopsCurrentReference) {
   auto control=std::make_shared<FakeControl>(); control->block_local_call=1U;
   RunningSystem system("tracking_rolling_cancel", IncrementalNavigationNodeDependencies{
@@ -2056,5 +2251,103 @@ TEST(IncrementalNavigationNode, RollingDestructionStopsBlockedWorker) {
   }
   EXPECT_EQ(control->active_local_calls.load(),0);
   EXPECT_EQ(control->completed_local_calls.load(),2);
+}
+}
+
+namespace lunar::incremental_navigation_ros {
+TEST(IncrementalNavigationNode, InstrumentForwardsControlledTargetInBothCycleModes) {
+  for (const auto& suffix : {"controlled_target_sync", "tracking_rolling_controlled_target"}) {
+    auto control = std::make_shared<FakeControl>();
+    auto calls = std::make_shared<std::atomic<int>>(0);
+    auto factory = [base = FakePorts(control), calls](const auto& cap) {
+      auto ports = base(cap);
+      auto select = ports.select_target;
+      ports.select_target_controlled = [select, calls](const auto& fine, const auto& window,
+          auto start, const auto& goal, const auto& route, const core::SearchControl& budget) {
+        EXPECT_GT(budget.deadline, core::SteadyClock::now());
+        EXPECT_FALSE(budget.stop_token.stop_requested());
+        ++*calls;
+        return select(fine, window, start, goal, route);
+      };
+      return ports;
+    };
+    RunningSystem system(suffix, IncrementalNavigationNodeDependencies{
+        .ports_factory = factory, .snapshots = core::SnapshotBundle{.fine = MakeFine()},
+        .state = core::StateInput{.base_link_pose = {.position_m = {.5, .5}}}});
+    auto goal = system.Send(5.5, .5);
+    ASSERT_TRUE(goal);
+    ASSERT_TRUE(WaitFor([&] {return !system.Paths().empty();}));
+    EXPECT_GT(calls->load(), 0) << suffix;
+    system.Cancel(goal);
+  }
+}
+}
+namespace lunar::incremental_navigation_ros {
+TEST(IncrementalNavigationNode, FineSafetyInvalidationDoesNotWaitForNavigationBuild) {
+  const auto fine=MakeFine(); const auto blocked=MakeFine(2,core::GridIndex{3,0});
+  core::AdaptiveNavigationMapBuilder initial;
+  const auto nav=initial.Update(fine,core::SearchDeadline::max(),{}).snapshot;
+  auto inject=std::make_shared<std::atomic_bool>(false);
+  auto building=std::make_shared<std::atomic_bool>(false);
+  auto release=std::make_shared<std::atomic_bool>(false);
+  auto control=std::make_shared<FakeControl>();
+  auto builder=std::make_shared<core::AdaptiveNavigationMapBuilder>();
+  auto factory=[control](const auto& cap) {
+    auto ports=FakePorts(control)(cap);
+    ports.plan_adaptive_global=[](const auto&,auto,auto,auto,const auto&) {
+      core::AdaptiveRouteResult r; r.route.status=core::GuidanceStatus::kAvailable;
+      r.route.route=core::GlobalRoute{}; return r;
+    };return ports;
+  };
+  RunningSystem system("tracking_rolling_build_safety",IncrementalNavigationNodeDependencies{
+    .ports_factory=factory,.snapshots=core::SnapshotBundle{.fine=fine,.navigation=nav},
+    .state=core::StateInput{.base_link_pose={.position_m={.5,.5}}},
+    .snapshot_source=[inject,blocked]() -> std::optional<core::SnapshotBundle> {
+      if(inject->exchange(false)) return core::SnapshotBundle{.fine=blocked}; return std::nullopt;},
+    .navigation_map_builder=[building,release,builder](auto f,auto deadline,const auto& stop) {
+      building->store(true);
+      while(!release->load() && core::SteadyClock::now()<deadline) std::this_thread::sleep_for(1ms);
+      return builder->Update(f,deadline,stop);
+    }});
+  auto goal=system.Send(5.5,.5); ASSERT_TRUE(goal);
+  ASSERT_TRUE(WaitFor([&]{return !system.Paths().empty();}));
+  inject->store(true);
+  const bool began=WaitFor([&]{return building->load();});
+  const bool invalidated=WaitFor([&] {
+    const auto paths=system.Paths(); return std::any_of(paths.begin(),paths.end(),[](const auto& p) {
+      return p.state==p.INVALIDATED && p.traversability_revision==2; }); },300ms);
+  release->store(true);
+  EXPECT_TRUE(began); EXPECT_TRUE(invalidated);
+  system.Cancel(goal);
+}
+}
+namespace lunar::incremental_navigation_ros {
+TEST(IncrementalNavigationNode, ControlledTargetCancellationAndExpiryNeverPublishActivePath) {
+  for (bool cancel : {false,true}) for (bool rolling : {false,true}) {
+    auto entered=std::make_shared<std::atomic_bool>(false);
+    auto control=std::make_shared<FakeControl>();
+    auto factory=[entered,base=FakePorts(control)](const auto& cap) {
+      auto p=base(cap);
+      p.select_target_controlled=[entered](const auto&,const auto&,auto,const auto&,
+          const auto&,const core::SearchControl& budget) -> std::optional<core::LocalTarget> {
+        entered->store(true);
+        while(!budget.stop_token.stop_requested() && budget.now()<budget.deadline)
+          std::this_thread::sleep_for(1ms);
+        return std::nullopt;
+      }; return p;
+    };
+    const std::string suffix=std::string(rolling?"tracking_rolling_":"")+"target_"+(cancel?"cancel":"expire");
+    RunningSystem system(suffix,IncrementalNavigationNodeDependencies{
+      .ports_factory=factory,.snapshots=core::SnapshotBundle{.fine=MakeFine()},
+      .state=core::StateInput{.base_link_pose={.position_m={.5,.5}}}},false,
+      TimingOverrides{.planning_sla_ms=50,.planning_hard_timeout_ms=300,.global_subdeadline_ms=50});
+    auto goal=system.Send(5.5,.5); ASSERT_TRUE(goal);
+    ASSERT_TRUE(WaitFor([&]{return entered->load();}));
+    auto future=system.Result(goal);
+    if(cancel) system.Cancel(goal);
+    ASSERT_EQ(future.wait_for(2s),std::future_status::ready);
+    EXPECT_EQ(future.get().result->reason_code,cancel?"CANCELED":"TIMEOUT");
+    for(const auto& p:system.Paths()) EXPECT_NE(p.state,p.ACTIVE);
+  }
 }
 }

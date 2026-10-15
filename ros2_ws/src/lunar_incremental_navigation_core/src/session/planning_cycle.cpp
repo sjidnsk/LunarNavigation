@@ -21,7 +21,36 @@ CycleCandidate ComputeCycle(const CycleRequest& request, PlanningSessionPorts& p
                           .y = request.goal.target_y_m};
   std::optional<GlobalRoute> guidance_route;
   output.guidance_status = GuidanceStatus::kUnavailable;
-  if (snapshots.guidance && ports.plan_global) {
+  if (ports.plan_adaptive_global) {
+    if (!snapshots.navigation || snapshots.navigation->fine_ptr() != snapshots.fine) {
+      output.failure = SessionOutcome::kMapUnavailable;
+      output.reason_code = output.global_reason = "NAVIGATION_MAP_PENDING";
+      return output;
+    }
+    try {
+      auto global = ports.plan_adaptive_global(*snapshots.navigation, start, final_goal,
+          std::min(deadline, now() + request.global_subdeadline), stop);
+      output.guidance_status = global.route.status;
+      output.global_reason = global.reason;
+      if (global.route.status == GuidanceStatus::kAvailable && global.route.route) {
+        guidance_route = std::move(global.route.route);
+        output.global_route = guidance_route;
+      } else if (global.reason != "MAP_INSUFFICIENT") {
+        output.failure = global.route.status == GuidanceStatus::kTimeout
+            ? SessionOutcome::kTimeout : global.route.status == GuidanceStatus::kNoRoute
+            ? SessionOutcome::kNoPath : SessionOutcome::kMapUnavailable;
+        output.reason_code = global.reason;
+        return output;
+      }
+      // With incomplete evidence the local solver may certify a safe prefix
+      // toward the unchanged goal. No optimistic global route is executed or
+      // generated here, and a complete known detour always takes priority.
+    } catch (...) {
+      output.failure = SessionOutcome::kInternalError;
+      output.reason_code = output.global_reason = "GLOBAL_PLANNER_ERROR";
+      return output;
+    }
+  } else if (snapshots.guidance && ports.plan_global) {
     try {
       const SearchDeadline global_deadline = std::min(
           deadline, now() + request.global_subdeadline);
@@ -42,7 +71,7 @@ CycleCandidate ComputeCycle(const CycleRequest& request, PlanningSessionPorts& p
     return output;
   }
 
-  if (!ports.select_target || !ports.build_start_patch) {
+  if ((!ports.select_target && !ports.select_target_controlled) || !ports.build_start_patch) {
     output.failure = SessionOutcome::kInternalError;
     output.reason_code = "INTERNAL_ERROR";
     return output;
@@ -55,15 +84,22 @@ CycleCandidate ComputeCycle(const CycleRequest& request, PlanningSessionPorts& p
         local_window.status == LocalPlanningWindowStatus::kCapacityExceeded
             ? "LOCAL_WINDOW_CAPACITY_EXCEEDED"
             : "START_OUTSIDE_FINE_MAP";
-    output.failure = SessionOutcome::kNoPath;
+    output.failure = output.global_reason == "MAP_INSUFFICIENT"
+        ? SessionOutcome::kMapUnavailable : SessionOutcome::kNoPath;
     output.reason_code = reason;
     return output;
   }
 
   std::optional<LocalTarget> target;
   try {
-    target = ports.select_target(*snapshots.fine, *local_window.geometry, start,
-                                        request.goal, guidance_route);
+    if (ports.select_target_controlled) {
+      target = ports.select_target_controlled(*snapshots.fine, *local_window.geometry,
+          start, request.goal, guidance_route,
+          SearchControl{.deadline = deadline, .stop_token = stop, .now = clock});
+    } else {
+      target = ports.select_target(*snapshots.fine, *local_window.geometry, start,
+                                  request.goal, guidance_route);
+    }
   } catch (...) {
     output.failure = SessionOutcome::kInternalError;
     output.reason_code = "INTERNAL_ERROR";
@@ -71,6 +107,11 @@ CycleCandidate ComputeCycle(const CycleRequest& request, PlanningSessionPorts& p
   }
   if (stop.stop_requested()) {
     output.stopped = true;
+    return output;
+  }
+  if (now() >= deadline) {
+    output.failure = SessionOutcome::kTimeout;
+    output.reason_code = "TIMEOUT";
     return output;
   }
   if (!target) {
@@ -148,6 +189,9 @@ CycleCandidate ComputeCycle(const CycleRequest& request, PlanningSessionPorts& p
 
   output.waiting_for_map = local.status == LocalPlanResult::Status::kNoPath &&
       local.reason_code == "LOCAL_WAITING_FOR_MAP" && target->region;
+  if (output.global_reason == "MAP_INSUFFICIENT" &&
+      local.status == LocalPlanResult::Status::kPlanFound && !local.reaches_final_goal)
+    output.global_reason = "KNOWN_PREFIX_FOUND";
   output.local = std::move(local);
   output.view = std::move(patch.view);
   return output;

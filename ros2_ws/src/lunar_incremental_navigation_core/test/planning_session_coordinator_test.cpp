@@ -726,6 +726,66 @@ TEST(PlanningSessionCoordinator,
   EXPECT_EQ(coordinator.state(), CoordinatorState::kIdle);
 }
 
+TEST(PlanningSessionCoordinator, TargetConstructionExpiryIsTimeoutRatherThanNoPath) {
+  const auto started = SteadyClock::time_point(std::chrono::seconds(10));
+  const auto deadline = started + std::chrono::seconds(3);
+  auto now = started;
+  auto config = Config();
+  config.now = [&] { return now; };
+  FakePorts fake;
+  auto ports = fake.Bind();
+  ports.select_target = [&](const FineTraversabilitySnapshot&,
+                            const SparseGridGeometry&, Point2,
+                            const FinalGoal&, const std::optional<GlobalRoute>&)
+      -> std::optional<LocalTarget> {
+    now = deadline;
+    return std::nullopt;
+  };
+  PlanningSessionCoordinator coordinator(Wheel(), {}, config, std::move(ports));
+  ASSERT_TRUE(coordinator.Start(SessionId{{1U}},
+      FinalGoal{.target_x_m = 3.5, .target_y_m = .5}).accepted);
+  const auto output = coordinator.PlanCycle(At(.5, .5), {.fine = MakeFine()},
+      CycleTrigger::kContinue, deadline);
+  ASSERT_TRUE(output.terminal);
+  EXPECT_EQ(output.terminal->result.outcome, SessionOutcome::kTimeout);
+  EXPECT_EQ(output.terminal->result.reason_code, "TIMEOUT");
+  EXPECT_FALSE(output.path_reference);
+}
+
+TEST(PlanningSessionCoordinator, ControlledTargetReceivesCycleDeadlineAndStopToken) {
+  const auto started = SteadyClock::time_point(std::chrono::seconds(10));
+  const auto deadline = started + std::chrono::seconds(3);
+  auto config = Config();
+  config.now = [&] { return started; };
+  FakePorts fake;
+  auto ports = fake.Bind();
+  PlanningSessionCoordinator* active = nullptr;
+  bool called = false;
+  ports.select_target_controlled = [&](const FineTraversabilitySnapshot&,
+      const SparseGridGeometry&, Point2, const FinalGoal&,
+      const std::optional<GlobalRoute>&, const SearchControl& control)
+      -> std::optional<LocalTarget> {
+    called = true;
+    EXPECT_EQ(control.deadline, deadline);
+    EXPECT_EQ(control.now(), started);
+    EXPECT_TRUE(control.stop_token.stop_possible());
+    EXPECT_TRUE(active->RequestStopCurrentCycle());
+    EXPECT_TRUE(control.canceled());
+    return std::nullopt;
+  };
+  PlanningSessionCoordinator coordinator(Wheel(), {}, config, std::move(ports));
+  active = &coordinator;
+  ASSERT_TRUE(coordinator.Start(SessionId{{1U}},
+      FinalGoal{.target_x_m = 3.5, .target_y_m = .5}).accepted);
+  const auto output = coordinator.PlanCycle(At(.5, .5), {.fine = MakeFine()},
+      CycleTrigger::kContinue, deadline);
+  EXPECT_TRUE(called);
+  EXPECT_EQ(fake.target_calls, 0U);
+  EXPECT_EQ(output.feedback.reason_code, "CYCLE_STOPPED");
+  EXPECT_FALSE(output.path_reference);
+  EXPECT_FALSE(output.terminal);
+}
+
 TEST(PlanningSessionCoordinator, FrozenPlatformSelectsExactlyOneLocalPlanner) {
   const auto fine = MakeFine();
   FakePorts wheel_fake;
@@ -1066,6 +1126,61 @@ TEST(PlanningSessionCoordinator, WaitingWakesOnMovementSmallerThanArrivalToleran
   ASSERT_TRUE(moved.path_reference);
 }
 
+
+TEST(PlanningSessionCoordinator, FineGlobalConsumesExactSnapshotAndKeepsFinalGoal) {
+  FakePorts fake;auto ports=fake.Bind();auto fine=MakeFine();int called=0;
+  AdaptiveNavigationMapBuilder builder;auto nav=builder.Update(fine,SearchDeadline::max(),{}).snapshot;
+  ports.plan_adaptive_global=[&](const AdaptiveNavigationSnapshot& map,Point2 a,Point2 b,SearchDeadline,const StopToken&) {
+    ++called;EXPECT_EQ(map.fine_ptr(),fine);EXPECT_DOUBLE_EQ(b.x,3.5);
+    AdaptiveRouteResult out;out.route.status=GuidanceStatus::kAvailable;
+    GlobalRoute route;Pose3 p{};p.position_m={a.x,a.y,0.};route.poses_map.push_back(p);
+    p.position_m={b.x,b.y,0.};route.poses_map.push_back(p);out.route.route=route;return out;
+  };
+  PlanningSessionCoordinator c(Wheel(),{},Config(),std::move(ports));
+  ASSERT_TRUE(c.Start(SessionId{{1U}},FinalGoal{.target_x_m=3.5,.target_y_m=.5}).accepted);
+  auto out=c.PlanCycle(At(.5,.5),SnapshotBundle{.fine=fine,.navigation=nav},CycleTrigger::kContinue,SearchDeadline::max());
+  EXPECT_EQ(called,1);EXPECT_EQ(fake.global_calls,0);EXPECT_TRUE(out.global_route);
+}
+TEST(PlanningSessionCoordinator, FineGlobalFailureDoesNotFallBackToOptimisticRoute) {
+  for(auto status:{GuidanceStatus::kNoRoute,GuidanceStatus::kTimeout}) {
+    FakePorts fake;auto ports=fake.Bind();auto fine=MakeFine();
+    AdaptiveNavigationMapBuilder builder;auto nav=builder.Update(fine,SearchDeadline::max(),{}).snapshot;
+    ports.plan_adaptive_global=[&](const auto&,auto,auto,auto,const auto&) {
+      AdaptiveRouteResult r;r.route.status=status;
+      r.reason=status==GuidanceStatus::kUnavailable?"MAP_INSUFFICIENT":status==GuidanceStatus::kTimeout?"TIMEOUT":"NO_KNOWN_ROUTE";return r;
+    };
+    PlanningSessionCoordinator c(Wheel(),{},Config(),std::move(ports));
+    ASSERT_TRUE(c.Start(SessionId{{1U}},FinalGoal{.target_x_m=3.5,.target_y_m=.5}).accepted);
+    auto out=c.PlanCycle(At(.5,.5),SnapshotBundle{.fine=fine,.guidance=MakeGuidance(*fine),.navigation=nav},CycleTrigger::kContinue,SearchDeadline::max());
+    ASSERT_TRUE(out.terminal);EXPECT_FALSE(out.path_reference);EXPECT_EQ(fake.global_calls,0);EXPECT_EQ(fake.wheel_calls,0);
+    auto expected=status==GuidanceStatus::kUnavailable?SessionOutcome::kMapUnavailable:status==GuidanceStatus::kTimeout?SessionOutcome::kTimeout:SessionOutcome::kNoPath;
+    EXPECT_EQ(out.terminal->result.outcome,expected);
+  }
+}
+
+TEST(PlanningSessionCoordinator, NavigationMapWaitDeadlineIsRetainedAcrossRetries) {
+  FakePorts fake;auto ports=fake.Bind();ports.plan_adaptive_global=[](const auto&,auto,auto,auto,const auto&){return AdaptiveRouteResult{};};
+  auto now=SteadyClock::time_point{};auto config=Config();config.now=[&]{return now;};
+  PlanningSessionCoordinator c(Wheel(),{},config,std::move(ports));
+  ASSERT_TRUE(c.Start(SessionId{{1U}},FinalGoal{.target_x_m=3.5,.target_y_m=.5}).accepted);
+  auto fine=MakeFine();auto a=c.PlanCycle(At(.5,.5),SnapshotBundle{.fine=fine},CycleTrigger::kContinue,now+std::chrono::seconds(1));
+  ASSERT_FALSE(a.terminal);EXPECT_EQ(a.feedback.reason_code,"NAVIGATION_MAP_PENDING");
+  now+=std::chrono::seconds(2);
+  auto b=c.PlanCycle(At(.5,.5),SnapshotBundle{.fine=fine},CycleTrigger::kContinue,now+std::chrono::seconds(1));
+  ASSERT_TRUE(b.terminal);EXPECT_EQ(b.terminal->result.reason_code,"NAVIGATION_MAP_TIMEOUT");
+  EXPECT_EQ(b.terminal->result.outcome,SessionOutcome::kMapUnavailable);
+}
+TEST(PlanningSessionCoordinator, ExtremeFiniteStartIsMapUnavailableWithoutBlindRecovery) {
+  FakePorts fake;auto ports=fake.Bind();auto fine=MakeFine();AdaptiveNavigationMapBuilder builder;
+  auto nav=builder.Update(fine,SearchDeadline::max(),{}).snapshot;
+  ports.plan_adaptive_global=[](const auto&,auto,auto,auto,const auto&){AdaptiveRouteResult r;r.reason="MAP_INSUFFICIENT";return r;};
+  PlanningSessionCoordinator c(Wheel(),{},Config(),std::move(ports));
+  ASSERT_TRUE(c.Start(SessionId{{1U}},FinalGoal{.target_x_m=3.5,.target_y_m=.5}).accepted);
+  auto r=c.PlanCycle(At(1e300,-1e300),SnapshotBundle{.fine=fine,.navigation=nav},CycleTrigger::kContinue,SearchDeadline::max());
+  ASSERT_TRUE(r.terminal);EXPECT_EQ(r.terminal->result.outcome,SessionOutcome::kMapUnavailable);
+  EXPECT_EQ(fake.patch_calls,0);EXPECT_EQ(fake.wheel_calls,0);
+}
+
 }  // namespace
 }  // namespace lunar::incremental_navigation
 
@@ -1178,5 +1293,44 @@ TEST(RollingSession, LoopCandidateCannotSkipBlockedEarlyBranchDuringValidation) 
   auto result=c.ApplyCycle(std::move(candidate),At(.7,1.05),SnapshotBundle{.fine=MakeFine(2,GridIndex{.x=2,.y=0})});
   EXPECT_FALSE(result.path_reference);
   EXPECT_EQ(result.feedback.reason_code,"CANDIDATE_PATH_BLOCKED");
+}
+}
+namespace lunar::incremental_navigation {
+TEST(PlanningSessionCoordinator, UnchangedMapWaitingHasBoundedDeadline) {
+  FakePorts fake;
+  fake.local_status=LocalPlanResult::Status::kNoPath;
+  fake.local_reason_code="LOCAL_WAITING_FOR_MAP";
+  fake.target_region=std::make_shared<LocalGoalRegion>();
+  auto now=SteadyClock::now(); auto config=Config();
+  config.now=[&]{return now;}; config.map_wait_timeout=std::chrono::seconds(1);
+  PlanningSessionCoordinator c(Wheel(),{},config,fake.Bind());
+  ASSERT_TRUE(c.Start(SessionId{{100}},{.target_x_m=6.5,.target_y_m=1.5}).accepted);
+  auto fine=MakeFine();
+  EXPECT_FALSE(c.PlanCycle(At(1.5,1.5),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max()).terminal);
+  now+=std::chrono::seconds(2);
+  auto out=c.PlanCycle(At(1.5,1.5),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max());
+  ASSERT_TRUE(out.terminal);
+  EXPECT_EQ(out.terminal->result.reason_code,"MAP_WAIT_TIMEOUT");
+  EXPECT_EQ(fake.wheel_calls,1);
+}
+}
+namespace lunar::incremental_navigation {
+TEST(PlanningSessionCoordinator, PoseJitterDoesNotRenewMapWaitDeadline) {
+  FakePorts fake; fake.local_status=LocalPlanResult::Status::kNoPath;
+  fake.local_reason_code="LOCAL_WAITING_FOR_MAP";
+  fake.target_region=std::make_shared<LocalGoalRegion>();
+  auto now=SteadyClock::now();auto cfg=Config();cfg.now=[&]{return now;};
+  cfg.map_wait_timeout=std::chrono::seconds(1);
+  PlanningSessionCoordinator c(Wheel(),{},cfg,fake.Bind());
+  ASSERT_TRUE(c.Start(SessionId{{101}},{.target_x_m=6.5,.target_y_m=1.5}).accepted);
+  auto fine=MakeFine();
+  auto out=c.PlanCycle(At(1.5,1.5),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max());
+  ASSERT_FALSE(out.terminal);
+  for(int i=1;i<=6 && !out.terminal;++i) {
+    now+=std::chrono::milliseconds(250);
+    out=c.PlanCycle(At(1.5+i*.0001,1.5),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max());
+  }
+  ASSERT_TRUE(out.terminal);
+  EXPECT_EQ(out.terminal->result.reason_code,"MAP_WAIT_TIMEOUT");
 }
 }
