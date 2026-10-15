@@ -1073,8 +1073,8 @@ TEST(PlanningSessionCoordinator, FinalArrivalUsesSameNumericalToleranceAsLocalSo
   ASSERT_TRUE(coordinator.Start(SessionId{{93U}},{.target_x_m=5.5,.target_y_m=1.5}).accepted);
   const auto fine=MakeFine();
   ASSERT_TRUE(coordinator.PlanCycle(At(1.5,1.5),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max()).path_reference);
-  // One-metre fixture resolution gives a 0.5 m arrival region.
-  const auto reached=coordinator.PlanCycle(At(std::nextafter(6.0,7.0),1.5),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max());
+  // Public 0.2 m acceptance retains the solver's numerical epsilon.
+  const auto reached=coordinator.PlanCycle(At(std::nextafter(5.7,6.0),1.5),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max());
   ASSERT_TRUE(reached.terminal);
   EXPECT_EQ(reached.terminal->result.outcome,SessionOutcome::kGoalReached);
 }
@@ -1410,6 +1410,21 @@ TEST(PlanningSessionCoordinator, FailedFinalCorrectionCannotBypassRetryLimit) {
       CycleTrigger::kDeviation, SearchDeadline::max());
   ASSERT_TRUE(failed.terminal);
   EXPECT_EQ(failed.terminal->result.reason_code, "FINAL_POSE_NOT_REACHED");
+}
+
+TEST(PlanningSessionCoordinator, FinalArrivalDoesNotExpandToHalfTheMapCell) {
+  FakePorts ports; ports.reaches_final_goal = true;
+  auto cfg=Config();cfg.goal_position_tolerance_m=.10;cfg.goal_yaw_tolerance_rad=.05;
+  PlanningSessionCoordinator c(Wheel(),{},cfg,ports.Bind());
+  auto fine=MakeFine();
+  ASSERT_TRUE(c.Start(SessionId{{106U}},
+      {.target_x_m=6.5,.target_y_m=1.5,.has_target_yaw=true,.target_yaw_rad=0.}).accepted);
+  ASSERT_TRUE(c.PlanCycle(At(1.5,1.5),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max()).path_reference);
+  EXPECT_FALSE(c.PlanCycle(At(6.35,1.5,0.),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max()).terminal);
+  EXPECT_FALSE(c.PlanCycle(At(6.45,1.5,.051),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max()).terminal);
+  const auto reached=c.PlanCycle(At(6.45,1.5,.049),{.fine=fine},CycleTrigger::kContinue,SearchDeadline::max());
+  ASSERT_TRUE(reached.terminal);
+  EXPECT_EQ(reached.terminal->result.outcome,SessionOutcome::kGoalReached);
 }
 
 }

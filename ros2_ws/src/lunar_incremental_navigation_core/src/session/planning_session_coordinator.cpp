@@ -156,13 +156,13 @@ struct PlanningSessionCoordinator::Impl final {
   }
 
   [[nodiscard]] bool GoalReached(const StateInput& input,
-                                 const FineTraversabilitySnapshot& fine)
+                                 const FineTraversabilitySnapshot&)
       const noexcept {
     if (!active_path || !active_path->reaches_final_goal || !goal) {
       return false;
     }
-    const double position_tolerance_m = GoalPositionTolerance(
-        fine, config.goal_position_tolerance_m);
+    // Map discretization may affect search, never the public final arrival band.
+    const double position_tolerance_m = config.goal_position_tolerance_m;
     if (!WithinArrivalTolerance(
             std::hypot(input.base_link_pose.position_m.x - goal->target_x_m,
                        input.base_link_pose.position_m.y - goal->target_y_m),
