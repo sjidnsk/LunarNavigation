@@ -281,9 +281,12 @@ class RequestLocalPlanningView final {
   bool stationary_support_{};
 };
 
+class AdaptiveNavigationSnapshot;
+
 struct SnapshotBundle final {
   std::shared_ptr<const FineTraversabilitySnapshot> fine;
   std::shared_ptr<const GlobalGuidanceSnapshot> guidance;
+  std::shared_ptr<const AdaptiveNavigationSnapshot> navigation;
 };
 
 }  // namespace lunar::incremental_navigation
