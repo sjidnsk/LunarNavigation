@@ -407,7 +407,10 @@ PreparedCycle PlanningSessionCoordinator::PrepareCycle(
     return prepared;
   }
   if (trigger == CycleTrigger::kSegmentEnd || trigger == CycleTrigger::kFinalPoseLost) {
-    if (impl_->active_path && impl_->active_path->reaches_final_goal) {
+    const bool execution_confirmed = impl_->config.require_execution_confirmation ||
+        trigger == CycleTrigger::kFinalPoseLost;
+    if (execution_confirmed && impl_->active_path && impl_->active_path->reaches_final_goal) {
+      // Compatibility pose polling does not confirm executor completion.
       // One fresh reference may correct residual motion after executor
       // completion. Repeating the same miss must yield a bounded failure.
       if (impl_->final_pose_corrections++ != 0U) {
