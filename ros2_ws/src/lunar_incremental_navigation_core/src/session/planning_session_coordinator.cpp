@@ -94,6 +94,7 @@ struct PlanningSessionCoordinator::Impl final {
   std::uint64_t request_sequence{};
   CycleTrigger pending_trigger{CycleTrigger::kContinue};
   bool final_alignment{};
+  unsigned final_pose_corrections{};
   void DropPending() {
     if (auto source = std::atomic_load_explicit(&current_cycle_stop, std::memory_order_acquire))
       source->request_stop();
@@ -307,6 +308,7 @@ StartSessionResult PlanningSessionCoordinator::Start(const SessionId id,
 
   impl_->DropPending();
   impl_->final_alignment = false;
+  impl_->final_pose_corrections = 0U;
   impl_->session_id = id;
   impl_->goal = goal;
   impl_->representation_deadline.reset();
@@ -372,7 +374,8 @@ PreparedCycle PlanningSessionCoordinator::PrepareCycle(
     impl_->state = CoordinatorState::kReplanning;
   }
 
-  if (snapshots.fine && impl_->GoalReached(state, *snapshots.fine) &&
+  if (trigger != CycleTrigger::kFinalPoseLost &&
+      snapshots.fine && impl_->GoalReached(state, *snapshots.fine) &&
       (!impl_->config.require_execution_confirmation || trigger == CycleTrigger::kSegmentEnd)) {
     output.terminal = impl_->Finish(SessionOutcome::kGoalReached,
                                     "GOAL_REACHED",
@@ -382,6 +385,12 @@ PreparedCycle PlanningSessionCoordinator::PrepareCycle(
   }
 
   if (trigger == CycleTrigger::kDeviation && impl_->active_path) {
+    if (impl_->active_path->reaches_final_goal && impl_->final_pose_corrections != 0U) {
+      output.terminal = impl_->Finish(SessionOutcome::kNoPath,
+          "FINAL_POSE_NOT_REACHED", impl_->last_safety_evaluated_fine_revision);
+      output.feedback = impl_->Feedback("FINAL_POSE_NOT_REACHED");
+      return prepared;
+    }
     output.path_reference =
         impl_->Invalidate(impl_->last_safety_evaluated_fine_revision);
     impl_->state = CoordinatorState::kReplanning;
@@ -392,12 +401,22 @@ PreparedCycle PlanningSessionCoordinator::PrepareCycle(
   const bool planning_required =
       impl_->state == CoordinatorState::kPlanning ||
       impl_->state == CoordinatorState::kReplanning ||
-      trigger == CycleTrigger::kSegmentEnd || rolling;
+      trigger == CycleTrigger::kSegmentEnd || trigger == CycleTrigger::kFinalPoseLost || rolling;
   if (!planning_required || impl_->pending || (rolling && impl_->final_alignment)) {
     output.feedback = impl_->Feedback("EXECUTING");
     return prepared;
   }
-  if (trigger == CycleTrigger::kSegmentEnd) {
+  if (trigger == CycleTrigger::kSegmentEnd || trigger == CycleTrigger::kFinalPoseLost) {
+    if (impl_->active_path && impl_->active_path->reaches_final_goal) {
+      // One fresh reference may correct residual motion after executor
+      // completion. Repeating the same miss must yield a bounded failure.
+      if (impl_->final_pose_corrections++ != 0U) {
+        output.terminal = impl_->Finish(SessionOutcome::kNoPath,
+            "FINAL_POSE_NOT_REACHED", impl_->last_safety_evaluated_fine_revision);
+        output.feedback = impl_->Feedback("FINAL_POSE_NOT_REACHED");
+        return prepared;
+      }
+    }
     impl_->final_alignment = false;
     impl_->state = CoordinatorState::kReplanning;
   }
@@ -682,7 +701,9 @@ std::uint64_t PlanningSessionCoordinator::active_segment_revision()
 namespace lunar::incremental_navigation {
 void PlanningSessionCoordinator::StopPendingCycle() { impl_->DropPending(); }
 void PlanningSessionCoordinator::SetFinalAlignment(bool value) {
-  if (value && !impl_->final_alignment) impl_->DropPending();
+  // Execution holds supersede speculative rolling updates, but the stopped
+  // executor still needs the required replacement/correction computation.
+  if (value && impl_->pending && impl_->pending->rolling) impl_->DropPending();
   impl_->final_alignment = value;
 }
 double PlanningSessionCoordinator::remaining_path_m() const noexcept {

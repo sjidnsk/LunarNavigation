@@ -1123,6 +1123,10 @@ struct IncrementalNavigationNode::Impl final {
       coordinator->SetFinalAlignment(rolling_enabled && execution_hold);
       rolling_policy->SetFrozen(rolling_enabled && execution_hold);
     }
+    // Collect required correction results even when the executor repeats its
+    // stopped terminal feedback. Safety evidence and execution holds above
+    // still take precedence over accepting worker output.
+    if (rolling_enabled) CollectWorkerResult(state.value_or(MissingState()));
     // Apply pending fine evidence before accepting execution completion: a
     // collision invalidates the reference, so its queued feedback is stale.
     // Only the stopped executor of the current reference may request replanning.
@@ -1133,16 +1137,21 @@ struct IncrementalNavigationNode::Impl final {
          tracking->state == lunar_planning_msgs::msg::TrackingStatus::COMPLETED) &&
         tracking->session_id.uuid == active_goal->get_goal_id() &&
         tracking->segment_revision == active_reference->segment_revision &&
+        terminal_tracking_revision != tracking->segment_revision &&
         std::isfinite(tracking->linear_speed_mps) &&
         std::isfinite(tracking->angular_speed_radps) &&
         std::abs(tracking->linear_speed_mps) <= 0.01 &&
         std::abs(tracking->angular_speed_radps) <= 0.03) {
-      RunCycle(*state, tracking->state == lunar_planning_msgs::msg::TrackingStatus::FAILED
-          ? core::CycleTrigger::kDeviation : core::CycleTrigger::kSegmentEnd);
+      terminal_tracking_revision = tracking->segment_revision;
+      const bool final_pose_lost = tracking->state == lunar_planning_msgs::msg::TrackingStatus::FAILED &&
+          active_reference->reaches_final_goal &&
+          (tracking->reason == "GOAL_POSITION_LOST" || tracking->reason == "GOAL_YAW_LOST");
+      RunCycle(*state, final_pose_lost ? core::CycleTrigger::kFinalPoseLost :
+          (tracking->state == lunar_planning_msgs::msg::TrackingStatus::FAILED
+          ? core::CycleTrigger::kDeviation : core::CycleTrigger::kSegmentEnd));
       replan_pending = coordinator->state() == core::CoordinatorState::kReplanning;
       return;
     }
-    if (rolling_enabled) CollectWorkerResult(state.value_or(MissingState()));
     if (replan_pending && !worker_busy && active_goal && active_goal->is_active()) {
       replan_pending = false;
       RunCycle(state.value_or(MissingState()), core::CycleTrigger::kContinue);
@@ -1234,6 +1243,7 @@ struct IncrementalNavigationNode::Impl final {
       return;
     }
     rolling_policy->Reset();
+    terminal_tracking_revision.reset();
     execution_hold = false;
     const core::StartSessionResult started = coordinator->Start(id, *converted.goal);
     if (!started.accepted || started.terminal) {
@@ -1738,6 +1748,7 @@ struct IncrementalNavigationNode::Impl final {
   double rolling_period_s{};
   bool rolling_enabled{}, execution_hold{}, worker_busy{};
   std::optional<double> tracking_remaining_m;
+  std::optional<std::uint64_t> terminal_tracking_revision;
   std::mutex worker_mutex;
   std::condition_variable worker_condition;
   std::optional<core::CycleRequest> worker_request;
