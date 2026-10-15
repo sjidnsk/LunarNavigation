@@ -1404,9 +1404,9 @@ TEST(PlanningSessionCoordinator, FailedFinalCorrectionCannotBypassRetryLimit) {
       FinalGoal{.target_x_m=6.5,.target_y_m=1.5,.has_target_yaw=true,.target_yaw_rad=0.}).accepted);
   ASSERT_TRUE(coordinator.PlanCycle(At(1.5,1.5), {.fine=fine},
       CycleTrigger::kContinue, SearchDeadline::max()).path_reference);
-  ASSERT_TRUE(coordinator.PlanCycle(At(6.5,1.5,.2), {.fine=fine},
+  ASSERT_TRUE(coordinator.PlanCycle(At(6.49,1.5,.2), {.fine=fine},
       CycleTrigger::kSegmentEnd, SearchDeadline::max()).path_reference);
-  auto failed = coordinator.PlanCycle(At(6.5,1.5,.2), {.fine=fine},
+  auto failed = coordinator.PlanCycle(At(6.49,1.5,.2), {.fine=fine},
       CycleTrigger::kDeviation, SearchDeadline::max());
   ASSERT_TRUE(failed.terminal);
   EXPECT_EQ(failed.terminal->result.reason_code, "FINAL_POSE_NOT_REACHED");
