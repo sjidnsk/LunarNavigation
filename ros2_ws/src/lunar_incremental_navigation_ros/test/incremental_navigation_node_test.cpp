@@ -806,7 +806,7 @@ TEST(IncrementalNavigationNode, DirectDeploymentDefaultsAndExplicitOverrides) {
   auto defaults = std::make_shared<IncrementalNavigationNode>();
   EXPECT_EQ(defaults->get_parameter("platform_type").as_string(), "legged");
   EXPECT_DOUBLE_EQ(defaults->get_parameter("terrain_background_half_width_m").as_double(), 0.2);
-  EXPECT_EQ(defaults->get_parameter("platform_type").as_string(), "wheel");
+  EXPECT_EQ(defaults->get_parameter("platform_type").as_string(), "legged");
   EXPECT_FALSE(defaults->get_parameter("platform_config").as_string().empty());
   EXPECT_TRUE(defaults->get_parameter("enable_tracking_feedback").as_bool());
   EXPECT_DOUBLE_EQ(defaults->get_parameter("rolling_replan_period_s").as_double(), 0.5);
