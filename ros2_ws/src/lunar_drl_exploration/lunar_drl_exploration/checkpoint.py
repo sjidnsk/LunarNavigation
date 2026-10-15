@@ -350,7 +350,8 @@ class TrainingState:
 
     @classmethod
     def capture(cls, *, learner, config, replay, schedule, boundary, replay_rng,
-                curriculum_rng, curriculum, collector_state, counters, fork=None):
+                curriculum_rng, curriculum, collector_state, counters, fork=None,
+                arrival_contract_migrations=None):
         boundary.require_safe()
         if len(replay) > schedule.transitions:
             raise ValueError('replay admission count exceeds learner-owned counter')
@@ -390,6 +391,8 @@ class TrainingState:
             counters=dumps_transport(counters))
         if fork is not None:
             record['fork'] = copy.deepcopy(fork)
+        if arrival_contract_migrations is not None:
+            record['arrival_contract_migrations'] = copy.deepcopy(arrival_contract_migrations)
         return cls(record)
 
     def validate(self, config=None, *, materialize_replay=False):

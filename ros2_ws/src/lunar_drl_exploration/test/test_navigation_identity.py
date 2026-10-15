@@ -13,3 +13,19 @@ def test_every_native_artifact_changes_identity(tmp_path,monkeypatch):
         assert changed[index]!=expected[index]
         assert all(changed[i]==expected[i] for i in range(3) if i!=index)
         path.write_bytes(b'original')
+
+
+def test_controller_execution_changes_runtime_provenance(tmp_path, monkeypatch):
+    prefix = tmp_path / 'lunar_pure_wheeled_controller'
+    module = prefix / 'lib/python3.10/site-packages/lunar_pure_wheeled_controller/execution.py'
+    entry = prefix / 'lib/lunar_pure_wheeled_controller/lunar_pure_wheeled_controller_node.py'
+    for path in (module, entry):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'original')
+    monkeypatch.setattr(identity, 'get_package_prefix', lambda package: str(prefix))
+    before = identity.controller_execution_files()
+    assert len(before) == 2
+    module.write_bytes(b'new arrival behavior')
+    after = identity.controller_execution_files()
+    assert before != after
+    assert {key for key, _ in before} == {key for key, _ in after}

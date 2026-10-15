@@ -356,10 +356,12 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
         policy_rng=torch.Generator().manual_seed(config.seed + 2).get_state(), sequences={})
     counters = dict(transitions=0, aborted=0, recoveries=0)
     fork_provenance = None
+    arrival_contract_migrations = None
     source_replay_sha256 = None
     if resume or fork_state is not None:
         state = manager.load(config) if resume else fork_state
         fork_provenance = state.record.get('fork')
+        arrival_contract_migrations = state.record.get('arrival_contract_migrations')
         if config.paired_scene_sequence:
             import hashlib
             source_replay_sha256 = hashlib.sha256(state.record['replay']).hexdigest()
@@ -438,6 +440,8 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
         restored_model_checksum=restored_checksum, initial_state_identity=initial_identity)
     if fork_provenance is not None:
         observations['fork'] = fork_provenance
+    if arrival_contract_migrations is not None:
+        observations['arrival_contract_migrations'] = arrival_contract_migrations
     # Bounded recent episode identities suffice for run auditing; counters remain cumulative.
     episode_ids = []
     barrier_pending = False
@@ -473,7 +477,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
         state = TrainingState.capture(learner=learner, config=config, replay=replay,
             schedule=schedule, boundary=boundary, replay_rng=replay_rng, curriculum_rng=curriculum_rng,
             curriculum=curriculum.snapshot(), collector_state=collector_state, counters=counters,
-            fork=fork_provenance)
+            fork=fork_provenance, arrival_contract_migrations=arrival_contract_migrations)
         return state
 
     def persist_diagnostics():

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import math
 
 import numpy as np
 import yaml
@@ -218,6 +219,7 @@ class TrainingConfig:
     integration_step_s: float = .05
     observation_hz: float = 2.0
     goal_position_tolerance_m: float = .05
+    goal_yaw_tolerance_rad: float = math.pi / 12
     stagnation_window_steps: int = 0
     stagnation_max_positions: int = 8
     stagnation_position_tolerance_m: float = .25
@@ -328,7 +330,8 @@ class TrainingConfig:
             if not isinstance(value, int) or value <= 0:
                 raise ValueError(f'positive integer required: {name}')
         for name in ('target_rtf', 'integration_step_s', 'observation_hz',
-                     'goal_position_tolerance_m', 'update_ratio', 'save_interval_s'):
+                     'goal_position_tolerance_m', 'goal_yaw_tolerance_rad',
+                     'update_ratio', 'save_interval_s'):
             value = getattr(self, name)
             if not np.isfinite(value) or value <= 0:
                 raise ValueError(f'positive finite value required: {name}')
@@ -382,6 +385,10 @@ def resume_semantics(config):
         schedule=dict(warmup=config.warmup, ratio=config.update_ratio),
         curriculum_budgets=record['curriculum_budgets'],
         curriculum_extents_m=record['curriculum_extents_m'])
+    # Legacy checkpoints implicitly used pi/12. Preserve that exact resume
+    # contract; explicit changes must be admitted by an audited migration.
+    if config.goal_yaw_tolerance_rad != math.pi / 12:
+        result['goal_yaw_tolerance_rad'] = config.goal_yaw_tolerance_rad
     if config.ordered_curriculum:
         result['ordered_curriculum'] = dict(version='ordered_task_transfer_v1',
             tasks=['moon_inside', 'cave_inside', 'moon_outside', 'cave_outside'],

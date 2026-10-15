@@ -18,3 +18,17 @@ def native_navigation_files():
                 digest.update(chunk)
         result.append(('native:' + package + ':' + relative, digest.hexdigest()))
     return result
+
+
+def controller_execution_files():
+    """Fingerprint the installed executor resolved by the ROS package prefix."""
+    prefix = Path(get_package_prefix('lunar_pure_wheeled_controller'))
+    modules = sorted({path for pattern in (
+        'lib/python*/site-packages/lunar_pure_wheeled_controller/*.py',
+        'local/lib/python*/dist-packages/lunar_pure_wheeled_controller/*.py')
+        for path in prefix.glob(pattern)})
+    entry = prefix / 'lib/lunar_pure_wheeled_controller/lunar_pure_wheeled_controller_node.py'
+    if not modules or not entry.is_file():
+        raise RuntimeError('installed wheeled controller execution files are missing')
+    return [('controller:' + str(path.relative_to(prefix)),
+             hashlib.sha256(path.read_bytes()).hexdigest()) for path in [*modules, entry]]

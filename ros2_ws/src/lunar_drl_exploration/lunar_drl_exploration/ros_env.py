@@ -311,7 +311,8 @@ class RosExplorationEnv:
         env=dict(os.environ,ROS_DOMAIN_ID=str(self.domain_id),ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST')
         common={'platform_config':self.config.platform.capability_path,'use_sim_time':True,
                 'goal_position_tolerance_m':self.config.goal_position_tolerance_m,
-                'goal_yaw_tolerance_rad':math.pi/12,'odometry_topic':ns+'/odom','tf_topic':ns+'/tf'}
+                'goal_yaw_tolerance_rad':self.config.goal_yaw_tolerance_rad,
+                'odometry_topic':ns+'/odom','tf_topic':ns+'/tf'}
         self.owned.start('lunar_incremental_navigation_ros','lunar_incremental_navigation_node',ns,
             dict(common,local_map_topic=ns+'/grid',action_name=ns+'/navigate',path_reference_topic=ns+'/reference',
                 local_path_topic=ns+'/path',global_route_topic=ns+'/route',diagnostics_topic=ns+'/diagnostics',
