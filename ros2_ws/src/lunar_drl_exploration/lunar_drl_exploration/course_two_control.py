@@ -41,6 +41,8 @@ def runtime_digest():
     files=[(p.name,sha(p)) for p in sorted(Path(__file__).parent.glob('*.py'))]
     spec=importlib.util.find_spec('lunar_drl_terrain_native')
     if spec and spec.origin:files.append(('terrain_native',sha(spec.origin)))
+    from .navigation_identity import native_navigation_files
+    files.extend(native_navigation_files())
     return hashlib.sha256(json.dumps(files).encode()).hexdigest()
 
 

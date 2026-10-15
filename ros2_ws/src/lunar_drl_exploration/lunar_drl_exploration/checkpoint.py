@@ -1,6 +1,7 @@
 """Complete learner-boundary continuation; one atomically replaced local resume."""
 from contextlib import contextmanager
 from dataclasses import dataclass
+import io
 import copy
 import json
 import os
@@ -521,6 +522,22 @@ class TrainingState:
             curriculum,collector_state,counters)
 
 
+class _CheckpointStream:
+    """Stream full replay metadata without bypassing atomic-write budgets.
+
+    Legacy torch serialization writes pickle directly to this stream. Hiding
+    fileno keeps tensor storage on BudgetWriter.write as well.
+    """
+    def __init__(self, stream):
+        self.stream = stream
+
+    def fileno(self):
+        raise io.UnsupportedOperation('checkpoint storage must use budgeted writes')
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
 class CheckpointManager:
     def __init__(self, output_dir, interval_s=1800, *, total_max_bytes=20*1024**3,
                  snapshot_max_bytes=2*1024**3, clock=time.monotonic, artifact_root=''):
@@ -566,7 +583,8 @@ class CheckpointManager:
         if len(state.record['replay'])>self.snapshot_max_bytes:
             raise ResourceLimitError('replay snapshot bytes',len(state.record['replay']),self.snapshot_max_bytes)
         state.validate()
-        self._atomic('resume.pt',lambda stream:torch.save(state.record,stream))
+        self._atomic('resume.pt', lambda stream: torch.save(state.record,
+            _CheckpointStream(stream), pickle_protocol=5, _use_new_zipfile_serialization=False))
         self.last_save=self.clock()
         self.requested_reason=None
         return self.output_dir/'resume.pt'
