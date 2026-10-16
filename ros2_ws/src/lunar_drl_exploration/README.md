@@ -772,26 +772,41 @@ establish learning, GPU collection, eight-environment throughput or target30.
 
 ## Async training and operator entrypoints
 
-`python -m lunar_drl_exploration.cli {train,evaluate,infer,export}` is a lazy
-stdlib bootstrap. `scripts/drl/build.sh` builds the affected dependency closure
-into `$HOME/.cache/lunar-drl-redesign/jazzy/{build,install,log}`. Launchers clear
-inherited ROS/Python/library overlay variables in a child shell, source Jazzy
-before strict unset checking, then source only the new `install/local_setup.bash`.
-`DRL_CACHE`, `DRL_ROS_SETUP`, and `DRL_PYTHON` explicitly override those paths;
-`CUDA_VISIBLE_DEVICES` remains a user setting. Default dependency Python is
-`$HOME/.cache/lunar-drl-training/venv/bin/python`.
+`python -m lunar_drl_exploration.cli {train,evaluate,infer,export}` 是延迟导入的 CLI。
+当前通用 shell 入口要求 **ROS 2 Humble**；旧日期段中的 Jazzy 缓存不是当前启动默认值。
+先准备已有 Torch/NumPy/PyYAML/SciPy 依赖的 Python，再用 `scripts/drl/build.sh`
+构建所需依赖闭包到独立 `DRL_CACHE`，启动器只接受与当前源码身份匹配的成功构建缓存。
+默认 ROS setup 为 `/opt/ros/humble/setup.bash`，默认缓存为
+`$HOME/.cache/lunar-drl-redesign/humble`，默认依赖解释器为
+`$HOME/.cache/lunar-drl-training/venv/bin/python`；下例显式指定独立缓存与解释器。
+构建与启动前不要混入其他 ROS 发行版或旧工作树安装目录。
+
+Humble 的 Float32MultiArray 调试检查不接受此版本的 NumPy 网格输入。
+`_run.sh` 在调用目标 Python 前导出 `PYTHONOPTIMIZE=1`，后续 Python 子进程继承该值。
+未设置时自动采用 1；显式 `PYTHONOPTIMIZE=0`、2 或空值会报错并以退出码 2 拒绝启动，
+应取消该变量或设置为 1。此模式关闭普通 Python 模块的 assert；pytest 重写的测试断言仍有效，
+但不能据此声称所有运行时 assert 都启用。直接绕过 shell 调用 CLI 时也必须显式保留该模式。
+
+启动器在子 shell 中清除继承的 ROS/Python/library overlay，加载 Humble，核验缓存后再加载
+当前缓存的 `install/local_setup.bash`。`DRL_CACHE`、`DRL_ROS_SETUP`、`DRL_PYTHON`
+可显式覆盖默认路径；`CUDA_VISIBLE_DEVICES` 仍由调用者选择。
+以下是新独立实验的命令示例，不能把路径换成正在运行的冻结实验后直接覆盖或续训：
 
 ```bash
+# 从本仓库根执行；解释器应已有本项目依赖，不在此安装或升级共享环境。
+export DRL_ROS_SETUP=/opt/ros/humble/setup.bash
+export DRL_CACHE="$HOME/CodexDownloads/lunar_navigation/drl-new-experiment-humble"
+export DRL_PYTHON=/mnt/data/WS/lunar-navigation/.runtime/region-relation-v2/venv/bin/python
+export DRL_OUTPUT="$HOME/CodexDownloads/lunar_navigation/drl-new-experiment/run"
+export PYTHONOPTIMIZE=1
 scripts/drl/build.sh
-scripts/drl/train.sh --config config/drl_exploration.yaml
-scripts/drl/train.sh --config config/drl_exploration.yaml --resume
-scripts/drl/train.sh --probe --probe-warmup 4 --probe-extent 40 --probe-budget 2 \
-  --max-transitions 12 --output-dir training-output/drl-exploration-redesign/my-probe
-scripts/drl/_run.sh export --checkpoint training-output/drl-exploration-redesign/resume.pt \
-  --output training-output/drl-exploration-redesign/actor.pt
-scripts/drl/evaluate.sh --actor training-output/drl-exploration-redesign/actor.pt \
+scripts/drl/train.sh --config config/drl_candidate_geometry_v3.yaml --output-dir "$DRL_OUTPUT"
+# 仅恢复本实验自己的、身份一致的完整检查点：
+scripts/drl/train.sh --config config/drl_candidate_geometry_v3.yaml --output-dir "$DRL_OUTPUT" --resume
+scripts/drl/_run.sh export --checkpoint "$DRL_OUTPUT/resume.pt" --output "$DRL_OUTPUT/actor.pt"
+scripts/drl/evaluate.sh --actor "$DRL_OUTPUT/actor.pt" \
   --seeds 2026091501 2026091502 --families moon cave --extents 40 100 --budget 512
-scripts/drl/infer.sh --actor training-output/drl-exploration-redesign/actor.pt
+scripts/drl/infer.sh --actor "$DRL_OUTPUT/actor.pt"
 ```
 
 `--max-transitions` is the number of **new admissions in this invocation**;

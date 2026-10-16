@@ -8,6 +8,10 @@ exec env -u AMENT_PREFIX_PATH -u COLCON_PREFIX_PATH -u CMAKE_PREFIX_PATH \
   bash --noprofile --norc -c '
     set -e
     DRL_ROOT=$1; shift
+    if [[ "${PYTHONOPTIMIZE-1}" != 1 ]]; then
+      echo "DRL Humble launcher requires PYTHONOPTIMIZE=1; unset it or explicitly set 1 (NumPy grid messages require this mode)" >&2
+      exit 2
+    fi
     DRL_ROS_SETUP=${DRL_ROS_SETUP:-/opt/ros/humble/setup.bash}
     DRL_CACHE=${DRL_CACHE:-$HOME/.cache/lunar-drl-redesign/humble}
     DRL_PYTHON=${DRL_PYTHON:-$HOME/.cache/lunar-drl-training/venv/bin/python}
@@ -18,6 +22,8 @@ exec env -u AMENT_PREFIX_PATH -u COLCON_PREFIX_PATH -u CMAKE_PREFIX_PATH \
     if [[ "$ROS_DISTRO" != humble ]]; then
       echo "DRL local launcher requires a separate Humble cache" >&2; exit 2
     fi
+    # Humble 生成消息的调试检查不接受 NumPy 网格；子进程必须继承同一模式。
+    export PYTHONOPTIMIZE=1
     export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
     export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4 NUMEXPR_NUM_THREADS=4
     cd "$DRL_ROOT"
