@@ -4,6 +4,9 @@
 
 #include <atomic>
 #include <cmath>
+#include <chrono>
+#include <map>
+#include <limits>
 #include <cstddef>
 #include <future>
 #include <limits>
@@ -12,6 +15,11 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
+
+#include <gtest/gtest.h>
+
+#include "lunar_incremental_navigation_ros/elevation_pipeline.hpp"
+#include "lunar_incremental_navigation_ros/policy_map_exporter.hpp"
 
 namespace lunar::incremental_navigation_ros {
 namespace {
@@ -47,8 +55,16 @@ using lunar::incremental_navigation::WheeledCapability;
   return evidence;
 }
 
+[[nodiscard]] OwnedElevationEvidence HeightShiftedBlockedEvidence(
+    const float shift, const double origin_x_m = 0.) {
+  auto evidence = BlockedTerrainEvidence(origin_x_m);
+  for (auto& height : evidence.elevation_m) height += shift;
+  return evidence;
+}
+
 struct FailureGate final {
   std::atomic<bool> armed{false};
+  bool throw_on_release{true};
   std::promise<void> entered;
   std::promise<void> release;
   std::shared_future<void> released{release.get_future().share()};
@@ -70,7 +86,9 @@ struct FailureGate final {
         if (fine_gate && fine_gate->armed.exchange(false)) {
           fine_gate->entered.set_value();
           fine_gate->released.wait();
-          throw std::runtime_error("injected fine derivation failure");
+          if (fine_gate->throw_on_release) {
+            throw std::runtime_error("injected fine derivation failure");
+          }
         }
         return lunar::incremental_navigation::FineTraversabilityBuilder{}.Derive(
             std::move(raw), capability, profile, std::move(previous), changes);
@@ -183,6 +201,439 @@ TEST(ElevationPipelineTest, CallbacksOnlyWriteRawAndMergeDirtyWork) {
   EXPECT_EQ(bundle.fine->fine_traversability_revision(), 1U);
   EXPECT_EQ(bundle.guidance, nullptr);
   EXPECT_EQ(pipeline.PendingFineDirtyTileCount(), 0U);
+}
+
+TEST(ElevationPipelineTest, FineSnapshotRetainsItsExactAcceptedMapStamp) {
+  ElevationPipeline pipeline(Capability(), Profile(), 1.0);
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.0F), 101).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.1F), 202).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+
+  const auto captured = pipeline.CapturePolicyMapSnapshot();
+  ASSERT_TRUE(captured.bundle.fine);
+  EXPECT_EQ(captured.processed_map_stamp_ns, 101);
+}
+
+TEST(ElevationPipelineTest, DuplicateRefreshesPublishedFineStampWithoutChangingMap) {
+  ElevationPipeline pipeline(Capability(), Profile(), 1.0);
+  const auto evidence = Evidence(0.0F);
+  ASSERT_EQ(pipeline.ApplyLocal(evidence, 101).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  EXPECT_EQ(pipeline.ApplyLocal(evidence, 202).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kDuplicate);
+  EXPECT_EQ(pipeline.CapturePolicyMapSnapshot().processed_map_stamp_ns, 202);
+}
+
+TEST(ElevationPipelineTest, DuplicatePendingBeforeDerivationAdvancesOnlyMatchingFine) {
+  ElevationPipeline pipeline(Capability(), Profile(), 1.0);
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.0F), 101).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.1F), 202).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.1F), 303).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kDuplicate);
+  EXPECT_EQ(pipeline.CapturePolicyMapSnapshot().processed_map_stamp_ns, 101);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto published = pipeline.CapturePolicyMapSnapshot();
+  EXPECT_EQ(published.bundle.fine->raw_elevation_revision(), 2U);
+  EXPECT_EQ(published.processed_map_stamp_ns, 303);
+  EXPECT_FALSE(pipeline.RunFineDerivation());
+}
+
+class DuplicateDuringDerivation : public testing::TestWithParam<bool> {};
+
+TEST_P(DuplicateDuringDerivation, PublishesExactRawStampPairWithoutNewerRawLeak) {
+  FailureGate gate;
+  gate.throw_on_release = false;
+  ElevationPipeline pipeline(Capability(), Profile(), 1.0,
+                             GatedFailureDerivers(&gate, nullptr));
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.0F), 101).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto original = pipeline.CapturePolicyMapSnapshot();
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.1F), 202).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  gate.armed.store(true);
+  auto entered = gate.entered.get_future();
+  auto worker = std::async(std::launch::async, [&] { return pipeline.RunFineDerivation(); });
+  const auto entered_status = entered.wait_for(std::chrono::seconds(5));
+  if (entered_status != std::future_status::ready) {
+    gate.release.set_value();
+    worker.wait();
+    FAIL() << "fine derivation did not reach injected gate";
+  }
+  EXPECT_EQ(pipeline.ApplyLocal(Evidence(0.1F), 303).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kDuplicate);
+  if (GetParam()) {
+    EXPECT_EQ(pipeline.ApplyLocal(Evidence(0.2F), 404).status,
+              lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+    EXPECT_EQ(pipeline.ApplyLocal(Evidence(0.2F), 505).status,
+              lunar::incremental_navigation::ElevationUpdateResult::Status::kDuplicate);
+  }
+  const AdapterResult<OwnedElevationEvidence> rejected{
+      .value = std::nullopt, .reason_code = "INVALID_INPUT"};
+  EXPECT_EQ(pipeline.ApplyLocal(rejected, 999).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kRejected);
+  EXPECT_EQ(pipeline.CapturePolicyMapSnapshot().processed_map_stamp_ns, 101);
+  gate.release.set_value();
+  ASSERT_TRUE(worker.get());
+  const auto published = pipeline.CapturePolicyMapSnapshot();
+  EXPECT_EQ(published.bundle.fine->raw_elevation_revision(), 2U);
+  EXPECT_EQ(published.processed_map_stamp_ns, GetParam() ? 202 : 303);
+  // The previously captured immutable pair cannot change after publication.
+  EXPECT_EQ(original.bundle.fine->raw_elevation_revision(), 1U);
+  EXPECT_EQ(original.processed_map_stamp_ns, 101);
+  if (GetParam()) {
+    ASSERT_TRUE(pipeline.RunFineDerivation());
+    const auto latest = pipeline.CapturePolicyMapSnapshot();
+    EXPECT_EQ(latest.bundle.fine->raw_elevation_revision(), 3U);
+    EXPECT_EQ(latest.processed_map_stamp_ns, 505);
+  }
+  const auto before_rejection = pipeline.CapturePolicyMapSnapshot();
+  EXPECT_EQ(pipeline.ApplyLocal(rejected, 1000).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kRejected);
+  EXPECT_EQ(pipeline.ApplyLocal(OwnedElevationEvidence{}, 1001).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kRejected);
+  EXPECT_EQ(pipeline.CapturePolicyMapSnapshot().processed_map_stamp_ns,
+            before_rejection.processed_map_stamp_ns);
+}
+
+INSTANTIATE_TEST_SUITE_P(PendingDuplicate, DuplicateDuringDerivation,
+                        testing::Bool());
+
+using PolicyResponse = lunar_planning_msgs::srv::GetPolicyMap::Response;
+using TileKey = std::pair<std::int64_t, std::int64_t>;
+using WireTiles = std::map<TileKey, lunar_planning_msgs::msg::PolicyMapTile>;
+
+PolicyResponse ExportCaptured(const ElevationPipeline& pipeline,
+                              const PolicyMapExporter& exporter,
+                              const std::uint64_t since = 0U) {
+  const auto capture = pipeline.CapturePolicyMapSnapshot(since);
+  return exporter.Export({.fine = capture.bundle.fine,
+                          .epoch = "direct-export-regression",
+                          .processed_stamp_ns = capture.processed_map_stamp_ns,
+                          .base_revision = capture.base_revision,
+                          .full_snapshot = capture.full_snapshot,
+                          .dirty_tiles = capture.dirty_tiles}, since);
+}
+
+void ApplyWireTiles(const PolicyResponse& response, WireTiles& tiles) {
+  if (response.full_snapshot) tiles.clear();
+  for (const auto& tile : response.tiles) tiles[{tile.tile_x, tile.tile_y}] = tile;
+}
+
+void ExpectFloatArraysEqual(const std::vector<float>& actual,
+                           const std::vector<float>& expected) {
+  ASSERT_EQ(actual.size(), expected.size());
+  for (std::size_t i = 0; i < actual.size(); ++i) {
+    if (!(actual[i] == expected[i] ||
+          (std::isnan(actual[i]) && std::isnan(expected[i])))) {
+      FAIL() << "float array differs at " << i << ": " << actual[i]
+             << " vs " << expected[i];
+    }
+  }
+}
+
+void ExpectAllExportedFieldsEqual(const WireTiles& reconstructed,
+                                 const PolicyResponse& full) {
+  ASSERT_TRUE(full.ready);
+  ASSERT_TRUE(full.full_snapshot);
+  ASSERT_EQ(reconstructed.size(), full.tiles.size());
+  for (const auto& tile : full.tiles) {
+    SCOPED_TRACE(testing::Message() << "tile " << tile.tile_x << "," << tile.tile_y);
+    const auto found = reconstructed.find({tile.tile_x, tile.tile_y});
+    ASSERT_NE(found, reconstructed.end());
+    EXPECT_EQ(found->second.states, tile.states);
+    EXPECT_EQ(found->second.intrinsic_states, tile.intrinsic_states);
+    EXPECT_EQ(found->second.observed, tile.observed);
+    ExpectFloatArraysEqual(found->second.costs, tile.costs);
+    ExpectFloatArraysEqual(found->second.elevation_m, tile.elevation_m);
+  }
+}
+
+void ExpectNavigationUnchanged(
+    const lunar::incremental_navigation::FineTraversabilitySnapshot& before,
+    const lunar::incremental_navigation::FineTraversabilitySnapshot& after) {
+  ASSERT_EQ(before.tile_indices(), after.tile_indices());
+  for (const auto index : before.tile_indices()) {
+    const auto a = before.FindTile(index), b = after.FindTile(index);
+    ASSERT_TRUE(a);
+    ASSERT_TRUE(b);
+    EXPECT_EQ(a->states(), b->states());
+    EXPECT_EQ(a->traversal_costs(), b->traversal_costs());
+    EXPECT_EQ(a->confidence_values(), b->confidence_values());
+    for (std::size_t i = 0; i < a->ground_values().size(); ++i)
+      EXPECT_EQ(a->GroundHeight(i), b->GroundHeight(i));
+  }
+}
+
+TEST(PolicyMapPipelineExport, HeightOnlyClassificationUsesConfiguredProfile) {
+  using lunar::incremental_navigation::IntrinsicCellState;
+  using lunar::incremental_navigation::MakePlatformElevationEvaluator;
+  for (const bool cubic : {true}) {
+    SCOPED_TRACE(cubic ? "baseline with nonzero background" : "moving least squares");
+    auto capability = Capability();
+    auto& wheel = std::get<WheeledCapability>(capability);
+    wheel.footprint_xy_m = {{-.01, -.01}, {.01, -.01}, {.01, .01}, {-.01, .01}};
+    wheel.minimum_clearance_m = 0.;
+    wheel.maximum_slope_rad = .3;
+    wheel.maximum_local_obstacle_relief_m = cubic ? .2 : 10.;
+    wheel.minimum_underbody_clearance_m = 10.;
+    auto profile = Profile();
+    profile.planar_envelope_xy_m = wheel.footprint_xy_m;
+    profile.maximum_slope_rad = wheel.maximum_slope_rad;
+    profile.terrain_background_half_width_m = cubic ? 1.6 : .8;
+    auto evidence = Evidence(0.0F, 0., 25U, 25U);
+    for (int y = 0; y < 25; ++y)
+      for (int x = 0; x < 25; ++x) {
+        const double dx = (x - 12) * .2, dy = (y - 12) * .2;
+        evidence.elevation_m[y * 25 + x] = cubic ? .5 * dx * dx * dx + .03 * dy
+                                               : .1 * dx + .25 * dx * dx + .07 * dy * dy;
+        if (std::abs(x - 12) <= 1 && std::abs(y - 12) <= 1)
+          evidence.elevation_m[y * 25 + x] = std::numeric_limits<float>::quiet_NaN();
+      }
+    ASSERT_TRUE(evidence.terrain_measurements.empty());
+    ElevationPipeline pipeline(capability, profile, 1.0);
+    PolicyMapExporter exporter(capability, profile);
+    ASSERT_EQ(pipeline.ApplyLocal(evidence, 10).status,
+              lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+    ASSERT_TRUE(pipeline.RunFineDerivation());
+    const auto check_classification = [&](const PolicyResponse& response) {
+      const auto fine = pipeline.CaptureBundle().fine;
+      const auto raw = fine->elevation();
+      EXPECT_EQ(response.profile_hash, fine->platform_profile_hash());
+      EXPECT_FALSE(raw->TerrainMeasurementsAt({10, 10}));
+      auto selected = MakePlatformElevationEvaluator(capability,
+          profile.terrain_background_half_width_m);
+      auto fallback = MakePlatformElevationEvaluator(capability);
+      std::size_t different = 0;
+      for (const auto& tile : response.tiles)
+        for (std::size_t offset = 0; offset < tile.states.size(); ++offset) {
+          const lunar::incremental_navigation::GridIndex cell{
+              tile.tile_x * lunar::incremental_navigation::kGridTileWidthCells +
+                  static_cast<std::int64_t>(offset % lunar::incremental_navigation::kGridTileWidthCells),
+              tile.tile_y * lunar::incremental_navigation::kGridTileWidthCells +
+                  static_cast<std::int64_t>(offset / lunar::incremental_navigation::kGridTileWidthCells)};
+          const auto expected = selected->Evaluate(*raw, cell).state;
+          const auto old = fallback->Evaluate(*raw, cell).state;
+          different += expected != old;
+          EXPECT_EQ(tile.intrinsic_states[offset], static_cast<std::uint8_t>(expected));
+          EXPECT_EQ(tile.observed[offset], EffectiveObservedState(expected,
+              raw->ElevationAt(cell).value_or(std::numeric_limits<float>::quiet_NaN())));
+        }
+      EXPECT_GT(different, 0U);  // 夹具必须实际区分所选profile与默认分类器。
+    };
+    const auto base = ExportCaptured(pipeline, exporter);
+    ASSERT_TRUE(base.ready);
+    check_classification(base);
+    WireTiles reconstructed;
+    ApplyWireTiles(base, reconstructed);
+    evidence.elevation_m[7 * 25 + 7] += .005F;
+    ASSERT_EQ(pipeline.ApplyLocal(evidence, 20).status,
+              lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+    ASSERT_TRUE(pipeline.RunFineDerivation());
+    const auto delta = ExportCaptured(pipeline, exporter, base.fine_revision);
+    const auto full = ExportCaptured(pipeline, exporter);
+    ASSERT_FALSE(delta.full_snapshot);
+    ASSERT_FALSE(delta.tiles.empty());
+    check_classification(full);
+    ApplyWireTiles(delta, reconstructed);
+    ExpectAllExportedFieldsEqual(reconstructed, full);
+  }
+}
+
+TEST(PolicyMapPipelineExport, HeightOnlyDeltaMatchesFullWithUnchangedNavigationFields) {
+  // 阻塞地形没有FREE有效地面，严格建立导航字段不变的height-only前提。
+  ElevationPipeline pipeline(Capability(), Profile(), 1.0);
+  PolicyMapExporter exporter(Capability(), Profile());
+  ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.0F), 10).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto base = ExportCaptured(pipeline, exporter);
+  const auto base_fine = pipeline.CaptureBundle().fine;
+  ASSERT_TRUE(base.ready);
+  ASSERT_FALSE(base.tiles.empty());
+  WireTiles reconstructed;
+  ApplyWireTiles(base, reconstructed);
+  ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.1F), 20).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  ExpectNavigationUnchanged(*base_fine, *pipeline.CaptureBundle().fine);
+  EXPECT_TRUE(pipeline.CaptureBundle().fine->changed_tiles().empty());
+  const auto delta = ExportCaptured(pipeline, exporter, base.fine_revision);
+  const auto full = ExportCaptured(pipeline, exporter);
+  ASSERT_FALSE(delta.full_snapshot);
+  ASSERT_FALSE(delta.tiles.empty());
+  EXPECT_EQ(delta.base_revision, base.fine_revision);
+  ASSERT_EQ(base.tiles.size(), full.tiles.size());
+  EXPECT_EQ(base.tiles[0].states, full.tiles[0].states);
+  EXPECT_EQ(base.tiles[0].costs, full.tiles[0].costs);
+  EXPECT_FLOAT_EQ(base.tiles[0].elevation_m[0], 0.F);
+  EXPECT_FLOAT_EQ(full.tiles[0].elevation_m[0], .1F);
+  ApplyWireTiles(delta, reconstructed);
+  ExpectAllExportedFieldsEqual(reconstructed, full);
+}
+
+TEST(PolicyMapPipelineExport, ObservedOnlyDeltaMatchesFullWithUnchangedNavigationFields) {
+  auto capability = Capability();
+  auto profile = Profile();
+  profile.planar_envelope_xy_m = {{-.3, -.3}, {.3, -.3}, {.3, .3}, {-.3, .3}};
+  std::get<WheeledCapability>(capability).footprint_xy_m = profile.planar_envelope_xy_m;
+  ElevationPipeline pipeline(capability, profile, 1.0);
+  PolicyMapExporter exporter(capability, profile);
+  auto evidence = Evidence(0.0F);
+  evidence.terrain_measurements.assign(49, {.center_known = true,
+      .neighborhood_complete = true, .slope_rad = 0, .relief_m = 2, .positive_rise_m = 2});
+  ASSERT_EQ(pipeline.ApplyLocal(evidence, 10).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto base = ExportCaptured(pipeline, exporter);
+  WireTiles reconstructed;
+  ApplyWireTiles(base, reconstructed);
+  evidence.terrain_measurements[24] = {.center_known = true, .neighborhood_complete = true};
+  ASSERT_EQ(pipeline.ApplyLocal(evidence, 20).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  EXPECT_TRUE(pipeline.CaptureBundle().fine->changed_tiles().empty());
+  const auto delta = ExportCaptured(pipeline, exporter, base.fine_revision);
+  const auto full = ExportCaptured(pipeline, exporter);
+  ASSERT_FALSE(delta.full_snapshot);
+  ASSERT_EQ(base.tiles.size(), 1U);
+  ASSERT_EQ(full.tiles.size(), 1U);
+  EXPECT_EQ(base.tiles[0].states, full.tiles[0].states);
+  EXPECT_EQ(base.tiles[0].costs, full.tiles[0].costs);
+  const auto center = 3 * lunar::incremental_navigation::kGridTileWidthCells + 3;
+  EXPECT_EQ(base.tiles[0].observed[center], kPolicyMapBlocked);
+  EXPECT_EQ(full.tiles[0].observed[center], kPolicyMapFree);
+  ApplyWireTiles(delta, reconstructed);
+  ExpectAllExportedFieldsEqual(reconstructed, full);
+}
+
+TEST(PolicyMapPipelineExport, MeasuredUnknownTileIsExportedWithoutAllocatedNavigationTile) {
+  ElevationPipeline pipeline(Capability(), Profile(), 1.0);
+  PolicyMapExporter exporter(Capability(), Profile());
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.25F, 0.0, 1, 1), 10).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  EXPECT_TRUE(pipeline.CaptureBundle().fine->tile_indices().empty());
+  const auto full = ExportCaptured(pipeline, exporter);
+  ASSERT_TRUE(full.ready);
+  ASSERT_EQ(full.tiles.size(), 1U);
+  EXPECT_EQ(full.tiles[0].states[0], kPolicyMapUnknown);
+  EXPECT_EQ(full.tiles[0].observed[0], kPolicyMapUnknown);
+  EXPECT_FLOAT_EQ(full.tiles[0].elevation_m[0], .25F);
+  WireTiles reconstructed;
+  ApplyWireTiles(full, reconstructed);
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(.5F, 0.0, 1, 1), 20).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(.75F, 120.0, 1, 1), 30).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto delta = ExportCaptured(pipeline, exporter, full.fine_revision);
+  ASSERT_FALSE(delta.full_snapshot);
+  EXPECT_EQ(delta.tiles.size(), 2U);
+  ApplyWireTiles(delta, reconstructed);
+  ExpectAllExportedFieldsEqual(reconstructed, ExportCaptured(pipeline, exporter));
+}
+
+TEST(PolicyMapPipelineExport, CoalescedRawUpdatesAndSkippedFineRevisionsMatchFull) {
+  // 阻塞地形没有FREE有效地面，严格建立导航字段不变的height-only前提。
+  ElevationPipeline pipeline(Capability(), Profile(), 1.0);
+  PolicyMapExporter exporter(Capability(), Profile());
+  for (const double x : {0., 120., 240.}) {
+    ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.0F, x), 10).status,
+              lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  }
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto base = ExportCaptured(pipeline, exporter);
+  const auto base_fine = pipeline.CaptureBundle().fine;
+  ASSERT_EQ(base.tiles.size(), 3U);
+  WireTiles reconstructed;
+  ApplyWireTiles(base, reconstructed);
+  ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.1F, 0.), 20).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.2F, 240.), 30).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  ExpectNavigationUnchanged(*base_fine, *pipeline.CaptureBundle().fine);
+  EXPECT_TRUE(pipeline.CaptureBundle().fine->changed_tiles().empty());
+  const auto coalesced = ExportCaptured(pipeline, exporter, base.fine_revision);
+  ASSERT_FALSE(coalesced.full_snapshot);
+  ApplyWireTiles(coalesced, reconstructed);
+  ExpectAllExportedFieldsEqual(reconstructed, ExportCaptured(pipeline, exporter));
+  ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.3F, 120.), 40).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto skipped = ExportCaptured(pipeline, exporter, base.fine_revision);
+  ASSERT_FALSE(skipped.full_snapshot);
+  EXPECT_EQ(skipped.base_revision, base.fine_revision);
+  EXPECT_EQ(skipped.fine_revision, base.fine_revision + 2U);
+  ApplyWireTiles(base, reconstructed);
+  ApplyWireTiles(skipped, reconstructed);
+  const auto full = ExportCaptured(pipeline, exporter);
+  ExpectAllExportedFieldsEqual(reconstructed, full);
+  // A second client request does not consume or shorten the first client's history.
+  const auto second_client = ExportCaptured(pipeline, exporter, coalesced.fine_revision);
+  ASSERT_FALSE(second_client.full_snapshot);
+  const auto repeated = ExportCaptured(pipeline, exporter, base.fine_revision);
+  ApplyWireTiles(base, reconstructed);
+  ApplyWireTiles(repeated, reconstructed);
+  ExpectAllExportedFieldsEqual(reconstructed, full);
+}
+
+TEST(PolicyMapPipelineExport, JournalRetains128TransitionsThenFallsBackToFull) {
+  ElevationPipeline pipeline(Capability(), Profile(), 1.0);
+  PolicyMapExporter exporter(Capability(), Profile());
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.0F), 1).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto base = ExportCaptured(pipeline, exporter);
+  for (int revision = 2; revision <= 129; ++revision) {
+    ASSERT_EQ(pipeline.ApplyLocal(Evidence(static_cast<float>(revision) * .001F), revision).status,
+              lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+    ASSERT_TRUE(pipeline.RunFineDerivation());
+  }
+  const auto retained = ExportCaptured(pipeline, exporter, base.fine_revision);
+  ASSERT_FALSE(retained.full_snapshot);
+  EXPECT_EQ(retained.fine_revision, 129U);
+  WireTiles reconstructed;
+  ApplyWireTiles(base, reconstructed);
+  ApplyWireTiles(retained, reconstructed);
+  ExpectAllExportedFieldsEqual(reconstructed, ExportCaptured(pipeline, exporter));
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(.130F), 130).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto gap = ExportCaptured(pipeline, exporter, base.fine_revision);
+  ASSERT_TRUE(gap.full_snapshot);
+  ApplyWireTiles(gap, reconstructed);
+  ExpectAllExportedFieldsEqual(reconstructed, ExportCaptured(pipeline, exporter));
+  const auto recent = ExportCaptured(pipeline, exporter, retained.fine_revision);
+  EXPECT_FALSE(recent.full_snapshot);
+  EXPECT_EQ(recent.base_revision, retained.fine_revision);
+}
+
+TEST(ElevationPipelineTest, JournalDeltaCoversCoalescedAcceptedRawTiles) {
+  ElevationPipeline pipeline(Capability(), Profile(), 1.0);
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.0F, 0.0), 10).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto base = pipeline.CapturePolicyMapSnapshot();
+  ASSERT_TRUE(base.bundle.fine);
+  const auto revision = base.bundle.fine->fine_traversability_revision();
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.1F, 0.0), 20).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.2F, 60.0), 30).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto delta = pipeline.CapturePolicyMapSnapshot(revision);
+  EXPECT_FALSE(delta.full_snapshot);
+  EXPECT_EQ(delta.base_revision, revision);
+  EXPECT_GE(delta.dirty_tiles.size(), 2U);
+  EXPECT_EQ(delta.processed_map_stamp_ns, 30);
 }
 
 TEST(ElevationPipelineTest,
@@ -421,4 +872,43 @@ TEST(ElevationPipelineTest, CapturedBundleRemainsImmutableAcrossLaterWorkers) {
 }
 
 }  // namespace
+TEST(PolicyMapPipelineExport, ChangedGroundAloneProducesDeltaMatchingFull) {
+  ElevationPipeline pipeline(Capability(), Profile(), 1.0);
+  PolicyMapExporter exporter(Capability(), Profile());
+  auto evidence = Evidence(0.0F);
+  // 显式原生平地中心统计固定state/cost，隔离有效地面高程变化。
+  evidence.terrain_measurements.resize(evidence.elevation_m.size());
+  for (std::size_t y = 0; y < evidence.geometry.height; ++y)
+    for (std::size_t x = 0; x < evidence.geometry.width; ++x)
+      evidence.terrain_measurements[y * evidence.geometry.width + x] = {
+          .center_known = true,
+          .neighborhood_complete = x > 0 && y > 0 &&
+              x + 1 < evidence.geometry.width && y + 1 < evidence.geometry.height};
+  ASSERT_EQ(pipeline.ApplyLocal(evidence, 10).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  const auto base = ExportCaptured(pipeline, exporter);
+  const auto old_fine = pipeline.CaptureBundle().fine;
+  WireTiles reconstructed;
+  ApplyWireTiles(base, reconstructed);
+  evidence.elevation_m.assign(evidence.elevation_m.size(), .125F);
+  ASSERT_EQ(pipeline.ApplyLocal(evidence, 20).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_TRUE(pipeline.RunFineDerivation());
+  EXPECT_FALSE(pipeline.CaptureBundle().fine->changed_tiles().empty());
+  const auto delta = ExportCaptured(pipeline, exporter, base.fine_revision);
+  const auto full = ExportCaptured(pipeline, exporter);
+  ASSERT_FALSE(delta.full_snapshot);
+  ASSERT_FALSE(delta.tiles.empty());
+  ASSERT_EQ(base.tiles.size(), full.tiles.size());
+  EXPECT_EQ(base.tiles[0].states, full.tiles[0].states);
+  EXPECT_EQ(base.tiles[0].intrinsic_states, full.tiles[0].intrinsic_states);
+  EXPECT_EQ(base.tiles[0].costs, full.tiles[0].costs);
+  const auto center_offset = 3 * lunar::incremental_navigation::kGridTileWidthCells + 3;
+  EXPECT_NE(old_fine->FindTile({0, 0})->GroundHeight(center_offset),
+            pipeline.CaptureBundle().fine->FindTile({0, 0})->GroundHeight(center_offset));
+  ApplyWireTiles(delta, reconstructed);
+  ExpectAllExportedFieldsEqual(reconstructed, full);
+}
+
 }  // namespace lunar::incremental_navigation_ros

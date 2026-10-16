@@ -32,6 +32,7 @@ set(LUNAR_INCREMENTAL_NAVIGATION_PRODUCTION_SOURCES
   src/local/local_target_selector.cpp
   src/local/local_goal_region.cpp
   src/local/request_local_start_patch.cpp
+  src/local/phase_motion.cpp
   src/local/phase_aware_path_simplifier.cpp
   src/session/planning_cycle.cpp
   src/session/rolling_update_policy.cpp
@@ -97,6 +98,7 @@ if(BUILD_TESTING)
     lunar_incremental_navigation_core_local_query_cache_test
     test/local_query_cache_test.cpp)
 
+  lunar_add_core_gtest(lunar_incremental_navigation_core_captured_start_support_regression_test test/captured_start_support_regression_test.cpp)
   lunar_add_core_gtest(lunar_incremental_navigation_core_rolling_update_policy_test test/rolling_update_policy_test.cpp)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_planning_contract_test
@@ -116,6 +118,9 @@ if(BUILD_TESTING)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_request_local_start_patch_test
     test/request_local_start_patch_test.cpp)
+  lunar_add_core_gtest(
+    lunar_incremental_navigation_core_start_support_regression_test
+    test/request_local_start_patch_regression_test.cpp)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_global_guidance_builder_test
     test/global_guidance_builder_test.cpp)

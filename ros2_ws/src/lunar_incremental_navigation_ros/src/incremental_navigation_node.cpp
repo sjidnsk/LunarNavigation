@@ -28,6 +28,7 @@
 #include <lunar_planning_msgs/action/navigate_to_pose.hpp>
 #include <lunar_planning_msgs/msg/path_reference.hpp>
 #include <lunar_planning_msgs/msg/tracking_status.hpp>
+#include <lunar_planning_msgs/srv/get_policy_map.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp/callback_group.hpp>
@@ -50,6 +51,7 @@
 #include "lunar_incremental_navigation_ros/map_adapters.hpp"
 #include "lunar_incremental_navigation_ros/message_conversion.hpp"
 #include "lunar_incremental_navigation_ros/platform_config.hpp"
+#include "lunar_incremental_navigation_ros/policy_map_exporter.hpp"
 #include "lunar_incremental_navigation_ros/request_diagnostics.hpp"
 #include "lunar_incremental_navigation_ros/state_adapter.hpp"
 #include "lunar_incremental_navigation_ros/traversability_qos.hpp"
@@ -222,7 +224,7 @@ struct RuntimeParameters final {
       parameters.profile.goal_position_tolerance_m <= 0.0 ||
       !std::isfinite(parameters.profile.goal_yaw_tolerance_rad) ||
       parameters.profile.goal_yaw_tolerance_rad <= 0.0) {
-    throw std::runtime_error("goal tolerances must be finite and positive");
+    throw std::invalid_argument("goal tolerances must be finite and positive");
   }
   parameters.profile.terrain_background_half_width_m = node.declare_parameter<double>(
       "terrain_background_half_width_m",
@@ -621,6 +623,39 @@ struct IncrementalNavigationNode::Impl final {
         node.create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
             parameters.diagnostics_topic,
             rclcpp::QoS{rclcpp::KeepLast{10}}.reliable());
+    policy_map_exporter = std::make_unique<PolicyMapExporter>(
+        parameters.capability, parameters.profile);
+    policy_map_epoch = parameters.platform_name + ":" + parameters.map_frame + ":" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const auto policy_map_service_name = node.declare_parameter<std::string>(
+        "policy_map_service", "/Car/T4/mapping/get_policy_map");
+    policy_map_service = node.create_service<lunar_planning_msgs::srv::GetPolicyMap>(
+        policy_map_service_name,
+        [this](const std::shared_ptr<lunar_planning_msgs::srv::GetPolicyMap::Request> request,
+               std::shared_ptr<lunar_planning_msgs::srv::GetPolicyMap::Response> response) {
+          std::optional<core::StateInput> state;
+          {
+            std::scoped_lock lock{event_mutex};
+            state = latest_state;
+          }
+          const auto policy_snapshot = pipeline.CapturePolicyMapSnapshot(request->since_revision);
+          const auto& bundle = policy_snapshot.bundle;
+          std::optional<core::Pose2> anchor;
+          if (state && std::isfinite(state->base_link_pose.position_m.x) &&
+              std::isfinite(state->base_link_pose.position_m.y) &&
+              std::isfinite(state->base_link_pose.yaw_rad)) {
+            anchor = state->base_link_pose;
+          }
+          *response = policy_map_exporter->Export(
+              {.fine = bundle.fine, .anchor = anchor,
+               .local_window_size_m = parameters.local_window_size_m,
+               .epoch = policy_map_epoch,
+               .processed_stamp_ns = policy_snapshot.processed_map_stamp_ns,
+               .base_revision = policy_snapshot.base_revision,
+               .full_snapshot = policy_snapshot.full_snapshot,
+               .dirty_tiles = policy_snapshot.dirty_tiles},
+              request->since_revision, request->minimum_map_stamp_ns);
+        });
 
     const auto make_map_options = [this](const std::string& topic) {
       rclcpp::SubscriptionOptions options;
@@ -865,8 +900,11 @@ struct IncrementalNavigationNode::Impl final {
       return;
     }
     const auto adapted = AdaptLocalElevation(input);
+    const std::int64_t map_stamp_ns =
+        static_cast<std::int64_t>(input.local_map->header.stamp.sec) * 1000000000LL +
+        static_cast<std::int64_t>(input.local_map->header.stamp.nanosec);
     const auto begin = std::chrono::steady_clock::now();
-    const core::ElevationUpdateResult update = pipeline.ApplyLocal(adapted);
+    const core::ElevationUpdateResult update = pipeline.ApplyLocal(adapted, map_stamp_ns);
     const double raw_ms = std::chrono::duration<double, std::milli>(
                               std::chrono::steady_clock::now() - begin)
                               .count();
@@ -1715,6 +1753,8 @@ struct IncrementalNavigationNode::Impl final {
   decltype(IncrementalNavigationNodeDependencies::navigation_map_builder) navigation_build;
   bool navigation_changed{};
   std::unique_ptr<core::PlanningSessionCoordinator> coordinator;
+  std::unique_ptr<PolicyMapExporter> policy_map_exporter;
+  std::string policy_map_epoch;
   CycleMetrics cycle_metrics;
   CycleMetrics worker_metrics;
   core::PlanningSessionPorts worker_ports;
@@ -1748,6 +1788,8 @@ struct IncrementalNavigationNode::Impl final {
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr global_route_publisher;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr
       diagnostics_publisher;
+  rclcpp::Service<lunar_planning_msgs::srv::GetPolicyMap>::SharedPtr
+      policy_map_service;
 #if defined(LUNAR_BUILD_DEMO)
   std::unique_ptr<PlanningDebugPublisher> debug_publisher;
 #endif

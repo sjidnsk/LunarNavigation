@@ -19,14 +19,6 @@
 namespace lunar::incremental_navigation {
 namespace {
 
-struct LocalElevationMeasurements final {
-  bool center_known{};
-  bool neighborhood_complete{};
-  double slope_rad{};
-  double relief_m{};
-  double positive_rise_m{};
-};
-
 [[nodiscard]] bool FiniteNonnegative(const double value) noexcept {
   return std::isfinite(value) && value >= 0.0;
 }
@@ -157,8 +149,13 @@ struct LocalElevationMeasurements final {
   return std::isfinite(sum) ? sum : kLargestFinite;
 }
 
-[[nodiscard]] LocalElevationMeasurements MeasureLocalElevation(
+}  // namespace
+
+[[nodiscard]] LocalTerrainMeasurements MeasureLocalTerrain(
     const ElevationRangeView& elevation, const GridIndex center) {
+  if (const auto measured = elevation.TerrainMeasurementsAt(center)) {
+    return *measured;
+  }
   const std::optional<ElevationRange> center_range =
       elevation.ElevationRangeAt(center);
   if (!center_range) {
@@ -205,7 +202,7 @@ struct LocalElevationMeasurements final {
           static_cast<double>(neighbor->max_m) - center_mid);
     }
   }
-  return LocalElevationMeasurements{
+  return LocalTerrainMeasurements{
       .center_known = true,
       .neighborhood_complete = complete,
       .slope_rad = maximum_slope,
@@ -214,11 +211,31 @@ struct LocalElevationMeasurements final {
   };
 }
 
+namespace {
+
 template <typename Capability>
 IntrinsicTraversalEvaluation EvaluateTerrainPatch(
     const ElevationRangeView& elevation, GridIndex center,
     const Capability& capability, double half_width_m,
     map::TerrainObservationEstimator* shared_observations = nullptr) {
+  if (const auto measured = elevation.TerrainMeasurementsAt(center)) {
+    if (!measured->center_known) return {};
+    const double relief_limit = [&] {
+      if constexpr (std::is_same_v<Capability, LeggedCapability>)
+        return capability.maximum_step_height_m;
+      else return capability.maximum_local_obstacle_relief_m;
+    }();
+    bool blocked = measured->slope_rad > capability.maximum_slope_rad ||
+                   measured->relief_m > relief_limit;
+    if constexpr (std::is_same_v<Capability, WheeledCapability>)
+      blocked |= measured->positive_rise_m > capability.minimum_underbody_clearance_m;
+    return {.state = blocked ? IntrinsicCellState::kBlocked :
+                      (measured->neighborhood_complete ? IntrinsicCellState::kFree :
+                                                        IntrinsicCellState::kUnknown),
+            .slope_rad = measured->slope_rad,
+            .relief_m = measured->relief_m,
+            .confidence = blocked || measured->neighborhood_complete ? 1. : 0.};
+  }
   map::TerrainObservationEstimator local_observations(elevation);
   auto& observations = shared_observations ? *shared_observations : local_observations;
   constexpr bool legged = std::is_same_v<Capability, LeggedCapability>;
@@ -331,8 +348,8 @@ class LeggedElevationEvaluator final : public PlatformElevationEvaluator {
   [[nodiscard]] IntrinsicTraversalEvaluation Evaluate(
       const ElevationRangeView& elevation,
       const GridIndex index) const override {
-    const LocalElevationMeasurements measured =
-        MeasureLocalElevation(elevation, index);
+    const LocalTerrainMeasurements measured =
+        MeasureLocalTerrain(elevation, index);
     if (!measured.center_known) {
       return {};
     }
@@ -412,15 +429,20 @@ struct FineCellEvaluator::Impl final {
 
   Impl(const ElevationRangeView& elevation_value,
        PlatformCapability capability_value,
-       TraversabilityProfile profile_value)
+       TraversabilityProfile profile_value,
+       std::unique_ptr<const PlatformElevationEvaluator> intrinsic,
+       bool use_observations = false)
       : elevation(elevation_value),
         capability(std::move(capability_value)),
         profile(std::move(profile_value)),
         observations(elevation),
-        intrinsic_evaluator(MakeEvaluatorWithObservations(
-            capability, profile.terrain_background_half_width_m, &observations)),
+        intrinsic_evaluator(use_observations ?
+            MakeEvaluatorWithObservations(
+                capability, profile.terrain_background_half_width_m, &observations) :
+            std::move(intrinsic)),
         hard_radius_m(CircumscribedRadius(profile.planar_envelope_xy_m)) {
-    if (!FiniteNonnegative(profile.preferred_clearance_m) ||
+    if (!intrinsic_evaluator ||
+        !FiniteNonnegative(profile.preferred_clearance_m) ||
         !FiniteNonnegative(profile.slope_weight) ||
         !FiniteNonnegative(profile.relief_weight) ||
         !FiniteNonnegative(profile.clearance_weight) ||
@@ -584,7 +606,15 @@ FineCellEvaluator::FineCellEvaluator(
     const ElevationRangeView& elevation,
     const PlatformCapability& capability,
     const TraversabilityProfile& profile)
-    : impl_(std::make_unique<Impl>(elevation, capability, profile)) {}
+    : impl_(std::make_unique<Impl>(elevation, capability, profile, nullptr, true)) {}
+
+FineCellEvaluator::FineCellEvaluator(
+    const ElevationRangeView& elevation,
+    const PlatformCapability& capability,
+    const TraversabilityProfile& profile,
+    std::unique_ptr<const PlatformElevationEvaluator> intrinsic)
+    : impl_(std::make_unique<Impl>(elevation, capability, profile,
+                                   std::move(intrinsic))) {}
 
 FineCellEvaluator::~FineCellEvaluator() = default;
 FineCellEvaluator::FineCellEvaluator(FineCellEvaluator&&) noexcept = default;

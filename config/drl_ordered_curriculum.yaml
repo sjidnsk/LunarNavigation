@@ -1,0 +1,66 @@
+# Four task phases; no position auxiliary loss. Promotion gates: course-plan.json.
+seed: 20261004
+paired_scene_sequence: false
+environments: 8
+warmup: 1024
+update_ratio: 0.25
+max_update_credit: 32
+actor_publish_updates: 16
+learning:
+  batch_size: 64
+  microbatch_size: 8
+  learning_rate: 1.0e-05
+  temperature_learning_rate: 0.003
+  initial_alpha: 5.0e-05
+  maximum_alpha: 0.0001
+  entropy_mode: position_heading
+  target_entropy_factor: 0.1
+  position_target_entropy_factor: 0.1
+  heading_target_entropy_factor: 0.1
+  gamma: 1.0
+  polyak: 0.005
+  return_steps: 1
+  position_aux_weight: 0.0
+completion_bonus: 20.0
+success_coverage: 0.99
+sensor:
+  range_m: 10.0
+  fov_deg: 90.0
+  offset_x_m: 0.0
+  offset_y_m: 0.0
+  offset_yaw_rad: 0.0
+stagnation_window_steps: 128
+stagnation_max_positions: 8
+stagnation_position_tolerance_m: 0.25
+curriculum_budgets:
+- 512
+- 512
+- 512
+curriculum_extents_m:
+- - 30.0
+  - 100.0
+- - 30.0
+  - 100.0
+- - 30.0
+  - 100.0
+worker_threads: 1
+collector_threads: 2
+learner_threads: 4
+replay_max_bytes: 8589934592
+snapshot_max_bytes: 268435456
+total_output_max_bytes: 8589934592
+metrics_max_bytes: 1048576
+system_reserve_bytes: 2147483648
+reward_diagnostics: true
+save_interval_s: 1800.0
+output_dir: /home/kai/CodexDownloads/lunar_navigation/drl-ordered-curriculum-30-100-bonus20-20261004/managed/run
+artifact_root: /home/kai/CodexDownloads/lunar_navigation/drl-ordered-curriculum-30-100-bonus20-20261004/managed
+ordered_curriculum: true
+ordered_rehearsal_fraction: 0.2
+ordered_budget_rule:
+  mode: linear_area
+  min_extent_m: 50.0
+  max_extent_m: 100.0
+  round_to: 32
+  min_decisions: 256
+  max_decisions: 512

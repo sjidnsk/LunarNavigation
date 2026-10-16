@@ -833,5 +833,173 @@ TEST(FineTraversabilityBuilder, OverlappingHighResolutionUpdatesMatchFullDerive)
   }
 }
 
+TEST(TerrainMeasurements, VisibleFloorRetainsWallClosureWithoutHiddenElevation) {
+  const auto geometry = Geometry(3, 3, 1.0);
+  PersistentElevationMap truth;
+  const auto full = Snapshot(truth, geometry, {0, 0, 2, 0, 0, 2, 0, 0, 2});
+  const GridIndex floor{1, 1};
+  const GridIndex hidden_wall{2, 1};
+  auto evaluator = MakePlatformElevationEvaluator(WheelCapability());
+  EXPECT_EQ(evaluator->Evaluate(*full, floor).state, IntrinsicCellState::kBlocked);
+  const auto measured = MeasureLocalTerrain(*full, floor);
+  EXPECT_TRUE(measured.center_known);
+  EXPECT_TRUE(measured.neighborhood_complete);
+  EXPECT_DOUBLE_EQ(measured.relief_m, 2.0);
+  EXPECT_DOUBLE_EQ(measured.positive_rise_m, 2.0);
+  EXPECT_DOUBLE_EQ(measured.slope_rad, std::atan2(2.0, 1.0));
+  const float unknown = std::numeric_limits<float>::quiet_NaN();
+  std::vector<float> visible{0, 0, unknown, 0, 0, unknown, 0, 0, unknown};
+  PersistentElevationMap raw_only;
+  auto raw = Snapshot(raw_only, geometry, visible);
+  EXPECT_EQ(raw->ElevationRangeAt(hidden_wall), std::nullopt);
+  EXPECT_EQ(evaluator->Evaluate(*raw, floor).state, IntrinsicCellState::kUnknown);
+  EXPECT_FALSE(MeasureLocalTerrain(*raw, floor).neighborhood_complete);
+  std::vector<LocalTerrainMeasurements> centers(9);
+  centers[4] = measured;
+  PersistentElevationMap effective;
+  ASSERT_EQ(effective.Apply({.geometry = geometry, .elevation_m = visible,
+      .map_from_source = IdentityMapTransform(), .terrain_measurements = centers}).status,
+      ElevationUpdateResult::Status::kApplied);
+  auto with_centers = effective.Snapshot();
+  EXPECT_EQ(with_centers->ElevationRangeAt(hidden_wall), std::nullopt);
+  EXPECT_EQ(evaluator->Evaluate(*with_centers, floor).state, IntrinsicCellState::kBlocked);
+  auto derived = FineTraversabilityBuilder().Derive(with_centers, WheelCapability(), Profile());
+  ASSERT_TRUE(derived);
+  EXPECT_EQ(derived->State(floor), FineCellState::kBlocked);
+  // Limits remain owned by each native platform evaluator.
+  auto permissive = WheelCapability();
+  permissive.maximum_local_obstacle_relief_m = 3.0;
+  permissive.minimum_underbody_clearance_m = 3.0;
+  EXPECT_EQ(MakePlatformElevationEvaluator(permissive)->Evaluate(*with_centers, floor).state,
+      IntrinsicCellState::kFree);
+}
+
+
+TEST(TerrainMeasurements, IncompleteMeasurementsCanBlockButCannotCertifyFree) {
+  PersistentElevationMap map;
+  const auto geometry = Geometry(1, 1, 1.0);
+  const std::vector<float> heights{0};
+  std::vector<LocalTerrainMeasurements> stats{{true, false, 0, 2, 2}};
+  ASSERT_EQ(map.Apply({.geometry = geometry, .elevation_m = heights,
+      .map_from_source = IdentityMapTransform(), .terrain_measurements = stats}).status,
+      ElevationUpdateResult::Status::kApplied);
+  EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability())->Evaluate(*map.Snapshot(), {0, 0}).state,
+      IntrinsicCellState::kBlocked);
+  EXPECT_EQ(MakePlatformElevationEvaluator(LeggedCapabilityForTest())->Evaluate(*map.Snapshot(), {0, 0}).state,
+      IntrinsicCellState::kBlocked);
+  PersistentElevationMap partial_flat;
+  stats[0] = {true, false, 0, 0, 0};
+  ASSERT_EQ(partial_flat.Apply({.geometry = geometry, .elevation_m = heights,
+      .map_from_source = IdentityMapTransform(), .terrain_measurements = stats}).status,
+      ElevationUpdateResult::Status::kApplied);
+  EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability())->Evaluate(*partial_flat.Snapshot(), {0, 0}).state,
+      IntrinsicCellState::kUnknown);
+}
+
+
+class StrengthenedPartialTerrain : public testing::TestWithParam<bool> {};
+
+TEST_P(StrengthenedPartialTerrain, NewBlockingEvidenceAdvancesRevision) {
+  PersistentElevationMap map;
+  const auto geometry = Geometry(1, 1, 1.0);
+  const GridIndex center{0, 0};
+  const std::vector<float> heights{0};
+  std::vector<LocalTerrainMeasurements> stats{{true, GetParam(), 0, 0, 0}};
+  const auto apply = [&] {
+    return map.Apply({.geometry = geometry, .elevation_m = heights,
+        .map_from_source = IdentityMapTransform(), .terrain_measurements = stats});
+  };
+  ASSERT_EQ(apply().status, ElevationUpdateResult::Status::kApplied);
+  const auto before = map.Snapshot();
+  auto evaluator = MakePlatformElevationEvaluator(WheelCapability());
+  auto fine_before = FineTraversabilityBuilder().Derive(before, WheelCapability(), Profile());
+  EXPECT_EQ(evaluator->Evaluate(*before, center).state,
+      GetParam() ? IntrinsicCellState::kFree : IntrinsicCellState::kUnknown);
+
+  stats[0] = {true, false, 0, 2, 2};
+  const auto update = apply();
+  EXPECT_EQ(update.status, ElevationUpdateResult::Status::kApplied);
+  EXPECT_EQ(update.raw_elevation_revision, 2U);
+  EXPECT_EQ(update.updated_cells, 1U);
+  EXPECT_EQ(update.dirty_tiles, (std::vector<TileIndex>{{0, 0}}));
+  const auto blocked = map.Snapshot();
+  ASSERT_EQ(blocked->changed_cells().size(), 1U);
+  EXPECT_EQ(blocked->changed_cells()[0], center);
+  EXPECT_EQ(evaluator->Evaluate(*blocked, center).state, IntrinsicCellState::kBlocked);
+  auto fine_blocked = FineTraversabilityBuilder().Derive(
+      blocked, WheelCapability(), Profile(), fine_before);
+  EXPECT_EQ(fine_blocked->State(center), FineCellState::kBlocked);
+  EXPECT_DOUBLE_EQ(before->TerrainMeasurementsAt(center)->relief_m, 0);
+
+  // A weaker partial view cannot forget the supported obstruction.
+  stats[0] = {true, false, 0, 0, 0};
+  EXPECT_EQ(apply().status, ElevationUpdateResult::Status::kDuplicate);
+  EXPECT_EQ(evaluator->Evaluate(*map.Snapshot(), center).state,
+      IntrinsicCellState::kBlocked);
+  // A new full measurement can replace and reduce all old statistics.
+  stats[0] = {true, true, 0, 0, 0};
+  EXPECT_EQ(apply().status, ElevationUpdateResult::Status::kApplied);
+  EXPECT_EQ(map.Snapshot()->raw_elevation_revision(), 3U);
+  EXPECT_EQ(evaluator->Evaluate(*map.Snapshot(), center).state, IntrinsicCellState::kFree);
+  EXPECT_EQ(evaluator->Evaluate(*blocked, center).state, IntrinsicCellState::kBlocked);
+}
+
+INSTANTIATE_TEST_SUITE_P(OldCompleteness, StrengthenedPartialTerrain,
+                        testing::Values(false, true));
+
+TEST(FineCellEvaluator, ExplicitNullCustomEvaluatorIsRejected) {
+  PersistentElevationMap map;
+  const auto raw = Snapshot(map, Geometry(3, 3, 1.), std::vector<float>(9, 0.F));
+  EXPECT_THROW((FineCellEvaluator(*raw, WheelCapability(), Profile(), nullptr)),
+               std::invalid_argument);
+  EXPECT_NO_THROW((FineCellEvaluator(*raw, WheelCapability(), Profile())));
+}
+
+TEST(TerrainMeasurements, VisibleCenterEvidenceSurvivesApplicationBaseline) {
+  const auto geometry = Geometry(3, 3, .05);
+  const float unknown = std::numeric_limits<float>::quiet_NaN();
+  std::vector<float> visible(9, unknown);
+  visible[4] = 0.F;
+  std::vector<LocalTerrainMeasurements> stats(9);
+  stats[4] = {true, false, 0., 2., 2.};
+  PersistentElevationMap map;
+  ASSERT_EQ(map.Apply({.geometry = geometry, .elevation_m = visible,
+      .map_from_source = IdentityMapTransform(), .terrain_measurements = stats}).status,
+      ElevationUpdateResult::Status::kApplied);
+  const auto blocked = map.Snapshot();
+  class MissingCenterView final : public ElevationRangeView {
+   public:
+    explicit MissingCenterView(SparseGridGeometry geometry) : geometry_(geometry) {}
+    const SparseGridGeometry& geometry() const noexcept override { return geometry_; }
+    std::optional<ElevationRange> ElevationRangeAt(GridIndex) const noexcept override {
+      return std::nullopt;
+    }
+    std::optional<LocalTerrainMeasurements> TerrainMeasurementsAt(
+        GridIndex) const noexcept override {
+      return LocalTerrainMeasurements{false, false, 0., 2., 2.};
+    }
+   private:
+    SparseGridGeometry geometry_;
+  } missing_center(blocked->geometry());
+  {
+    EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)
+                  ->Evaluate(*blocked, {1, 1}).state, IntrinsicCellState::kBlocked);
+    EXPECT_EQ(MakePlatformElevationEvaluator(LeggedCapabilityForTest(), .2)
+                  ->Evaluate(*blocked, {1, 1}).state, IntrinsicCellState::kBlocked);
+    EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)
+                  ->Evaluate(missing_center, {1, 1}).state, IntrinsicCellState::kUnknown);
+    EXPECT_FALSE(blocked->ElevationRangeAt({2, 1}));
+  }
+  // 完整的新观测可以释放障碍；旧稀疏快照仍保持原证据。
+  stats[4] = {true, true, 0., 0., 0.};
+  ASSERT_EQ(map.Apply({.geometry = geometry, .elevation_m = visible,
+      .map_from_source = IdentityMapTransform(), .terrain_measurements = stats}).status,
+      ElevationUpdateResult::Status::kApplied);
+  EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)->Evaluate(*map.Snapshot(), {1, 1}).state,
+      IntrinsicCellState::kFree);
+  EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)->Evaluate(*blocked, {1, 1}).state,
+      IntrinsicCellState::kBlocked);
+}
+
 }  // namespace
 }  // namespace lunar::incremental_navigation
