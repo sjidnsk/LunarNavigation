@@ -1,6 +1,6 @@
 # 导航起点恢复修复与正式训练切换记录
 
-当前状态：已于 2026-10-16 18:15（Asia/Shanghai）在第 14 块完整保存后切换并恢复同一正式训练流程。新环境正在重跑第 14 块固定评测，完成后按原流程进入第 15 块。
+当前状态：已于 2026-10-16 18:15（Asia/Shanghai）在第 14 块完整保存后切换；新环境第 14 块快速评测 40/40 成功，无运行错误。正式训练已进入第 15 块，并确认实际回放采样和 CUDA 更新继续。
 
 ## 修复结果及职责
 
@@ -55,11 +55,14 @@
 - 本块自然保存：116605 条累计采样、28672 次更新、0 个未完成请求、0 更新信用；只暂停外层控制器和评测，没有中断 trainer。
 - 独立备份大小 7949196081 字节，完整 checkpoint SHA256 为 `7a8979e855aee409ca64c299ac70915cf6909fdc6ec147d4be65e5264d5c51b0`；激活前后完全相同。
 - 全部 13540 条回放反序列化成功，完整序列化 SHA256 为 `c4b34a00c49315b1c619df814ec4fcefebaaece8cca4d1f3eb2324b9ef79f71c`。Actor、两个 Q 网络、优化器、随机状态、课程、采集器和计数器均保存在原检查点，未重写。
-- 保存 1879 个历史文件的哈希；旧环境未完成的第 14 块评测及实时进度完整移入 `evaluation-before/`，不会作为新环境缓存复用。
+- 保存并在恢复后逐项核对 1879 个历史文件：1852 个原位内容一致、24 个旧评测记录在归档中一致、3 个继续写入的日志保有独立原始备份；无缺失。旧环境未完成的第 14 块评测及实时进度完整移入 `evaluation-before/`，未作为新环境缓存复用。
 - 同一正式服务恢复，同一 run ID 与 ClearML task `1118fd391801473f83d5494498630e50`。实际核对 8 路原生进程的可执行文件和加载库均来自新冻结环境；评测页身份为 current，身份不匹配排除数为 0。
-- 恢复后的实际回放采样与学习更新将在新环境固定评测完成后核对，尚未在本记录中声明完成。
+- 新环境固定评测完成 40/40 场景，其中月表 20、洞穴 20；碰撞、运行错误和身份不匹配均为 0，每份场景证明均核对新 runtime、同一配置和第 14 块 Actor 哈希。
+- 第 15 块实际恢复 13540/13540 条回放，序列化 SHA 与备份完全相同；恢复模型校验和 `d6bea04365c35c5e9f648d46719313ee7d6551d92a3323af795e9f0c780a7223` 与切换前一致。
+- 恢复验证时累计采样 116637、更新 28680，相对保存点新增 32 条采样、8 次更新；实际一次采样为月表 32、洞穴 32，共 64 条不同经验、来自 64 个回合。CUDA 已初始化，数值检查累计覆盖 28680 次更新，损失与梯度均为有限值。
+- 实际学习进程及其 8 路原生导航进程均核对到新冻结环境。其他训练配置逐字节未改，同一 run ID、ClearML task 和全部历史记录继续沿用。
 
-操作证据：`pause-notification.log`、`checkpoint-proof.json`、`historical-file-shas.json`、`evaluation-archive.json`、`runtime-adoption.json`、`service-restart.json`、`post-resume-active.json`、`watchdog-release.json`。
+操作证据：`pause-notification.log`、`checkpoint-proof.json`、`historical-file-shas.json`、`evaluation-archive.json`、`runtime-adoption.json`、`service-restart.json`、`post-resume-active.json`、`watchdog-release.json`、`history-preserved-proof.json`、`formal-block14-evaluation.json`、`post-resume-training.json`。
 
 ## 实施判断及限制
 

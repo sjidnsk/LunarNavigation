@@ -62,8 +62,8 @@ Files: controller execution tests/source only if necessary; DRL `ros_env.py` and
 - [x] Stage frozen runtime, native libraries and manifest; certify new runtime in isolated ROS domains.
 - [x] At naturally saved block-14 boundary verify checkpoint serialization and full replay count/hash; back up checkpoint and all identity/history records.
 - [x] Adopt new runtime with unchanged config/checkpoint, audited historical epochs and same run/ClearML task.
-- [ ] Resume and prove sampled replay, incrementing updates, unchanged schedule continuity and active runtime hashes.
-- [ ] Report exact verification limits; Orin/real vehicle remain NOT_RUN.
+- [x] Resume and prove sampled replay, incrementing updates, unchanged schedule continuity and active runtime hashes.
+- [x] Report exact verification limits; Orin/real vehicle remain NOT_RUN.
 
 ## Execution Ledger
 
@@ -101,3 +101,7 @@ Ruling: Keep old experiment identity authoritative until activation — the revi
 - Activated reviewed runtime at 2026-10-16 18:15:22 Asia/Shanghai; same run and ClearML task. Eight live native workers load the final new libraries; old partial block-14 evaluation and live data are archived. The new runtime reruns block-14 quick evaluation before normal block-15 learning. The scoped watchdog HOLD was released only after live native runtime verification.
 
 Ruling: Use the user-notified already-saved boundary rather than restarting the old observer — the observer was explicitly disarmed at the user request; trainer completion and absence were independently reverified before pausing evaluation — a mistaken boundary would risk interrupting new collection, so exact saved schedule, empty in-flight credit, trainer absence, evaluation phase and unchanged checkpoint stat were all checked.
+
+Task 4: complete — natural saved block 14 was independently verified following user notification; full checkpoint and history preservation, runtime adoption and resumed sampling/CUDA updates passed. `post-resume-training.json` verifies restored replay 13540/13540 with SHA unchanged, restored Actor/Q checksum unchanged, actual 32/32 balanced sampling of 64 unique transitions from 64 episodes, and increments to 116637 transitions / 28680 updates. All 8 learner-owned native workers load the final new navigation libraries. Numeric guard version 1 has checked every update; losses and gradients are finite. The new-runtime block-14 quick evaluation completes 40/40 successes, zero collisions, infrastructure errors and excluded identities; this is operational/fixed-case evidence, not a convergence or generalization claim.
+
+Historical preservation was rechecked after restart: 1879/1879 files match, including 1852 continued originals, 24 archived old evaluation rows and 3 independent before-copies for logs that have since continued. No missing historical file; all old branches/worktrees retained, no remote push. Host Humble verification is complete; native Orin, real vehicle and external TCP simulator remain NOT_RUN.
