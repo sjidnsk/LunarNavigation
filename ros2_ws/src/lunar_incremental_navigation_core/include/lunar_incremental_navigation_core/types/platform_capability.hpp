@@ -29,6 +29,7 @@ struct TraversabilityProfile final {
   double start_blind_zone_margin_m{};
   double goal_position_tolerance_m{};
   double goal_yaw_tolerance_rad{};
+  double confidence_weight{2.0};
 };
 
 enum class PlatformType : std::uint8_t {

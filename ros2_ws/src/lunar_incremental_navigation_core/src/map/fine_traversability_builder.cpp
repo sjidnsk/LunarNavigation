@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "map/grid_bounds.hpp"
+#include "map/terrain_observation_estimator.hpp"
 #include "map/influence_cells.hpp"
 
 namespace lunar::incremental_navigation {
@@ -82,7 +83,8 @@ void ValidateProfile(const TraversabilityProfile& profile) {
       !FiniteNonnegative(profile.terrain_background_half_width_m) ||
       !FiniteNonnegative(profile.slope_weight) ||
       !FiniteNonnegative(profile.relief_weight) ||
-      !FiniteNonnegative(profile.clearance_weight)) {
+      !FiniteNonnegative(profile.clearance_weight) ||
+      !FiniteNonnegative(profile.confidence_weight)) {
     throw std::invalid_argument(
         "traversability profile parameters must be finite and nonnegative");
   }
@@ -139,6 +141,7 @@ class ProfileHasher final {
   hasher.Add(profile.slope_weight);
   hasher.Add(profile.relief_weight);
   hasher.Add(profile.clearance_weight);
+  hasher.Add(profile.confidence_weight);
   std::visit(
       [&hasher](const auto& typed_capability) {
         using Capability = std::decay_t<decltype(typed_capability)>;
@@ -405,7 +408,8 @@ FineTraversabilityBuilder::Derive(
         hard_radius_m + profile.preferred_clearance_m +
         (std::holds_alternative<WheeledCapability>(capability)
              ? TerrainBackgroundRadiusCells(profile.terrain_background_half_width_m,
-                                            raw->geometry().resolution_m()) : 1) *
+                                            raw->geometry().resolution_m()) +
+               map::TerrainObservationEstimator(*raw).dependency_radius_cells() : 1) *
         std::sqrt(2.0) * raw->geometry().resolution_m();
     recompute_cells =
         detail::InfluenceCells(raw->geometry(), changed_raw, influence_m);
@@ -440,20 +444,30 @@ FineTraversabilityBuilder::Derive(
 
     FineTraversabilityTile::StateArray states;
     FineTraversabilityTile::CostArray costs;
+    FineTraversabilityTile::ConfidenceArray confidence{};
+    auto ground = FineTraversabilityTile::UnknownGround();
     if (old_tile) {
       states = old_tile->states();
       costs = old_tile->traversal_costs();
+      confidence = old_tile->confidence_values();
+      ground = old_tile->ground_values();
     } else {
       states.fill(FineCellState::kUnknown);
       costs.fill(0.0);
     }
     const auto old_states = states;
     const auto old_costs = costs;
+    const auto old_confidence = confidence;
+    const auto old_ground = ground;
     const auto update_cell = [&](const GridIndex cell) {
       const FineCellEvaluation evaluation = cell_evaluator.Evaluate(cell);
       const std::size_t offset = TileCellOffset(cell);
       states[offset] = evaluation.state;
       costs[offset] = evaluation.traversal_cost;
+      confidence[offset] = static_cast<float>(evaluation.confidence);
+      ground[offset] = evaluation.state == FineCellState::kFree
+          ? cell_evaluator.GroundHeight(cell).value_or(std::numeric_limits<float>::quiet_NaN())
+          : std::numeric_limits<float>::quiet_NaN();
       ++updated_cells;
     };
     if (incremental) {
@@ -489,7 +503,9 @@ FineTraversabilityBuilder::Derive(
     }
 
     const bool unobserved = TileIsUnobserved(states, costs);
-    const bool changed = old_tile ? states != old_states || costs != old_costs
+    const bool ground_changed = !std::equal(ground.begin(),ground.end(),old_ground.begin(),
+        [](float a,float b){return a==b || (std::isnan(a)&&std::isnan(b));});
+    const bool changed = old_tile ? ground_changed || states != old_states || costs != old_costs || confidence != old_confidence
                                   : !unobserved;
     if (!changed) {
       continue;
@@ -497,7 +513,7 @@ FineTraversabilityBuilder::Derive(
     changed_tiles.push_back(tile_index);
     directory = directory.WithTile(
         tile_index, std::make_shared<const FineTraversabilityTile>(
-                        std::move(states), std::move(costs)));
+                        std::move(states), std::move(costs), std::move(confidence), std::move(ground)));
   }
 
   std::vector<TileIndex> changed_halo_tiles(halo_tiles.begin(),
@@ -510,10 +526,13 @@ FineTraversabilityBuilder::Derive(
       .elevation_cells_examined =
           cell_evaluator.evaluated_elevation_cells(),
       .elevation_cache_tiles = cell_evaluator.cached_elevation_tiles(),
+      .ground_cells_estimated = cell_evaluator.evaluated_ground_cells(),
+      .ground_cache_bytes = cell_evaluator.ground_cache_bytes(),
       .allocated_cells = directory.tile_count() * kGridTileCellCount,
       .allocated_bytes = directory.tile_count() *
                          (sizeof(FineCellState) + sizeof(double)) *
-                         kGridTileCellCount,
+                         kGridTileCellCount + directory.tile_count() *
+                         (sizeof(FineTraversabilityTile::ConfidenceArray) + sizeof(FineTraversabilityTile::GroundArray)),
       .derivation_ms = elapsed_ms,
   };
   const std::uint64_t fine_revision =
@@ -523,7 +542,8 @@ FineTraversabilityBuilder::Derive(
       profile_hash, hard_radius_m, profile.preferred_clearance_m,
       TraversalCostWeights{.slope = profile.slope_weight,
                            .relief = profile.relief_weight,
-                           .clearance = profile.clearance_weight},
+                           .clearance = profile.clearance_weight,
+                           .confidence = profile.confidence_weight},
       std::move(raw), std::move(directory), std::move(changed_tiles),
       std::move(changed_halo_tiles), metrics);
 }

@@ -23,6 +23,7 @@ set(LUNAR_INCREMENTAL_NAVIGATION_PRODUCTION_SOURCES
   src/map/global_guidance_builder.cpp
   src/map/adaptive_navigation_map.cpp
   src/map/persistent_elevation_map.cpp
+  src/map/terrain_observation_estimator.cpp
   src/map/platform_elevation_physics.cpp
   src/map/fine_traversability_builder.cpp
   src/global/global_route_planner.cpp
@@ -85,6 +86,8 @@ if(BUILD_TESTING)
 
   lunar_add_core_gtest(lunar_incremental_navigation_core_influence_run_test test/influence_run_test.cpp)
   target_include_directories(lunar_incremental_navigation_core_influence_run_test PRIVATE src)
+  lunar_add_core_gtest(lunar_incremental_navigation_core_terrain_observation_estimator_test test/terrain_observation_estimator_test.cpp)
+  target_include_directories(lunar_incremental_navigation_core_terrain_observation_estimator_test PRIVATE src)
   lunar_add_core_gtest(lunar_incremental_navigation_core_terrain_window_test test/terrain_window_test.cpp)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_boundary_distance_index_test

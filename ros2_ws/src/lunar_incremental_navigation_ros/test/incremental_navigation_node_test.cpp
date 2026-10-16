@@ -876,6 +876,30 @@ TEST(IncrementalNavigationNode, ClearanceWeightMustBeFiniteAndNonnegative) {
   }
 }
 
+TEST(IncrementalNavigationNode, ConfidenceCostHasDefaultAndStartupOverride) {
+  auto defaults = std::make_shared<IncrementalNavigationNode>(
+      ServerOptions("confidence_default"), IncrementalNavigationNodeDependencies{});
+  ASSERT_TRUE(defaults->has_parameter("confidence_weight"));
+  EXPECT_DOUBLE_EQ(defaults->get_parameter("confidence_weight").as_double(), 2.0);
+  auto options = ServerOptions("confidence_override");
+  options.append_parameter_override("confidence_weight", 0.0);
+  auto disabled = std::make_shared<IncrementalNavigationNode>(
+      options, IncrementalNavigationNodeDependencies{});
+  EXPECT_DOUBLE_EQ(disabled->get_parameter("confidence_weight").as_double(), 0.0);
+  EXPECT_FALSE(disabled->set_parameters_atomically(
+      {rclcpp::Parameter("confidence_weight", 2.0)}).successful);
+}
+
+TEST(IncrementalNavigationNode, ConfidenceWeightMustBeFiniteAndNonnegative) {
+  for (const double weight : {-1.0, std::numeric_limits<double>::infinity(),
+                               std::numeric_limits<double>::quiet_NaN()}) {
+    auto options = ServerOptions("confidence_invalid");
+    options.append_parameter_override("confidence_weight", weight);
+    EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(
+        options, IncrementalNavigationNodeDependencies{}), std::runtime_error);
+  }
+}
+
 TEST(IncrementalNavigationNode, RejectsUnsupportedLocalMapQosParameters) {
   auto options = ServerOptions("invalid_map_qos");
   options.append_parameter_override("local_map_qos_durability", "volatilee");
