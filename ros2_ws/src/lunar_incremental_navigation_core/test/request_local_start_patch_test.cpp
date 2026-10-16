@@ -665,5 +665,119 @@ TEST(RequestLocalStartPatch, CanonicalWheelNearWallWedgeCertifiesStationarySuppo
   EXPECT_FALSE(patch.view->CanBeEndpoint({20,20}));
 }
 
+// 只提供原始height；中心缺测使请求实际进入支撑平面路径。
+struct HeightOnlyProfileFixture final {
+  GridGeometry geometry;
+  std::vector<float> heights;
+  WheeledCapability capability;
+  TraversabilityProfile profile;
+};
+
+HeightOnlyProfileFixture ProfileSupportFixture(bool cubic, TerrainFitMethod method) {
+  auto geometry = Geometry(25U, 25U, .2);
+  std::vector<float> heights(geometry.CellCount());
+  for (int y = 0; y < 25; ++y)
+    for (int x = 0; x < 25; ++x) {
+      const double dx = (x - 12) * .2, dy = (y - 12) * .2;
+      heights[y * 25 + x] = cubic ? .5 * dx * dx * dx + .03 * dy
+                                 : .1 * dx + .25 * dx * dx + .07 * dy * dy;
+      if (std::abs(x - 12) <= 1 && std::abs(y - 12) <= 1)
+        heights[y * 25 + x] = std::numeric_limits<float>::quiet_NaN();
+    }
+  auto capability = WheelCapability();
+  capability.footprint_xy_m = {{-.01, -.01}, {.01, -.01}, {.01, .01}, {-.01, .01}};
+  capability.minimum_clearance_m = 0.;
+  capability.maximum_slope_rad = .3;
+  capability.maximum_local_obstacle_relief_m = cubic ? .2 : 10.;
+  capability.minimum_underbody_clearance_m = 10.;
+  auto profile = Profile(.4, {.slope = 1., .relief = 1.});
+  profile.planar_envelope_xy_m = capability.footprint_xy_m;
+  profile.maximum_slope_rad = capability.maximum_slope_rad;
+  profile.terrain_background_half_width_m = cubic ? 1.6 : .8;
+  profile.terrain_fit_method = method;
+  return {geometry, std::move(heights), capability, profile};
+}
+
+std::size_t DifferentSupportSelections(const ElevationSnapshot& raw,
+    const HeightOnlyProfileFixture& fixture, TerrainFitMethod other_method,
+    double other_background) {
+  auto selected = MakePlatformElevationEvaluator(fixture.capability,
+      fixture.profile.terrain_background_half_width_m, fixture.profile.terrain_fit_method);
+  auto other = MakePlatformElevationEvaluator(fixture.capability,
+      other_background, other_method);
+  std::size_t count = 0;
+  for (int y = 8; y <= 16; ++y)
+    for (int x = 8; x <= 16; ++x)
+      if (raw.ElevationAt({x, y}) &&
+          ((selected->Evaluate(raw, {x, y}).state == IntrinsicCellState::kBlocked) !=
+           (other->Evaluate(raw, {x, y}).state == IntrinsicCellState::kBlocked))) ++count;
+  return count;
+}
+
+TEST(RequestLocalStartPatch, StationarySupportUsesProfileBackgroundWidth) {
+  const auto fixture = ProfileSupportFixture(true, TerrainFitMethod::kBaseline);
+  const auto snapshots = MakeFixture(fixture.geometry, fixture.heights,
+      fixture.capability, fixture.profile);
+  ASSERT_EQ(snapshots.fine->State({12, 12}), FineCellState::kUnknown);
+  ASSERT_FALSE(snapshots.raw->TerrainMeasurementsAt({10, 10}));
+  ASSERT_GT(DifferentSupportSelections(*snapshots.raw, fixture,
+      TerrainFitMethod::kBaseline, 0.), 0U);
+  const auto stationary = RequestLocalStartPatchBuilder{}.BuildStationary(
+      snapshots.fine, PoseAt(fixture.geometry, {12, 12}), fixture.capability, fixture.profile);
+  // 所选背景排除受支持障碍，剩余样本不能给出可认证的原地平面。
+  EXPECT_EQ(stationary.status, StartPatchResult::Status::kUnresolved);
+  EXPECT_FALSE(stationary.view);
+  EXPECT_EQ(snapshots.fine->State({12, 12}), FineCellState::kUnknown);
+}
+
+TEST(RequestLocalStartPatch, StationarySupportUsesProfileFitMethod) {
+  auto fixture = ProfileSupportFixture(false, TerrainFitMethod::kBaseline);
+  const auto baseline = MakeFixture(fixture.geometry, fixture.heights,
+      fixture.capability, fixture.profile);
+  const auto pose = PoseAt(fixture.geometry, {12, 12});
+  const auto baseline_support = RequestLocalStartPatchBuilder{}.BuildStationary(
+      baseline.fine, pose, fixture.capability, fixture.profile);
+  fixture.profile.terrain_fit_method = TerrainFitMethod::kMovingLeastSquares;
+  const auto selected = MakeFixture(fixture.geometry, fixture.heights,
+      fixture.capability, fixture.profile);
+  ASSERT_GT(DifferentSupportSelections(*selected.raw, fixture,
+      TerrainFitMethod::kBaseline, fixture.profile.terrain_background_half_width_m), 0U);
+  const auto support = RequestLocalStartPatchBuilder{}.BuildStationary(
+      selected.fine, pose, fixture.capability, fixture.profile);
+  ASSERT_EQ(baseline_support.status, StartPatchResult::Status::kReady);
+  ASSERT_EQ(support.status, StartPatchResult::Status::kReady);
+  ASSERT_TRUE(baseline_support.view);
+  ASSERT_TRUE(support.view);
+  EXPECT_LT(support.view->TraversalCost({12, 12}),
+            .1 * baseline_support.view->TraversalCost({12, 12}));
+  EXPECT_TRUE(support.view->CanCertifyStationary(pose.position_m));
+  EXPECT_FALSE(support.view->CanBeEndpoint({12, 12}));
+  EXPECT_EQ(selected.fine->State({12, 12}), FineCellState::kUnknown);
+}
+
+TEST(RequestLocalStartPatch, TranslationSupportUsesProfileFitMethod) {
+  auto fixture = ProfileSupportFixture(false, TerrainFitMethod::kBaseline);
+  const auto baseline = MakeFixture(fixture.geometry, fixture.heights,
+      fixture.capability, fixture.profile);
+  const auto pose = PoseAt(fixture.geometry, {12, 12});
+  const auto baseline_support = RequestLocalStartPatchBuilder{}.Build(
+      baseline.fine, pose, fixture.capability, fixture.profile);
+  fixture.profile.terrain_fit_method = TerrainFitMethod::kMovingLeastSquares;
+  const auto selected = MakeFixture(fixture.geometry, fixture.heights,
+      fixture.capability, fixture.profile);
+  const auto support = RequestLocalStartPatchBuilder{}.Build(
+      selected.fine, pose, fixture.capability, fixture.profile);
+  ASSERT_EQ(baseline_support.status, StartPatchResult::Status::kReady);
+  ASSERT_EQ(support.status, StartPatchResult::Status::kReady);
+  ASSERT_TRUE(baseline_support.view);
+  ASSERT_TRUE(support.view);
+  // 不同的真实支撑筛选改变拟合平面代价，而不是仅检查工厂入参。
+  EXPECT_GT(support.view->TraversalCost({12, 12}),
+            5. * baseline_support.view->TraversalCost({12, 12}));
+  EXPECT_EQ(support.view->Source({12, 12}), LocalCellSource::kStartAssumedFree);
+  EXPECT_FALSE(support.view->CanBeEndpoint({12, 12}));
+  EXPECT_EQ(selected.fine->State({12, 12}), FineCellState::kUnknown);
+}
+
 }  // namespace
 }  // namespace lunar::incremental_navigation

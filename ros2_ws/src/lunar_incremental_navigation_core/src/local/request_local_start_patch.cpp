@@ -405,7 +405,8 @@ StartPatchResult RequestLocalStartPatchBuilder::Build(
   }
 
   const std::unique_ptr<const PlatformElevationEvaluator> evaluator =
-      MakePlatformElevationEvaluator(capability, profile.terrain_background_half_width_m);
+      MakePlatformElevationEvaluator(capability, profile.terrain_background_half_width_m,
+                                     profile.terrain_fit_method);
   const std::set<GridIndex> patch_cells =
       PatchCells(local_window, p0.position_m, patch_radius_m);
   const std::optional<Plane> plane = FitSupportPlane(
@@ -483,7 +484,8 @@ StartPatchResult RequestLocalStartPatchBuilder::BuildStationary(
   // halo is part of this request-local plane assumption, not navigable space.
   // Measured ranges/stats remain authoritative throughout the halo.
   const auto cells = WithOneCellRing(geometry, PatchCells(geometry, p0.position_m, radius));
-  const auto evaluator = MakePlatformElevationEvaluator(capability);
+  const auto evaluator = MakePlatformElevationEvaluator(
+      capability, profile.terrain_background_half_width_m, profile.terrain_fit_method);
   const auto plane = FitSupportPlane(*fine->elevation(), *evaluator,
       WithOneCellRing(geometry, cells), p0.position_m);
   if (!plane) return {.status = StartPatchResult::Status::kUnresolved};

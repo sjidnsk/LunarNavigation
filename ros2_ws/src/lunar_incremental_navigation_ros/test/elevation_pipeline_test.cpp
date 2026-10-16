@@ -371,6 +371,84 @@ void ExpectNavigationUnchanged(
   }
 }
 
+TEST(PolicyMapPipelineExport, HeightOnlyClassificationUsesConfiguredProfile) {
+  using lunar::incremental_navigation::IntrinsicCellState;
+  using lunar::incremental_navigation::MakePlatformElevationEvaluator;
+  using lunar::incremental_navigation::TerrainFitMethod;
+  for (const bool cubic : {true, false}) {
+    SCOPED_TRACE(cubic ? "baseline with nonzero background" : "moving least squares");
+    auto capability = Capability();
+    auto& wheel = std::get<WheeledCapability>(capability);
+    wheel.footprint_xy_m = {{-.01, -.01}, {.01, -.01}, {.01, .01}, {-.01, .01}};
+    wheel.minimum_clearance_m = 0.;
+    wheel.maximum_slope_rad = .3;
+    wheel.maximum_local_obstacle_relief_m = cubic ? .2 : 10.;
+    wheel.minimum_underbody_clearance_m = 10.;
+    auto profile = Profile();
+    profile.planar_envelope_xy_m = wheel.footprint_xy_m;
+    profile.maximum_slope_rad = wheel.maximum_slope_rad;
+    profile.terrain_background_half_width_m = cubic ? 1.6 : .8;
+    profile.terrain_fit_method = cubic ? TerrainFitMethod::kBaseline
+                                     : TerrainFitMethod::kMovingLeastSquares;
+    auto evidence = Evidence(0.0F, 0., 25U, 25U);
+    for (int y = 0; y < 25; ++y)
+      for (int x = 0; x < 25; ++x) {
+        const double dx = (x - 12) * .2, dy = (y - 12) * .2;
+        evidence.elevation_m[y * 25 + x] = cubic ? .5 * dx * dx * dx + .03 * dy
+                                               : .1 * dx + .25 * dx * dx + .07 * dy * dy;
+        if (std::abs(x - 12) <= 1 && std::abs(y - 12) <= 1)
+          evidence.elevation_m[y * 25 + x] = std::numeric_limits<float>::quiet_NaN();
+      }
+    ASSERT_TRUE(evidence.terrain_measurements.empty());
+    ElevationPipeline pipeline(capability, profile, 1.0);
+    PolicyMapExporter exporter(capability, profile);
+    ASSERT_EQ(pipeline.ApplyLocal(evidence, 10).status,
+              lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+    ASSERT_TRUE(pipeline.RunFineDerivation());
+    const auto check_classification = [&](const PolicyResponse& response) {
+      const auto fine = pipeline.CaptureBundle().fine;
+      const auto raw = fine->elevation();
+      EXPECT_EQ(response.profile_hash, fine->platform_profile_hash());
+      EXPECT_FALSE(raw->TerrainMeasurementsAt({10, 10}));
+      auto selected = MakePlatformElevationEvaluator(capability,
+          profile.terrain_background_half_width_m, profile.terrain_fit_method);
+      auto fallback = MakePlatformElevationEvaluator(capability);
+      std::size_t different = 0;
+      for (const auto& tile : response.tiles)
+        for (std::size_t offset = 0; offset < tile.states.size(); ++offset) {
+          const lunar::incremental_navigation::GridIndex cell{
+              tile.tile_x * lunar::incremental_navigation::kGridTileWidthCells +
+                  static_cast<std::int64_t>(offset % lunar::incremental_navigation::kGridTileWidthCells),
+              tile.tile_y * lunar::incremental_navigation::kGridTileWidthCells +
+                  static_cast<std::int64_t>(offset / lunar::incremental_navigation::kGridTileWidthCells)};
+          const auto expected = selected->Evaluate(*raw, cell).state;
+          const auto old = fallback->Evaluate(*raw, cell).state;
+          different += expected != old;
+          EXPECT_EQ(tile.intrinsic_states[offset], static_cast<std::uint8_t>(expected));
+          EXPECT_EQ(tile.observed[offset], EffectiveObservedState(expected,
+              raw->ElevationAt(cell).value_or(std::numeric_limits<float>::quiet_NaN())));
+        }
+      EXPECT_GT(different, 0U);  // 夹具必须实际区分所选profile与默认分类器。
+    };
+    const auto base = ExportCaptured(pipeline, exporter);
+    ASSERT_TRUE(base.ready);
+    check_classification(base);
+    WireTiles reconstructed;
+    ApplyWireTiles(base, reconstructed);
+    evidence.elevation_m[7 * 25 + 7] += .005F;
+    ASSERT_EQ(pipeline.ApplyLocal(evidence, 20).status,
+              lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+    ASSERT_TRUE(pipeline.RunFineDerivation());
+    const auto delta = ExportCaptured(pipeline, exporter, base.fine_revision);
+    const auto full = ExportCaptured(pipeline, exporter);
+    ASSERT_FALSE(delta.full_snapshot);
+    ASSERT_FALSE(delta.tiles.empty());
+    check_classification(full);
+    ApplyWireTiles(delta, reconstructed);
+    ExpectAllExportedFieldsEqual(reconstructed, full);
+  }
+}
+
 TEST(PolicyMapPipelineExport, HeightOnlyDeltaMatchesFullWithUnchangedNavigationFields) {
   // 阻塞地形没有FREE有效地面，严格建立导航字段不变的height-only前提。
   ElevationPipeline pipeline(Capability(), Profile(), 1.0);

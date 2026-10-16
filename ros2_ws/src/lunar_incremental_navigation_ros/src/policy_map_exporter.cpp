@@ -116,7 +116,8 @@ lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::Export(
     std::sort(indices.begin(), indices.end());
     indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
   }
-  const auto intrinsic_evaluator = core::MakePlatformElevationEvaluator(capability_);
+  const auto intrinsic_evaluator = core::MakePlatformElevationEvaluator(
+      capability_, profile_.terrain_background_half_width_m, profile_.terrain_fit_method);
   for (const core::TileIndex index : indices) {
     const auto tile = fine.FindTile(index);
     // Native M elides tiles whose navigation states are all UNKNOWN. Their
