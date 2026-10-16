@@ -78,12 +78,12 @@ class RequestLocalPlanningView final {
       std::shared_ptr<const FineTraversabilitySnapshot> base,
       SparseGridGeometry geometry, const Pose2 patch_anchor,
       const double start_patch_radius_m,
-      std::vector<LocalCellOverride> overrides)
+      std::vector<LocalCellOverride> overrides, bool stationary_support = false)
       : base_(std::move(base)),
         geometry_(std::move(geometry)),
         patch_anchor_(patch_anchor),
         start_patch_radius_m_(start_patch_radius_m),
-        overrides_(std::move(overrides)) {
+        overrides_(std::move(overrides)), stationary_support_(stationary_support) {
     if (!base_) {
       throw std::invalid_argument("request-local view requires a base snapshot");
     }
@@ -92,10 +92,10 @@ class RequestLocalPlanningView final {
         geometry_.frame_id() != base_geometry.frame_id() ||
         geometry_.resolution_m() != base_geometry.resolution_m() ||
         geometry_.origin_m() != base_geometry.origin_m() ||
-        geometry_.min_inclusive().x < base_geometry.min_inclusive().x ||
+        (!stationary_support_ && (geometry_.min_inclusive().x < base_geometry.min_inclusive().x ||
         geometry_.min_inclusive().y < base_geometry.min_inclusive().y ||
         geometry_.max_exclusive().x > base_geometry.max_exclusive().x ||
-        geometry_.max_exclusive().y > base_geometry.max_exclusive().y) {
+        geometry_.max_exclusive().y > base_geometry.max_exclusive().y))) {
       throw std::invalid_argument(
           "request-local geometry must be a subset of the base lattice");
     }
@@ -197,11 +197,25 @@ class RequestLocalPlanningView final {
     return std::nullopt;
   }
 
+  [[nodiscard]] bool CanCertifyStationary(const Vec2 point) const noexcept {
+    return stationary_support_ && point == patch_anchor_.position_m;
+  }
+
   [[nodiscard]] bool CanBeEndpoint(const GridIndex index) const noexcept {
     return geometry_.Contains(index) &&
            base_->State(index) == FineCellState::kFree &&
            base_->PlanningElevationRangeAt(index).has_value();
   }
+
+  // Certify the entire closed segment, including corner contacts. A prefix
+  // may enter measured free space once and cannot reenter assumed space.
+  [[nodiscard]] bool CertifySegment(Vec3 from, Vec3 to,
+                                    StartPhase initial,
+                                    StartPhase final,
+                                    const SearchControl* control = nullptr) const noexcept;
+
+  [[nodiscard]] std::optional<StartPhase> AdvanceGridStep(
+      StartPhase phase, GridIndex current, GridIndex next) const noexcept;
 
   [[nodiscard]] bool CanCertifyLeggedSupport(
       const GridIndex index, const bool is_initial_support) const noexcept {
@@ -259,6 +273,7 @@ class RequestLocalPlanningView final {
   Pose2 patch_anchor_;
   double start_patch_radius_m_{};
   std::vector<LocalCellOverride> overrides_;
+  bool stationary_support_{};
 };
 
 class AdaptiveNavigationSnapshot;

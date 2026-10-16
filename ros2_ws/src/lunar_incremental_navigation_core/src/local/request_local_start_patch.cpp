@@ -242,18 +242,43 @@ struct Plane final {
   return plane;
 }
 
+// The derivative halo supplies the classifier's 3x3 stencil. Outside the
+// bounded assumption domain, classify only actual measured terrain.
+class BoundedSupportEvaluator final : public PlatformElevationEvaluator {
+ public:
+  BoundedSupportEvaluator(const ElevationSnapshot& measured,
+                          const std::set<GridIndex>& assumptions,
+                          const PlatformCapability& capability,
+                          const TraversabilityProfile& profile)
+      : measured_(measured), assumptions_(assumptions),
+        evaluator_(MakePlatformElevationEvaluator(
+            capability, profile.terrain_background_half_width_m)) {}
+
+  IntrinsicTraversalEvaluation Evaluate(
+      const ElevationRangeView& support, GridIndex index) const override {
+    return evaluator_->Evaluate(assumptions_.contains(index) ? support : measured_,
+                                 index);
+  }
+
+ private:
+  const ElevationSnapshot& measured_;
+  const std::set<GridIndex>& assumptions_;
+  std::unique_ptr<const PlatformElevationEvaluator> evaluator_;
+};
+
 class PatchedElevationView final : public ElevationRangeView {
  public:
   PatchedElevationView(std::shared_ptr<const ElevationSnapshot> base,
                        const std::set<GridIndex>& patch_cells,
-                       const Plane plane, const Point2 anchor) noexcept
+                       const Plane plane, const Point2 anchor,
+                       const SparseGridGeometry& geometry) noexcept
       : base_(std::move(base)),
         patch_cells_(patch_cells),
         plane_(plane),
-        anchor_(anchor) {}
+        anchor_(anchor), geometry_(geometry) {}
 
   [[nodiscard]] const SparseGridGeometry& geometry() const noexcept override {
-    return base_->geometry();
+    return geometry_;
   }
 
   [[nodiscard]] std::optional<ElevationRange> ElevationRangeAt(
@@ -279,11 +304,17 @@ class PatchedElevationView final : public ElevationRangeView {
     return ElevationRange{.min_m = elevation_m, .max_m = elevation_m};
   }
 
+  [[nodiscard]] std::optional<LocalTerrainMeasurements> TerrainMeasurementsAt(
+      const GridIndex index) const noexcept override {
+    return base_->TerrainMeasurementsAt(index);
+  }
+
  private:
   std::shared_ptr<const ElevationSnapshot> base_;
   const std::set<GridIndex>& patch_cells_;
   Plane plane_;
   Point2 anchor_;
+  SparseGridGeometry geometry_;
 };
 
 [[nodiscard]] bool HasEvidenceExit(
@@ -383,9 +414,13 @@ StartPatchResult RequestLocalStartPatchBuilder::Build(
   if (!plane) {
     return {.status = StartPatchResult::Status::kUnresolved};
   }
-  const PatchedElevationView patched(fine->elevation(), patch_cells, *plane,
-                                     p0.position_m);
-  FineCellEvaluator patched_evaluator(patched, capability, profile);
+  const auto derivative_support = WithOneCellRing(local_window, patch_cells);
+  const PatchedElevationView patched(fine->elevation(), derivative_support, *plane,
+                                     p0.position_m, local_window);
+  FineCellEvaluator patched_evaluator(
+      patched, capability, profile,
+      std::make_unique<BoundedSupportEvaluator>(*fine->elevation(), patch_cells,
+                                                 capability, profile));
 
   std::vector<LocalCellOverride> overrides;
   overrides.reserve(patch_cells.size());
@@ -421,6 +456,100 @@ StartPatchResult RequestLocalStartPatchBuilder::Build(
   return {.status = StartPatchResult::Status::kReady,
           .view = std::move(view),
           .assumed_cells = assumed_cells};
+}
+
+StartPatchResult RequestLocalStartPatchBuilder::BuildStationary(
+    std::shared_ptr<const FineTraversabilitySnapshot> fine, const Pose2& p0,
+    const PlatformCapability& capability, const TraversabilityProfile& profile) const {
+  if (!fine || !std::isfinite(profile.start_blind_zone_margin_m) ||
+      profile.start_blind_zone_margin_m < 0.0 || !std::isfinite(p0.yaw_rad))
+    throw std::invalid_argument("invalid stationary support request");
+  const auto* wheel = std::get_if<WheeledCapability>(&capability);
+  if (!wheel || wheel->maximum_spin_rate_radps <= 0.0)
+    return {.status = StartPatchResult::Status::kUnresolved};
+  const auto& base = fine->geometry();
+  const auto start = WorldToCell(base, p0.position_m);
+  if (!start) return {.status = StartPatchResult::Status::kUnresolved};
+  if (fine->State(*start) == FineCellState::kBlocked)
+    return {.status = StartPatchResult::Status::kStartBlocked};
+  const double radius = fine->hard_inflation_radius_m() + profile.start_blind_zone_margin_m;
+  const double span = std::ceil(radius / base.resolution_m()) + 2.0;
+  if (!std::isfinite(span) || span > (kMaximumLocalPlanningWindowAxisCells - 1) / 2)
+    return {.status = StartPatchResult::Status::kUnresolved};
+  const auto n = static_cast<std::int64_t>(span);
+  const SparseGridGeometry geometry(base.frame_id(), base.resolution_m(), base.origin_m(),
+      {start->x - n, start->y - n}, {start->x + n + 1, start->y + n + 1});
+  // The native intrinsic classifier reads a 3x3 stencil. Its finite support
+  // halo is part of this request-local plane assumption, not navigable space.
+  // Measured ranges/stats remain authoritative throughout the halo.
+  const auto cells = WithOneCellRing(geometry, PatchCells(geometry, p0.position_m, radius));
+  const auto evaluator = MakePlatformElevationEvaluator(
+      capability, profile.terrain_background_half_width_m);
+  const auto plane = FitSupportPlane(*fine->elevation(), *evaluator,
+      WithOneCellRing(geometry, cells), p0.position_m);
+  if (!plane) return {.status = StartPatchResult::Status::kUnresolved};
+  const PatchedElevationView patched(fine->elevation(), cells, *plane, p0.position_m, geometry);
+  const auto evaluation = FineCellEvaluator(patched, capability, profile).Evaluate(*start);
+  if (evaluation.state == FineCellState::kBlocked)
+    return {.status = StartPatchResult::Status::kStartBlocked};
+  if (evaluation.state != FineCellState::kFree)
+    return {.status = StartPatchResult::Status::kUnresolved};
+  std::vector<LocalCellOverride> overrides;
+  if (fine->State(*start) == FineCellState::kUnknown)
+    overrides.push_back({*start, LocalCellSource::kStartAssumedFree, evaluation.traversal_cost});
+  const auto count = overrides.size();
+  return {.status = StartPatchResult::Status::kReady,
+          .view = std::make_shared<const RequestLocalPlanningView>(fine, geometry, p0, radius,
+              std::move(overrides), true), .assumed_cells = count};
+}
+
+StartConnectionsResult RequestLocalStartPatchBuilder::BuildStartConnections(
+    std::shared_ptr<const FineTraversabilitySnapshot> fine,
+    const SparseGridGeometry& local_window, const Pose2& p0,
+    const PlatformCapability& capability,
+    const TraversabilityProfile& profile) const {
+  const StartPatchResult patch = Build(fine, local_window, p0, capability, profile);
+  StartConnectionsResult result{.status = patch.status};
+  if (!patch.view || (patch.status != StartPatchResult::Status::kReady &&
+                      patch.status != StartPatchResult::Status::kNotNeeded)) {
+    return result;
+  }
+  const std::optional<GridIndex> start = WorldToCell(local_window, p0.position_m);
+  if (!start) return result;
+  const StartPhase initial = patch.view->Source(*start) == LocalCellSource::kEvidenceFree
+                                 ? StartPhase::kNormal : StartPhase::kStartPrefix;
+  if (initial == StartPhase::kNormal) {
+    result.connections.push_back({.index = *start, .phase = initial});
+    return result;
+  }
+  constexpr std::array<GridIndex, 8> kNeighbors{{
+      {.x = -1, .y = -1}, {.x = 0, .y = -1}, {.x = 1, .y = -1},
+      {.x = -1, .y = 0},                         {.x = 1, .y = 0},
+      {.x = -1, .y = 1},  {.x = 0, .y = 1},  {.x = 1, .y = 1},
+  }};
+  std::queue<std::pair<GridIndex, StartPhase>> frontier;
+  std::set<GridIndex> visited;
+  frontier.push({*start, initial});
+  visited.insert(*start);
+  while (!frontier.empty()) {
+    const auto [current, phase] = frontier.front();
+    frontier.pop();
+    for (const GridIndex offset : kNeighbors) {
+      const auto next = detail::OffsetWithinGeometry(local_window, current,
+                                                     offset.x, offset.y);
+      if (!next || visited.contains(*next)) continue;
+      const auto next_phase = patch.view->AdvanceGridStep(phase, current, *next);
+      if (!next_phase) continue;
+      visited.insert(*next);
+      if (*next_phase == StartPhase::kNormal) {
+        result.connections.push_back({.index = *next, .phase = *next_phase});
+      } else {
+        frontier.push({*next, *next_phase});
+      }
+    }
+  }
+  if (result.connections.empty()) result.status = StartPatchResult::Status::kUnresolved;
+  return result;
 }
 
 }  // namespace lunar::incremental_navigation

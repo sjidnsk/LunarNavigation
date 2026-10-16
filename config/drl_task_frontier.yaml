@@ -1,0 +1,55 @@
+# New task_graph_v4 (27D/7D), candidate_frontier_truth_v2, candidate_graph_sac_v3.
+# Same-domain FREE centers/unknown demands; boundary inside. Measured-only Actor.
+# Directional in/out counts /100; inside eliminated counts reward/Critic /50.
+# Zero-gain transit, detours, retreat retained; success = collision-free coverage >=99%.
+# All SAC/replay states start at zero. Old v3 checkpoints are never resumed.
+# Stage 0: 1024 warmup. Stages 1..10: 8192 admissions +2048 updates each.
+# After each stage: frozen historical exact-float 10 moon/cave pairs, 512 decisions.
+# These hyperparameters control variables; 20480 updates are not a convergence claim.
+seed: 20261003
+paired_scene_sequence: true
+environments: 8
+warmup: 1024
+update_ratio: 0.25
+max_update_credit: 32
+actor_publish_updates: 16
+learning:
+  batch_size: 64
+  microbatch_size: 8
+  learning_rate: 0.00001
+  temperature_learning_rate: 0.003
+  initial_alpha: 0.00005
+  maximum_alpha: 0.0001
+  entropy_mode: position_heading
+  target_entropy_factor: 0.1
+  position_target_entropy_factor: 0.1
+  heading_target_entropy_factor: 0.1
+  gamma: 1.0
+  polyak: 0.005
+  return_steps: 1
+  position_aux_weight: 0.0
+completion_bonus: 5.0
+success_coverage: 0.99
+sensor:
+  range_m: 10.0
+  fov_deg: 90.0
+  offset_x_m: 0.0
+  offset_y_m: 0.0
+  offset_yaw_rad: 0.0
+stagnation_window_steps: 128
+stagnation_max_positions: 8
+stagnation_position_tolerance_m: 0.25
+curriculum_budgets: [512, 512, 512]
+curriculum_extents_m: [[50.0, 100.0], [50.0, 100.0], [50.0, 100.0]]
+worker_threads: 1
+collector_threads: 2
+learner_threads: 4
+replay_max_bytes: 8589934592
+snapshot_max_bytes: 268435456
+total_output_max_bytes: 8589934592
+metrics_max_bytes: 1048576
+system_reserve_bytes: 2147483648
+reward_diagnostics: true
+save_interval_s: 1800.0
+output_dir: /home/kai/CodexDownloads/lunar_navigation/drl-task-frontier-20261003/managed/run
+artifact_root: /home/kai/CodexDownloads/lunar_navigation/drl-task-frontier-20261003/managed

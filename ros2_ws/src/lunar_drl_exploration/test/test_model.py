@@ -1,0 +1,249 @@
+"""Sparse network contract tests: topology, packing and privileged isolation."""
+from dataclasses import replace
+import inspect
+import numpy as np
+import pytest
+torch = pytest.importorskip("torch")
+from lunar_drl_exploration.contracts import (DecisionObservation, PrivilegedScene, PrivilegedState,
+    PrivilegedActionContext)
+from lunar_drl_exploration.config import ModelConfig
+from lunar_drl_exploration.model import Actor, Critic, PolygonEncoder
+from lunar_drl_exploration.batch import pack_privileged
+
+torch.set_num_threads(2)
+
+
+def observation(n=7, locations=3, seed=1):
+    rng = np.random.default_rng(seed)
+    positions = rng.normal(size=(n, 2)).astype(np.float32)
+    features = rng.normal(size=(n, 27)).astype(np.float32)
+    features[:, :2] = (positions - positions[0]) / 10
+    edges = np.column_stack((np.arange(n-1), np.arange(1, n)))
+    nodes = np.repeat(np.arange(min(n, locations)), 8)
+    yaws = np.tile(np.arange(8)*np.pi/4, min(n, locations))
+    return DecisionObservation(np.arange(n), positions, features, edges,
+        np.ones(n-1), 0, np.array([[0,0],[1,0],[1,1],[.4,.3],[0,1]]),
+        np.arange(8)/8, nodes, yaws, np.column_stack((positions[nodes], yaws)), 'e', seed)
+
+
+def scene(n=9):
+    return PrivilegedScene('s', np.column_stack((np.arange(n), np.zeros(n))),
+        np.column_stack((np.arange(n-1), np.arange(1,n))), np.ones(n-1),
+        np.arange(n+1)*2, np.arange(n*2),
+        np.packbits(np.ones(n*2, np.uint8), bitorder='little'), (2,n), {})
+
+
+def action_context(obs, truth_nodes=9, gain=1):
+    if not len(obs.goals):
+        return PrivilegedActionContext(np.empty((0,2)), np.empty(0,int), np.empty(0), np.array([0]),
+            np.empty(0,int), np.empty(0), np.empty(0))
+    positions, action_positions = np.unique(obs.goals[:, :2], axis=0, return_inverse=True)
+    supports = np.arange(len(positions), dtype=np.int64) % truth_nodes
+    return PrivilegedActionContext(positions, action_positions, obs.goals[:, 2], np.arange(len(positions)+1),
+        supports, np.linspace(.1, 1., len(positions)), np.full(len(obs.goals), gain))
+
+
+def state(n=9, full=False, obs=None, gain=1):
+    obs = observation() if obs is None else obs
+    return PrivilegedState('s', np.packbits(np.full(n*2, full, np.uint8), bitorder='little'),
+                           action_context(obs, n, gain))
+
+
+def test_actor_packing_permutation_and_joint_argmax():
+    torch.manual_seed(4)
+    actor = Actor(ModelConfig()).eval()
+    observations = [observation(1,1), observation(), observation(21,20)]
+    with torch.no_grad():
+        packed = actor(observations)
+        for obs, out in zip(observations, packed):
+            single = actor([obs])[0]
+            torch.testing.assert_close(out.logits, single.logits, atol=2e-6, rtol=2e-5)
+            assert out.probs.shape == (len(obs.action_nodes),)
+            torch.testing.assert_close(out.probs.sum(), torch.tensor(1.))
+            assert out.probs.argmax() == out.logits.argmax()
+        obs = observations[1]
+        order = np.array([3,1,5,0,6,2,4]); inverse = np.argsort(order)
+        action_order = np.arange(len(obs.action_nodes))[::-1].copy()
+        shuffled = replace(obs, node_ids=obs.node_ids[order], positions=obs.positions[order],
+            features=obs.features[order], edges=inverse[obs.edges[::-1]],
+            edge_lengths=obs.edge_lengths[::-1], current_index=int(inverse[0]),
+            action_nodes=inverse[obs.action_nodes[action_order]],
+            action_yaws=obs.action_yaws[action_order], goals=obs.goals[action_order])
+        torch.testing.assert_close(actor([shuffled])[0].logits,
+            packed[1].logits[torch.tensor(action_order)], atol=2e-6, rtol=2e-5)
+
+
+def test_polygon_retains_boundary_adjacency_and_cyclic_start_invariance():
+    torch.manual_seed(12)
+    encoder = PolygonEncoder(128)
+    polygon = torch.tensor([[0.,0.],[2.,0.],[1.,.4],[2.,2.],[0.,2.]])
+    def encode(p):
+        return encoder(torch.cat((p, p.roll(-1,0)),1))
+    torch.testing.assert_close(encode(polygon).roll(2,0), encode(polygon.roll(2,0)))
+    assert not torch.allclose(encode(polygon), encode(polygon[[0,1,3,2,4]]))
+
+
+def test_critic_uses_current_coverage_and_measured_observation_actor_is_isolated():
+    torch.manual_seed(9)
+    obs, truth = observation(), scene()
+    actor, critic = Actor(ModelConfig()), Critic(ModelConfig())
+    assert list(inspect.signature(actor.forward).parameters) == ['observations']
+    with torch.no_grad():
+        original = actor([obs])[0].logits.clone()
+        q0 = critic([obs], [state(obs=obs)], {'s':truth})[0]
+        q1 = critic([obs], [state(full=True, obs=obs)], {'s':truth})[0]
+        changed = replace(obs, features=obs.features+0.5)
+        q2 = critic([changed], [state(obs=changed)], {'s':truth})[0]
+        assert not torch.allclose(q0,q1)
+        assert not torch.allclose(q0,q2)
+        torch.testing.assert_close(actor([obs])[0].logits, original, atol=0,rtol=0)
+    batch = pack_privileged([obs], [state(full=True, obs=obs)], {'s':truth}, 'cpu')
+    np.testing.assert_allclose(batch.graph.features[:, 3].numpy(), 1.)
+
+
+def test_sparse_attention_never_allocates_node_square():
+    from torch.utils._python_dispatch import TorchDispatchMode
+    class NoSquare(TorchDispatchMode):
+        def __torch_dispatch__(self, func, types, args=(), kwargs=None):
+            out = func(*args, **(kwargs or {}))
+            for value in torch.utils._pytree.tree_leaves(out):
+                if isinstance(value, torch.Tensor):
+                    assert sum(d == 257 for d in value.shape) < 2, (func, value.shape)
+            return out
+    with torch.no_grad(), NoSquare():
+        out = Actor(ModelConfig())([observation(257,20)])[0]
+    assert len(out.probs) == 160
+
+
+def test_critic_packs_different_scene_topologies_and_reference_owner_counts():
+    torch.manual_seed(2)
+    critic = Critic(ModelConfig()).eval()
+    observations = [observation(4,2),observation(13,7)]
+    truth1 = replace(scene(3), reference_offsets=np.array([0,0,2,6]),
+        reference_indices=np.array([0,1,2,3,4,5]))
+    truth2 = replace(scene(11),scene_id='other')
+    states = [PrivilegedState('s',np.array([0b00101101],np.uint8),action_context(observations[0],3)),
+              replace(state(11,True,observations[1]),scene_id='other')]
+    scenes={'s':truth1,'other':truth2}
+    packed=pack_privileged(observations,states,scenes,'cpu')
+    torch.testing.assert_close(packed.graph.features[:3,3],torch.tensor([0.,.5,.75]))
+    with torch.no_grad():
+        results=critic(observations,states,scenes)
+        for o,s,q in zip(observations,states,results):
+            torch.testing.assert_close(q,critic([o],[s],scenes)[0],atol=2e-6,rtol=2e-5)
+        order=np.array([2,0,1]); inverse=np.argsort(order)
+        owner_chunks=[truth1.reference_indices[truth1.reference_offsets[i]:truth1.reference_offsets[i+1]] for i in order]
+        shuffled=replace(truth1,positions=truth1.positions[order],edges=inverse[truth1.edges],
+            reference_offsets=np.r_[0,np.cumsum([len(a) for a in owner_chunks])],
+            reference_indices=np.concatenate(owner_chunks))
+        remapped = replace(states[0], actions=replace(states[0].actions,
+            support_indices=inverse[states[0].actions.support_indices]))
+        torch.testing.assert_close(critic([observations[0]],[remapped],{'s':shuffled})[0],results[0],atol=2e-6,rtol=2e-5)
+
+
+def test_critic_candidate_queries_are_permutation_local_and_gain_sensitive():
+    torch.manual_seed(71)
+    obs, truth = observation(), scene()
+    critic, actor = Critic(ModelConfig()).eval(), Actor(ModelConfig()).eval()
+    base = state(obs=obs)
+    order = np.arange(len(obs.goals))[::-1].copy()
+    shuffled_obs = replace(obs, action_nodes=obs.action_nodes[order], action_yaws=obs.action_yaws[order],
+                           goals=obs.goals[order])
+    shuffled = replace(base, actions=replace(base.actions,
+        action_positions=base.actions.action_positions[order], action_yaws=base.actions.action_yaws[order],
+        removed_frontiers=base.actions.removed_frontiers[order]))
+    with torch.no_grad():
+        q = critic([obs], [base], {'s':truth})[0]
+        torch.testing.assert_close(critic([shuffled_obs], [shuffled], {'s':truth})[0], q[order])
+        extra = replace(base, actions=PrivilegedActionContext(
+            np.vstack((base.actions.positions, [99., 99.])), base.actions.action_positions, base.actions.action_yaws,
+            np.r_[base.actions.support_offsets, base.actions.support_offsets[-1] + 1],
+            np.r_[base.actions.support_indices, 0], np.r_[base.actions.support_distances, 1.],
+            base.actions.removed_frontiers))
+        torch.testing.assert_close(critic([obs], [extra], {'s':truth})[0], q)
+        richer = replace(base, actions=replace(base.actions, removed_frontiers=base.actions.removed_frontiers + 100))
+        assert not torch.allclose(critic([obs], [richer], {'s':truth})[0], q)
+        torch.testing.assert_close(actor([obs])[0].logits, actor([obs])[0].logits, atol=0, rtol=0)
+
+
+def test_critic_local_support_and_gain_receive_gradients():
+    critic = Critic(ModelConfig()).train()
+    obs, truth = observation(), scene()
+    critic([obs], [state(obs=obs, gain=1)], {'s':truth})[0].sum().backward()
+    assert critic.support_geometry[0].weight.grad.abs().sum() > 0
+    assert critic.head[0].weight.grad[:, -1].abs().sum() > 0
+
+
+def test_critic_rejects_stale_descriptor_when_same_position_yaws_are_swapped():
+    obs = observation()
+    stale = state(obs=obs)
+    order = np.arange(len(obs.goals))
+    order[:2] = order[1::-1]
+    swapped = replace(obs, action_nodes=obs.action_nodes[order],
+                      action_yaws=obs.action_yaws[order], goals=obs.goals[order])
+    with pytest.raises(ValueError, match="yaw"):
+        pack_privileged([swapped], [stale], {'s': scene()}, 'cpu')
+
+
+def test_training_recompute_reduces_saved_activations_without_changing_gradients():
+    import copy
+    torch.manual_seed(32)
+    actor=Actor(ModelConfig()).train()
+    direct=copy.deepcopy(actor).eval()
+    def run(network):
+        sizes=[]
+        def save(tensor):
+            sizes.append(tensor.numel())
+            return tensor
+        with torch.autograd.graph.saved_tensors_hooks(save,lambda x:x):
+            logits=network([observation(129,20)])[0].logits
+            logits.square().sum().backward()
+        return logits,sum(sizes)
+    recomputed,recomputed_size=run(actor)
+    normal,normal_size=run(direct)
+    torch.testing.assert_close(recomputed,normal)
+    for p,q in zip(actor.parameters(),direct.parameters()):
+        torch.testing.assert_close(p.grad,q.grad)
+    assert recomputed_size < normal_size / 2
+
+
+@pytest.mark.parametrize('mount_yaw', [0., np.pi / 2, np.pi / 3, -2 * np.pi + np.pi / 3])
+def test_executed_optical_history_aligns_with_packed_vehicle_actions(mount_yaw):
+    from lunar_drl_exploration.batch import pack_observations
+    from lunar_drl_exploration.contracts import Pose, SensorSpec
+    from lunar_drl_exploration.decision import DecisionCore
+    from test_task_analysis import snapshot, task
+
+    pose = Pose(3.5, 3.5, np.pi)
+    core = DecisionCore(task(0, 0, 8, 8), SensorSpec(range_m=3, offset_yaw_rad=mount_yaw))
+    # Only a real, nearby physical observation counts; a far pose and an empty
+    # sensor update cannot mark other action directions at the current anchor.
+    core.record_observation(Pose(3.51, 3.51, 2 * np.pi), [[1, 2]])
+    core.record_observation(Pose(4.5, 3.5, np.pi), [[1, 2]])
+    core.record_observation(Pose(3.5, 3.5, np.pi), [])
+    m = np.zeros((8, 8), np.uint8); m[2:5, 2:5] = 1
+    obs, _ = core.observe(snapshot(m, pose=pose))
+    current = obs.action_nodes == obs.current_index
+    packed = pack_observations([obs], 'cpu')
+    visited = packed.action_features[current, 6].numpy()
+    np.testing.assert_array_equal(visited, [1, 0, 0, 0, 0, 0, 0])
+    np.testing.assert_array_equal(obs.features[obs.current_index, 19:], [1, 0, 0, 0, 0, 0, 0, 0])
+    assert obs.features.shape[1] == 27 and packed.action_features.shape[1] == 7
+
+
+def test_optical_history_reprojects_when_mount_configuration_changes():
+    from lunar_drl_exploration.batch import pack_observations
+    from lunar_drl_exploration.contracts import Pose, SensorSpec
+    from lunar_drl_exploration.decision import DecisionCore
+    from test_task_analysis import snapshot, task
+
+    core = DecisionCore(task(0, 0, 8, 8), SensorSpec(range_m=3))
+    core.record_observation(Pose(3.5, 3.5, np.pi / 2), [[1, 2]])
+    # Optical-world pi/2 remains observed after the sensor mounting changes.
+    core.sensor = replace(core.sensor, offset_yaw_rad=np.pi / 2)
+    core.analyzer.sensor = core.sensor
+    m = np.zeros((8, 8), np.uint8); m[2:5, 2:5] = 1
+    obs, _ = core.observe(snapshot(m, pose=Pose(3.5, 3.5, np.pi)))
+    visited = pack_observations([obs], 'cpu').action_features[obs.action_nodes == obs.current_index, 6]
+    np.testing.assert_array_equal(visited.numpy(), [1, 0, 0, 0, 0, 0, 0])
+    np.testing.assert_array_equal(core.history.bits([[3.5, 3.5]])[0], [0, 0, 1, 0, 0, 0, 0, 0])

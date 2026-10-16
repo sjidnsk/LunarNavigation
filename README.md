@@ -4,9 +4,20 @@
 
 104 实机非 TCP 对齐配置见 [Orin 静态 TF 与导航配置](docs/STATIC_TF_INPUT.md)，源码范围与分层验证见 [104/216 对齐记录](docs/ORIN_NON_TCP_ALIGNMENT.md)。实机启动脚本仅启动导航，不启动控制器。
 
+强化学习统一开发整合线为 `dev/drl-exploration`，下设功能、修复、测试和文档专项分支；分支层级、当前算法及运行命令见[强化学习开发入口](docs/DRL开发入口.md)。
+
 本次主线导入及 30 秒默认等待超时的验证见[集成记录](docs/集成地图探索规划控制修改.md)。下文历史 demo 数据保留其当时参数。
 
 新增独立 Jazzy [复杂地形完整探索 demo](docs/复杂地形完整探索demo.md)：300 m 复杂地形、全局 1 m / 局部 0.2 m、正式探索规划控制、默认 30 倍可调仿真时钟。[简单控制闭环 demo](docs/增量规划控制闭环demo.md)及旧演示保留。
+
+新增独立 [DRL 稀疏图探索实现与验证](docs/validation/2026-09-15-drl-exploration-redesign-implementation.md)：
+8 个原生导航/公共控制器/轻量运动学环境、CPU 图 Actor、单 GPU SAC、有限回放与断点恢复。
+在 `dev/drl-exploration` 的 `drl-exploration-redesign` 工作树使用 `scripts/drl/build.sh`，再按
+[操作指令的 DRL 章节](docs/操作指令.md#drl-稀疏图探索独立-redesign-分支)开训、恢复、评估、导出和挂接推理。
+默认预热 1024、有效 batch 64、30 倍目标、0.2 m/s；已测短程 GPU 闭环不代表训练收敛或 Orin/实车就绪。
+2026-09-19 已接入[路径尺度决策图与候选对应 Critic](docs/validation/2026-09-19-drl-graph-critic-implementation.md)。
+后续采用[净空优先基础选点与单线C=0训练基线](docs/validation/2026-09-19-drl-clearance-baseline.md)，入口为 `scripts/drl/baseline.sh`。
+新输出目录为 `training-output/drl-metric-critic/`（固定小场景为 `drl-metric-critic-small/`），旧完整检查点不兼容，旧产物保留。
 
 `lunar_pure_planner_ros` 是独立的普通 ROS 2 节点，不使用 Lifecycle manager，也不启动旧规划器。
 
@@ -598,18 +609,6 @@ Action Result 不提供分阶段耗时或调用次数；不能把其中的 `elap
 `e93a4685ed4cebbe06bc2983b6ea3e03159554c5`；core+ROS、pure tests 和完整 foundation 均通过。
 真实 bag、月表全局输入、生产 ROS domain 原子切换与 Jetson AGX Orin 仍受下表边界约束。
 
-## 当前证据边界
-
-| key | status | 边界 |
-| --- | --- | --- |
-| `bag_metadata` | `SEARCHED_ZERO_CANDIDATES` | 已搜索 `/home/kai`（maxdepth 8）下的 `metadata.yaml`，候选数为 0。 |
-| `real_bag_replay` | `NOT_RUN_REAL_BAG_NOT_LOCATED` | metadata 搜索已完成且候选数为 0；没有候选可执行 `ros2 bag info`，也未回放任何真实 bag。 |
-| `lava_tube_replay` | `NOT_RUN_REAL_BAG_NOT_LOCATED` | 未定位真实 bag，未执行 `ros2 bag info` 或回放，不能声明 `LAVA_TUBE` 已验证。 |
-| `lunar_surface_e2e` | `NOT_RUN_MISSING_GLOBAL_INPUT` | 缺少真实 `/Car/T3/mapping/global_overview` producer 或包含该 Topic 的 bag，不能证明 `LUNAR_SURFACE` 全局加局部端到端成功。 |
-| `global_producer` | `NOT_RUN` | 未完成真实 producer 集成。 |
-| `jetson_agx` | `NOT_RUN` | 未执行 Jetson AGX Orin 原生构建、性能、功耗或稳定性验收。 |
-| `historical_missing_global_bag` | `HISTORICAL_SUBSET_ONLY` | 历史记录中的 bag 缺少 `/Car/T3/mapping/global_overview`，仅可作为 `LAVA_TUBE` 局部输入子集；本轮未找到其 metadata，未实际回放。 |
-| `synthetic_global` | `FORBIDDEN` | 禁止生成或使用假全局图；不得用合成、零填充或局部图替代真实 `/Car/T3/mapping/global_overview`；月表验收仍需实机在线全局总览，或重新录制并核验包含该 Topic 的 rosbag。 |
 
 ## 移动中滚动局部规划（隔离轮式闭环）
 
@@ -654,3 +653,16 @@ ros2 run lunar_incremental_controller_demo run_case --case rolling_straight \
 本部署分支的移动中持续规划配置、移植差异与验证结果见 [部署同步记录](docs/validation/2026-09-23-rolling-deployment-sync.md)。
 
 足式 `incremental_reference` 默认持续规划（0.5 s / 1 m），两端开关与验证边界见 [足式默认开启验证](docs/validation/2026-09-23-legged-rolling-default.md)。
+
+## 当前证据边界
+
+| key | status | 边界 |
+| --- | --- | --- |
+| `bag_metadata` | `SEARCHED_ZERO_CANDIDATES` | 已搜索 `/home/kai`（maxdepth 8）下的 `metadata.yaml`，候选数为 0。 |
+| `real_bag_replay` | `NOT_RUN_REAL_BAG_NOT_LOCATED` | metadata 搜索已完成且候选数为 0；没有候选可执行 `ros2 bag info`，也未回放任何真实 bag。 |
+| `lava_tube_replay` | `NOT_RUN_REAL_BAG_NOT_LOCATED` | 未定位真实 bag，未执行 `ros2 bag info` 或回放，不能声明 `LAVA_TUBE` 已验证。 |
+| `lunar_surface_e2e` | `NOT_RUN_MISSING_GLOBAL_INPUT` | 缺少真实 `/Car/T3/mapping/global_overview` producer 或包含该 Topic 的 bag，不能证明 `LUNAR_SURFACE` 全局加局部端到端成功。 |
+| `global_producer` | `NOT_RUN` | 未完成真实 producer 集成。 |
+| `jetson_agx` | `NOT_RUN` | 未执行 Jetson AGX Orin 原生构建、性能、功耗或稳定性验收。 |
+| `historical_missing_global_bag` | `HISTORICAL_SUBSET_ONLY` | 历史记录中的 bag 缺少 `/Car/T3/mapping/global_overview`，仅可作为 `LAVA_TUBE` 局部输入子集；本轮未找到其 metadata，未实际回放。 |
+| `synthetic_global` | `FORBIDDEN` | 禁止生成或使用假全局图；不得用合成、零填充或局部图替代真实 `/Car/T3/mapping/global_overview`；月表验收仍需实机在线全局总览，或重新录制并核验包含该 Topic 的 rosbag。 |

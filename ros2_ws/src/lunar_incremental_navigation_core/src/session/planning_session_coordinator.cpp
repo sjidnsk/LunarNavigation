@@ -32,10 +32,9 @@ namespace {
 }
 
 [[nodiscard]] double GoalPositionTolerance(
-    const FineTraversabilitySnapshot& fine,
+    const FineTraversabilitySnapshot&,
     const double profile_tolerance_m) noexcept {
-  return std::max(0.5 * fine.geometry().resolution_m(),
-                  profile_tolerance_m);
+  return profile_tolerance_m;
 }
 
 [[nodiscard]] SessionState FeedbackState(

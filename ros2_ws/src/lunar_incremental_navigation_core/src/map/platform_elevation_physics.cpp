@@ -149,11 +149,93 @@ namespace {
   return std::isfinite(sum) ? sum : kLargestFinite;
 }
 
+}  // namespace
+
+[[nodiscard]] LocalTerrainMeasurements MeasureLocalTerrain(
+    const ElevationRangeView& elevation, const GridIndex center) {
+  if (const auto measured = elevation.TerrainMeasurementsAt(center)) {
+    return *measured;
+  }
+  const std::optional<ElevationRange> center_range =
+      elevation.ElevationRangeAt(center);
+  if (!center_range) {
+    return {};
+  }
+
+  const double center_mid =
+      0.5 * (static_cast<double>(center_range->min_m) +
+             static_cast<double>(center_range->max_m));
+  double minimum = center_range->min_m;
+  double maximum = center_range->max_m;
+  double maximum_slope = 0.0;
+  double maximum_positive_rise = 0.0;
+  bool complete = true;
+  const double resolution_m = elevation.geometry().resolution_m();
+  for (std::int64_t dy = -1; dy <= 1; ++dy) {
+    for (std::int64_t dx = -1; dx <= 1; ++dx) {
+      if (dx == 0 && dy == 0) {
+        continue;
+      }
+      const std::optional<GridIndex> neighbor_index =
+          detail::OffsetWithinGeometry(elevation.geometry(), center, dx, dy);
+      const std::optional<ElevationRange> neighbor =
+          neighbor_index ? elevation.ElevationRangeAt(*neighbor_index)
+                         : std::nullopt;
+      if (!neighbor_index || !neighbor) {
+        complete = false;
+        continue;
+      }
+      const double neighbor_mid =
+          0.5 * (static_cast<double>(neighbor->min_m) +
+                 static_cast<double>(neighbor->max_m));
+      const double planar_distance_m =
+          resolution_m * std::hypot(static_cast<double>(dx),
+                                    static_cast<double>(dy));
+      maximum_slope =
+          std::max(maximum_slope,
+                   std::atan2(std::abs(neighbor_mid - center_mid),
+                              planar_distance_m));
+      minimum = std::min(minimum, static_cast<double>(neighbor->min_m));
+      maximum = std::max(maximum, static_cast<double>(neighbor->max_m));
+      maximum_positive_rise = std::max(
+          maximum_positive_rise,
+          static_cast<double>(neighbor->max_m) - center_mid);
+    }
+  }
+  return LocalTerrainMeasurements{
+      .center_known = true,
+      .neighborhood_complete = complete,
+      .slope_rad = maximum_slope,
+      .relief_m = maximum - minimum,
+      .positive_rise_m = std::max(0.0, maximum_positive_rise),
+  };
+}
+
+namespace {
+
 template <typename Capability>
 IntrinsicTraversalEvaluation EvaluateTerrainPatch(
     const ElevationRangeView& elevation, GridIndex center,
     const Capability& capability, double half_width_m,
     map::TerrainObservationEstimator* shared_observations = nullptr) {
+  if (const auto measured = elevation.TerrainMeasurementsAt(center)) {
+    if (!measured->center_known) return {};
+    const double relief_limit = [&] {
+      if constexpr (std::is_same_v<Capability, LeggedCapability>)
+        return capability.maximum_step_height_m;
+      else return capability.maximum_local_obstacle_relief_m;
+    }();
+    bool blocked = measured->slope_rad > capability.maximum_slope_rad ||
+                   measured->relief_m > relief_limit;
+    if constexpr (std::is_same_v<Capability, WheeledCapability>)
+      blocked |= measured->positive_rise_m > capability.minimum_underbody_clearance_m;
+    return {.state = blocked ? IntrinsicCellState::kBlocked :
+                      (measured->neighborhood_complete ? IntrinsicCellState::kFree :
+                                                        IntrinsicCellState::kUnknown),
+            .slope_rad = measured->slope_rad,
+            .relief_m = measured->relief_m,
+            .confidence = blocked || measured->neighborhood_complete ? 1. : 0.};
+  }
   map::TerrainObservationEstimator local_observations(elevation);
   auto& observations = shared_observations ? *shared_observations : local_observations;
   constexpr bool legged = std::is_same_v<Capability, LeggedCapability>;
@@ -327,15 +409,20 @@ struct FineCellEvaluator::Impl final {
 
   Impl(const ElevationRangeView& elevation_value,
        PlatformCapability capability_value,
-       TraversabilityProfile profile_value)
+       TraversabilityProfile profile_value,
+       std::unique_ptr<const PlatformElevationEvaluator> intrinsic,
+       bool use_observations = false)
       : elevation(elevation_value),
         capability(std::move(capability_value)),
         profile(std::move(profile_value)),
         observations(elevation),
-        intrinsic_evaluator(MakeEvaluatorWithObservations(
-            capability, profile.terrain_background_half_width_m, &observations)),
+        intrinsic_evaluator(use_observations ?
+            MakeEvaluatorWithObservations(
+                capability, profile.terrain_background_half_width_m, &observations) :
+            std::move(intrinsic)),
         hard_radius_m(CircumscribedRadius(profile.planar_envelope_xy_m)) {
-    if (!FiniteNonnegative(profile.preferred_clearance_m) ||
+    if (!intrinsic_evaluator ||
+        !FiniteNonnegative(profile.preferred_clearance_m) ||
         !FiniteNonnegative(profile.slope_weight) ||
         !FiniteNonnegative(profile.relief_weight) ||
         !FiniteNonnegative(profile.clearance_weight) ||
@@ -499,7 +586,15 @@ FineCellEvaluator::FineCellEvaluator(
     const ElevationRangeView& elevation,
     const PlatformCapability& capability,
     const TraversabilityProfile& profile)
-    : impl_(std::make_unique<Impl>(elevation, capability, profile)) {}
+    : impl_(std::make_unique<Impl>(elevation, capability, profile, nullptr, true)) {}
+
+FineCellEvaluator::FineCellEvaluator(
+    const ElevationRangeView& elevation,
+    const PlatformCapability& capability,
+    const TraversabilityProfile& profile,
+    std::unique_ptr<const PlatformElevationEvaluator> intrinsic)
+    : impl_(std::make_unique<Impl>(elevation, capability, profile,
+                                   std::move(intrinsic))) {}
 
 FineCellEvaluator::~FineCellEvaluator() = default;
 FineCellEvaluator::FineCellEvaluator(FineCellEvaluator&&) noexcept = default;

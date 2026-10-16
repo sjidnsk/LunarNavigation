@@ -868,3 +868,71 @@ def test_legged_rolling_default_and_opt_out(enabled):
         if controller is not None:
             controller.destroy_node()
         rclpy.shutdown()
+
+
+def test_node_stop_resets_emitted_command_history(controller_with_observer):
+    controller, _, _, _ = controller_with_observer
+    controller._publish_twist(.15, .1)
+    assert controller._executor._last_linear_command == .15
+    assert controller._executor._last_angular_command == .1
+    controller._tick()
+    assert controller._executor._last_linear_command == 0.
+    assert controller._executor._last_angular_command == 0.
+
+
+def test_lateral_odometry_motion_prevents_terminal_feedback(monkeypatch):
+    from types import SimpleNamespace
+    from lunar_planning_msgs.msg import PathReference, TrackingStatus
+    rclpy.init(args=["--ros-args", "-p", "input_mode:=incremental_reference",
+                     "-p", "command_topic:=/lunar_demo/controller_test/cmd"])
+    controller = PureWheeledControllerNode()
+    messages = []
+    monkeypatch.setattr(controller, "_tracking_status", SimpleNamespace(publish=messages.append))
+    try:
+        reference = PathReference()
+        reference.session_id.uuid = [8] * 16
+        reference.segment_revision = 1
+        reference.reaches_final_goal = True
+        reference.path = make_path(frame_id="map", points=[(0., 0., 0.), (1., 0., 0.)])
+        controller._on_path_reference(reference)
+        controller._on_tf(make_direct_map_from_odom())
+        odometry = make_odometry(x=1.)
+        odometry.twist.twist.linear.y = .2
+        controller._on_odometry(odometry)
+        controller._tick()
+        assert messages[-1].state == TrackingStatus.BRAKING
+        controller._on_odometry(make_odometry(x=1.))
+        controller._last_control_ns = None
+        controller._tick()
+        assert messages[-1].state == TrackingStatus.COMPLETED
+    finally:
+        controller.destroy_node()
+        rclpy.shutdown()
+
+
+@pytest.mark.parametrize("mode,enabled", [
+    ("motion_reference", True), ("motion_reference", False),
+    ("incremental_path", True), ("incremental_path", False),
+    ("incremental_reference", True), ("incremental_reference", False),
+])
+def test_rolling_updates_only_apply_to_versioned_references(mode, enabled):
+    from lunar_pure_wheeled_controller.tracking import TrackingState
+    args = ["--ros-args", "-p", f"input_mode:={mode}",
+            "-p", "command_topic:=/lunar_demo/controller_test/cmd"]
+    if not enabled:
+        args += ["-p", "enable_rolling_updates:=false"]
+    rclpy.init(args=args)
+    controller = None
+    try:
+        controller = PureWheeledControllerNode()
+        assert controller._executor.rolling_updates is (enabled and mode == "incremental_reference")
+        executor = controller._executor
+        executor.set_path(((0., 0., 0.), (3., 0., 0.)), identity=("session", 1), final=False)
+        executor.update(TrackingState(0., 0., 0.), .05)
+        executor.set_path(((0., 0., 0.), (4., 0., 0.)), identity=("session", 2), final=False)
+        result = executor.update(TrackingState(.1, 0., 0., linear_mps=.1), .05)
+        assert result.phase == ("TRACKING" if executor.rolling_updates else "BRAKING")
+    finally:
+        if controller is not None:
+            controller.destroy_node()
+        rclpy.shutdown()
