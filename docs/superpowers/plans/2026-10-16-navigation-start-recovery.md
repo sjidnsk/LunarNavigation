@@ -58,8 +58,8 @@ Files: controller execution tests/source only if necessary; DRL `ros_env.py` and
 
 ### 4. Review, preservation and boundary cutover
 
-- [ ] Review whole diff and run affected core/ROS/controller/DRL suites, sequential performance cases and source/boundary checks.
-- [ ] Stage frozen runtime, native libraries and manifest; certify new runtime in isolated ROS domains.
+- [x] Review whole diff and run affected core/ROS/controller/DRL suites, sequential performance cases and source/boundary checks.
+- [x] Stage frozen runtime, native libraries and manifest; certify new runtime in isolated ROS domains.
 - [ ] At naturally saved block-14 boundary verify checkpoint serialization and full replay count/hash; back up checkpoint and all identity/history records.
 - [ ] Adopt new runtime with unchanged config/checkpoint, audited historical epochs and same run/ClearML task.
 - [ ] Resume and prove sampled replay, incrementing updates, unchanged schedule continuity and active runtime hashes.
@@ -68,9 +68,9 @@ Files: controller execution tests/source only if necessary; DRL `ros_env.py` and
 ## Execution Ledger
 
 - Task 1 common commit `254c0237`; training port `0516b839`. Task 2 common `ff68191f` + deadline follow-up `3760ba19`; training ports `531af85c` / `3634b137`. DRL diagnostics and captured-statistics regression `612d3015`.
-- RED/GREEN evidence is stored outside Git in `/mnt/data/WS/lunar-navigation/analysis-artifacts/navigation-recovery-cutover-20261016/`. Common 19 CTest suites and final DRL 20 CTest suites pass. Final ROS 14 suites pass; identical controller source passes 154 tests. Failure diagnostics pass 67 targeted tests, plus 14 source/identity tests.
+- RED/GREEN evidence is stored outside Git in `/mnt/data/WS/lunar-navigation/analysis-artifacts/navigation-recovery-cutover-20261016/`. Common 19 CTest suites and final DRL 20 CTest suites pass. Final ROS 14 suites pass; identical controller source passes 154 tests. Reviewed failure diagnostics pass 68 targeted tests. The full final frozen DRL suite passes 1513 tests, with 2 skipped; the optimized-interpreter warning is retained in the log.
 - Five actual failed maps preserve all fine-map classifications and recover 17 native start connections each; all 20 tested goal plans succeed. Original four goal coordinates succeed after physically replaying the original two initialization spins. Six matched canceled poses, including the original approximately 0.145 m stopped location, produce real constructable inputs.
-- Final frozen Python package has 79 files: only `ros_env.py` and `ros_messages.py` differ from the previous deployed package, plus the new failure-only `navigation_failure.py`. No model/learner/sensor/reward/config source changes. Controller execution hashes are identical. Candidate runtime: `db923a3d24373e8f5d67a01901ae659c9b6997d40aa15993f2a5e8e69e6e47b1`.
+- Final frozen Python package has 79 files: only `ros_env.py` and `ros_messages.py` differ from the previous deployed package, plus the new failure-only `navigation_failure.py`. No model/learner/sensor/reward/config source changes. Controller execution hashes are identical. Reviewed candidate runtime: `8470d67be1e6e5fc2dfa7e0a3351017bff35b07c630a9bd40246ba34c83b09da`. The first candidate is retained separately as evidence, not modified in place.
 - Final frozen environment executes five actual Actor decisions each on moon and cave without infrastructure errors. Formal service still runs the old environment; no live launcher/config/checkpoint has been modified.
 
 Ruling: Keep the common regression independent of per-center terrain measurements — integration does not expose the DRL-only measurement API — the captured measurement fixture is additionally tested on the DRL development line; no DRL API is imported into common navigation.
@@ -86,3 +86,13 @@ Ruling: Increase only the regression runner stack to 64 MiB — an existing snap
 Ruling: Rerun socket/DDS tests with host access and isolated domains — sandbox networking denies the local IPC transport and ROS initialization — sandbox failures remain recorded and are not counted as algorithm failures or passes.
 
 Ruling: Establish a new explicit source manifest epoch for the intentional implementation change — the previous 78-file manifest correctly rejects modified files and the added diagnostic module — retain the old manifest in the cutover evidence and keep the active experiment identity authoritative until saved-boundary adoption.
+
+Final review: One independent whole-branch review found three Important issues and no Critical issues. All three entered one fix pass; no second reviewer was dispatched. The author regraded them as Important because they could prevent the promised cutover, prevent complete rollback, or lose current failure evidence.
+
+- Final: fixed string/integer process-birth comparison — ownership tests RED→GREEN, including dead and reused PID cases.
+- Final: fixed incomplete evaluation-move rollback — complete intent is persisted before moving anything; injected second-move failure and idempotent rollback tests RED→GREEN. Cutover safety suite: 6 passed.
+- Final: fixed post-result stop failure losing the current action result — session tokens bind captured result and execution context to the current attempt, including failed-begin isolation; targeted diagnostics suite: 68 passed. Product commit `f5fa4023`.
+
+Ruling: Repair only the signal-test fixture handshake — production `PYTHONOPTIMIZE=1` strips blocking I/O hidden inside the spawned fixture's asserts, reproducing the same failure on the old frozen runtime — explicit waits fix all 15 signal-boundary cases without changing training code. If this ruling were wrong, a production atomic-update issue could be masked; the unchanged old runtime passing the corrected real-signal cases and exact schedule/learner/replay checks distinguish that risk.
+
+Ruling: Keep old experiment identity authoritative until activation — the reviewed candidate has its own frozen source epoch, launcher and binary hashes — a mistaken identity transition could invalidate old evaluations; immutable historical epochs and full-file hashes are required at adoption.
