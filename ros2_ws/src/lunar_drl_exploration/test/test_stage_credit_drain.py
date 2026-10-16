@@ -178,8 +178,13 @@ def signal_boundary_child(record, boundary, handshake):
         if boundary == where and not fired:
             fired = True
             handshake.send(dict(boundary=where, accounted=accounted))
-            assert handshake.poll(20), 'parent must release signal boundary'
-            assert handshake.recv() == 'release'
+            # Spawned fixtures also run with production PYTHONOPTIMIZE=1.
+            # Blocking protocol operations cannot live inside stripped asserts.
+            if not handshake.poll(20):
+                raise AssertionError('parent must release signal boundary')
+            release = handshake.recv()
+            if release != 'release':
+                raise AssertionError('unexpected signal boundary release')
     original_update = SACLearner.update
     original_updated = UpdateSchedule.updated
     original_send, original_recv, original_poll = Duplex.send, Duplex.recv, Duplex.poll
