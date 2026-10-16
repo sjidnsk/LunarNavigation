@@ -177,6 +177,129 @@ TEST_P(ReachableLocalGoals, CurrentPoseAloneNeverBecomesNewSuccessfulGoal) {
   EXPECT_TRUE(result.path.empty());
 }
 
+TEST_P(ReachableLocalGoals, KnownWallCannotProjectBackwardsOntoFutureReturnLeg) {
+  // A route goes down around a wall outside the local window, then returns
+  // on its other side. The upper left exit is close only through that wall.
+  std::vector<FineCellState> cells(kWidth * kHeight, FineCellState::kFree);
+  for (int y = 0; y < 8; ++y) cells[Offset({6, y})] = FineCellState::kBlocked;
+  auto fixture = MakeFixture(cells);
+  const SparseGridGeometry window("map", 1., {}, {0, 0}, {8, 8});
+  const Pose2 start = PoseAt({1, 3}, std::numbers::pi / 2.);
+  fixture.view = std::make_shared<const RequestLocalPlanningView>(
+      fixture.fine, window, start, 3., std::vector<LocalCellOverride>{});
+  GlobalRoute route;
+  for (Point2 p : {Point2{1.5, 3.5}, Point2{4.5, 8.5},
+                  Point2{8.5, 8.5}, Point2{8.5, 1.5}})
+    route.poses_map.push_back({.position_m = {p.x, p.y, 0.}});
+  const auto target = Rolling(fixture, start.position_m,
+      FinalGoal{.target_x_m = 8.5, .target_y_m = 1.5}, route);
+  ASSERT_TRUE(target);
+  ASSERT_TRUE(target->region);
+  EXPECT_EQ(target->region->At({5, 0}), nullptr)
+      << "The exit behind the robot must not borrow a route across the wall";
+  const auto result = RunPlatform(fixture, start, *target, GetParam());
+  ASSERT_EQ(result.status, LocalPlanResult::Status::kPlanFound);
+  ASSERT_FALSE(result.path.empty());
+  EXPECT_DOUBLE_EQ(result.path.back().pose.position_m.y, 7.5);
+}
+
+TEST_P(ReachableLocalGoals, ReturnLegInsideWindowCannotConnectThroughWall) {
+  std::vector<FineCellState> cells(kWidth * kHeight, FineCellState::kFree);
+  for (int y = 0; y < 8; ++y) cells[Offset({6, y})] = FineCellState::kBlocked;
+  auto fixture = MakeFixture(cells);
+  const SparseGridGeometry window("map", 1., {}, {0, 0}, {10, 8});
+  const Pose2 start = PoseAt({1, 3}, std::numbers::pi / 2.);
+  fixture.view = std::make_shared<const RequestLocalPlanningView>(
+      fixture.fine, window, start, 3., std::vector<LocalCellOverride>{});
+  GlobalRoute route;
+  for (Point2 p : {Point2{1.5, 3.5}, Point2{4.5, 8.5},
+                  Point2{8.5, 8.5}, Point2{8.5, 1.5}, Point2{10.5, 1.5}})
+    route.poses_map.push_back({.position_m = {p.x, p.y, 0.}});
+  const auto target = Rolling(fixture, start.position_m,
+      FinalGoal{.target_x_m = 10.5, .target_y_m = 1.5}, route);
+  ASSERT_TRUE(target);
+  EXPECT_EQ(target->region->At({5, 0}), nullptr);
+  const auto result = RunPlatform(fixture, start, *target, GetParam());
+  ASSERT_EQ(result.status, LocalPlanResult::Status::kPlanFound);
+  ASSERT_FALSE(result.path.empty());
+  EXPECT_DOUBLE_EQ(result.path.back().pose.position_m.y, 7.5);
+}
+
+TEST_P(ReachableLocalGoals, VisibleShortcutDoesNotForceFollowingEveryRouteCorner) {
+  auto fixture = MakeFixture();
+  const Pose2 start = PoseAt({2, 4});
+  const SparseGridGeometry window("map", 1., {}, {0, 0}, {11, 9});
+  fixture.view = std::make_shared<const RequestLocalPlanningView>(
+      fixture.fine, window, start, 3., std::vector<LocalCellOverride>{});
+  GlobalRoute route;
+  for (Point2 p : {Point2{2.5, 4.5}, Point2{2.5, .5},
+                  Point2{10.5, .5}, Point2{14.5, 4.5}})
+    route.poses_map.push_back({.position_m = {p.x, p.y, 0.}});
+  const auto target = Rolling(fixture, start.position_m,
+      FinalGoal{.target_x_m = 14.5, .target_y_m = 4.5}, route);
+  ASSERT_TRUE(target);
+  const auto result = RunPlatform(fixture, start, *target, GetParam());
+  ASSERT_EQ(result.status, LocalPlanResult::Status::kPlanFound);
+  ASSERT_FALSE(result.path.empty());
+  EXPECT_DOUBLE_EQ(result.path.back().pose.position_m.x, 10.5);
+  double distance = 0.;
+  for (std::size_t i = 1; i < result.path.size(); ++i) {
+    const auto& a = result.path[i-1].pose.position_m;
+    const auto& b = result.path[i].pose.position_m;
+    distance += std::hypot(b.x-a.x, b.y-a.y);
+  }
+  EXPECT_LT(distance, 12.) << "Open space should not follow the long three-side detour";
+}
+
+TEST(ReachableLocalGoalRegion, TargetConstructionObservesCancellationAndExpiry) {
+  const auto fixture = MakeFixture();
+  const auto start = PoseAt({2, 4});
+  const FinalGoal goal{.target_x_m = 14.5, .target_y_m = 4.5};
+  std::stop_source stop;
+  stop.request_stop();
+  EXPECT_FALSE(LocalTargetSelector().SelectRolling(*fixture.fine,
+      fixture.view->geometry(), start.position_m, goal, {},
+      SearchControl{.stop_token = stop.get_token()}));
+  EXPECT_FALSE(LocalTargetSelector().SelectRolling(*fixture.fine,
+      fixture.view->geometry(), start.position_m, goal, {},
+      SearchControl{.deadline = SteadyClock::time_point{}}));
+  // Expire during construction, after the initial check has passed.
+  std::size_t reads = 0;
+  const auto deadline = SteadyClock::time_point(std::chrono::seconds(1));
+  EXPECT_FALSE(LocalTargetSelector().SelectRolling(*fixture.fine,
+      fixture.view->geometry(), start.position_m, goal, {},
+      SearchControl{.deadline = deadline, .now = [&] {
+        return ++reads > 3 ? deadline : SteadyClock::time_point{};
+      }}));
+  EXPECT_GT(reads, 3U);
+}
+
+TEST(ReachableLocalGoalRegion, VisibleForwardEndpointRetainsAndPricesLegalShortcut) {
+  // A blocked perpendicular foot must not remove a boundary candidate that
+  // can see the forward end. In open space the same endpoint also gives a
+  // shorter connection + tail cost than connecting at the perpendicular foot.
+  for (const bool occlude_projection : {false, true}) {
+    SCOPED_TRACE(occlude_projection);
+    std::vector<FineCellState> cells(kWidth * kHeight, FineCellState::kFree);
+    if (occlude_projection) cells[Offset({5, 3})] = FineCellState::kBlocked;
+    const auto fixture = MakeFixture(cells);
+    const SparseGridGeometry window("map", 1., {}, {0, 0}, {11, 6});
+    GlobalRoute route;
+    for (const Point2 p : {Point2{.5, .5}, Point2{14.5, .5}}) {
+      route.poses_map.push_back({.position_m = {p.x, p.y, 0.}});
+    }
+    const auto target = LocalTargetSelector().SelectRolling(
+        *fixture.fine, window, {.5, .5},
+        FinalGoal{.target_x_m = 14.5, .target_y_m = .5}, route);
+    ASSERT_TRUE(target);
+    const auto* candidate = target->region->At({5, 5});
+    ASSERT_NE(candidate, nullptr);
+    const double connection_and_tail = std::hypot(11. - 5.5, .5 - 5.5) + 3.5;
+    EXPECT_NEAR(candidate->remaining_cost,
+                2. * connection_and_tail + std::hypot(11., 6.), 1.e-9);
+  }
+}
+
 TEST_P(ReachableLocalGoals, FrontierDoesNotSlideSidewaysWithoutRouteProgress) {
   std::vector<FineCellState> cells(kWidth*kHeight,FineCellState::kUnknown);
   for (int y=0;y<int(kHeight);++y)

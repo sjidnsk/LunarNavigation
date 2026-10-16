@@ -122,6 +122,8 @@ install(
   FILES_MATCHING
     PATTERN "wheel.yaml"
     PATTERN "legged.yaml"
+    PATTERN "wheel_orin.yaml"
+    PATTERN "legged_orin.yaml"
     PATTERN "incremental_navigation_interfaces.yaml")
 install(
   DIRECTORY "${LUNAR_INCREMENTAL_NAVIGATION_LAUNCH_SOURCE_DIR}/"

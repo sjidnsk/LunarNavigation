@@ -153,8 +153,9 @@ template <typename Capability>
 IntrinsicTraversalEvaluation EvaluateTerrainPatch(
     const ElevationRangeView& elevation, GridIndex center,
     const Capability& capability, double half_width_m,
-    map::TerrainObservationEstimator* shared_observations = nullptr) {
-  map::TerrainObservationEstimator local_observations(elevation);
+    map::TerrainObservationEstimator* shared_observations = nullptr,
+    TerrainFitMethod fit_method = TerrainFitMethod::kBaseline) {
+  map::TerrainObservationEstimator local_observations(elevation, {.fit_method=fit_method});
   auto& observations = shared_observations ? *shared_observations : local_observations;
   constexpr bool legged = std::is_same_v<Capability, LeggedCapability>;
   auto patch = map::MeasureTerrainPatch(elevation, center, half_width_m, observations);
@@ -229,8 +230,9 @@ IntrinsicTraversalEvaluation EvaluateTerrainPatch(
 class WheelElevationEvaluator final : public PlatformElevationEvaluator {
  public:
   explicit WheelElevationEvaluator(WheeledCapability capability, double half_width_m,
-                                   map::TerrainObservationEstimator* observations = nullptr)
-      : capability_(std::move(capability)), half_width_m_(half_width_m), observations_(observations) {
+                                   map::TerrainObservationEstimator* observations = nullptr,
+                                   TerrainFitMethod fit_method = TerrainFitMethod::kBaseline)
+      : capability_(std::move(capability)), half_width_m_(half_width_m), observations_(observations), fit_method_(fit_method) {
     if (!FiniteNonnegative(capability_.maximum_slope_rad) ||
         !FiniteNonnegative(capability_.maximum_local_obstacle_relief_m) ||
         !FiniteNonnegative(capability_.minimum_underbody_clearance_m)) {
@@ -242,20 +244,22 @@ class WheelElevationEvaluator final : public PlatformElevationEvaluator {
   [[nodiscard]] IntrinsicTraversalEvaluation Evaluate(
       const ElevationRangeView& elevation,
       const GridIndex index) const override {
-    return EvaluateTerrainPatch(elevation, index, capability_, half_width_m_, observations_);
+    return EvaluateTerrainPatch(elevation, index, capability_, half_width_m_, observations_, fit_method_);
   }
 
  private:
   WheeledCapability capability_;
   double half_width_m_{};
   map::TerrainObservationEstimator* observations_{};
+  TerrainFitMethod fit_method_{TerrainFitMethod::kBaseline};
 };
 
 class LeggedElevationEvaluator final : public PlatformElevationEvaluator {
  public:
   explicit LeggedElevationEvaluator(LeggedCapability capability, double half_width_m,
-                                   map::TerrainObservationEstimator* observations = nullptr)
-      : capability_(std::move(capability)), half_width_m_(half_width_m), observations_(observations) {
+                                   map::TerrainObservationEstimator* observations = nullptr,
+                                   TerrainFitMethod fit_method = TerrainFitMethod::kBaseline)
+      : capability_(std::move(capability)), half_width_m_(half_width_m), observations_(observations), fit_method_(fit_method) {
     if (!FiniteNonnegative(capability_.maximum_slope_rad) ||
         !FiniteNonnegative(capability_.maximum_step_height_m) ||
         !FiniteNonnegative(capability_.maximum_gap_width_m)) {
@@ -267,13 +271,14 @@ class LeggedElevationEvaluator final : public PlatformElevationEvaluator {
   [[nodiscard]] IntrinsicTraversalEvaluation Evaluate(
       const ElevationRangeView& elevation,
       const GridIndex index) const override {
-    return EvaluateTerrainPatch(elevation, index, capability_, half_width_m_, observations_);
+    return EvaluateTerrainPatch(elevation, index, capability_, half_width_m_, observations_, fit_method_);
   }
 
  private:
   LeggedCapability capability_;
   double half_width_m_{};
   map::TerrainObservationEstimator* observations_{};
+  TerrainFitMethod fit_method_{TerrainFitMethod::kBaseline};
 };
 
 }  // namespace
@@ -286,19 +291,20 @@ namespace {
 std::unique_ptr<const PlatformElevationEvaluator>
 MakeEvaluatorWithObservations(const PlatformCapability& capability,
                                const double background_half_width_m,
-                               map::TerrainObservationEstimator* observations) {
+                               map::TerrainObservationEstimator* observations,
+                               TerrainFitMethod fit_method = TerrainFitMethod::kBaseline) {
   if (!FiniteNonnegative(background_half_width_m))
     throw std::invalid_argument("terrain background width must be finite and nonnegative");
   return std::visit(
-      [background_half_width_m, observations](const auto& typed_capability)
+      [background_half_width_m, observations, fit_method](const auto& typed_capability)
           -> std::unique_ptr<const PlatformElevationEvaluator> {
         using Capability = std::decay_t<decltype(typed_capability)>;
         if constexpr (std::is_same_v<Capability, WheeledCapability>) {
           return std::make_unique<const WheelElevationEvaluator>(
-              typed_capability, background_half_width_m, observations);
+              typed_capability, background_half_width_m, observations, fit_method);
         } else if constexpr (std::is_same_v<Capability, LeggedCapability>) {
           return std::make_unique<const LeggedElevationEvaluator>(
-              typed_capability, background_half_width_m, observations);
+              typed_capability, background_half_width_m, observations, fit_method);
         } else {
           throw std::invalid_argument(
               "fine traversability supports wheel or legged capability");
@@ -310,8 +316,9 @@ MakeEvaluatorWithObservations(const PlatformCapability& capability,
 }  // namespace
 
 std::unique_ptr<const PlatformElevationEvaluator>
-MakePlatformElevationEvaluator(const PlatformCapability& capability, double half_width_m) {
-  return MakeEvaluatorWithObservations(capability, half_width_m, nullptr);
+MakePlatformElevationEvaluator(const PlatformCapability& capability, double half_width_m,
+                               TerrainFitMethod fit_method) {
+  return MakeEvaluatorWithObservations(capability, half_width_m, nullptr, fit_method);
 }
 
 struct FineCellEvaluator::Impl final {
@@ -327,15 +334,20 @@ struct FineCellEvaluator::Impl final {
 
   Impl(const ElevationRangeView& elevation_value,
        PlatformCapability capability_value,
-       TraversabilityProfile profile_value)
+       TraversabilityProfile profile_value,
+       std::unique_ptr<const PlatformElevationEvaluator> intrinsic,
+       bool use_observations = false)
       : elevation(elevation_value),
         capability(std::move(capability_value)),
         profile(std::move(profile_value)),
         observations(elevation, {.fit_method=profile.terrain_fit_method}),
-        intrinsic_evaluator(MakeEvaluatorWithObservations(
-            capability, profile.terrain_background_half_width_m, &observations)),
+        intrinsic_evaluator(use_observations
+            ? MakeEvaluatorWithObservations(
+                capability, profile.terrain_background_half_width_m, &observations)
+            : std::move(intrinsic)),
         hard_radius_m(CircumscribedRadius(profile.planar_envelope_xy_m)) {
-    if (!FiniteNonnegative(profile.preferred_clearance_m) ||
+    if (!intrinsic_evaluator ||
+        !FiniteNonnegative(profile.preferred_clearance_m) ||
         !FiniteNonnegative(profile.slope_weight) ||
         !FiniteNonnegative(profile.relief_weight) ||
         !FiniteNonnegative(profile.clearance_weight) ||
@@ -499,7 +511,15 @@ FineCellEvaluator::FineCellEvaluator(
     const ElevationRangeView& elevation,
     const PlatformCapability& capability,
     const TraversabilityProfile& profile)
-    : impl_(std::make_unique<Impl>(elevation, capability, profile)) {}
+    : impl_(std::make_unique<Impl>(elevation, capability, profile, nullptr, true)) {}
+
+FineCellEvaluator::FineCellEvaluator(
+    const ElevationRangeView& elevation,
+    const PlatformCapability& capability,
+    const TraversabilityProfile& profile,
+    std::unique_ptr<const PlatformElevationEvaluator> intrinsic)
+    : impl_(std::make_unique<Impl>(elevation, capability, profile,
+                                   std::move(intrinsic))) {}
 
 FineCellEvaluator::~FineCellEvaluator() = default;
 FineCellEvaluator::FineCellEvaluator(FineCellEvaluator&&) noexcept = default;

@@ -47,13 +47,21 @@ class PlatformElevationEvaluator {
 
 [[nodiscard]] std::unique_ptr<const PlatformElevationEvaluator>
 MakePlatformElevationEvaluator(const PlatformCapability& capability,
-                               double background_half_width_m = 0.0);
+                               double background_half_width_m = 0.0,
+                               TerrainFitMethod fit_method = TerrainFitMethod::kBaseline);
 
 class FineCellEvaluator final {
  public:
   FineCellEvaluator(const ElevationRangeView& elevation,
                     const PlatformCapability& capability,
                     const TraversabilityProfile& profile);
+  // Request-local classification can separate derivative samples from the
+  // bounded domain certified as movement support. Persistent maps use the
+  // ordinary evaluator through the three-argument constructor.
+  FineCellEvaluator(const ElevationRangeView& elevation,
+                    const PlatformCapability& capability,
+                    const TraversabilityProfile& profile,
+                    std::unique_ptr<const PlatformElevationEvaluator> intrinsic);
   ~FineCellEvaluator();
 
   FineCellEvaluator(const FineCellEvaluator&) = delete;

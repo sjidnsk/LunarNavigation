@@ -303,3 +303,33 @@ TEST(TerrainObservationEstimator, RejectedOutliersCannotProvideTwoDimensionalSup
     EXPECT_FALSE(estimator.Estimate({20,20})) << TerrainFitMethodName(method);
   }
 }
+
+TEST(TerrainObservationEstimator, FineAndInjectedEvaluatorsKeepSelectedCurvedGroundFit) {
+  GroundFixture f;
+  for (int y=0;y<41;++y) for (int x=0;x<41;++x)
+    f.heights[y*41+x]=.035f*std::sin(1.7*x)+.008f*std::cos(1.3*y);
+  auto raw=f.Snapshot();
+  WheeledCapability wheel; wheel.maximum_slope_rad=1.;
+  wheel.maximum_local_obstacle_relief_m=.5; wheel.minimum_underbody_clearance_m=.5;
+  TraversabilityProfile profile;
+  profile.planar_envelope_xy_m={{-.001,-.001},{.001,-.001},{.001,.001},{-.001,.001}};
+  profile.terrain_background_half_width_m=.2;
+  profile.slope_weight=1.; profile.confidence_weight=0.;
+  FineCellEvaluator baseline(*raw,wheel,profile);
+  const auto before=baseline.Evaluate({20,20});
+  profile.terrain_fit_method=TerrainFitMethod::kMovingLeastSquares;
+  FineCellEvaluator selected(*raw,wheel,profile);
+  const auto after=selected.Evaluate({20,20});
+  ASSERT_EQ(before.state,FineCellState::kFree);
+  ASSERT_EQ(after.state,FineCellState::kFree);
+  EXPECT_GT(std::abs(before.traversal_cost-after.traversal_cost),1e-6);
+  TerrainObservationEstimator estimator(*raw,{.fit_method=profile.terrain_fit_method});
+  const auto ground=estimator.Estimate({20,20}); ASSERT_TRUE(ground);
+  ASSERT_TRUE(selected.GroundHeight({20,20}));
+  EXPECT_NEAR(*selected.GroundHeight({20,20}),ground->surface_height_m,1e-7);
+  const auto patch=MeasureTerrainPatch(*raw,{20,20},.2,estimator); ASSERT_TRUE(patch);
+  const auto injected=MakePlatformElevationEvaluator(wheel,.2,profile.terrain_fit_method);
+  const auto intrinsic=injected->Evaluate(*raw,{20,20});
+  EXPECT_NEAR(intrinsic.slope_rad,patch->refined_slope_rad,1e-12);
+  EXPECT_NEAR(after.traversal_cost,intrinsic.slope_rad*intrinsic.slope_rad,1e-12);
+}

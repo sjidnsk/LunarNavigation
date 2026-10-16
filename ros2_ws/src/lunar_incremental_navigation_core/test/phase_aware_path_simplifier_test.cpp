@@ -65,6 +65,89 @@ namespace {
   return PathPoint{.pose = {.position_m = {.x = x, .y = y}}, .phase = phase};
 }
 
+TEST(PhaseAwareSearch, FindsAlternativeToPrefixDiagonalGrazingEvidence) {
+  const auto fine = MakeFine({{{2, 1}, FineCellState::kFree},
+                              {{3, 1}, FineCellState::kFree},
+                              {{3, 2}, FineCellState::kFree}});
+  const RequestLocalPlanningView view(
+      fine, {.position_m = {1.5, 1.5}}, 3.0,
+      {{{1, 1}, LocalCellSource::kStartAssumedFree, 0.0},
+       {{1, 2}, LocalCellSource::kStartAssumedFree, 0.0},
+       {{2, 2}, LocalCellSource::kStartAssumedFree, 0.0}});
+  WheelLocalPlanner planner;
+  const auto result = planner.Plan(
+      view, {.position_m = {1.5, 1.5}},
+      {.center = {3.5, 2.5}, .is_final_goal = true},
+      SteadyClock::now() + std::chrono::seconds(2), {});
+  EXPECT_EQ(result.status, LocalPlanResult::Status::kPlanFound)
+      << result.reason_code;
+  EXPECT_FALSE(result.path.empty());
+}
+
+TEST(PhaseAwareSimplifier, ChecksShortPathsAndMonotonePhaseSwitch) {
+  const auto fine = MakeFine({{{2, 1}, FineCellState::kFree},
+                              {{4, 1}, FineCellState::kFree}});
+  const RequestLocalPlanningView view(
+      fine, {.position_m = {1.5, 1.5}}, 4.0,
+      {{{1, 1}, LocalCellSource::kStartAssumedFree, 0.0},
+       {{3, 1}, LocalCellSource::kStartAssumedFree, 0.0}});
+  const std::vector<PathPoint> reentry{
+      P(1.5, 1.5, StartPhase::kStartPrefix),
+      P(4.5, 1.5, StartPhase::kNormal)};
+  EXPECT_TRUE(SimplifyPhaseAwarePath(view, reentry).empty());
+  const std::vector<PathPoint> illegal_normal{
+      P(2.5, 1.5, StartPhase::kNormal),
+      P(4.5, 1.5, StartPhase::kNormal)};
+  EXPECT_TRUE(SimplifyPhaseAwarePath(view, illegal_normal).empty());
+  const std::vector<PathPoint> legal_switch{
+      P(1.5, 1.5, StartPhase::kStartPrefix),
+      P(2.5, 1.5, StartPhase::kNormal)};
+  EXPECT_EQ(SimplifyPhaseAwarePath(view, legal_switch).size(), 2U);
+}
+
+TEST(PhaseAwareMotion, CornerContactsAndActualStartShareOnePhaseRule) {
+  const auto fine = MakeFine({{{2, 1}, FineCellState::kFree},
+                              {{3, 1}, FineCellState::kFree},
+                              {{3, 2}, FineCellState::kFree}});
+  const RequestLocalPlanningView view(
+      fine, {.position_m = {1.5, 1.5}}, 3.0,
+      {{{1, 1}, LocalCellSource::kStartAssumedFree, 0.0},
+       {{1, 2}, LocalCellSource::kStartAssumedFree, 0.0},
+       {{2, 2}, LocalCellSource::kStartAssumedFree, 0.0}});
+  // A prefix-to-prefix diagonal touches measured space at the corner.
+  EXPECT_FALSE(view.AdvanceGridStep(StartPhase::kStartPrefix, {1, 1}, {2, 2}));
+  // Leaving the prefix is legal, but the reverse is never legal.
+  EXPECT_EQ(view.AdvanceGridStep(StartPhase::kStartPrefix, {1, 1}, {2, 1}),
+            StartPhase::kNormal);
+  EXPECT_FALSE(view.AdvanceGridStep(StartPhase::kNormal, {2, 1}, {1, 1}));
+  EXPECT_FALSE(view.CertifySegment({1.5, 1.5}, {3.5, 2.5},
+                                   StartPhase::kStartPrefix, StartPhase::kNormal));
+  // Moving the physical start within its cell changes the crossed cells.
+  EXPECT_TRUE(view.CertifySegment({1.1, 1.9}, {2.5, 2.5},
+                                  StartPhase::kStartPrefix, StartPhase::kStartPrefix));
+  EXPECT_FALSE(view.CertifySegment({1.9, 1.1}, {2.5, 2.5},
+                                   StartPhase::kStartPrefix, StartPhase::kStartPrefix));
+  const std::vector<PathPoint> crossing{
+      P(1.5, 1.5, StartPhase::kStartPrefix),
+      P(2.5, 1.5, StartPhase::kNormal),
+      P(2.5, 2.5, StartPhase::kStartPrefix)};
+  EXPECT_TRUE(SimplifyPhaseAwarePath(view, crossing).empty());
+}
+
+TEST(PhaseAwareSimplifier, ShortPathsHonorDeadlineDuringCertification) {
+  const auto fine = MakeFine({{{1, 1}, FineCellState::kFree},
+                              {{2, 1}, FineCellState::kFree}});
+  const RequestLocalPlanningView view(fine, {.position_m = {1.5, 1.5}}, 0., {});
+  const std::vector<PathPoint> raw{P(1.5, 1.5, StartPhase::kNormal),
+                                    P(2.5, 1.5, StartPhase::kNormal)};
+  const auto deadline = SteadyClock::time_point{} + std::chrono::seconds(1);
+  int checks = 0;
+  SearchControl control{.deadline = deadline, .now = [&] {
+    return ++checks == 1 ? SteadyClock::time_point{} : deadline;
+  }};
+  EXPECT_TRUE(SimplifyPhaseAwarePath(view, raw, control).empty());
+}
+
 // Captured failing terminal edges from the real planned outbound/return probe.
 // Only the four cells touching the terminal corner intersect these segments.
 TEST(GridSupercover, CapturedTerminalCornersDoNotTraversePastTheEndpoint) {

@@ -242,6 +242,30 @@ struct Plane final {
   return plane;
 }
 
+// The derivative halo supplies the classifier's 3x3 stencil. Outside the
+// bounded assumption domain, classify only actual measured terrain.
+class BoundedSupportEvaluator final : public PlatformElevationEvaluator {
+ public:
+  BoundedSupportEvaluator(const ElevationSnapshot& measured,
+                          const std::set<GridIndex>& assumptions,
+                          const PlatformCapability& capability,
+                          const TraversabilityProfile& profile)
+      : measured_(measured), assumptions_(assumptions),
+        evaluator_(MakePlatformElevationEvaluator(
+            capability, profile.terrain_background_half_width_m, profile.terrain_fit_method)) {}
+
+  IntrinsicTraversalEvaluation Evaluate(
+      const ElevationRangeView& support, GridIndex index) const override {
+    return evaluator_->Evaluate(assumptions_.contains(index) ? support : measured_,
+                                 index);
+  }
+
+ private:
+  const ElevationSnapshot& measured_;
+  const std::set<GridIndex>& assumptions_;
+  std::unique_ptr<const PlatformElevationEvaluator> evaluator_;
+};
+
 class PatchedElevationView final : public ElevationRangeView {
  public:
   PatchedElevationView(std::shared_ptr<const ElevationSnapshot> base,
@@ -383,9 +407,13 @@ StartPatchResult RequestLocalStartPatchBuilder::Build(
   if (!plane) {
     return {.status = StartPatchResult::Status::kUnresolved};
   }
-  const PatchedElevationView patched(fine->elevation(), patch_cells, *plane,
+  const auto derivative_support = WithOneCellRing(local_window, patch_cells);
+  const PatchedElevationView patched(fine->elevation(), derivative_support, *plane,
                                      p0.position_m);
-  FineCellEvaluator patched_evaluator(patched, capability, profile);
+  FineCellEvaluator patched_evaluator(
+      patched, capability, profile,
+      std::make_unique<BoundedSupportEvaluator>(*fine->elevation(), patch_cells,
+                                                 capability, profile));
 
   std::vector<LocalCellOverride> overrides;
   overrides.reserve(patch_cells.size());
