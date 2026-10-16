@@ -83,6 +83,7 @@ class PureWheeledControllerNode(Node):
         super().__init__("lunar_pure_wheeled_controller")
         defaults = {
             "input_mode": "motion_reference",
+            "enable_rolling_updates": True,
             "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
             "platform_config": "",
             "path_reference_topic": "/Car/T4/planning/path_reference",
@@ -162,7 +163,9 @@ class PureWheeledControllerNode(Node):
                     float(policy_values[key]), float(capability[source])
                 )
         self._policy = TrackingPolicy(**policy_values)
-        self._executor = PathExecutor(self._policy)
+        self._executor = PathExecutor(
+            self._policy, rolling_updates=(input_mode == "incremental_reference"
+                and self.get_parameter("enable_rolling_updates").value))
         self._reference_identity = None
         self._retired_sessions = deque(maxlen=64)
         self._invalidated_revision = -1
@@ -463,6 +466,7 @@ class PureWheeledControllerNode(Node):
         message.linear.x = linear
         message.angular.z = angular
         self._commands.publish(message)
+        self._executor.note_command(message.linear.x, message.angular.z)
 
     def destroy_node(self) -> bool:
         self._publish_twist()
