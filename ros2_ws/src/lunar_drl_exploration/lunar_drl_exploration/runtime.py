@@ -14,13 +14,15 @@ class ActorPolicy:
         from .model import Actor
         from .config import ModelConfig, canonical_model_config
         from .feature_schema import OBSERVATION_SCHEMA, require_frontier_semantics
-        if (record.get('schema') != OBSERVATION_SCHEMA or
+        if (record.get('schema') not in (OBSERVATION_SCHEMA, 'task_graph_v5') or
                 set(record) != {'schema', 'frontier_semantics', 'model_config', 'version', 'state_dict'}):
             raise ValueError(f'expected {OBSERVATION_SCHEMA} actor_state Actor-only artifact')
         require_frontier_semantics(record)
         if type(record['version']) is not int or record['version'] < 0:
             raise ValueError('Actor version must be a nonnegative completed-update integer')
         model_config = ModelConfig(**canonical_model_config(record['model_config']))
+        if record['schema'] != model_config.observation_schema:
+            raise ValueError('Actor schema does not match architecture_version')
         actor = Actor(model_config)
         try:
             actor.load_state_dict(record['state_dict'], strict=True)

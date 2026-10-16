@@ -297,6 +297,11 @@ def worker_rows(s, width, details=False, limit=None):
 def training_stats(s, width):
     p = s['progress']
     out = section('采集与学习',width)
+    spec=s['identity'].get('approach_reward')
+    if s['identity'].get('region_query_mode'):
+        out.append(('网络：任务区域条件查询 · additive_v1 · 基准模型零初始化迁移','accent'))
+    if spec:
+        out.append((f"有界距离辅助奖励 · 上限 {spec['bound']:g} · 尺度 {spec['scale_m']:g}m · 原奖励与辅助项分别记录",'accent'))
     if not p:
         return out+[('待开始 · block31 基线评测结束后启动 C3。' if s['identity'].get('sampling')=='scene_episode_v1' else
             '待开始 · 场景验收和 block31 基线评测结束后启动 C3。','dim')]
@@ -313,6 +318,14 @@ def training_stats(s, width):
         amount = total-s['identity'].get('baseline_transitions',total)
         out.append(('补采上限 '+progress_bar(amount,s['identity'].get('prefill_limit',4096)), 'accent'))
         out.append(('满足经验供给后可提前结束；本阶段零优化器更新。','dim'))
+    elif prefill_schedule and s['identity'].get('region_query_mode'):
+        start = s['state'].get('block_start_transitions', prefill_schedule['transitions'])
+        size = s['identity']['block_admissions']
+        out.append(('当前段采集 '+progress_bar(total-start,size),'accent'))
+        out.append(('本实验采集 '+progress_bar(total-prefill_schedule['transitions'],s['identity']['pilot_admissions']),'accent'))
+        out.append(('本实验更新 '+progress_bar(p.get('updates',0)-prefill_schedule['updates'],s['identity']['pilot_updates']),'accent'))
+        out.append((f"距下次评测剩余 {max(0,start+size-total):,} 条 · 每段固定 60 场景",'normal'))
+        out.append((f"继承基准更新 {prefill_schedule['updates']:,} 次 · 零更新补采 {prefill_schedule.get('prefill_transitions',0):,} 条",'dim'))
     elif prefill_schedule:
         out.append(('本段采集 '+progress_bar(total-prefill_schedule['transitions'],s['identity'].get('pilot_admissions',2048)), 'accent'))
         out.append(('本段更新 '+progress_bar(p.get('updates',0)-prefill_schedule['updates'],s['identity'].get('pilot_updates',512)), 'accent'))

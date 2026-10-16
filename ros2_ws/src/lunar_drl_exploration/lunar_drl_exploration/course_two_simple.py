@@ -11,21 +11,24 @@ SAMPLING='scene_episode_v1'
 
 
 class SimpleCourse(CourseTwo):
-    def __init__(self,state=None,success_coverage=.99):
-        self.stage='A1';self.phase=0;self.task='three_scenes';self.rehearsal=0.
-        self.success_coverage=success_coverage;self.weights=dict.fromkeys(TASKS,1/3)
-        self.active={};self.episodes={};self.by_task={t:dict.fromkeys(COUNTERS,0) for t in TASKS}
-        self.coverage_stats={t:dict(count=0,sum=0.,recent=[]) for t in TASKS}
-        self.phase_transitions=dict.fromkeys(TASKS,0);self.phase_samples=dict.fromkeys(TASKS,0)
+    def __init__(self,state=None,success_coverage=.99,tasks=TASKS,entry_mode=''):
+        self.tasks=tuple(tasks)
+        if self.tasks not in (TASKS,('moon_outside','cave_inside')):raise ValueError('invalid active scene tasks')
+        self.schema='three_scene_course_v1' if len(self.tasks)==3 else 'two_scene_course_v1'
+        self.stage='A1';self.phase=0;self.task='three_scenes' if len(self.tasks)==3 else 'two_scenes';self.rehearsal=0.
+        self.success_coverage=success_coverage;self.weights=dict.fromkeys(self.tasks,1/len(self.tasks))
+        self.active={};self.episodes={};self.by_task={t:dict.fromkeys(COUNTERS,0) for t in self.tasks}
+        self.coverage_stats={t:dict(count=0,sum=0.,recent=[]) for t in self.tasks}
+        self.phase_transitions=dict.fromkeys(self.tasks,0);self.phase_samples=dict.fromkeys(self.tasks,0)
         self.bootstrap_updates=0;self.missing_replay_tasks=[];self.last_sampling_weights={}
-        self.action_seconds=dict.fromkeys(TASKS,1.);self.supply_capacity=dict.fromkeys(TASKS,0)
-        self.scene_issued=dict.fromkeys(TASKS,0)
+        self.action_seconds=dict.fromkeys(self.tasks,1.);self.supply_capacity=dict.fromkeys(self.tasks,0)
+        self.scene_issued=dict.fromkeys(self.tasks,0)
         if state is not None:
-            if state.get('schema')!='three_scene_course_v1' or state.get('weights')!=self.weights:
+            if state.get('schema')!=self.schema or state.get('weights')!=self.weights:
                 raise ValueError('three-scene curriculum identity changed')
             for name in ('by_task','coverage_stats','phase_transitions','phase_samples','action_seconds','scene_issued'):
                 value=deepcopy(state[name])
-                if set(value)!=set(TASKS):raise ValueError('three-scene task identity changed')
+                if set(value)!=set(self.tasks):raise ValueError('three-scene task identity changed')
                 setattr(self,name,value)
             if any(not math.isfinite(v) or v<=0 for v in self.action_seconds.values()):
                 raise ValueError('invalid scene service time')
@@ -47,15 +50,44 @@ class SimpleCourse(CourseTwo):
                         not isinstance(recent,list) or len(recent)!=min(n,COVERAGE_WINDOW) or
                         any(type(v)not in (int,float) or not math.isfinite(v) or not 0<=v<=1 for v in recent)):
                     raise ValueError('invalid scene coverage counters')
+        self.entry=None
+        if entry_mode:
+            from .entry_curriculum import EntryCurriculum
+            if state is not None and 'entry_curriculum' not in state:
+                raise ValueError('missing formal entry curriculum state')
+            self.entry=EntryCurriculum(entry_mode,None if state is None else state['entry_curriculum'])
+            if self.entry.admissions!=self.phase_transitions['moon_outside']:
+                raise ValueError('entry curriculum admission counter changed')
+            if sum(v['count'] for v in self.entry.stats.values())>self.by_task['moon_outside']['ended']:
+                raise ValueError('entry statistics exceed ended moon episodes')
+        elif state is not None and 'entry_curriculum' in state:
+            raise ValueError('entry curriculum mode changed')
+
+    def bind_entry_spec(self,env,spec):
+        if self.entry is None or spec['curriculum_task']!='moon_outside':return
+        from .entry_curriculum import STAGES
+        bounds=(spec.get('outside_distance_min_m'),spec.get('outside_distance_max_m'))
+        stage=next((i for i,s in enumerate(STAGES) if bounds==s[:2]),None)
+        if stage is None and bounds!=(10.,50.):raise ValueError('unknown formal entry start range')
+        self.episodes[env]['entry_stage']=stage
+
+    def reset_episode(self,env):
+        stage=self.episodes.get(env,{}).get('entry_stage')
+        super().reset_episode(env)
+        if env in self.episodes:self.episodes[env]['entry_stage']=stage
+
+    def admitted(self,env):
+        super().admitted(env)
+        if self.entry is not None:self.entry.advance(self.phase_transitions['moon_outside'])
 
     def set_supply(self,status):
-        self.supply_capacity={t:status.get('episode_capacity',{}).get(t,0) for t in TASKS}
+        self.supply_capacity={t:status.get('episode_capacity',{}).get(t,0) for t in self.tasks}
 
     def next_task(self):
         # Balance newly issued complete scenes, not concurrent slots or steps.
         # Fast cave episodes free workers that can immediately take slower moon
         # scenes. Resume reactivates saved specs without issuing them again.
-        task=min(TASKS,key=lambda t:self.scene_issued[t])
+        task=min(self.tasks,key=lambda t:self.scene_issued[t])
         self.scene_issued[task]+=1
         return task
 
@@ -68,12 +100,23 @@ class SimpleCourse(CourseTwo):
 
     def record_progress(self,env,progress):
         super().record_progress(env,progress)
+        if self.entry is not None and self.active[env]=='moon_outside':
+            self.episodes[env]['entry_start_distance']=progress.get('start_boundary_distance_m')
+            self.episodes[env]['first_actual_entry']=deepcopy(progress.get('first_entry'))
         duration=progress.get('last_execution',{}).get('wall_s')
         if isinstance(duration,(int,float)) and math.isfinite(duration) and duration>0:
             task=self.active[env]
             self.action_seconds[task]=.8*self.action_seconds[task]+.2*max(.01,min(120.,duration))
 
-    def ready_for_learning(self,counts):return all(counts.get(t,0)>0 for t in TASKS)
+    def observe(self,env,*,terminated,truncated,coverage,collision):
+        task=self.active[env];episode=self.episodes[env]
+        super().observe(env,terminated=terminated,truncated=truncated,coverage=coverage,collision=collision)
+        if self.entry is not None and task=='moon_outside' and (terminated or truncated):
+            self.entry.observe(episode.get('entry_stage'),episode['steps'],
+                episode.get('entry_start_distance'),episode.get('first_actual_entry'),
+                bool(collision or episode['collision']))
+
+    def ready_for_learning(self,counts):return all(counts.get(t,0)>0 for t in self.tasks)
 
     def sampling_weights(self,counts):
         if not self.ready_for_learning(counts):raise ValueError('missing scene replay')
@@ -81,14 +124,15 @@ class SimpleCourse(CourseTwo):
 
     def summary(self):
         result=super().summary()
-        result.update(schema='three_scene_course_v1',rehearsal=0.,learning_protocol=SAMPLING,
+        result.update(schema=self.schema,rehearsal=0.,learning_protocol=SAMPLING,
             action_seconds=dict(self.action_seconds),scene_issued=dict(self.scene_issued),
             dispatch_rule='least_issued_scene',
             active_slots=dict(Counter(self.active.values())),supply_capacity=dict(self.supply_capacity))
+        if self.entry is not None:result['entry_curriculum']=self.entry.state_dict()
         return result
 
 
-def fresh_scene(config,task,ordinal,*,seed=None):
+def fresh_scene(config,task,ordinal,*,seed=None,split='train'):
     from .ordered_curriculum import area_budget
     if task not in TASKS or not 0<=ordinal<2**24:raise ValueError('invalid scene sequence')
     seed=((config.seed+3)<<32)+(TASKS.index(task)<<24)+ordinal if seed is None else seed
@@ -96,7 +140,19 @@ def fresh_scene(config,task,ordinal,*,seed=None):
     family,start=task.split('_')
     spec=dict(seed=seed,family=family,extent=extent,start_mode=start,curriculum_task=task,
         episode_budget=area_budget(extent,config.ordered_budget_rule))
-    if family=='cave':spec['task_scope']='whole_cave_v1'
+    if family=='cave':
+        spec['task_scope']='whole_cave_v1'
+        version=getattr(config,'cave_generator_version','')
+        if version:
+            from .cave_topology import VERSION,manifest_hash,select_mother
+            if version!=VERSION:raise ValueError('unsupported cave generator version')
+            actual_hash=manifest_hash()
+            if getattr(config,'cave_split_manifest_hash','')!=actual_hash:
+                raise ValueError('cave split manifest identity changed')
+            mother=select_mother(split,ordinal)
+            spec.update(cave_generator_version=VERSION,mother_graph_id=mother['mother_graph_id'],
+                dataset_split=split,cave_split_manifest_hash=actual_hash)
+        elif split!='train':raise ValueError('structural evaluation split requires cave_topology_v2')
     if task=='moon_outside':spec['outside_distance_max_m']=20.
     if config.course_two_scene_profile:
         from .course_two_sensors import sensor_spec
@@ -104,6 +160,19 @@ def fresh_scene(config,task,ordinal,*,seed=None):
         if task=='moon_outside':
             spec.update(outside_distance_min_m=10.,outside_distance_max_m=50.,context_margin_m=62.)
     return spec
+
+
+def cave_evaluation_specs(config,split):
+    """Frozen cave counts for the unified three-task protocol; quick is a subset.
+
+    Geometry variants share mother IDs. Structural groups remain disjoint even
+    if maps have new seeds, headings or sensors. No cave subtype quota is used.
+    """
+    if split=='quick':return cave_evaluation_specs(config,'validation')[:20]
+    if split not in ('validation','test'):raise ValueError('invalid cave evaluation split')
+    count=60 if split=='validation' else 100
+    base=2026102400000 if split=='validation' else 2026102500000
+    return [fresh_scene(config,'cave_inside',i,seed=base+i,split=split) for i in range(count)]
 
 
 def development_cases(config):
@@ -158,11 +227,16 @@ def evaluation_gate(rows,baseline):
 
 
 class SceneIndex:
-    def __init__(self,completion_bonus=20.,task_scope='whole_cave_v1',scene_profile=''):
+    def __init__(self,completion_bonus=20.,task_scope='whole_cave_v1',scene_profile='',exploration_reward_scale=1.,tasks=TASKS):
+        self.tasks=tuple(tasks)
+        if self.tasks not in (TASKS,('moon_outside','cave_inside')):raise ValueError('invalid active scene tasks')
+        self.quota,self.extra=divmod(64,len(self.tasks))
+        self.required=self.quota+bool(self.extra)
         if task_scope!='whole_cave_v1':raise ValueError('three scenes require whole cave scope')
         if scene_profile not in ('','distance_sensor_10_30_v1'):raise ValueError('invalid scene profile')
         self.completion_bonus=completion_bonus;self.task_scope=task_scope;self.sampling=SAMPLING
         self.scene_profile=scene_profile
+        self.exploration_reward_scale=exploration_reward_scale
         self.rows={};self.pools=defaultdict(lambda:defaultdict(set));self.excluded=set();self.last_batch={}
 
     @property
@@ -171,7 +245,7 @@ class SceneIndex:
     def add(self,index,transition,scenes):
         if index in self.rows or index in self.excluded:raise ValueError('duplicate scene replay index')
         d=scenes[transition.privileged.scene_id].generator_descriptor;t=d.get('curriculum_task')
-        if (t not in TASKS or t=='cave_inside' and d.get('task_scope')!=self.task_scope or
+        if (t not in self.tasks or t=='cave_inside' and d.get('task_scope')!=self.task_scope or
                 self.scene_profile and d.get('scene_profile')!=self.scene_profile):
             self.excluded.add(index);return
         self.rows[index]=(transition.episode_id,t,transition.step_index)
@@ -184,13 +258,13 @@ class SceneIndex:
         if not pool:del self.pools[task]
 
     def status(self):
-        capacities={t:sum(min(4,len(v)) for v in self.pools.get(t,{}).values()) for t in TASKS}
-        missing=[t for t in TASKS if capacities[t]<22]
+        capacities={t:sum(min(4,len(v)) for v in self.pools.get(t,{}).values()) for t in self.tasks}
+        missing=[t for t in self.tasks if capacities[t]<self.required]
         return dict(ready=not missing,missing=missing,task_scope=self.task_scope,learning_protocol=SAMPLING,
             scene_profile=self.scene_profile,
-            pool_counts={t:sum(map(len,self.pools.get(t,{}).values())) for t in TASKS},
-            episode_counts={t:len(self.pools.get(t,{})) for t in TASKS},episode_capacity=capacities,
-            phase_quotas=dict.fromkeys(TASKS,'21–22'),scope_excluded_transitions=len(self.excluded))
+            pool_counts={t:sum(map(len,self.pools.get(t,{}).values())) for t in self.tasks},
+            episode_counts={t:len(self.pools.get(t,{})) for t in self.tasks},episode_capacity=capacities,
+            phase_quotas=dict.fromkeys(self.tasks,'21–22' if self.extra else str(self.quota)),scope_excluded_transitions=len(self.excluded))
 
     def _choose(self,task,count,rng):
         pool=self.pools.get(task,{})
@@ -205,8 +279,8 @@ class SceneIndex:
 
     def sample_indices(self,rng):
         if not self.status()['ready']:raise ValueError('missing scene replay buckets')
-        extra=TASKS[int(rng.integers(3))]
-        selected=[i for t in TASKS for i in self._choose(t,22 if t==extra else 21,rng)]
+        extra=self.tasks[int(rng.integers(len(self.tasks)))] if self.extra else None
+        selected=[i for t in self.tasks for i in self._choose(t,self.quota+int(t==extra),rng)]
         rng.shuffle(selected)
         self.last_batch=dict(phases=dict(Counter(self.rows[i][1] for i in selected)),
             unique_transitions=len(set(selected)),episodes=len({self.rows[i][0] for i in selected}),
@@ -215,7 +289,7 @@ class SceneIndex:
 
     def required_indices(self):
         rng=np.random.default_rng(0);result=set()
-        for t in TASKS:
+        for t in self.tasks:
             capacity=self.status()['episode_capacity'][t]
-            if capacity:result.update(self._choose(t,min(22,capacity),rng))
+            if capacity:result.update(self._choose(t,min(self.required,capacity),rng))
         return result

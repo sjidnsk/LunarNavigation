@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[4]
 
 def run_build(tmp_path, cache, *args):
     setup = tmp_path / 'setup.bash'
-    setup.write_text('export ROS_DISTRO=jazzy\n')
+    setup.write_text('export ROS_DISTRO=humble\n')
     binary = tmp_path / 'bin'
     binary.mkdir(exist_ok=True)
     colcon = binary / 'colcon'
@@ -31,7 +31,7 @@ def test_cold_cache_source_link_and_idempotence(tmp_path):
     assert link.resolve() == ROOT / 'ros2_ws/src/lunar_drl_exploration/native'
     identity = json.loads((cache / '.drl-source.json').read_text())
     assert identity['source_root'] == str(ROOT)
-    assert identity['ros_distro'] == 'jazzy'
+    assert identity['ros_distro'] == 'humble'
     assert run_build(tmp_path, cache, '--symlink-install').returncode == 0
 
 
@@ -48,7 +48,7 @@ def test_unknown_nonempty_cache_is_preserved(tmp_path):
 def test_foreign_source_marker_is_rejected(tmp_path):
     cache = tmp_path / 'cache'
     cache.mkdir()
-    (cache / '.drl-source.json').write_text(json.dumps({'source_root': '/foreign', 'ros_distro': 'jazzy'}))
+    (cache / '.drl-source.json').write_text(json.dumps({'source_root': '/foreign', 'ros_distro': 'humble'}))
     result = run_build(tmp_path, cache)
     assert result.returncode != 0
     assert not (cache / 'colcon-called').exists()
@@ -150,3 +150,37 @@ def test_protected_package_and_output_prefixes_refused_before_cache(tmp_path, op
     assert result.returncode != 0
     assert 'override refused' in result.stderr
     assert not cache.exists()
+
+
+def build_module():
+    import importlib.util
+    spec=importlib.util.spec_from_file_location('build_cache_regression',ROOT/'scripts/drl/build_cache.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize('relative',[
+    'lunar_drl_exploration/lunar_drl_exploration/model.py',
+    'lunar_incremental_navigation_ros/src/node.cpp',
+    'lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/execution.py',
+    'lunar_planning_msgs/msg/TrackingStatus.msg',
+])
+def test_cache_digest_covers_all_runtime_inputs(tmp_path,relative):
+    source=tmp_path/'source';path=source/'ros2_ws/src'/relative
+    path.parent.mkdir(parents=True);path.write_text('old\n')
+    module=build_module();old=module.native_digest(source)
+    path.write_text('new\n')
+    assert module.native_digest(source)!=old
+
+
+def test_failed_rebuild_invalidates_success_identity_and_can_retry(tmp_path):
+    cache=tmp_path/'cache'
+    assert run_build(tmp_path,cache).returncode==0
+    colcon=tmp_path/'bin/colcon';colcon.write_text('#!/bin/sh\nexit 17\n');colcon.chmod(0o755)
+    env=dict(os.environ,ROS_DISTRO='humble',PATH=str(colcon.parent)+':'+os.environ['PATH'])
+    command=['python3',str(ROOT/'scripts/drl/build_cache.py'),str(ROOT),str(cache)]
+    failed=subprocess.run(command,env=env,capture_output=True,text=True)
+    assert failed.returncode!=0
+    verify=subprocess.run(['python3',str(ROOT/'scripts/drl/build_cache.py'),'--verify',str(ROOT),str(cache)],env=env,capture_output=True,text=True)
+    assert verify.returncode!=0, 'failed colcon must not leave a launchable success identity'
+    assert run_build(tmp_path,cache).returncode==0

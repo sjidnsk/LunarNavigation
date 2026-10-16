@@ -55,7 +55,9 @@ def prepare_start(env,case,*,construct=False,inside=None,progress=None):
             positions=observation.goals
             if not len(positions):raise ValueError('prelude has no measured candidate')
             headings=np.rint(observation.action_yaws/(math.pi/4)).astype(int)%8
-            gains=observation.features[observation.action_nodes,IN_GAIN_SLICE.start+headings]
+            gains=(observation.node_views[observation.action_nodes,headings,0]
+                if observation.schema=='task_graph_v5' else
+                observation.features[observation.action_nodes,IN_GAIN_SLICE.start+headings])
             distances=np.linalg.norm(positions[:,:2]-[p.pose.x,p.pose.y],axis=1)
             score=gains/(1+distances/10)
             for i,goal in enumerate(positions):score[i]/=(1+visits[tuple(np.round(goal,2))])**2

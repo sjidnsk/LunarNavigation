@@ -233,8 +233,11 @@ class RewardParts:
     turn_rad: float
     removed_frontiers_in: int
     removed_frontiers_out: int
+    approach_reward: float = 0.
 
     def __post_init__(self):
+        if not np.isfinite(self.approach_reward):
+            raise ValueError('approach reward must be finite')
         for name in ('removed_frontiers_in', 'removed_frontiers_out'):
             value = getattr(self, name)
             if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value < 0:

@@ -135,5 +135,6 @@ def fresh_spec(config,task,ordinal,templates):
 def course_for(config,state=None):
     if config.course_two_sampling=='scene_episode_v1':
         from .course_two_simple import SimpleCourse
-        return SimpleCourse(state,success_coverage=config.success_coverage)
+        return SimpleCourse(state,success_coverage=config.success_coverage,
+            tasks=config.course_two_scene_tasks,entry_mode=config.moon_entry_curriculum)
     return RebalancedCourse(config.course_two_variant,state=state,success_coverage=config.success_coverage)

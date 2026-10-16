@@ -47,15 +47,20 @@ class ExecutionMetadata:
 
 def make_transition(observation,action,next_observation,privileged,next_privileged,*,
                     initial,final,removed_frontiers_in: int,removed_frontiers_out: int,
-                    completed,budget_hit,episode_id,actor_version,completion_bonus=0.,exhausted=False):
+                    completed,budget_hit,episode_id,actor_version,completion_bonus=0.,exhausted=False,approach_reward=None,gamma=1.,exploration_reward_scale=1.):
     area,distance,turn=(float(b-a) for a,b in zip(initial,final))
     if area < -1e-8 or distance < -1e-8 or turn < -1e-8:
         raise InfrastructureError('nonmonotonic whole-action accounting')
     parts=RewardParts(area,distance,turn,removed_frontiers_in,removed_frontiers_out)
-    reward=parts.removed_frontiers_in/50.-.02*distance/10.-.005*turn/math.pi-.001
+    reward=exploration_reward_scale*parts.removed_frontiers_in/50.-.02*distance/10.-.005*turn/math.pi-.001
     if completed:
         reward += completion_bonus
     terminated=bool(completed or exhausted)
+    from .approach_potential import observation_shaping
+    auxiliary=observation_shaping(observation,next_observation,approach_reward,terminated=terminated,gamma=gamma)
+    from dataclasses import replace
+    parts=replace(parts,approach_reward=auxiliary)
+    reward+=auxiliary
     return Transition(observation,action,reward,next_observation,privileged,next_privileged,
         parts,terminated,bool(budget_hit and not terminated),episode_id,int(actor_version))
 
@@ -67,6 +72,7 @@ class RosExplorationEnv:
         self._fixed_sensor=self.sensor
         self._initial_reference_coverage=0.
         self._first_roi=None;self._approach_limits={};self._approach_start_distance=0.
+        self._first_entry=None;self._initial_inside_task=False
         self.namespace=f'/lunar_training/env_{self.env_id}'
         self._requested_domain=None if domain_base is None else domain_base+self.env_id
         self.domain_id=self._requested_domain
@@ -87,14 +93,27 @@ class RosExplorationEnv:
         self._episode_truncated=False
         self.native_observation=None;self.fine_observation=None
         self.policy_graph_stats=None;self.policy_graph_diagnostics=None
+        self._training_terrain_guard=None
+        if training and config.cave_generator_version:
+            from .region_relation_data_guard import TrainingTerrainGuard
+            self._training_terrain_guard=TrainingTerrainGuard(config.artifact_root)
 
     @property
     def owned_pids(self): return self.owned.pids
 
     def reset(self,seed,family,extent,*,episode_budget=None,start_mode='any',curriculum_task=None,
               course_two_case=None,task_scope='',outside_distance_max_m=None,
-              outside_distance_min_m=None,context_margin_m=12.,sensor=None,scene_profile=''):
+              outside_distance_min_m=None,context_margin_m=12.,sensor=None,scene_profile='',
+              cave_generator_version='',mother_graph_id=None,dataset_split='train',
+              cave_split_manifest_hash=None):
         self.close()
+        if cave_generator_version and (family!='cave' or task_scope!='whole_cave_v1'
+                                      or course_two_case is not None):
+            raise ValueError('cave generator identity requires ordinary whole-cave scene')
+        if self.config.cave_generator_version and family=='cave' and (
+                cave_generator_version != self.config.cave_generator_version or
+                cave_split_manifest_hash != self.config.cave_split_manifest_hash):
+            raise ValueError('cave dispatch differs from frozen generator/split identity')
         if (outside_distance_max_m is not None or outside_distance_min_m is not None) and (
                 family!='moon' or start_mode!='outside' or course_two_case is not None):
             raise ValueError('bounded distance applies only to ordinary outside moon scenes')
@@ -144,7 +163,9 @@ class RosExplorationEnv:
         if task_scope:
             if family!='cave' or task_scope!='whole_cave_v1':raise ValueError('invalid rehearsal task scope')
             from .course_two_task_scope import build_rehearsal
-            terrain,pose,task,descriptor=build_rehearsal(seed,extent,start_mode,self.config.platform)
+            terrain,pose,task,descriptor=build_rehearsal(seed,extent,start_mode,self.config.platform,
+                cave_generator_version=cave_generator_version,mother_graph_id=mother_graph_id,
+                dataset_split=dataset_split,cave_split_manifest_hash=cave_split_manifest_hash)
             descriptor=dict(descriptor,**extra)
             terrain.generator_descriptor=MappingProxyType(dict(terrain.generator_descriptor,**extra))
             self.episode_budget=int(episode_budget or self.config.curriculum_budgets[0])
@@ -183,7 +204,14 @@ class RosExplorationEnv:
         validate_sensor(self.sensor)
         self._fixed_sensor=self.sensor
         self.terrain=terrain;self.task=task
+        self.episode_id=uuid.uuid4().hex
+        guard=getattr(self,'_training_terrain_guard',None)
+        terrain_sha=(guard.check(terrain,descriptor or {},self.episode_id,self.env_id)
+                     if guard is not None else None)
         self.plant=KinematicPlant(terrain,pose,self.config.platform)
+        from .approach_potential import distance_to_region
+        self._initial_inside_task=distance_to_region((pose.x,pose.y),task.polygon)==0.
+        self._first_entry=None
         self.reference=CoverageReference.build(terrain,pose,task,self.sensor)
         static=build_truth(terrain,self.reference,GraphConfig(platform=self.config.platform))
         self.privileged_builder=PrivilegedBuilder(terrain,static,task,self.sensor,
@@ -198,7 +226,6 @@ class RosExplorationEnv:
         self._approach_limits=(dict(descriptor) if descriptor and descriptor.get('scenario_id') else {})
         if self.stagnation is not None:self.stagnation.reset()
         self.report=None
-        self.episode_id=uuid.uuid4().hex
         self._sim_ns=1_000_000_000;self._last_sensor_ns=0;self._latest_sensor_ns=0
         self._command=(0.,0.);self._next_tick=time.monotonic()
         self._start_wall=time.monotonic();self._max_command_speed=0.;self._sensor_count=0
@@ -224,7 +251,7 @@ class RosExplorationEnv:
                 raise InputUnavailable('bounded initialization produced no native start connection')
             if not self.report.available: raise InputUnavailable(self.report.reason_code)
             native=self.observation
-            policy,fine,diagnostics,stats=self._prepare_policy_state(native)
+            policy,fine,diagnostics,stats=self._prepare_policy_state(native,snapshot=snap)
             self.privileged=self._privileged(fine)
             self.observation=policy;self.native_observation=native;self.fine_observation=fine
             self.policy_graph_diagnostics=diagnostics;self.policy_graph_stats=stats
@@ -240,6 +267,7 @@ class RosExplorationEnv:
                 sensor=asdict(self.sensor),initial_reference_coverage=self._initial_reference_coverage,
                 initial_pose=[self.plant.pose.x,self.plant.pose.y,self.plant.pose.yaw],
                 initial_roi_visible=self._initial_reference_coverage>0)
+            if terrain_sha is not None:self.episode_metadata['terrain_sha256']=terrain_sha
             return self.observation,self.privileged
         except BaseException:
             self.close();raise
@@ -256,7 +284,7 @@ class RosExplorationEnv:
         native,report=self.core.observe(snapshot,self.adapter.velocity)
         if result.outcome!=0 or not report.available or self.plant.collision:
             raise InputUnavailable('prelude navigation failed: '+str(result.reason_code))
-        policy,fine,diagnostics,stats=self._prepare_policy_state(native)
+        policy,fine,diagnostics,stats=self._prepare_policy_state(native,snapshot=snapshot)
         self.observation,self.native_observation,self.fine_observation=policy,native,fine
         self.privileged=self._privileged(fine);self.report=report
         self.policy_graph_diagnostics=diagnostics;self.policy_graph_stats=stats
@@ -273,6 +301,9 @@ class RosExplorationEnv:
         self._first_roi=None;self.steps=0;self._episode_truncated=False;self.truncation_reason=None
         if self.stagnation is not None:self.stagnation.reset()
         p=self.plant.pose
+        from .approach_potential import distance_to_region
+        self._initial_inside_task=distance_to_region((p.x,p.y),self.task.polygon)==0.
+        self._first_entry=None
         self.episode_metadata.update(prelude=prelude,initial_reference_coverage=self._initial_reference_coverage,
             initial_pose=[p.x,p.y,p.yaw],initial_roi_visible=self._initial_reference_coverage>0,
             initial_known_area_m2=self._known_area)
@@ -349,6 +380,7 @@ class RosExplorationEnv:
         stamp=ros_time(self._sim_ns)
         self._clock_pub.publish(Clock(clock=stamp))
         p=self.plant.pose
+        self._record_task_entry()
         x,y=self.terrain.world_to_cell(p.x,p.y)
         self._odom_pub.publish(odometry_message(p,self.plant.linear_mps,self.plant.angular_radps,
             self._sim_ns,self.terrain.heights[y,x]))
@@ -369,6 +401,17 @@ class RosExplorationEnv:
             self.buffer.acknowledge(self.adapter.processed_stamp_ns)
             self._apply_known(snap)
         self._pace()
+
+    def _record_task_entry(self):
+        """Actual robot entry at physical integration ticks, separate from visibility."""
+        if self._initial_inside_task or self._first_entry is not None:
+            return
+        from .approach_potential import distance_to_region
+        pose=self.plant.pose
+        if distance_to_region((pose.x,pose.y),self.task.polygon)==0.:
+            self._first_entry=dict(decisions=self.steps+int(self._step_active),
+                distance_m=self.plant.distance_m-self._approach_start_distance,
+                simulation_s=self.plant.simulation_s,x_m=pose.x,y_m=pose.y)
 
     def _pace(self):
         # Total wall-step budget includes computation. Overload resets the
@@ -468,12 +511,25 @@ class RosExplorationEnv:
         return self.privileged_builder.build(self.observation if observation is None else observation,
                                              self.reference.pack(mask), frontiers=self.core.frontiers)
 
-    def _prepare_policy_state(self, native):
+    def _prepare_policy_state(self, native, *, snapshot=None):
         """Adapt the Actor graph before computing real-goal Critic descriptors."""
         started=time.perf_counter()
         mode=self.config.policy_graph_mode
         cap=self.config.remote_frontier_positions
-        if mode=='a2':
+        if self.config.model.architecture_version == 'candidate_geometry_v3':
+            from .candidate_observation import prepare_candidate_observation
+            if snapshot is None:
+                raise ValueError('v5 input requires the frozen build snapshot')
+            result=prepare_candidate_observation(native,snapshot.pose,contract=mode=='a2',
+                max_remote_positions=cap if mode=='a2' else 0,
+                metadata=dict(platform_profile_hash=snapshot.profile_hash,
+                    map_resolution_m=float(snapshot.resolution_m),task_id=self.task.task_id,
+                    sensor_mount=dict(offset_x_m=self.sensor.offset_x_m,
+                        offset_y_m=self.sensor.offset_y_m,offset_yaw_rad=self.sensor.offset_yaw_rad)))
+            policy,fine=result.observation,result.fine_observation
+            diagnostics=result.diagnostics
+            virtual_nodes=int(result.virtual_mask.sum())
+        elif mode=='a2':
             from .policy_graph import prepare_policy_graph
             result=prepare_policy_graph(native,max_remote_positions=cap)
             policy,fine=result.observation,result.fine_observation
@@ -521,7 +577,7 @@ class RosExplorationEnv:
             snap=self._snapshot()
             next_native,report=self.core.observe(snap,self.adapter.velocity)
             if not report.available:raise InfrastructureError('unconstructable final state: '+report.reason_code)
-            next_observation,next_fine,diagnostics,stats=self._prepare_policy_state(next_native)
+            next_observation,next_fine,diagnostics,stats=self._prepare_policy_state(next_native,snapshot=snap)
             next_privileged=self._privileged(next_fine);self.steps+=1
             success=(not self.plant.collision and
                 self.reference.coverage_ratio(next_privileged.observed)>=self.config.success_coverage)
@@ -544,7 +600,9 @@ class RosExplorationEnv:
                 removed_frontiers_out=count_removed(before_frontiers,self.core.frontiers,domain="outside"),
                 completed=success,exhausted=report.completed,
                 budget_hit=budget_hit or stagnated or approach_hit,
-                episode_id=self.episode_id,actor_version=version,completion_bonus=self.config.completion_bonus)
+                episode_id=self.episode_id,actor_version=version,completion_bonus=self.config.completion_bonus,
+                approach_reward=self.config.approach_reward,gamma=self.config.learning.gamma,
+                exploration_reward_scale=self.config.exploration_reward_scale)
             self._episode_truncated=transition.truncated
             self.truncation_reason=('DECISION_BUDGET' if budget_hit else 'APPROACH_BUDGET' if approach_hit else 'STAGNATION') if transition.truncated else None
             self.last_execution=ExecutionMetadata(goal,result.outcome,result.reason_code,result.last_segment_revision,
@@ -576,6 +634,7 @@ class RosExplorationEnv:
             'stagnation_triggered':self.stagnation.triggered if self.stagnation else False,
             'sensor':asdict(self.sensor),'scenario_id':self.episode_metadata.get('scenario_id'),
             'first_roi':self._first_roi,'initial_roi_visible':self._initial_reference_coverage>0,
+            'first_entry':self._first_entry,'initial_inside_task':self._initial_inside_task,
             'policy_graph':dict(self.policy_graph_stats or {})}
 
     def cancel(self):

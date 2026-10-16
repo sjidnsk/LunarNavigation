@@ -20,6 +20,17 @@ class GraphBatch:
 
 
 @dataclass
+class RegionQueryIndex:
+    """Sample-local unique node queries and their boundary-edge pairs."""
+    nodes: torch.Tensor
+    groups: torch.Tensor
+    current: torch.Tensor
+    actions: torch.Tensor
+    pair_queries: torch.Tensor
+    pair_edges: torch.Tensor
+
+
+@dataclass
 class ObservationBatch:
     graph: GraphBatch
     polygon_edges: torch.Tensor
@@ -29,6 +40,8 @@ class ObservationBatch:
     action_features: torch.Tensor
     action_groups: torch.Tensor
     action_counts: tuple
+    region_queries: RegionQueryIndex
+    schema: str = 'task_graph_v4'
 
     @property
     def size(self):
@@ -74,12 +87,40 @@ def _graph(features, edges, lengths, currents, device):
 def pack_observations(observations, device):
     if not observations:
         raise ValueError("at least one decision observation required")
+    from .feature_schema import require_observation_identity
+    for observation in observations:
+        require_observation_identity(observation)
+    if len({o.schema for o in observations}) != 1:
+        raise ValueError('mixed observation schema in batch')
+    if observations[0].schema == 'task_graph_v5':
+        from .candidate_batch import pack_candidates
+        return pack_candidates(observations, device)
     graph = _graph([o.features for o in observations], [o.edges for o in observations],
         [o.edge_lengths for o in observations], [o.current_index for o in observations], device)
     offsets = np.cumsum((0,) + graph.counts[:-1])
     polygons = [np.concatenate((o.polygon, np.roll(o.polygon, -1, axis=0)), axis=1)
                 for o in observations]
     action_counts = tuple(len(o.action_nodes) for o in observations)
+    query_nodes, query_groups, query_current, query_actions = [], [], [], []
+    pair_queries, pair_edges = [], []
+    query_offset = edge_offset = 0
+    for group, (o, node_offset, polygon) in enumerate(zip(observations, offsets, polygons)):
+        # Stable first occurrence by node identity, never by XY or heading.
+        rows = {}
+        for node in o.action_nodes:
+            rows.setdefault(int(node), len(rows))
+            query_actions.append(query_offset + rows[int(node)])
+        rows.setdefault(int(o.current_index), len(rows))
+        query_current.append(query_offset + rows[int(o.current_index)])
+        query_nodes.extend(node_offset + node for node in rows)
+        query_groups.extend([group] * len(rows))
+        pair_queries.extend(np.repeat(np.arange(len(rows)) + query_offset, len(polygon)))
+        pair_edges.extend(np.tile(np.arange(len(polygon)) + edge_offset, len(rows)))
+        query_offset += len(rows)
+        edge_offset += len(polygon)
+    index = RegionQueryIndex(*(torch.as_tensor(values, dtype=torch.long, device=device)
+        for values in (query_nodes, query_groups, query_current, query_actions,
+                       pair_queries, pair_edges)))
     action_features = []
     for o in observations:
         heading = np.rint(o.action_yaws / (np.pi / 4)).astype(np.int64) % 8
@@ -96,7 +137,7 @@ def pack_observations(observations, device):
         _tensor([o.action_nodes + offset for o, offset in zip(observations, offsets)], device, torch.long),
         _tensor(action_features, device),
         torch.as_tensor(np.repeat(np.arange(len(observations)), action_counts), dtype=torch.long, device=device),
-        action_counts)
+        action_counts, index)
 
 
 def pack_privileged(observations, states, scene_registry, device):
@@ -127,17 +168,26 @@ def pack_privileged(observations, states, scene_registry, device):
         bits = ((state.observed[indices // 8] >> (indices % 8)) & 1).astype(np.float32)
         sums = np.diff(np.r_[0., np.cumsum(bits, dtype=np.float64)][scene.reference_offsets])
         fractions = np.divide(sums, counts, out=np.zeros_like(sums), where=counts > 0)
-        origin = observation.positions[observation.current_index]
-        features.append(np.column_stack(((scene.positions - origin) / 10.,
+        if observation.schema == 'task_graph_v5':
+            from .candidate_observation import body_vectors
+            pose = observation.build_pose
+            origin = np.array([pose.x, pose.y])
+            def rotate(values):
+                return body_vectors(values, pose.yaw)
+        else:
+            origin = observation.positions[observation.current_index]
+            def rotate(values):
+                return values
+        features.append(np.column_stack((rotate(scene.positions - origin) / 10.,
             np.log1p(counts), fractions)).astype(np.float32))
         edges.append(scene.edges)
         lengths.append(scene.edge_lengths)
-        query_positions.append(((context.positions - origin) / 10.).astype(np.float32))
+        query_positions.append((rotate(context.positions - origin) / 10.).astype(np.float32))
         query_groups.append(np.full(len(context.positions), group, np.int64))
         repeated = np.repeat(np.arange(len(context.positions)), np.diff(context.support_offsets))
         support_query.append(repeated + query_offset)
         support_nodes.append(context.support_indices + node_offset)
-        delta = (scene.positions[context.support_indices] - context.positions[repeated]) / 10.
+        delta = rotate(scene.positions[context.support_indices] - context.positions[repeated]) / 10.
         support_geometry.append(np.column_stack((delta, context.support_distances / 10.)).astype(np.float32))
         action_queries.append(context.action_positions + query_offset)
         expected_removed_frontiers.append(context.removed_frontiers / 50.)

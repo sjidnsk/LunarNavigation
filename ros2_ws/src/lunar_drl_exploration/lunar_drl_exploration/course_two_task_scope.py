@@ -55,13 +55,21 @@ def scene_requests():
     return [[dict(r,request_id=_identity(r)) for r in rows] for rows in (training,development)]
 
 
-def build_rehearsal(seed, extent, start_mode, platform):
+def build_rehearsal(seed, extent, start_mode, platform, *, cave_generator_version='',
+                    mother_graph_id=None, dataset_split='train', cave_split_manifest_hash=None):
     from .scene import Scene, TerrainGrid
     from .contracts import Pose, TaskSpec
     from .geometry import polygon_mask
     from .course_two_scene import _identity
     if start_mode not in ('inside','outside'):raise ValueError('whole cave requires explicit start')
-    scene=Scene(seed,'cave',extent,platform=platform)
+    if cave_generator_version:
+        from .cave_topology import VERSION, manifest_hash
+        if cave_generator_version!=VERSION or start_mode!='inside':
+            raise ValueError('cave_topology_v2 requires inside start')
+        if cave_split_manifest_hash is not None and cave_split_manifest_hash!=manifest_hash():
+            raise ValueError('cave split manifest identity changed')
+    scene=Scene(seed,'cave',extent,platform=platform,cave_generator_version=cave_generator_version,
+        mother_graph_id=mother_graph_id,dataset_split=dataset_split)
     original=TerrainGrid.from_scene(scene)
     heights=original.heights.copy();rows,cols=np.nonzero(heights==0.)
     resolution=original.resolution_m
@@ -70,13 +78,13 @@ def build_rehearsal(seed, extent, start_mode, platform):
     polygon=np.array([[low[0],low[1]],[high[0],low[1]],[high[0],high[1]],[low[0],high[1]]])
     x=original.origin[0]+(np.arange(original.shape[1])+.5)*resolution
     y=original.origin[1]+(np.arange(original.shape[0])+.5)*resolution
-    mouth_x,mouth_y,_=scene._rooms[1]
+    mouth_x,mouth_y,_=scene.anchor_room if scene.cave_geometry is not None else scene._rooms[1]
     apron=x[None,:]<low[0]
     entrance=(x[None,:]<mouth_x)&(np.abs(y[:,None]-mouth_y)<1.8)
     # The current curriculum uses only inside starts: preserve the natural cave.
     # Outside geometry remains solely for the versioned historical diagnostic.
     if start_mode=='outside':heights[np.broadcast_to(apron,heights.shape)|entrance]=0.
-    terrain=TerrainGrid.from_heights(heights,resolution,original.origin,platform)
+    terrain=original if scene.cave_geometry is not None else TerrainGrid.from_heights(heights,resolution,original.origin,platform)
     task=TaskSpec(_identity(dict(scope=SCOPE,seed=seed,extent=extent)),'map',polygon)
     anchor=Pose(mouth_x,mouth_y,scene._yaw)
     reachable=terrain.reachable(anchor)!=0
@@ -88,11 +96,17 @@ def build_rehearsal(seed, extent, start_mode, platform):
     if not len(xs):raise ValueError('whole cave has no legal requested start')
     pick=int(np.random.default_rng(np.random.SeedSequence([seed,302])).integers(len(xs)))
     pose=Pose(*terrain.cell_center(int(xs[pick]),int(ys[pick])),scene._yaw)
-    descriptor=dict(generator_version='whole_cave_rehearsal_v1',task_scope=SCOPE,
+    descriptor=dict(original.generator_descriptor, generator_version=cave_generator_version or 'whole_cave_rehearsal_v1',task_scope=SCOPE,
         seed=seed,family='cave',extent_m=extent,provided_bounds=scene.bounds,
         resolution_m=resolution,start_mode=start_mode,curriculum_task='cave_'+start_mode,
         cave_interior_outside_cells=int(np.count_nonzero((original.heights==0)&~roi)))
     if descriptor['cave_interior_outside_cells']:raise ValueError('cave task cuts interior')
+    if scene.cave_geometry is not None:
+        # Reconstructed terrain uses the same heights/native classifier. Preserve
+        # native qualification while recording the task-relative reference count.
+        descriptor['reference_reachable_task_cells']=int(np.count_nonzero(reachable&roi))
+        if not descriptor['reference_reachable_task_cells']:
+            raise ValueError('v2 cave task has no reachable reference cells')
     terrain.generator_descriptor=MappingProxyType(descriptor)
     return terrain,pose,task,descriptor
 

@@ -208,7 +208,7 @@ def test_actual_split_sac_update_full_resume_and_actor_export_equal(tmp_path):
     equal_state(result.curriculum, loads_transport(saved.record['curriculum']))
     equal_state(result.replay_rng.bit_generator.state, loads_transport(saved.record['rng']['replay']))
     equal_state(result.curriculum_rng.bit_generator.state, loads_transport(saved.record['rng']['curriculum']))
-    assert result.replay.snapshot(1_000_000) == saved.record['replay']
+    assert result.replay.snapshot(1_000_000, require_all=True) == saved.record['replay']
     artifact = tmp_path/'actor.pt'; export_actor(checkpoint, artifact)
     policy = ActorPolicy.load(artifact)
     with torch.inference_mode():

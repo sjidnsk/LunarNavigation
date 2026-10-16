@@ -1,4 +1,4 @@
-"""Opt-in actual isolated Jazzy action/controller/plant integration (no mocks)."""
+"""Opt-in actual isolated Humble action/controller/plant integration (no mocks)."""
 import os
 import math
 import numpy as np

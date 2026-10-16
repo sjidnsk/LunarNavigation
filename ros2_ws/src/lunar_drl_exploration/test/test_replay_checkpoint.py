@@ -498,3 +498,46 @@ def test_save_load_validate_replay_and_restore_materializes_contracts_once(tmp_p
     constructed.clear()
     restored=loaded.restore(SACLearner(config.model,config.learning),config)
     assert sorted(constructed)==[0,1] and len(restored.replay)==1
+
+def test_checkpoint_uses_binary_bytes_pickle_without_latin1_expansion(tmp_path):
+    import io
+    import pickle
+    import pickletools
+    from lunar_drl_exploration.config import TrainingConfig,ModelConfig
+    from lunar_drl_exploration.sac import SACLearner
+    from lunar_drl_exploration.schedule import UpdateSchedule
+    from lunar_drl_exploration.checkpoint import CheckpointManager,UpdateBoundary
+    config=replace(TrainingConfig(),model=ModelConfig(width=16,heads=2,layers=1))
+    learner=SACLearner(config.model,config.learning)
+    replay=ReplayBuffer(1000000);replay.add(transition(),{'s':scene()})
+    schedule=UpdateSchedule();schedule.collected()
+    state=capture_state(learner,config,replay,schedule,UpdateBoundary())
+    manager=CheckpointManager(tmp_path)
+    path=manager.save(state)
+    # The formal writer streams legacy torch containers, avoiding zipfile's
+    # multi-gigabyte bytes buffer. Skip the three primitive header pickles;
+    # disassemble the following state pickle without loading tensor storage.
+    raw=path.read_bytes()
+    stream=io.BytesIO(raw)
+    for _ in range(3):pickle.load(stream)
+    data=raw[stream.tell():]
+    # Protocol 2 encodes bytes through Unicode/Latin1, multiplying large snapshot memory.
+    assert any(op.name in ('BINBYTES','SHORT_BINBYTES','BINBYTES8') for op,arg,pos in pickletools.genops(data))
+    loaded=manager.load(config)
+    assert loaded.record['replay']==state.record['replay']
+
+
+def test_transport_releases_source_and_decoded_arrays_without_cyclic_gc():
+    was_enabled=gc.isenabled(); gc.disable()
+    try:
+        source=np.arange(100,dtype=np.float32)
+        source_ref=weakref.ref(source)
+        payload=dumps_transport(dict(array=source))
+        del source
+        assert source_ref() is None
+        decoded=loads_transport(payload)
+        decoded_ref=weakref.ref(decoded['array'])
+        del decoded
+        assert decoded_ref() is None
+    finally:
+        if was_enabled: gc.enable()

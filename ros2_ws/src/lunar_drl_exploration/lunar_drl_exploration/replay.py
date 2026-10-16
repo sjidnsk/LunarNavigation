@@ -13,8 +13,9 @@ from .feature_schema import (PRIVILEGED_SCHEMA, frontier_semantics,
                              require_frontier_semantics, require_observation_identity)
 from .contracts import (DecisionObservation, PrivilegedScene, PrivilegedState, PrivilegedActionContext,
                         Transition, RewardParts, Pose, TaskSpec, SensorSpec)
+from .candidate_observation import CandidateObservation
 
-_TYPES = {cls.__name__: cls for cls in (DecisionObservation, PrivilegedScene,
+_TYPES = {cls.__name__: cls for cls in (DecisionObservation, CandidateObservation, PrivilegedScene,
           PrivilegedState, PrivilegedActionContext, Transition, RewardParts, Pose, TaskSpec, SensorSpec)}
 
 
@@ -86,17 +87,23 @@ def dumps_transport(value, *, _prefix=b''):
         nodes[index] = node
         return ('ref', index)
 
-    root = encode(value)
-    record = dict(schema='immutable_transport_v1', frontier_semantics=frontier_semantics(),
-                  root=root, nodes=nodes)
-    if not _prefix:
-        return pickle.dumps(record, protocol=5)
-    # One output stream: adding the fixed replay envelope never concatenates a
-    # second multi-GiB payload. BytesIO.getvalue owns its immutable result.
-    with io.BytesIO() as stream:
-        stream.write(_prefix)
-        pickle.dump(record, stream, protocol=5)
-        return stream.getvalue()
+    try:
+        root = encode(value)
+        record = dict(schema='immutable_transport_v1', frontier_semantics=frontier_semantics(),
+                      root=root, nodes=nodes)
+        if not _prefix:
+            return pickle.dumps(record, protocol=5)
+        # One output stream: adding the fixed replay envelope never concatenates a
+        # second multi-GiB payload. BytesIO.getvalue owns its immutable result.
+        with io.BytesIO() as stream:
+            stream.write(_prefix)
+            pickle.dump(record, stream, protocol=5)
+            return stream.getvalue()
+    finally:
+        # Recursive closures otherwise retain multi-GiB backings until cyclic GC.
+        nodes.clear(); memo.clear(); owners.clear()
+        encode = None
+
 
 
 def loads_transport(payload):
@@ -127,7 +134,7 @@ def loads_transport(payload):
             if cls is None:
                 raise ValueError('unknown transport contract')
             kwargs = {k: decode(v) for k, v in node[2].items()}
-            if cls in (DecisionObservation, PrivilegedState, PrivilegedActionContext) and 'schema' not in kwargs:
+            if cls in (DecisionObservation, CandidateObservation, PrivilegedState, PrivilegedActionContext) and 'schema' not in kwargs:
                 raise ValueError('transport contract schema is required')
             try:
                 result = cls(**kwargs)  # Run normal contract validation.
@@ -152,7 +159,11 @@ def loads_transport(payload):
         memo[value] = result
         return result
 
-    return decode(record['root'])
+    try:
+        return decode(record['root'])
+    finally:
+        memo.clear()
+        decode = None
 
 
 def _objects(root):
@@ -297,11 +308,20 @@ class ReplayBuffer:
     def __len__(self):
         return len(self._entries)
 
+    @property
+    def observation_schema(self):
+        return next(iter(self._entries.values()))[0].observation.schema if self._entries else None
+
     def add(self, transition, scenes):
         if not isinstance(transition, Transition):
             raise TypeError('only finished Transition records enter replay')
         for obs in (transition.observation, transition.next_observation):
             require_observation_identity(obs)
+        expected_schema = (next(iter(self._entries.values()))[0].observation.schema
+                           if self._entries else transition.observation.schema)
+        if any(obs.schema != expected_schema for obs in
+               (transition.observation, transition.next_observation)):
+            raise ValueError('mixed observation schema in replay')
         for state in (transition.privileged, transition.next_privileged):
             if state.schema != PRIVILEGED_SCHEMA or (state.actions is not None and
                     state.actions.schema != PRIVILEGED_SCHEMA):
@@ -346,7 +366,9 @@ class ReplayBuffer:
         if self.course_two_index is not None:
             single.enable_course_two_sampling(completion_bonus=self.course_two_index.completion_bonus,
                 task_scope=self.course_two_index.task_scope,sampling=self.course_two_index.sampling,
-                scene_profile=getattr(self.course_two_index,'scene_profile',''))
+                scene_profile=getattr(self.course_two_index,'scene_profile',''),
+                exploration_reward_scale=self.course_two_index.exploration_reward_scale,
+                scene_tasks=getattr(self.course_two_index,'tasks',None))
         single._first = single._next = self._next
         single._append(transition, selected, ids)
         if single.bytes_used > self.max_bytes:
@@ -448,14 +470,19 @@ class ReplayBuffer:
         indices = rng.integers(0, len(self._entries), size=batch_size)
         return [self._entries[self._first + int(index)][0] for index in indices]
 
-    def enable_course_two_sampling(self, *, completion_bonus=20., task_scope='', sampling='', scene_profile=''):
+    def enable_course_two_sampling(self, *, completion_bonus=20., task_scope='', sampling='', scene_profile='', exploration_reward_scale=1., scene_tasks=None):
         from .course_two_replay import PhaseIndex
+        if sampling=='scene_episode_v1':
+            from .course_two_simple import TASKS
+            scene_tasks=tuple(TASKS if scene_tasks is None else scene_tasks)
+        elif scene_tasks not in (None,('moon_outside','moon_inside','cave_inside')):
+            raise ValueError('active scene tasks require scene episode sampling')
         if scene_profile and sampling!='scene_episode_v1':raise ValueError('scene profile requires scene sampler')
         if self.course_two_index is None:
             if sampling=='scene_episode_v1':
                 from .course_two_simple import SceneIndex
-                index=SceneIndex(completion_bonus,task_scope,scene_profile)
-            elif not sampling:index = PhaseIndex(completion_bonus, task_scope)
+                index=SceneIndex(completion_bonus,task_scope,scene_profile,exploration_reward_scale,tasks=scene_tasks)
+            elif not sampling:index = PhaseIndex(completion_bonus, task_scope,exploration_reward_scale)
             else:raise ValueError('unknown course-two sampler')
             for key, entry in self._entries.items():
                 index.add(key, entry[0], self._scenes)
@@ -463,8 +490,10 @@ class ReplayBuffer:
             while self.bytes_used > self.max_bytes:
                 self.evict_oldest()
         elif (self.course_two_index.completion_bonus != completion_bonus or self.course_two_index.task_scope != task_scope
+                or self.course_two_index.exploration_reward_scale!=exploration_reward_scale
                 or self.course_two_index.sampling!=sampling
-                or getattr(self.course_two_index,'scene_profile','')!=scene_profile):
+                or getattr(self.course_two_index,'scene_profile','')!=scene_profile
+                or sampling=='scene_episode_v1' and self.course_two_index.tasks!=scene_tasks):
             raise ValueError('course-two success bonus or task scope changed')
         return self.course_two_index
 
@@ -557,7 +586,34 @@ class ReplayBuffer:
             result.append(tuple(sequence))
         return result
 
-    def snapshot(self, max_bytes=2 * 1024**3, *, require_sample=False, required_indices=()):
+    def snapshot(self, max_bytes=2 * 1024**3, *, require_sample=False, required_indices=(), require_all=False):
+        """Bounded export, or an all-or-error continuation snapshot.
+
+        A continuation never selects a smaller replay to satisfy a disk budget.
+        Normal online FIFO eviction is still governed by ``self.max_bytes``.
+        """
+        if require_all:
+            if not set(required_indices).issubset(self._entries):
+                raise ValueError('required replay snapshot index is absent')
+            if require_sample and not len(self):
+                raise ResourceLimitError('complete replay snapshot requires a sample', 0, 1)
+            ordinals = {index: ordinal for ordinal, index in enumerate(self._entries)}
+            record = dict(schema='bounded_replay_v2', frontier_semantics=frontier_semantics(),
+                retention='complete_v1', source_count=len(self),
+                transitions=[entry[0] for entry in self._entries.values()], scenes=dict(self._scenes),
+                task_order={task: [ordinals[index] for index in indices]
+                            for task, indices in self._task_entries.items()})
+            if self.course_two_index is not None:
+                index = self.course_two_index
+                record['course_two_sampling'] = dict(completion_bonus=index.completion_bonus,
+                    task_scope=index.task_scope, sampling=index.sampling,
+                    scene_profile=getattr(index, 'scene_profile', ''),
+                    exploration_reward_scale=index.exploration_reward_scale,
+                    scene_tasks=getattr(index, 'tasks', None))
+            payload = dumps_transport(record, _prefix=_SNAPSHOT_MAGIC + len(self).to_bytes(8, 'little'))
+            if len(payload) > max_bytes:
+                raise ResourceLimitError('complete replay sample snapshot bytes', len(payload), max_bytes)
+            return payload
         selected = ReplayBuffer(max(1, max_bytes))
         required_indices = set(required_indices)
         if not required_indices.issubset(self._entries):
@@ -623,7 +679,8 @@ class ReplayBuffer:
             selected.evict_oldest()
 
     @classmethod
-    def from_snapshot(cls, payload, max_bytes=8 * 1024**3, *, validate_only=False):
+    def from_snapshot(cls, payload, max_bytes=8 * 1024**3, *, validate_only=False,
+                      expected_observation_schema=None):
         count = snapshot_sample_count(payload)
         # memoryview removes the envelope without copying the complete bytes.
         record = loads_transport(memoryview(payload)[_SNAPSHOT_HEADER_BYTES:])
@@ -632,10 +689,20 @@ class ReplayBuffer:
         require_frontier_semantics(record)
         if not isinstance(record.get('transitions'), list) or len(record['transitions']) != count:
             raise ValueError('replay sample count disagrees with envelope')
+        complete = record.get('retention') == 'complete_v1'
+        if 'retention' in record and not complete:
+            raise ValueError('unknown replay retention contract')
+        if complete and (type(record.get('source_count')) is not int or record['source_count'] != count):
+            raise ValueError('complete replay source count disagrees with snapshot')
         result = cls(max_bytes)
         steps = set()
         active_tasks = set()
+        schema = expected_observation_schema
         for transition in record['transitions']:
+            if schema is None:
+                schema = transition.observation.schema
+            if any(obs.schema != schema for obs in (transition.observation, transition.next_observation)):
+                raise ValueError('replay observation schema does not match requested protocol')
             task = transition_task(transition, record['scenes'])
             if task != 'unclassified':
                 active_tasks.add(task)
@@ -644,8 +711,12 @@ class ReplayBuffer:
                 if key in steps:
                     raise ValueError('duplicate episode step in replay snapshot')
                 steps.add(key)
+            previous_count = len(result)
             result.add(transition, record['scenes'])
-            if validate_only:
+            if complete and len(result) != previous_count + 1:
+                raise ResourceLimitError('complete replay restore would lose samples',
+                    previous_count + 1, len(result))
+            if validate_only and not complete:
                 # Decode must inspect all contracts, but save/load acceptance needs
                 # only one admission ledger at a time. Retain the actual replay only
                 # on restore; decoded record objects are released at function exit.
@@ -668,7 +739,7 @@ class ReplayBuffer:
                     seen.add(index)
             if len(seen) != count:
                 raise ValueError('incomplete replay task order')
-            if not validate_only:
+            if not validate_only or complete:
                 for task, indices in orders.items():
                     kept = [index for index in indices if index in result._entries]
                     if kept:
@@ -676,4 +747,9 @@ class ReplayBuffer:
                         for position, index in enumerate(kept):
                             result._task_bytes += sys.getsizeof(position) - sys.getsizeof(result._task_positions[index])
                             result._task_positions[index] = position
+        if complete:
+            if 'course_two_sampling' in record:
+                result.enable_course_two_sampling(**record['course_two_sampling'])
+            if len(result) != count:
+                raise ResourceLimitError('complete replay restore lost samples to sampler budget', count, len(result))
         return None if validate_only else result

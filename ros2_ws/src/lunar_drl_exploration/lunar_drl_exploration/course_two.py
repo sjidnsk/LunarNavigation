@@ -169,10 +169,11 @@ def reconfigure_checkpoint(state, config):
     diagnostics = counters.get('reward_diagnostics')
     if diagnostics is not None:
         RewardDiagnostics(original.environments, original.completion_bonus,
-            original.success_coverage, diagnostics)
+            original.success_coverage, diagnostics, exploration_reward_scale=original.exploration_reward_scale)
         diagnostics['environments'] = config.environments
         diagnostics['active'].extend([None]*(config.environments-original.environments))
-        RewardDiagnostics(config.environments, config.completion_bonus, config.success_coverage, diagnostics)
+        RewardDiagnostics(config.environments, config.completion_bonus, config.success_coverage, diagnostics,
+            exploration_reward_scale=config.exploration_reward_scale)
     counters.setdefault('course_two_reconfigurations', []).append(deepcopy(audit))
     record = deepcopy(state.record)
     record.update(config=after, semantics=resume_semantics(config),

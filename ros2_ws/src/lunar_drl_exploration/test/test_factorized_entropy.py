@@ -233,17 +233,25 @@ def test_single_position_has_exactly_zero_temperature_gradient_in_float32():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(),reason='CUDA required for synchronization audit')
-def test_split_cuda_update_has_no_scalar_device_sync_and_restores_both_adam_states_on_cpu():
+def test_split_cuda_update_has_bounded_phase_sync_and_restores_both_adam_states_on_cpu():
     from torch.utils._python_dispatch import TorchDispatchMode
-    class NoScalarDeviceSync(TorchDispatchMode):
+    scalar_reads = []
+    class PhaseDeviceSync(TorchDispatchMode):
         def __torch_dispatch__(self,func,types,args=(),kwargs=None):
             if func == torch.ops.aten._local_scalar_dense.default:
-                assert not args[0].is_cuda, 'per-transition CUDA scalar read'
+                if args[0].is_cuda:
+                    scalar_reads.append(args[0].numel())
             return func(*args,**(kwargs or {}))
     learner = sac.SACLearner(MODEL,learner_config(),device='cuda')
-    with NoScalarDeviceSync():
+    with PhaseDeviceSync():
         metrics = learner.update(transitions(),{'s':scene()})
     assert all(math.isfinite(value) for value in metrics.values())
+    # Four optimizer phases and parameter gates, independent of transitions.
+    assert len(scalar_reads) <= 12 and all(size == 1 for size in scalar_reads)
+    assert metrics['numeric_guard_version'] == 1 and metrics['numeric_checked_updates'] == 1
+    for key in ('actor_grad_norm', 'q1_grad_norm', 'q2_grad_norm', 'temperature_grad_norm',
+                'log_alpha_position', 'log_alpha_heading'):
+        assert math.isfinite(metrics[key])
     cpu = sac.SACLearner(MODEL,learner_config())
     cpu.load_state_dict(learner.state_dict())
     for optimizer in (cpu.alpha_optimizer,cpu.heading_alpha_optimizer):

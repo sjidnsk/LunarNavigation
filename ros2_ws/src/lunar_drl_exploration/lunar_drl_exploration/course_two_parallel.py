@@ -10,6 +10,7 @@ import uuid
 
 from . import course_two_control as ctl
 from .processes import _LAUNCH
+from .evaluation_error_policy import enabled, counted_failure
 
 MAX_WORKERS=16
 EVALUATION_DOMAIN_BASE=216
@@ -58,6 +59,8 @@ def cached_result(root,output,proof):
             or row.get('kind')!=proof['case']['kind']):
         raise ValueError('cached evaluation identity changed: '+str(output))
     if result.get('status')!='finished' or row.get('error'):
+        if enabled(root) and result.get('status')=='failed' and isinstance(row.get('error'),str) and row['error'].startswith(('InfrastructureError:','WorkerExit:')):
+            return dict(result,row=counted_failure(row))
         raise RuntimeError('evaluation infrastructure error: '+str(row.get('error')))
     return result
 
@@ -132,9 +135,20 @@ def screen(controller,actor,cases,label):
                 if code is None:continue
                 if controller.stopping:break
                 cid=job['case']['case_id']
-                if code:raise RuntimeError(f'eval-{label}-{cid} exited {code}; see logs/eval-{label}-{cid}.log')
+                if code and not enabled(root):raise RuntimeError(f'eval-{label}-{cid} exited {code}; see logs/eval-{label}-{cid}.log')
+                if code and not job['output'].exists():
+                    record=job['record'];progress_path=root/record['progress']
+                    progress=ctl.read(progress_path) if progress_path.exists() else {}
+                    matched=all(progress.get(k)==record.get(k) for k in ('case_id','slot','job_id')) and progress.get('actor')==str(actor)
+                    case=job['case'];row=dict(case_id=cid,kind=case['kind'],capability=case.get('capability'),completed=False,
+                        error=f'WorkerExit: exited {code}; see logs/eval-{label}-{cid}.log',collisions=None,
+                        initial_completed=False,decisions=progress.get('decisions') if matched else None,
+                        final_coverage=progress.get('coverage') if matched else None,coverage_source='last_observed' if matched else 'unavailable')
+                    ctl.write(job['output'],dict(status='failed',proof=dict(common,case=case),row=counted_failure(row),
+                        wall_s=time.time()-record['started_unix'],execution=record))
                 result=cached_result(root,job['output'],dict(common,case=job['case']))
                 if result is None:raise RuntimeError('evaluation exited without a result: '+cid)
+                if code and not result['row'].get('error'):raise RuntimeError('nonzero evaluation exit contradicts successful result: '+cid)
                 results[cid]=result
                 del jobs[slot];del controller.evaluation_children[slot]
                 controller.evaluation_signalled.discard(slot)

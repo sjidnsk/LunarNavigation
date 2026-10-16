@@ -124,19 +124,22 @@ def test_production_stage_arithmetic_without_formal_training():
 def gated_completion_collector(child, record, state, ready, count, **kwargs):
     """Withhold first DONE transport until all eight slots have finished."""
     from lunar_drl_exploration.collector import collector_main
-    from lunar_drl_exploration.ipc import Duplex
-    original = Duplex.send
-    def send(self, message):
-        if message['kind'] == 'DONE':
-            with count.get_lock():
-                count.value += 1
-                if count.value == 8: ready.set()
-        return original(self, message)
-    Duplex.send = send
     class GatePipe:
+        pending = {}
         def send(self, message):
-            if message['kind'] == 'DONE':
-                assert ready.wait(20), 'all eight workers must complete before releasing DONE'
+            if message['kind'] == 'DONE' and not ready.is_set():
+                # Retries do not count as another worker. Buffer only DONE so
+                # later SCENE/READY messages can still initialize the eighth slot.
+                self.pending[message['env']] = message
+                with count.get_lock():
+                    count.value = len(self.pending)
+                if len(self.pending) < 8:
+                    return
+                ready.set()
+                for completed in self.pending.values():
+                    child.send(completed)
+                self.pending.clear()
+                return
             return child.send(message)
         def __getattr__(self, name): return getattr(child, name)
     collector_main(GatePipe(), record, state, **kwargs)

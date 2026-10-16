@@ -145,7 +145,7 @@ def test_real_collector_prefill_saves_and_resumes_without_updates(tmp_path,monke
     catalog={task:[dict(seed=123+i,family='moon',extent=40.,start_mode='inside',
         curriculum_task=task,episode_budget=512)]*4 for i,task in enumerate(c2.RebalancedCourse('C3').weights)}
     monkeypatch.setattr(c2,'load_catalog',lambda _: (catalog,[]))
-    kwargs=dict(collect_only=True,device='cpu',env_factory='worker_fixtures:ControlledCourseEnv',domain_base=180)
+    kwargs=dict(collect_only=True,device='cpu',env_factory='worker_fixtures:ControlledCourseEnv',domain_base=157)
     result=run_training(config,max_transitions=16,**kwargs)
     before=CheckpointManager(config.output_dir).load(config)
     assert result['updates']==0 and before.record['schedule']['prefill_transitions']==16

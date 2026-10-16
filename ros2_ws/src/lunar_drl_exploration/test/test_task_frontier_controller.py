@@ -21,8 +21,18 @@ def module(name):
     return result
 
 
+def local_controller(tmp_path):
+    # The original scene expression/order is the contract; an external machine's
+    # downloaded experiment is not a unit-test dependency.
+    c=module('controller');c.LEGACY=tmp_path/'legacy'
+    cases=[dict(family=family,seed=2026100100+i,extent_m=50.+i*50./9.)
+           for i in range(10) for family in ('moon','cave')]
+    c.write(c.LEGACY/'artifacts/baseline-summary.json',dict(cases=cases))
+    return c
+
+
 def test_owned_run_binds_explicit_runtime_cache(tmp_path,monkeypatch):
-    c=module('controller')
+    c=local_controller(tmp_path)
     root=tmp_path/'run'
     cache=tmp_path/'fresh-cache'
     monkeypatch.setenv('DRL_CACHE',str(cache))
@@ -132,7 +142,11 @@ def test_measured_probe_rebuilds_exact_graph_with_precover_and_sensor_history(tm
     with pytest.raises(ValueError): p.validate_exact_alignment(p.rebuild_fixed_observation(broken),original)
 
 
-def test_curve_buckets_keep_samples_gaps_and_write_three_png_csv_classes(tmp_path):
+def test_curve_buckets_keep_samples_gaps_and_write_three_png_csv_classes(tmp_path,monkeypatch):
+    # Plotter deliberately uses system Python; avoid user-site NumPy2 crossing
+    # the apt Matplotlib NumPy1 ABI boundary, while still creating real figures.
+    monkeypatch.setenv('PYTHONNOUSERSITE','1')
+    monkeypatch.setenv('MPLCONFIGDIR',str(tmp_path/'matplotlib-config'))
     c = module('curves')
     data = c.empty_history()
     c.ingest(data,[dict(learning=dict(updates=1,actor_loss=2.,alpha_position=.0001,
@@ -153,7 +167,7 @@ def test_curve_buckets_keep_samples_gaps_and_write_three_png_csv_classes(tmp_pat
 
 
 def test_root_ownership_and_lock_refuse_foreign_files_and_second_controller(tmp_path):
-    c=module('controller')
+    c=local_controller(tmp_path)
     foreign=tmp_path/'foreign';foreign.mkdir();(foreign/'keep.txt').write_text('owned elsewhere')
     with pytest.raises(ValueError,match='adopt'):c.prepare(foreign,ROOT/'config/drl_task_frontier.yaml')
     owned=tmp_path/'owned';record=c.prepare(owned,ROOT/'config/drl_task_frontier.yaml')
@@ -310,7 +324,7 @@ def test_controller_progress_subprocess_and_owned_stop_keep_persistent_logs(tmp_
     import os
     import signal
     import threading
-    c=module('controller');root=tmp_path/'run';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
+    c=local_controller(tmp_path);root=tmp_path/'run';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
     control=c.Controller(root);control.record(phase='training')
     script="import json; print('TASK_FRONTIER_PROGRESS '+json.dumps(dict(transitions=300,updates=0,credit=0)),flush=True)"
     assert control.spawn([sys.executable,'-c',script],'fixture')
@@ -331,7 +345,7 @@ def test_controller_progress_subprocess_and_owned_stop_keep_persistent_logs(tmp_
 
 
 def test_controller_screen_orders_twenty_exact_cases_and_rejects_scene_mismatch(tmp_path):
-    c=module('controller');root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
+    c=local_controller(tmp_path);root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
     control=c.Controller(root);control.record(stage=1)
     actor=root/'stage1.pt';actor.write_bytes(b'controlled frozen actor')
     c.write(actor.with_suffix('.json'),dict(checkpoint_sha='checkpoint',actor_sha=c.sha(actor)))
@@ -360,7 +374,7 @@ def test_controller_screen_orders_twenty_exact_cases_and_rejects_scene_mismatch(
 
 
 def test_controller_does_not_publish_partial_evaluation_as_finished(tmp_path):
-    c=module('controller');root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
+    c=local_controller(tmp_path);root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
     control=c.Controller(root);actor=root/'stage1.pt';actor.write_bytes(b'actor')
     c.write(actor.with_suffix('.json'),dict(checkpoint_sha='checkpoint',actor_sha=c.sha(actor)))
     control.spawn=lambda *args,**kwargs:False
@@ -369,7 +383,7 @@ def test_controller_does_not_publish_partial_evaluation_as_finished(tmp_path):
 
 
 def test_owned_run_rejects_effective_config_drift(tmp_path):
-    c=module('controller');root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
+    c=local_controller(tmp_path);root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
     config=c.read(root/'config.json');config['warmup']=4;c.write(root/'config.json',config)
     with pytest.raises(ValueError,match='config'):c.identity(root)
 
@@ -381,7 +395,7 @@ def startup_fixture(tmp_path,monkeypatch):
     import select
     import subprocess
     import threading
-    c=module('controller');root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
+    c=local_controller(tmp_path);root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
     monkeypatch.setattr(c,'verify_gate',lambda root:None)
     children=[];entered=threading.Event();release=threading.Event()
     options={'mode':'ready','hold_parent':False};real_popen=subprocess.Popen
@@ -405,7 +419,9 @@ c.main(sys.argv[5:])
     def controlled_popen(command,**kwargs):
         reader,writer=os.pipe()
         inherited=tuple(kwargs.pop('pass_fds',()))
-        process=real_popen([*command[:2],'python','-c',code,str(SCRIPTS),str(writer),options['mode'],
+        # The owned-process/READY/lock contract is exercised by this real child;
+        # distribution setup in the historical Jazzy wrapper is outside it.
+        process=real_popen([sys.executable,'-c',code,str(SCRIPTS),str(writer),options['mode'],
             str(SCRIPTS/'controller.py'),*command[2:]],pass_fds=(*inherited,writer),**kwargs)
         children.append(process);os.close(writer)
         try:
@@ -459,7 +475,9 @@ def test_background_entry_hands_owned_lock_to_child_before_parent_release(startu
 def test_background_entry_rejects_early_exit_bad_identity_and_timeout(startup_fixture,capsys,mode,pattern,monkeypatch):
     c,root,children,options,entered,release=startup_fixture
     options['mode']=mode
-    monkeypatch.setattr(c,'STARTUP_TIMEOUT',.5,raising=False)
+    # Identity/exit checks must allow child imports under concurrent CPU load;
+    # only the timeout case tests a deliberately short wall deadline.
+    monkeypatch.setattr(c,'STARTUP_TIMEOUT',.5 if mode=='timeout' else 10.,raising=False)
     with pytest.raises(RuntimeError,match=pattern):c.main(['resume','--root',str(root)])
     assert not capsys.readouterr().out.strip(),'failed startup must not print successful PID result'
     assert children[0].poll() is not None

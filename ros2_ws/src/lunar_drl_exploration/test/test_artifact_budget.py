@@ -244,3 +244,40 @@ def test_eight_parallel_progress_writers_preserve_all_completed_records(tmp_path
             if process.is_alive():
                 process.terminate()
                 process.join(5)
+
+
+def test_checkpoint_existing_root_preserves_declared_two_gib_diagnostic_budget(tmp_path):
+    from lunar_drl_exploration.artifacts import MANIFEST
+    from lunar_drl_exploration.checkpoint import CheckpointManager
+    root=tmp_path/'prepared'
+    initialize_artifact_root(root,32*1024**3,diagnostic_max_bytes=2*1024**3)
+    before=(root/MANIFEST).read_bytes()
+    manager=CheckpointManager(root/'run',artifact_root=root,total_max_bytes=32*1024**3,
+                              snapshot_max_bytes=512*1024**2)
+    assert manager.output_dir==root/'run'
+    assert (root/MANIFEST).read_bytes()==before
+    assert artifact_usage(root)['diagnostic_max_bytes']==2*1024**3
+    with pytest.raises(ValueError,match='immutable'):
+        CheckpointManager(root/'wrong-total',artifact_root=root,total_max_bytes=31*1024**3)
+    assert (root/MANIFEST).read_bytes()==before
+    assert not (root/'wrong-total').exists()
+
+
+def test_checkpoint_fresh_root_keeps_default_diagnostic_budget(tmp_path):
+    from lunar_drl_exploration.artifacts import DIAGNOSTIC_MAX_BYTES
+    from lunar_drl_exploration.checkpoint import CheckpointManager
+    root=tmp_path/'new'
+    CheckpointManager(root/'run',artifact_root=root,total_max_bytes=32*1024**3)
+    assert artifact_usage(root)['diagnostic_max_bytes']==DIAGNOSTIC_MAX_BYTES
+
+
+def test_checkpoint_existing_root_refuses_symlinked_budget_marker(tmp_path):
+    from lunar_drl_exploration.artifacts import MANIFEST
+    from lunar_drl_exploration.checkpoint import CheckpointManager
+    root=tmp_path/'prepared'
+    initialize_artifact_root(root,32*1024**3,diagnostic_max_bytes=2*1024**3)
+    outside=tmp_path/'saved-budget.json';outside.write_bytes((root/MANIFEST).read_bytes())
+    (root/MANIFEST).unlink();(root/MANIFEST).symlink_to(outside)
+    with pytest.raises(ValueError,match='symlink'):
+        CheckpointManager(root/'run',artifact_root=root,total_max_bytes=32*1024**3)
+    assert not (root/'run').exists()

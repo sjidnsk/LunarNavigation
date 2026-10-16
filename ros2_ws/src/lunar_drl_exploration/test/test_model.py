@@ -78,8 +78,8 @@ def test_polygon_retains_boundary_adjacency_and_cyclic_start_invariance():
     encoder = PolygonEncoder(128)
     polygon = torch.tensor([[0.,0.],[2.,0.],[1.,.4],[2.,2.],[0.,2.]])
     def encode(p):
-        return encoder(torch.cat((p, p.roll(-1,0)),1), torch.zeros(5,dtype=torch.long), 1)
-    torch.testing.assert_close(encode(polygon), encode(polygon.roll(2,0)))
+        return encoder(torch.cat((p, p.roll(-1,0)),1))
+    torch.testing.assert_close(encode(polygon).roll(2,0), encode(polygon.roll(2,0)))
     assert not torch.allclose(encode(polygon), encode(polygon[[0,1,3,2,4]]))
 
 

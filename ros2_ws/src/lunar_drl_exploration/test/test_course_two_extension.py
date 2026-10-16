@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 @pytest.mark.parametrize('interrupt_at',[None,2])
-def test_four_extended_blocks_continue_and_resume_exact_budgets(tmp_path,monkeypatch,interrupt_at):
+@pytest.mark.parametrize('block_size',[4096,8192])
+def test_four_extended_blocks_continue_and_resume_exact_budgets(tmp_path,monkeypatch,interrupt_at,block_size):
     from lunar_drl_exploration import course_two_trial as trial,course_two_control as ctl
     import lunar_drl_exploration.evaluation as evaluation
     d=tmp_path/'arms/C3';run=d/'training/run';run.mkdir(parents=True)
@@ -18,7 +19,7 @@ def test_four_extended_blocks_continue_and_resume_exact_budgets(tmp_path,monkeyp
     monkeypatch.setattr(trial,'gate',lambda rows,baseline:dict(passed=False,stop=True))
     class Fake:
         root=tmp_path
-        identity=dict(continuation_blocks=4,block_admissions=4096,pilot_admissions=16384,pilot_updates=4096)
+        identity=dict(continuation_blocks=4,block_admissions=block_size,pilot_admissions=block_size*4,pilot_updates=block_size)
         def __init__(self):self.stopping=False;self.state={'results':{}};self.budgets=[];self.interrupt=interrupt_at;self.labels=[]
         def initialize_arm(self,arm):return SimpleNamespace(output_dir=str(run))
         def save(self,**values):self.state.update(values)
@@ -37,11 +38,11 @@ def test_four_extended_blocks_continue_and_resume_exact_budgets(tmp_path,monkeyp
         preserved=(d/'block01.pt').read_bytes()
         f.interrupt=None;assert trial.Trial.extend(f,[])
         assert (d/'block01.pt').read_bytes()==preserved
-        assert f.budgets==[4096,4096,2048,4096,4096]
+        assert f.budgets==[block_size,block_size,block_size//2,block_size,block_size]
     else:
-        assert done and f.budgets==[4096]*4
+        assert done and f.budgets==[block_size]*4
     assert f.labels==[f'C3-block{i:02}' for i in range(1,5)]
     assert len(f.state['results'])==4
     final=ctl.read(run/'resume.pt')['schedule']
-    assert final['transitions']==257497+16384 and final['updates']==64000+4096
+    assert final['transitions']==257497+block_size*4 and final['updates']==64000+block_size
     assert all(not g['passed'] and g['stop'] for g in f.state['results'].values())

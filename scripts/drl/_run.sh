@@ -8,14 +8,15 @@ exec env -u AMENT_PREFIX_PATH -u COLCON_PREFIX_PATH -u CMAKE_PREFIX_PATH \
   bash --noprofile --norc -c '
     set -e
     DRL_ROOT=$1; shift
-    DRL_ROS_SETUP=${DRL_ROS_SETUP:-/opt/ros/jazzy/setup.bash}
-    DRL_CACHE=${DRL_CACHE:-$HOME/.cache/lunar-drl-redesign/jazzy}
+    DRL_ROS_SETUP=${DRL_ROS_SETUP:-/opt/ros/humble/setup.bash}
+    DRL_CACHE=${DRL_CACHE:-$HOME/.cache/lunar-drl-redesign/humble}
     DRL_PYTHON=${DRL_PYTHON:-$HOME/.cache/lunar-drl-training/venv/bin/python}
     source "$DRL_ROS_SETUP"
+    python3 "$DRL_ROOT/scripts/drl/build_cache.py" --verify "$DRL_ROOT" "$DRL_CACHE"
     source "$DRL_CACHE/install/local_setup.bash"
     set -u
-    if [[ "$ROS_DISTRO" != jazzy ]]; then
-      echo "DRL local launcher requires a separate Jazzy cache" >&2; exit 2
+    if [[ "$ROS_DISTRO" != humble ]]; then
+      echo "DRL local launcher requires a separate Humble cache" >&2; exit 2
     fi
     export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
     export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4 NUMEXPR_NUM_THREADS=4

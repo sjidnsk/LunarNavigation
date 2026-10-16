@@ -83,6 +83,7 @@ def evaluate_case(root, request_path, output, *, slot=0, progress=None, job_id=N
         initial=env.reference.coverage_ratio(env.privileged.observed)
         row.update(initial_roi_visible=initial>0,initial_coverage=initial,
             initial_completed=bool(env.completed),
+            initial_inside_task=env._initial_inside_task,
             reference_id=env.reference.reference_id,reference_area_m2=env.reference.area_m2,
             sensor=env.episode_metadata['sensor'],
             start_boundary_distance_m=env.episode_metadata.get('start_boundary_distance_m'),
@@ -99,7 +100,7 @@ def evaluate_case(root, request_path, output, *, slot=0, progress=None, job_id=N
             coverage=env.reference.coverage_ratio(transition.next_privileged.observed)
             geometry.observe((env.plant.pose.x,env.plant.pose.y),transition.parts.new_area_m2)
             row['trajectory'].append([env.plant.pose.x,env.plant.pose.y,env.plant.pose.yaw,coverage])
-            row.update(decisions=env.steps,first_roi=env._first_roi)
+            row.update(decisions=env.steps,first_roi=env._first_roi,first_entry=env._first_entry)
             write(progress,dict(case_id=row['case_id'],actor=str(actor),decisions=env.steps,
                 coverage=coverage,updated_unix=time.time(),phase='policy',first_roi=row['first_roi'],
                 slot=slot,domain_id=env.domain_id,job_id=job_id))

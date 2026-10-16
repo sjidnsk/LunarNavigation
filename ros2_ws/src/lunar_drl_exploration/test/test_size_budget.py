@@ -1,12 +1,12 @@
 """Size budgets are frozen before the episode, independent of its outcome."""
 import pytest
-from test_task_frontier_controller import module
+from test_task_frontier_controller import module,local_controller
 
 RULE=dict(mode='linear_extent',min_extent_m=50.,max_extent_m=100.,round_to=32,min_decisions=256,max_decisions=384)
 
 
 def test_size_budget_freezes_five_exact_pairs_and_rule_identity(tmp_path):
-    c=module('controller');path=tmp_path/'cases.json'
+    c=local_controller(tmp_path);path=tmp_path/'cases.json'
     rows=c.freeze_cases(c.LEGACY/'artifacts/baseline-summary.json',path,group_indices=[0,2,4,7,9],budget=RULE)
     assert [row['budget'] for row in rows[::2]]==[256,288,320,352,384]
     assert all(rows[i]['budget']==rows[i+1]['budget'] for i in range(0,10,2))
@@ -37,7 +37,7 @@ AREA_RULE=dict(RULE,mode='linear_area',max_decisions=512)
 
 
 def test_area_budget_exact_groups_and_midpoint(tmp_path):
-    c=module('controller')
+    c=local_controller(tmp_path)
     rows=c.freeze_cases(c.LEGACY/'artifacts/baseline-summary.json',tmp_path/'area.json',group_indices=[0,2,4,7,9],budget=AREA_RULE)
     assert [r['budget'] for r in rows[::2]]==[256,288,352,448,512]
     assert all(rows[i]['budget']==rows[i+1]['budget'] for i in range(0,10,2))

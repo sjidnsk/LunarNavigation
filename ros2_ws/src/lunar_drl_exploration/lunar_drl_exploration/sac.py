@@ -12,6 +12,25 @@ from .contracts import Transition
 from .model import Actor, Critic, segment_sum
 
 
+def checked_gradient_norm(parameters, loss, phase):
+    """Reduce on device, then make one finite gate before an optimizer step."""
+    gradients = [p.grad for p in parameters if p.grad is not None]
+    if not gradients:
+        raise FloatingPointError(phase + ' has no gradients')
+    norms = torch.stack([torch.linalg.vector_norm(gradient.detach()) for gradient in gradients])
+    norm = torch.linalg.vector_norm(norms)
+    if not bool(torch.isfinite(torch.stack((loss.detach(), norm))).all()):
+        raise FloatingPointError(phase + ' nonfinite loss or gradients')
+    return norm
+
+
+def require_finite_parameters(parameters, phase):
+    """Check updated tensors before they can become a completed learner version."""
+    finite = torch.stack([torch.isfinite(p.detach()).all() for p in parameters])
+    if not bool(finite.all()):
+        raise FloatingPointError(phase + ' nonfinite parameters after optimizer step')
+
+
 def soft_values(probs, log_probs, q1, q2, alpha, groups, count, *, entropy_bonus=None):
     if entropy_bonus is None:
         # Preserve the legacy joint path, including its arithmetic order.
@@ -317,12 +336,18 @@ class SACLearner:
         if len(transitions) != config.batch_size:
             raise ValueError("a complete update requires 64 transitions")
         sequences = self._sequences(transitions)
+        if any(obs.schema != self.model_config.observation_schema
+               for sequence in sequences for transition in sequence
+               for obs in (transition.observation, transition.next_observation)):
+            raise ValueError('SAC observation schema does not match model architecture')
         transitions = [sequence[0] for sequence in sequences]
         chunks = [transitions[i:i+config.microbatch_size]
                   for i in range(0,len(transitions),config.microbatch_size)]
         # Scalar diagnostics stay on-device until the single final transfer.
         metrics = torch.zeros(13, device=self.device)
         coefficient_mass = torch.zeros((), device=self.device)
+        moments = torch.zeros((5, 2), device=self.device)
+        samples_for_diagnostics = [[] for _ in range(3)]
         self.q1_optimizer.zero_grad(set_to_none=True)
         self.q2_optimizer.zero_grad(set_to_none=True)
         for offset, chunk in zip(range(0, len(transitions), config.microbatch_size), chunks):
@@ -333,6 +358,8 @@ class SACLearner:
             else:
                 targets, masses = self.retrace_targets(sequences[offset:offset + len(chunk)], scenes)
                 coefficient_mass += masses.sum()
+            moments[2] += torch.stack((targets.sum(), targets.square().sum()))
+            samples_for_diagnostics[2].append(targets.detach())
             batch = pack_observations([t.observation for t in chunk], self.device)
             truth = pack_privileged([t.observation for t in chunk], [t.privileged for t in chunk], scenes, self.device)
             indices = torch.tensor(np.cumsum((0,) + batch.action_counts[:-1]) +
@@ -344,10 +371,19 @@ class SACLearner:
                 loss = (selected - targets).square().mean()
                 (loss * weight).backward()
                 metrics[i] += loss.detach() * weight
-                del selected, loss
+                detached = selected.detach()
+                samples_for_diagnostics[i].append(detached)
+                td_error = detached - targets
+                moments[i] += torch.stack((detached.sum(), detached.square().sum()))
+                moments[i + 3] += torch.stack((td_error.sum(), td_error.square().sum()))
+                del selected, loss, detached, td_error
             metrics[5] += targets.mean() * weight
+        q1_norm = checked_gradient_norm(self.q1.parameters(), metrics[0], 'q1')
+        q2_norm = checked_gradient_norm(self.q2.parameters(), metrics[1], 'q2')
         self.q1_optimizer.step()
+        require_finite_parameters(self.q1.parameters(), 'q1')
         self.q2_optimizer.step()
+        require_finite_parameters(self.q2.parameters(), 'q2')
         # Clear critic grads before the actor phase: detached Q cannot pollute them.
         self.q1_optimizer.zero_grad(set_to_none=True)
         self.q2_optimizer.zero_grad(set_to_none=True)
@@ -390,37 +426,66 @@ class SACLearner:
                                              entropies if split_entropy else None)
             metrics[6:12] += diagnostics[:6] * weight
             metrics[12] = torch.maximum(metrics[12], diagnostics[6])
+        actor_norm = checked_gradient_norm(self.actor.parameters(), metrics[2], 'actor')
         self.actor_optimizer.step()
+        require_finite_parameters(self.actor.parameters(), 'actor')
         alpha_loss = temperature_loss(self.log_alpha, entropy_gap, 0.0)
         if split_entropy:
             alpha_loss = alpha_loss + temperature_loss(self.log_alpha_heading, heading_entropy_gap, 0.0)
         alpha_loss.backward()
+        temperatures = [self.log_alpha] + ([self.log_alpha_heading] if split_entropy else [])
+        temperature_norm = checked_gradient_norm(temperatures, alpha_loss, 'temperature')
         self.alpha_optimizer.step()
+        require_finite_parameters([self.log_alpha], 'temperature')
         if split_entropy:
             self.heading_alpha_optimizer.step()
+            require_finite_parameters([self.log_alpha_heading], 'temperature')
         metrics[3] = alpha_loss.detach()
         with torch.no_grad():
-            self.log_alpha.clamp_(max=math.log(config.maximum_alpha))
+            self.log_alpha.clamp_(max=math.log(config.effective_maximum_position_alpha))
             if split_entropy:
                 self.log_alpha_heading.clamp_(max=math.log(config.maximum_alpha))
             for target, source in ((self.target1,self.q1),(self.target2,self.q2)):
                 for target_p, source_p in zip(target.parameters(), source.parameters()):
                     target_p.lerp_(source_p, config.polyak)
+        require_finite_parameters((*self.target1.parameters(), *self.target2.parameters()), 'target')
+        standard_deviations = (moments[:, 1] / len(transitions) -
+                              (moments[:, 0] / len(transitions)).square()).clamp_min(0).sqrt()
+        q1_samples, q2_samples, target_samples = (torch.cat(chunks) for chunks in samples_for_diagnostics)
+        absolute_td = torch.cat(((q1_samples - target_samples).abs(),
+                                 (q2_samples - target_samples).abs()))
+        percentiles = metrics.new_tensor([.5, .95, .99])
+        quantiles = torch.cat([torch.quantile(values, percentiles)
+            for values in (q1_samples, q2_samples, target_samples, absolute_td)])
+        diagnostics = torch.cat((torch.stack((actor_norm, q1_norm, q2_norm, temperature_norm)),
+            standard_deviations,
+            torch.stack(((self.alpha_position == 0).to(metrics.dtype),
+                         (self.alpha_heading == 0).to(metrics.dtype),
+                         self.log_alpha.detach(),
+                         (self.log_alpha_heading if split_entropy else self.log_alpha).detach())), quantiles))
+        if not bool(torch.isfinite(torch.cat((metrics, diagnostics))).all()):
+            raise FloatingPointError('nonfinite update diagnostics')
         self.updates += 1
         values = torch.cat((metrics, self.alpha.reshape(1), coefficient_mass.reshape(1),
-            self.alpha_position.reshape(1), self.alpha_heading.reshape(1), entropy_targets)).detach().cpu().tolist()
+            self.alpha_position.reshape(1), self.alpha_heading.reshape(1), entropy_targets, diagnostics)).detach().cpu().tolist()
         return dict(zip(('critic1_loss','critic2_loss','actor_loss','alpha_loss','entropy','target_mean',
                         'position_entropy','heading_conditional_entropy','position_max_probability',
                         'raw_score_span','score_saturation_fraction','raw_score_gradient_abs_mean',
                         'raw_score_gradient_abs_max','alpha','trace_coefficient_mass_sum',
-                        'alpha_position','alpha_heading','position_entropy_target','heading_entropy_target'), values),
-                    updates=self.updates, batch_size=len(transitions), trace_samples=len(sequences),
+                        'alpha_position','alpha_heading','position_entropy_target','heading_entropy_target',
+                        'actor_grad_norm','q1_grad_norm','q2_grad_norm','temperature_grad_norm',
+                        'q1_selected_std','q2_selected_std','td_target_std','q1_td_error_std','q2_td_error_std',
+                        'alpha_position_underflow','alpha_heading_underflow','log_alpha_position','log_alpha_heading',
+                        'q1_p50','q1_p95','q1_p99','q2_p50','q2_p95','q2_p99',
+                        'td_target_p50','td_target_p95','td_target_p99','td_p50','td_p95','td_p99'), values),
+                    updates=self.updates, numeric_guard_version=1, numeric_checked_updates=self.updates,
+                    batch_size=len(transitions), trace_samples=len(sequences),
                     trace_length_sum=sum(map(len, sequences)),
                     trace_multi_count=sum(len(sequence) > 1 for sequence in sequences),
                     trace_legacy_count=sum(sequence[0].behavior_log_prob is None for sequence in sequences))
 
     def actor_state(self):
-        return {'schema':OBSERVATION_SCHEMA, 'frontier_semantics':frontier_semantics(), 'model_config':asdict(self.model_config),
+        return {'schema':self.model_config.observation_schema, 'frontier_semantics':frontier_semantics(), 'model_config':asdict(self.model_config),
                 'version':self.updates,
                 'state_dict':{k:v.detach().cpu().clone() for k,v in self.actor.state_dict().items()}}
 
@@ -445,7 +510,7 @@ class SACLearner:
             saved = canonical_learning_config(state['learning_config'])
         except ValueError as error:
             raise ValueError('incompatible SAC semantics') from error
-        current = asdict(self.learning_config)
+        current = canonical_learning_config(asdict(self.learning_config))
         for name in ('microbatch_size', 'learning_rate', 'polyak', 'initial_alpha', 'temperature_learning_rate'):
             saved.pop(name)
             current.pop(name)

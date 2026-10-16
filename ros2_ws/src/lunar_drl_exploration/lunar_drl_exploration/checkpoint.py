@@ -1,8 +1,9 @@
 """Complete learner-boundary continuation; one atomically replaced local resume."""
 from contextlib import contextmanager
 from dataclasses import dataclass
-import io
 import copy
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,8 @@ from .metrics import ResourceLimitError, artifact_bytes, live_hardware
 from .replay import ReplayBuffer, dumps_transport, loads_transport, snapshot_sample_count
 from .schedule import UpdateSchedule
 from .feature_schema import LEARNER_SCHEMA, require_frontier_semantics
-from .artifacts import BudgetWriter as _BudgetWriter, atomic_write, initialize_artifact_root, _safe_path
+from .artifacts import (BudgetWriter as _BudgetWriter, atomic_write, initialize_artifact_root,
+                        artifact_usage, MANIFEST, _safe_path)
 
 SCHEMA='bounded_training_v1'
 REPLAY_BOOTSTRAP_SCHEMA='ordered_a2_replay_bootstrap_v1'
@@ -160,7 +162,10 @@ class TrainingState:
         This operation neither creates the destination nor writes the source.
         """
         from .config import training_config_from_record
-        if experiment not in (None, 'paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent', 'ordered-ratio', 'ordered-a2', 'course-two', 'course-two-rebalance'):
+        if experiment == 'course-two-region-query':
+            from .region_query_migration import _retired
+            _retired()
+        if experiment not in (None, 'paired-polyak', 'paired-multistep', 'paired-entropy', 'ordered-extent', 'ordered-ratio', 'ordered-a2', 'course-two', 'course-two-rebalance', 'course-two-potential', 'course-two-region-query'):
             raise ValueError('unknown fork experiment: ' + str(experiment))
         source = Path(source).resolve()
         destination = Path(config.output_dir).resolve()
@@ -178,7 +183,7 @@ class TrainingState:
         fields = ('stagnation_window_steps', 'stagnation_max_positions',
                   'stagnation_position_tolerance_m', 'artifact_root',
                   'total_output_max_bytes', 'metrics_max_bytes', 'reward_diagnostics')
-        if experiment in ('course-two','course-two-rebalance'):
+        if experiment in ('course-two','course-two-rebalance','course-two-potential'):
             curriculum=loads_transport(state.record['curriculum'])
             if (not original.ordered_curriculum or original.course_two or not config.course_two
                     or config.ordered_curriculum or original.policy_graph_mode!='a2'
@@ -187,10 +192,14 @@ class TrainingState:
             fields=('course_two','ordered_curriculum','artifact_root','total_output_max_bytes',
                     'snapshot_max_bytes','metrics_max_bytes','save_interval_s',
                     'owned_pss_limit_bytes','system_reserve_bytes')
-            if experiment=='course-two-rebalance':
+            if experiment in ('course-two-rebalance','course-two-potential'):
                 if not config.course_two_variant or not original.environments<=config.environments<=32:
                     raise ValueError('rebalance requires variant and bounded environment increase')
                 fields+=('course_two_variant','course_two_catalog','course_two_catalog_sha','course_two_task_scope','course_two_sampling','course_two_scene_profile','environments')
+        if experiment=='course-two-potential':
+            if original.approach_reward is not None or config.approach_reward is None:
+                raise ValueError('potential fork requires unshaped baseline and explicit new shaping')
+            fields+=('approach_reward',)
         if experiment == 'ordered-a2':
             if (not original.ordered_curriculum or not config.ordered_curriculum or
                     original.policy_graph_mode != 'fine' or config.policy_graph_mode != 'a2' or
@@ -270,10 +279,10 @@ class TrainingState:
                 for key in fields if before[key] != after[key]})
         if experiment is not None:
             state.record['fork']['experiment'] = experiment
-        if experiment in ('ordered-extent', 'ordered-ratio', 'ordered-a2', 'course-two','course-two-rebalance'):
+        if experiment in ('ordered-extent', 'ordered-ratio', 'ordered-a2', 'course-two','course-two-rebalance','course-two-potential'):
             import hashlib
             state.record['fork']['source_checkpoint_sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
-        if experiment in ('course-two','course-two-rebalance'):
+        if experiment in ('course-two','course-two-rebalance','course-two-potential'):
             from .course_two import CourseTwo
             curriculum=loads_transport(state.record['curriculum'])
             curriculum['course_one_history']=copy.deepcopy(curriculum['course'])
@@ -296,6 +305,13 @@ class TrainingState:
                     raise ValueError('course-two cannot fork an unfinished A2 bootstrap')
                 counters['course_one_replay_bootstrap']=counters.pop('replay_bootstrap')
             state.record['counters']=dumps_transport(counters)
+        if experiment=='course-two-potential':
+            state.record['replay']=ReplayBuffer(config.replay_max_bytes).snapshot(config.snapshot_max_bytes)
+            state.record.pop('replay_integrity', None)  # This explicit fork resets experience.
+            counters=loads_transport(state.record['counters'])
+            counters.pop('reward_diagnostics',None)
+            state.record['counters']=dumps_transport(counters)
+            state.record['fork']['reward_replay_reset']=True
         if experiment == 'ordered-a2':
             curriculum = loads_transport(state.record['curriculum'])
             course = curriculum.get('course', {})
@@ -311,6 +327,7 @@ class TrainingState:
                 admitted=0, active=True, required_tasks=list(course['weights']), by_task={})
             state.record['counters'] = dumps_transport(counters)
             state.record['replay'] = ReplayBuffer(config.replay_max_bytes).snapshot(config.snapshot_max_bytes)
+            state.record.pop('replay_integrity', None)  # Ordered-A2 explicitly bootstraps new replay.
         if experiment == 'ordered-ratio':
             # Restart quotas at this explicit allocation boundary, retaining all
             # episode/coverage totals and avoiding historical catch-up collection.
@@ -353,6 +370,8 @@ class TrainingState:
                 curriculum_rng, curriculum, collector_state, counters, fork=None,
                 arrival_contract_migrations=None):
         boundary.require_safe()
+        if len(replay) and replay.observation_schema != config.model.observation_schema:
+            raise ValueError('replay observation schema differs from captured model')
         if len(replay) > schedule.transitions:
             raise ValueError('replay admission count exceeds learner-owned counter')
         if (schedule.warmup != config.warmup or
@@ -371,11 +390,13 @@ class TrainingState:
         index=replay.course_two_index if config.course_two_variant else None
         required=index.required_indices() if index is not None else ()
         saved_replay=replay.snapshot(config.snapshot_max_bytes,
-            require_sample=schedule.can_update and not active_bootstrap,required_indices=required)
+            require_sample=schedule.can_update and not active_bootstrap,required_indices=required,
+            require_all=True)
         if index is not None and index.status()['ready']:
             saved=ReplayBuffer.from_snapshot(saved_replay,config.replay_max_bytes)
-            if not saved.enable_course_two_sampling(completion_bonus=config.completion_bonus, task_scope=config.course_two_task_scope, sampling=config.course_two_sampling, scene_profile=config.course_two_scene_profile).status()['ready']:
+            if not saved.enable_course_two_sampling(completion_bonus=config.completion_bonus, task_scope=config.course_two_task_scope, sampling=config.course_two_sampling, scene_profile=config.course_two_scene_profile, exploration_reward_scale=config.exploration_reward_scale, scene_tasks=config.course_two_scene_tasks).status()['ready']:
                 raise ValueError('snapshot lost balanced replay readiness')
+            del saved
         if active_bootstrap and snapshot_sample_count(saved_replay) != bootstrap['admitted']:
             raise ValueError('active replay bootstrap snapshot must retain every admitted sample')
         rng=dict(python=random.getstate(),numpy=dumps_transport(np.random.get_state()),
@@ -387,6 +408,8 @@ class TrainingState:
         record = dict(schema=SCHEMA,semantics=resume_semantics(config),config=config_record(config),
             learner=learner.state_dict(),schedule=schedule.state_dict(),rng=rng,
             replay=saved_replay,
+            replay_integrity=dict(mode='complete_v1', count=len(replay),
+                sha256=hashlib.sha256(saved_replay).hexdigest()),
             curriculum=dumps_transport(curriculum),collector_state=copy.deepcopy(collector_state),
             counters=dumps_transport(counters))
         if fork is not None:
@@ -490,9 +513,15 @@ class TrainingState:
         active_bootstrap = bootstrap is not None and bootstrap['active']
         if schedule.can_update and count == 0 and not active_bootstrap:
             raise ValueError('checkpoint earned update credit requires a replay sample')
+        integrity = record.get('replay_integrity')
+        if integrity is not None and (not isinstance(integrity, dict) or
+                integrity.get('mode') != 'complete_v1' or type(integrity.get('count')) is not int or
+                integrity['count'] != count or integrity.get('sha256') != hashlib.sha256(record['replay']).hexdigest()):
+            raise ValueError('checkpoint replay sample count/digest integrity mismatch')
         # A current envelope cannot conceal legacy or semantically mismatched content.
         replay = ReplayBuffer.from_snapshot(record['replay'], config.replay_max_bytes,
-            validate_only=not (materialize_replay or active_bootstrap))
+            validate_only=not (materialize_replay or active_bootstrap),
+            expected_observation_schema=config.model.observation_schema)
         if active_bootstrap:
             validate_replay_bootstrap(config, schedule, counters, replay=replay,
                 fork=record.get('fork', {}))
@@ -551,7 +580,15 @@ class CheckpointManager:
             root, output = _safe_path(artifact_root), _safe_path(output_dir)
             if not output.is_relative_to(root) or output == root:
                 raise ValueError('training output must be inside, not outside or equal to artifact root')
-            initialize_artifact_root(root, total_max_bytes)
+            marker = root / MANIFEST
+            if marker.exists() or marker.is_symlink():
+                # An existing prepared root owns its immutable diagnostic limit.
+                # Keep the requested total exact; initialize rejects any mismatch.
+                declared = artifact_usage(root)
+                initialize_artifact_root(root, total_max_bytes,
+                    diagnostic_max_bytes=declared['diagnostic_max_bytes'])
+            else:
+                initialize_artifact_root(root, total_max_bytes)
         self.output_dir.mkdir(parents=True,exist_ok=True)
         self.interval_s=interval_s; self.total_max_bytes=total_max_bytes
         self.snapshot_max_bytes=snapshot_max_bytes; self.clock=clock

@@ -147,7 +147,15 @@ def test_launcher_clears_old_overlays_and_preserves_user_device_selection(tmp_pa
     root = Path(__file__).resolve().parents[4]
     ros = tmp_path / 'ros.bash'; cache = tmp_path / 'cache'
     (cache / 'install').mkdir(parents=True)
-    ros.write_text('export ROS_DISTRO=jazzy\nexport PYTHONPATH=/new/ros\n')
+    ros.write_text('export ROS_DISTRO=humble\nexport PYTHONPATH=/new/ros\n')
+    # Launcher now requires an owned Humble cache with current native identity.
+    spec = importlib.util.spec_from_file_location('drl_build_cache', root / 'scripts/drl/build_cache.py')
+    build_cache = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build_cache)
+    import json
+    (cache / '.drl-source.json').write_text(json.dumps(dict(
+        source_root=str(root), ros_distro='humble',
+        native_source_sha256=build_cache.native_digest(root))))
     (cache / 'install/local_setup.bash').write_text('export PYTHONPATH=/new/drl:$PYTHONPATH\n')
     python = tmp_path / 'python'
     python.write_text('#!/bin/bash\n/usr/bin/env\n')

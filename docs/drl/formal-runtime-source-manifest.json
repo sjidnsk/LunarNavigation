@@ -1,0 +1,154 @@
+{
+  "schema": "formal_drl_source_v1",
+  "deployed_runtime": "1c57d3118181fda5fc588d3be0281d2b280381d7871f6cae53d1715fbd996ba5",
+  "config_sha256": "8d159d7e55fcb42aa23aef21900595199d8371f809543b3b83ef2ef1618deefb",
+  "source_epoch": "navigation-budget-20261016",
+  "package": "lunar_drl_exploration",
+  "files": {
+    "course_two_qualification.py": "2aeda2e48391987f38010350871df35f89a32c71799dfe5694383d36e774480e",
+    "graph.py": "68a8c4187c2470be50df789a214fdd6db7b727abaae365ff96345064636d3738",
+    "sac.py": "b9a01916c0307dec39a3062edb9c1af0b16830371851dc24181ca4194a66df2a",
+    "reference.py": "55d33e571abedaac91c8eccbed4ef448b95cd379d09858db73f4bc57ce985d04",
+    "policy_graph.py": "a87747fb01395ac3b668c4ff409b72e82e8a2f1b15f5662cfc520e56be3836c7",
+    "worker.py": "9672c85fefca83ac105a6125d612954a9309ba61b354f90e6438c72b3c94baa0",
+    "course_two_prelude.py": "0a94dc57bd5f88d32c207cc20ea04a3c6628bf6a8d83a60e9b367603717c3d72",
+    "course_two_parallel.py": "bad98ee5664f9136c5b083a1cadcdb978900f1876736ac2bba2d27b16ba7d134",
+    "model.py": "f74b1e6ed239b1b9a090b4905806bd77094cb9e2c5bca93590f90d61bda4272d",
+    "__init__.py": "c2f01b474ba4e56aa323f23c9c2ed8bf099b1184c45d2b7d5813221e147e00d4",
+    "candidate_model.py": "b873d0ea4ce3bd841919ad4cb32941cf4e37802c46c9097a93fd7a5130e5aaab",
+    "checkpoint.py": "ec0b9d0e09d26ba3db58345f68849b452fc97dc7584ab4511e5fcf7cc21f092a",
+    "metrics.py": "bb396c4c5ac5692f17287a5b584a2e3ee8332da9b9636cf201c9dbd43646da2e",
+    "navigation_identity.py": "62b3f37cc2a6625e9e866df4220be0f3d8773386b62d281a8f523ce10c107088",
+    "actor_probe.py": "59ef74e433608b98376534c004a318e6262cd2c52cbb4c58ead95f165a6fd4fa",
+    "terminal.py": "41cea21c8de268f4679f71a420228860a8871c6b488ca2b8fc0d4ff2f731535c",
+    "replay.py": "d5b08523fa18e1e594757fb41ac2cef61c6018d139a5706f2f8f63057f0c9a04",
+    "stagnation.py": "e8976007202d8a68766def74771236cce4dcc1c68c6b7489cf5d76c6b2e9a8b5",
+    "maps.py": "879c65dd68fca2ca48d19e37bae1bbc3906ef906da90ea1bdfb9669f6a384312",
+    "arrival_contract.py": "84e58d43e548d8118e847aae68f7eb6ec7733c04f5072aacb12e271810450a96",
+    "candidate_batch.py": "fc1d8fc37eca212e6cd21d6b21a62076f498fb93e0e2abe9c27c01db751482fa",
+    "sensor.py": "17e4cbc6a08d5b670957bc76ed9e73c0056ea2ec1c469681a3faac3910de461b",
+    "contracts.py": "caf1c4cbdd864d40f6161233b3ae2023b1c7fcd67ba4907c140851cc46ea7830",
+    "course_two_scene.py": "35e42e2210183e9b50a37132d06277aa84b67f0b003b13e686783a269f42f21e",
+    "course_two_rebalance.py": "60505cd9ee0529cc29203967507a6fafb5e84f8a4bddedd2ba30e49e04da616d",
+    "ros_messages.py": "8241419a0cbd7853842ff5490007978b198a9e58909985996cd0a6c123dcba79",
+    "task_analysis.py": "52cd508a2ae6f32a3cd77c5d9e98d7acc4730639f0c1ba05b77a3ef5d88f67ff",
+    "coverage.py": "c0ce49c76631c3badcb7aaa364893c554b557402a679c1fe7a172c75128de793",
+    "region_query_trial.py": "279d3dc95e9bdec15a3a24be9e4f537b0d03a660263240533659fea755bc7022",
+    "reward_diagnostics.py": "90759c57a5262ae9d20ec7bce12ca5b64a6b218549429c40a5a9c941483f406b",
+    "course_two_rebalanced_scene.py": "7f6ef365534eea89012981c86525181ff9b2e3999087a15875e73d1249755eb6",
+    "baseline_experiment.py": "105eb4926b29d2d03fe53bd03f76bf79367a8cbee8b4be0c4a3282713549bf01",
+    "paired_experiment.py": "4953165e11e0176e13a6b795bed1caa21b6d987b81c79614eec6b60279afa799",
+    "artifacts.py": "3dab93789940e06871b9283bdbbc31179756b06fffdb1bbafb089e5637f604e2",
+    "course_two_replay.py": "dcea3bb7856873c5182193dc0ab7191743ee2653409cbe2c2678ccb15f166402",
+    "ordered_curriculum.py": "4b57cd0d4e5ea24ef5f3917ff1e23109e31298878c39d69fcdd7ab81e70f7939",
+    "clearml_tracking.py": "7bd62fb055a3246cab0def69006fb7db993cc298dbea2f077cba10c0da4471fe",
+    "navigation_budget.py": "0ea149b694c6eaa27e0d17cf7689b0acc356779973bc4932b1adf603b8bccab1",
+    "schedule.py": "f2805dfa5ddabf3c577f72930432695d2005e5f7c45fbf414b492a27279f0b32",
+    "batch.py": "beb7330488c72edc457e837b673c680a0d64092e8d5c30cd3019ec017d8a0eeb",
+    "plant.py": "327f5e50cc83f8137b2436fba16a298fdcaa8c3fe9a822b33a20087152c049ab",
+    "course_two_simple.py": "3a1a5bdac24e3aa1c863a3c857bf408ed85d7b0a4e8abed5eac1ddd51a9c1e86",
+    "course_two_control.py": "c5249b9fcac617ee8b4d2e132e0a052194226bf90f0a660a2fff23ba0d0d6465",
+    "region_relation_run.py": "eaef542619f4341f0718beba5bcd07381104c76c71da5fae49fd183fe6df6b0a",
+    "edge_message.py": "d5b320ad661bfa57e7270acc4f06b819be094529830b0cc88a5280d2eafc93b5",
+    "region_query_migration.py": "3df4b8d3f79a7239db5bafa45b6a78110ff1e410fc140e58997e5807334f310e",
+    "region_relation_prepare.py": "4dd665c040c374c805d3cc4d664fbe6e1f5c00d4d7c2663229545d3b414de3b3",
+    "processes.py": "591e45d5abfdfdfb6af89fcab1c7f0173a18952bdc10f48220da6d504562ff42",
+    "evaluation_error_policy.py": "b5f792c2adf4a46594a921a4d19d9f451e34098d9b8569a25e3285299b473f71",
+    "ipc.py": "f3bc0b7ffb252c96bf10b35fb2d8fb3bb1db5133cbc17cb676564f66acdecbd4",
+    "metric_graph.py": "70ed49814ca228f790a62bc64c097754f0b741a16a4003447491d4448812b136",
+    "cave_topology.py": "b528c75d1b4582f20d3036d15cecd7bbf0f923279306646b7677afe7b1d8e1d7",
+    "runtime.py": "849989d6992c9931cb47d4ee21b818538f716dc747ca6baa0a10fa10704095d8",
+    "feature_schema.py": "28157b7e93b1e034502f9cdc96e7c722b49f749c7c387f27f0cf9f828c414b4b",
+    "config.py": "9045c3616252bed0cd7f76b71189266a5a2367609deccf16c3b616875c771188",
+    "approach_potential.py": "5cf21a9027d5a5b32ce596be0550c673de528fb8f6efcb3d07aa8d25dfcdf358",
+    "domain_lease.py": "f0a91b686c45bbd1eaa7f0072b4152c78a3f73b78b5c4b673c02596525680f0f",
+    "course_two_sensors.py": "28486750defdedf0dc31f2a8dc6ad50e37b90bc1c45d6595b42d35414ccd72aa",
+    "cli.py": "d810f917ef23f11bf29da1585c48309eca0ad187a4d3ccfa63b4301dbe829059",
+    "ros_env.py": "991aa5ea36292811ec3bf77741232d053e800549d36b468c75f0a725de50177f",
+    "course_two_trial.py": "46bff3327ec784193adbb9ec0b5c9df648da6be7939ec3b55a784bbc27db8666",
+    "geometry.py": "644a208842fc260b348dbd63a9ed5da783c1fc0b28d7b92f7a02d5817e1ec056",
+    "evaluation.py": "df5782e4959d3bd73c8d22eed41e60b6367d81f5c635403044a0ca2ed477d345",
+    "frontiers.py": "8fd6de21f29b58aa2f3117c23c8c119bb7e7178d7a05878dc446b61e78c9fe45",
+    "course_two_eval.py": "2f19dc44c4265fe3459a311557b81ed5c57912ae3dd89e6a8582f1290cefa6db",
+    "entry_curriculum.py": "9225472a1d659ca31b278019d049b153769b04ea8c61c19342ada6cd26665205",
+    "edge_dot.py": "356880ab9984cb772d9e06e9b0efcd94818aa18b2b80da007d722699690dd33e",
+    "region_relation_data_guard.py": "989c137fb8984bc9130ddaa97fad8c5773a84c17c40fbcc690bef40beef53fd1",
+    "scene.py": "476670e4a2aa4111b969366065cc6632945281dec25ba9356725da7d4d045d0c",
+    "region_relation_evaluation.py": "3df2c74c9608a031aa1d23c513596c12c3ed4ddda81b8009ef1b623b03122b7f",
+    "training.py": "aad1308bca166b76006893ab3f04cd05b671d11104a32a0672252d01742cce3e",
+    "course_two.py": "2cb526bcf81bd5e7986c7af85509e72379d332ab067d4bb9b653e3f8659fbf52",
+    "course_two_task_scope.py": "fc9cba5fe2ab690e5a84c919ce5c96e102a5162cbfb016aa38a49c1c5b9391b0",
+    "history.py": "9d36a40bdb0b0386fe55b73d62cb970e03812acb21375541a7f4d213eae055fb",
+    "privileged.py": "b38b6c9be957a7f4c44144a3fd74e82adae939ff7ac6ecb931fcc3395d443591",
+    "decision.py": "203ba4151430caee04dc0a00bebe3ca0deecb8bf45f61867dc7bfb6c0f9fd420",
+    "candidate_observation.py": "c1fe25886a6e473999f8340d9e66747b6a77646cfe575c21f5bd3349d3cd60b6",
+    "collector.py": "00f609f33ab021c998d2cc3b0a98508a96845fa42ee4657b0ad05449e42e3410"
+  },
+  "native_navigation": [
+    [
+      "native:lunar_incremental_navigation_core:lib/liblunar_incremental_navigation_core.so",
+      "c42cb8c10904e2ea90a07efc1dc35b5db78b95340f5e7fc685f262dced0f701d"
+    ],
+    [
+      "native:lunar_incremental_navigation_ros:lib/liblunar_incremental_navigation_ros.so",
+      "4210194514acf3719e573d37a0a05f1d0e7ad0b98b82a6d01b525585fa54ed84"
+    ],
+    [
+      "native:lunar_incremental_navigation_ros:lib/lunar_incremental_navigation_ros/lunar_incremental_navigation_node",
+      "c46fc530fd667daceb613202f44a38a74d86668caaecf8c975300f14726197d9"
+    ]
+  ],
+  "controller_execution": [
+    [
+      "controller:local/lib/python3.10/dist-packages/lunar_pure_wheeled_controller/__init__.py",
+      "a39f13c11c7a3b68fb9246b3b26a141e528d9a2abfe4f4cb8c61961ade580c4d"
+    ],
+    [
+      "controller:local/lib/python3.10/dist-packages/lunar_pure_wheeled_controller/execution.py",
+      "90249fc72bb8f2a27d8e0ec82e33bb40167458914847512295fe110dd8ae4450"
+    ],
+    [
+      "controller:local/lib/python3.10/dist-packages/lunar_pure_wheeled_controller/frame.py",
+      "39b1b35efc32d3ae97b32e28a4a6f6359238d4bd0d43a1619a3b315c6dd73d08"
+    ],
+    [
+      "controller:local/lib/python3.10/dist-packages/lunar_pure_wheeled_controller/geometry.py",
+      "ba8c4472119f08d7276007d0c62d0dbba8db7233ac28b30be17bf7722846ed64"
+    ],
+    [
+      "controller:local/lib/python3.10/dist-packages/lunar_pure_wheeled_controller/incremental_path.py",
+      "01e75a3d5807ec50f65b57b7d8e7a58caa55ccff5c1e24bcc852e5eff8fd3593"
+    ],
+    [
+      "controller:local/lib/python3.10/dist-packages/lunar_pure_wheeled_controller/limits.py",
+      "4fc24cba9ab065045d4cdf44df6210518281af1ba01ab3ee9b800123d629a7d6"
+    ],
+    [
+      "controller:local/lib/python3.10/dist-packages/lunar_pure_wheeled_controller/node.py",
+      "03a36f2fdb9e6266266ba2e34ef92f2fb2fbac4083cb4239cc9bcf0c68241ae3"
+    ],
+    [
+      "controller:local/lib/python3.10/dist-packages/lunar_pure_wheeled_controller/path_geometry.py",
+      "95f263a17fa75bb117459925a0c4c19b884660968f9abb0072bac7b38d807b89"
+    ],
+    [
+      "controller:local/lib/python3.10/dist-packages/lunar_pure_wheeled_controller/reference.py",
+      "c8ee957ad96552efae1f8cfde604edbd4a9003d52398ed3ac02f848d5289338b"
+    ],
+    [
+      "controller:local/lib/python3.10/dist-packages/lunar_pure_wheeled_controller/tracking.py",
+      "6928081bc25273ac91e4a1405bbe6e4c9dae90829b33b25da3286f18433baa30"
+    ],
+    [
+      "controller:lib/lunar_pure_wheeled_controller/lunar_pure_wheeled_controller_node.py",
+      "ec3873303a615108287d3a86b049c9d2d1749bba905c296e24c4ab8073a5e7d5"
+    ]
+  ],
+  "scope": "Exact deployed Python package; existing public navigation source retained; native install and runtime configuration contribute separately to runtime identity",
+  "portable_config_sha256": "7f4340e5a965882d1b96924b15729bb682297c4be2cb91a22e89081261224839",
+  "portable_config_path_fields": [
+    "platform.capability_path",
+    "output_dir",
+    "artifact_root"
+  ]
+}

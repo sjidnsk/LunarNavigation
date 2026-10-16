@@ -82,10 +82,12 @@ class RewardDiagnostics:
     At most 233 environments are accepted (the available DDS domain ID count).
     """
 
-    def __init__(self, environments, completion_bonus=5., success_coverage=.99, state=None):
+    def __init__(self, environments, completion_bonus=5., success_coverage=.99, state=None, *, exploration_reward_scale=1.):
         self.environments = _integer(environments, 'environments', low=1, high=233)
         self.completion_bonus = _finite(completion_bonus, 'completion_bonus', low=0.)
         self.success_coverage = _finite(success_coverage, 'success_coverage', low=0., high=1.)
+        self.exploration_reward_scale = _finite(exploration_reward_scale, 'exploration_reward_scale', low=0.)
+        if self.exploration_reward_scale <= 0:raise ValueError('exploration reward scale must be positive')
         self._state = dict(schema=_SCHEMA, environments=self.environments,
             completion_bonus=self.completion_bonus, success_coverage=self.success_coverage,
             totals=_stats(), by_coverage={key: _stats() for key in _COVERAGE},
@@ -94,6 +96,8 @@ class RewardDiagnostics:
             late_episode_segments={key: _tail() for key in _OUTCOMES},
             segments_closed_by_reason={key: 0 for key in _CLOSE_REASONS},
             active=[None] * self.environments, success_cases=[], stagnation_cases=[])
+        if self.exploration_reward_scale != 1.:
+            self._state['exploration_reward_scale'] = self.exploration_reward_scale
         if state is not None:
             self._restore(state)
             for env_id in range(self.environments):
@@ -133,9 +137,11 @@ class RewardDiagnostics:
         reason = (truncation_reason if truncation_reason in _TRUNCATION_REASONS else 'OTHER') if truncated else None
         removed_in = _integer(transition.parts.removed_frontiers_in, 'removed_frontiers_in')
         removed_out = _integer(transition.parts.removed_frontiers_out, 'removed_frontiers_out')
-        components = dict(exploration=removed_in / 50.,
+        components = dict(exploration=self.exploration_reward_scale * removed_in / 50.,
             motion=-.002 * distance - .005 * turn / math.pi, step=-.001,
             completion=self.completion_bonus if success else 0.)
+        auxiliary=getattr(transition.parts,'approach_reward',0.)
+        if auxiliary:components['approach']=auxiliary
         residual = reward - sum(components.values())
         row = dict(actor_version=version, before_coverage=before, after_coverage=after,
             new_area_m2=area, distance_m=distance, turn_rad=turn, reward=reward,
@@ -144,6 +150,7 @@ class RewardDiagnostics:
             completion_reward=components['completion'], wall_s=wall, simulation_s=simulation,
             terminated=terminated, truncated=truncated, success=success,
             truncation_reason=reason, collision=collision)
+        if auxiliary:row.update(approach_reward=auxiliary,base_reward=reward-auxiliary)
         # Keep scalar endpoints only, never graph arrays or full execution records.
         for prefix, field in (('actual', 'actual_pose'), ('goal', 'goal')):
             position = execution.get(field)
@@ -182,7 +189,7 @@ class RewardDiagnostics:
             if truncated:
                 stats['truncation_reasons'][reason] += 1
             for key, value in components.items():
-                stats['reward_components'][key] += value
+                stats['reward_components'][key] = stats['reward_components'].get(key,0.) + value
             stats['reward_residual_sum'] += residual
             stats['reward_mismatch_count'] += int(abs(residual) > 1e-8)
             _versions(stats, version)
@@ -266,7 +273,8 @@ class RewardDiagnostics:
             raise ValueError('diagnostic state schema mismatch')
         if state['environments'] != self.environments:
             raise ValueError('diagnostic state environments mismatch')
-        if state['completion_bonus'] != self.completion_bonus or state['success_coverage'] != self.success_coverage:
+        if (state['completion_bonus'] != self.completion_bonus or state['success_coverage'] != self.success_coverage
+                or state.get('exploration_reward_scale',1.) != self.exploration_reward_scale):
             raise ValueError('diagnostic reward semantics mismatch')
         for key, allowed in (('by_coverage', _COVERAGE), ('by_family', _FAMILIES),
                 ('by_size', _SIZES), ('segments_closed_by_reason', _CLOSE_REASONS),
@@ -293,7 +301,7 @@ class RewardDiagnostics:
                 self._validate_scalars({k: v for k, v in active.items() if k not in ('late', 'steps')})
                 self._validate_shape(active['late'], _tail())
                 for step in active['steps']:
-                    if not isinstance(step, dict) or set(step) != _STEP_FIELDS:
+                    if not isinstance(step, dict) or set(step)-{'approach_reward','base_reward'} != _STEP_FIELDS:
                         raise ValueError('diagnostic state bounded step schema mismatch')
                     self._validate_scalars(step)
         self._state = deepcopy(state)
@@ -309,8 +317,9 @@ class RewardDiagnostics:
     @classmethod
     def _validate_shape(cls, value, template):
         if isinstance(template, dict):
-            if not isinstance(value, dict) or set(value) != set(template):
+            if not isinstance(value, dict) or (set(value) != set(template) and not (set(template)=={'exploration','motion','step','completion'} and set(value)==set(template)|{'approach'})):
                 raise ValueError('diagnostic state bounded counter schema mismatch')
+            if 'approach' in value and 'approach' not in template:_finite(value['approach'],'approach')
             for key in template:
                 cls._validate_shape(value[key], template[key])
         elif type(template) is int:

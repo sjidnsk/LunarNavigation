@@ -130,7 +130,9 @@ def evaluate(config, actor_path, *, seeds, families, extents, budget, output=Non
                     geometry = None
                     try:
                         obs, state = env.reset(seed, family, extent, episode_budget=budget)
-                        geometry = GeometryMetrics(obs.positions[obs.current_index], config.goal_position_tolerance_m)
+                        position = ([obs.build_pose.x,obs.build_pose.y] if obs.schema=='task_graph_v5'
+                                    else obs.positions[obs.current_index])
+                        geometry = GeometryMetrics(position, config.goal_position_tolerance_m)
                         progress = env.progress()
                         metric.observe(env.reference.coverage_ratio(state.observed),
                             progress['distance_m'], 0., 'INITIAL', env.terminated, False,
@@ -140,7 +142,9 @@ def evaluate(config, actor_path, *, seeds, families, extents, budget, output=Non
                         while not metric.terminated and not metric.truncated and not metric.collisions:
                             transition = env.step(policy(obs))
                             next_obs = transition.next_observation
-                            geometry.observe(next_obs.positions[next_obs.current_index], transition.parts.new_area_m2)
+                            position = ([next_obs.build_pose.x,next_obs.build_pose.y] if next_obs.schema=='task_graph_v5'
+                                        else next_obs.positions[next_obs.current_index])
+                            geometry.observe(position, transition.parts.new_area_m2)
                             execution = env.last_execution
                             metric.observe(env.reference.coverage_ratio(transition.next_privileged.observed),
                                 env.progress()['distance_m'], transition.parts.new_area_m2,
@@ -184,10 +188,12 @@ def export_actor(checkpoint, output):
         from .checkpoint import TrainingState
         TrainingState(record).validate()
         source = record['learner']
-        actor = dict(schema=OBSERVATION_SCHEMA, frontier_semantics=frontier_semantics(),
+        from .config import ModelConfig, canonical_model_config
+        model = ModelConfig(**canonical_model_config(source['model_config']))
+        actor = dict(schema=model.observation_schema, frontier_semantics=frontier_semantics(),
             model_config=source['model_config'],
             version=source['updates'], state_dict=source['actor'])
-    elif record.get('schema') == OBSERVATION_SCHEMA: actor = record
+    elif record.get('schema') in (OBSERVATION_SCHEMA, 'task_graph_v5'): actor = record
     else: raise ValueError('unsupported checkpoint/Actor schema; no old GRU migration')
     # Same loader's exact shape/schema checks, before replacing an existing file.
     from .runtime import ActorPolicy

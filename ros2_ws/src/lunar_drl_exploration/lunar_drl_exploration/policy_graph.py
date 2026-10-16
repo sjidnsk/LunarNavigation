@@ -220,10 +220,11 @@ def _validate_cap(max_positions):
         raise ValueError("max_positions must be a nonnegative integer")
 
 
-def _expand_actions(observation, max_positions, adjacency):
+def _expand_actions(observation, max_positions, adjacency, *, distances=None):
     if max_positions == 0:
         return observation
-    distances = _distances(adjacency, observation.current_index)
+    if distances is None:
+        distances = _distances(adjacency, observation.current_index)
     positive_inside = np.any(observation.features[:, IN_GAIN_SLICE] > 0, axis=1)
     candidates = sorted(
         (row for row in distances if row != observation.current_index and positive_inside[row]),

@@ -1,5 +1,25 @@
 # 强化学习统一开发入口
 
+## 2026-10-16 正式训练版本源码整合
+
+唯一开发整合线为 `dev/drl-exploration`，工作树为项目根下
+`lunar-runtime/.worktrees/drl-exploration-redesign`。已收录当前正式
+`candidate_geometry_v3 / task_graph_v5` 架构、完整回放、课程与评测控制、
+改进导航的训练接线、到达契约及动态行程预算；对应配置为
+`config/drl_candidate_geometry_v3.yaml`，默认旧模型配置不静默切换。
+
+详见[正式版本整合说明](drl/2026-10-16-formal-version-consolidation.md)；
+运行 `python3 scripts/drl/verify_formal_source.py` 可只读核验78份训练Python源码。
+模型、回放和实验产物不进入Git。
+
+当前正式训练仍使用原 `.runtime/candidate-geometry-v3` 冻结运行副本，实验根为
+`.runtime/candidate-geometry-v3/experiment-20261014`；本次Git整合不切换或重启该服务。
+V5、旧课程和到达修复工作树仍保留，其中存在运行cwd或构建源路径依赖，不可据此删除。
+
+以下日期段保留为历史记录，其旧训练、绝对路径和缓存不作为本次正式训练启动依据。
+
+---
+
 ## 2026-10-12 统一整合入口
 
 代码开发统一到 `dev/drl-exploration`，工作树为

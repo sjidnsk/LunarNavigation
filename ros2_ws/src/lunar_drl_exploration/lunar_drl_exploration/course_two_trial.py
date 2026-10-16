@@ -77,7 +77,7 @@ def gate(rows,baseline):
         next_action='end_block_and_review')
 
 
-def prepare(root):
+def prepare(root,*,bounded_potential=False):
     import torch
     from .checkpoint import TrainingState
     from .config import training_config_from_record,config_record
@@ -113,6 +113,10 @@ def prepare(root):
         ctl.read(root/'frozen/development-requests.json')))
     ctl.write(root/'state.json',dict(status='ready',phase='baseline',stage='A1',arm=None,
         results={},qualification_done=0,qualification_total=total,created_unix=time.time()))
+    if bounded_potential:
+        identity=ctl.read(root/'identity.json')
+        identity.update(approach_reward=dict(mode='bounded_quadratic_v1',bound=2.,scale_m=50.),bounded_potential=True,continuation_blocks=4,block_admissions=4096,pilot_admissions=16384,pilot_updates=4096)
+        ctl.write(root/'identity.json',identity)
     return dict(root=str(root),status='ready',runtime=ctl.runtime_digest())
 
 
@@ -236,10 +240,14 @@ class Trial(ctl.Controller):
         from .config import training_config_from_record
         from .course_two_parallel import worker_count
         if arm!='C3':raise ValueError('only C3 training is enabled')
+        if self.identity.get('region_query_mode'):
+            from .region_query_trial import arm_config
+            return arm_config(self.root, self.identity)
         catalog=self.root/'rebuilt-catalog.json'
         simple=self.identity.get('sampling')=='scene_episode_v1'
         return replace(training_config_from_record(ctl.read(self.root/'config.json')),
             environments=worker_count(self.root/'training-settings.json',default=12),
+            approach_reward=self.identity.get('approach_reward'),
             ordered_curriculum=False,course_two=True,course_two_variant=arm,
             course_two_task_scope=self.identity.get('task_scope',''),
             course_two_sampling=self.identity.get('sampling',''),
@@ -254,23 +262,27 @@ class Trial(ctl.Controller):
         from .checkpoint import TrainingState,CheckpointManager
         config=self.arm_config(arm);directory=self.root/'arms'/arm;path=Path(config.output_dir)/'resume.pt'
         if path.exists():checkpoint(path).validate(config);return config
-        state=TrainingState.fork_from(self.root/'frozen/source-resume.pt',config,experiment='course-two-rebalance')
+        if self.identity.get('region_query_mode'):
+            raise ValueError('region query prepared checkpoint is missing; refusing to reinitialize')
+        state=TrainingState.fork_from(self.root/'frozen/source-resume.pt',config,experiment='course-two-potential' if config.approach_reward else 'course-two-rebalance')
         manager=CheckpointManager(config.output_dir,config.save_interval_s,total_max_bytes=config.total_output_max_bytes,
             snapshot_max_bytes=config.snapshot_max_bytes,artifact_root=config.artifact_root)
         manager.save(state);ctl.write(directory/'config.json',config_record(config))
         return config
 
-    def pilot(self,arm,baseline):
-        from .evaluation import export_actor
+    def prefill(self,arm):
         from .training import state_checksum
         config=self.initialize_arm(arm);directory=self.root/'arms'/arm
         current=Path(config.output_dir)/'resume.pt';prepared=directory/'prefill.pt'
+        if self.identity.get('region_query_mode') and (not prepared.exists() or
+                ctl.sha(prepared)!=self.identity['prepared_checkpoint_sha']):
+            raise ValueError('region query prepared prefill changed; refusing to recollect')
         if not prepared.exists():
             from .replay import ReplayBuffer
             from .course_two_rebalance import preparation_ready
             state=checkpoint(current)
             replay=ReplayBuffer.from_snapshot(state.record['replay'],config.replay_max_bytes)
-            replay.enable_course_two_sampling(completion_bonus=config.completion_bonus, task_scope=config.course_two_task_scope, sampling=config.course_two_sampling, scene_profile=config.course_two_scene_profile)
+            replay.enable_course_two_sampling(completion_bonus=config.completion_bonus, task_scope=config.course_two_task_scope, sampling=config.course_two_sampling, scene_profile=config.course_two_scene_profile, exploration_reward_scale=config.exploration_reward_scale, scene_tasks=config.course_two_scene_tasks)
             ready=preparation_ready(arm,replay)
             del replay
             remaining=4096-(state.record['schedule']['transitions']-self.identity['baseline_transitions'])
@@ -286,13 +298,20 @@ class Trial(ctl.Controller):
                 raise ValueError('prefill changed model/optimizer/temperature')
             from .replay import ReplayBuffer
             replay=ReplayBuffer.from_snapshot(state.record['replay'],config.replay_max_bytes)
-            index=replay.enable_course_two_sampling(completion_bonus=config.completion_bonus, task_scope=config.course_two_task_scope, sampling=config.course_two_sampling, scene_profile=config.course_two_scene_profile)
+            index=replay.enable_course_two_sampling(completion_bonus=config.completion_bonus, task_scope=config.course_two_task_scope, sampling=config.course_two_sampling, scene_profile=config.course_two_scene_profile, exploration_reward_scale=config.exploration_reward_scale, scene_tasks=config.course_two_scene_tasks)
             if not preparation_ready(arm,replay):
                 ctl.write(directory/'missing-replay.json',index.status());raise ValueError('prefill missing replay buckets')
             shutil.copyfile(current,prepared)
             ctl.write(directory/'prefill-proof.json',dict(learner_sha=state_checksum(state.record['learner']),
                 source_learner_sha=state_checksum(source.record['learner']),schedule=state.record['schedule'],
                 replay=index.status(),checkpoint_sha=ctl.sha(prepared)))
+        return config
+
+    def pilot(self,arm,baseline):
+        from .evaluation import export_actor
+        config=self.prefill(arm)
+        if not config:return False
+        directory=self.root/'arms'/arm;current=Path(config.output_dir)/'resume.pt';prepared=directory/'prefill.pt'
         prepared_state=checkpoint(prepared);target=prepared_state.record['schedule']['transitions']+2048
         state=checkpoint(current);remaining=ctl.remaining_budget(target,state.record['schedule']['transitions'])
         self.save(phase='training',arm=arm,target_transitions=target)
@@ -324,7 +343,11 @@ class Trial(ctl.Controller):
                 or size<=0 or size%4 or self.identity['pilot_admissions']!=blocks*size
                 or self.identity['pilot_updates']!=blocks*size//4):
             raise ValueError('invalid extension budget')
-        config=self.initialize_arm('C3');directory=self.root/'arms/C3'
+        if self.identity.get('bounded_potential'):
+            config=self.prefill('C3')
+            if not config:return False
+        else:config=self.initialize_arm('C3')
+        directory=self.root/'arms/C3'
         current=Path(config.output_dir)/'resume.pt'
         start=checkpoint(directory/'prefill.pt').record['schedule']
         for index in range(1,blocks+1):
@@ -389,8 +412,9 @@ class Trial(ctl.Controller):
 def main():
     import argparse,json
     p=argparse.ArgumentParser();p.add_argument('command',choices=('prepare','start','resume','run','stop','status'))
-    p.add_argument('--root',type=Path,default=DEFAULT_ROOT);a=p.parse_args();root=a.root.resolve()
-    if a.command=='prepare':result=prepare(root)
+    p.add_argument('--root',type=Path,default=DEFAULT_ROOT);p.add_argument('--bounded-potential',action='store_true');a=p.parse_args();root=a.root.resolve()
+    if a.command=='prepare':
+        result=prepare(root,bounded_potential=a.bounded_potential)
     elif a.command in ('start','resume'):result=start(root)
     elif a.command=='stop':result=stop(root)
     elif a.command=='run':return Trial(root).run()

@@ -72,7 +72,10 @@ class EvaluationReader:
                 return old[1]
             if digest:
                 with path.open('rb') as stream:
-                    value = hashlib.file_digest(stream, 'sha256').hexdigest()
+                    digest = hashlib.sha256()
+                    for block in iter(lambda: stream.read(1024**2), b''):
+                        digest.update(block)
+                    value = digest.hexdigest()
             else:
                 value = json.loads(path.read_text(encoding='utf-8'))
                 if transform is not None:

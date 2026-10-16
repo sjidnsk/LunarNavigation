@@ -203,14 +203,21 @@ def test_bounded_nonuniform_actor_loss_matches_direct_frozen_distribution():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA required for synchronization audit')
-def test_bounded_cuda_update_has_no_scalar_device_synchronization():
+@pytest.mark.parametrize('microbatch', [16, 64])
+def test_bounded_cuda_update_has_only_phase_device_synchronization(microbatch):
     from torch.utils._python_dispatch import TorchDispatchMode
-    class NoScalarDeviceSync(TorchDispatchMode):
+    scalar_reads = []
+    class PhaseDeviceSync(TorchDispatchMode):
         def __torch_dispatch__(self, func, types, args=(), kwargs=None):
             if func == torch.ops.aten._local_scalar_dense.default:
-                assert not args[0].is_cuda, 'per-action CUDA scalar read'
+                if args[0].is_cuda:
+                    scalar_reads.append(args[0].numel())
             return func(*args, **(kwargs or {}))
-    learner = SACLearner(ModelConfig(width=16, heads=2, layers=1, actor_score_bound=10.), device='cuda')
-    with NoScalarDeviceSync():
+    learner = SACLearner(ModelConfig(width=16, heads=2, layers=1, actor_score_bound=10.),
+        LearningConfig(microbatch_size=microbatch), device='cuda')
+    with PhaseDeviceSync():
         metrics = learner.update(transitions(), {'s': scene()})
     assert all(math.isfinite(value) for value in metrics.values())
+    # Finite gates are per optimizer phase, never per action or microbatch.
+    assert len(scalar_reads) <= 12 and all(size == 1 for size in scalar_reads)
+    assert metrics['numeric_guard_version'] == 1 and metrics['numeric_checked_updates'] == 1

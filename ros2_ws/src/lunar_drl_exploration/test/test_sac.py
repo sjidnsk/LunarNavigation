@@ -130,17 +130,21 @@ def test_saved_state_owns_tensors_and_rejects_old_schema():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(),reason='CUDA required for synchronization audit')
-def test_cuda_complete_update_avoids_scalar_device_synchronization():
+def test_cuda_complete_update_has_only_bounded_phase_synchronization():
     from torch.utils._python_dispatch import TorchDispatchMode
-    class NoScalarDeviceSync(TorchDispatchMode):
+    scalar_reads=[]
+    class PhaseDeviceSync(TorchDispatchMode):
         def __torch_dispatch__(self,func,types,args=(),kwargs=None):
             if func == torch.ops.aten._local_scalar_dense.default:
-                assert not args[0].is_cuda, 'per-transition CUDA scalar read'
+                if args[0].is_cuda: scalar_reads.append(args[0].numel())
             return func(*args,**(kwargs or {}))
     learner=SACLearner(ModelConfig(),LearningConfig(),device='cuda')
-    with NoScalarDeviceSync():
+    with PhaseDeviceSync():
         metrics=learner.update(transitions(),{'s':scene()})
+    # Only aggregate phase gates synchronize; no transition/node/edge loops read scalars.
+    assert len(scalar_reads) <= 12 and all(size==1 for size in scalar_reads)
     assert metrics['updates']==1 and all(math.isfinite(v) for v in metrics.values())
+    assert metrics['numeric_guard_version']==1 and metrics['numeric_checked_updates']==1
     restored=SACLearner(ModelConfig(),LearningConfig(),device='cpu')
     restored.load_state_dict(learner.state_dict())
     assert restored.updates==1
@@ -218,3 +222,138 @@ def test_restore_still_rejects_changed_model_shape():
     saved['model_config']['width'] = 64
     with pytest.raises(ValueError, match='incompatible learner model schema'):
         learner.load_state_dict(saved)
+
+
+def test_v2_optimization_phases_isolate_actor_critics_and_temperature(monkeypatch):
+    learner=SACLearner(ModelConfig(width=16,heads=2,layers=1),LearningConfig(microbatch_size=64))
+    actor_before=[p.detach().clone() for p in learner.actor.parameters()]
+    critic_after=[]; actor_grad_after=[]; phases=[]
+    for name in ('q1','q2'):
+        optimizer=getattr(learner,name+'_optimizer'); original=optimizer.step
+        def critic_step(*args,_original=original,_name=name,**kwargs):
+            for p,before in zip(learner.actor.parameters(),actor_before):
+                assert torch.equal(p,before) and p.grad is None
+            result=_original(*args,**kwargs); phases.append(_name)
+            if _name=='q2':
+                critic_after.extend(p.detach().clone() for m in (learner.q1,learner.q2) for p in m.parameters())
+            return result
+        monkeypatch.setattr(optimizer,'step',critic_step)
+    actor_step=learner.actor_optimizer.step
+    def step_actor(*args,**kwargs):
+        for p,before in zip((p for m in (learner.q1,learner.q2) for p in m.parameters()),critic_after):
+            assert torch.equal(p,before) and p.grad is None
+        result=actor_step(*args,**kwargs)
+        actor_grad_after.extend(p.grad.clone() for p in learner.actor.parameters())
+        phases.append('actor'); return result
+    monkeypatch.setattr(learner.actor_optimizer,'step',step_actor)
+    alpha_step=learner.alpha_optimizer.step
+    def step_alpha(*args,**kwargs):
+        for p,before in zip(learner.actor.parameters(),actor_grad_after):
+            assert torch.equal(p.grad,before)
+        phases.append('alpha'); return alpha_step(*args,**kwargs)
+    monkeypatch.setattr(learner.alpha_optimizer,'step',step_alpha)
+    learner.update(transitions(),{'s':scene()})
+    assert phases==['q1','q2','actor','alpha']
+    assert all(p.grad is None for m in (learner.target1,learner.target2) for p in m.parameters())
+
+
+def test_v2_nonterminal_empty_successor_rejected_and_single_action_is_one():
+    learner=SACLearner(ModelConfig(width=16,heads=2,layers=1))
+    sample=transitions()[0]
+    assert sample.terminated and len(sample.next_observation.action_nodes)==0
+    with pytest.raises(ValueError,match='nonterminal successor'):
+        learner.td_targets([replace(sample,terminated=False)],{'s':scene()})
+    obs=sample.observation
+    single=replace(obs,action_nodes=obs.action_nodes[:1],action_yaws=obs.action_yaws[:1],goals=obs.goals[:1])
+    output=learner.actor([single])[0]
+    torch.testing.assert_close(output.probs,torch.ones(1),atol=0,rtol=0)
+    torch.testing.assert_close(output.log_probs,torch.zeros(1),atol=0,rtol=0)
+
+
+@pytest.mark.parametrize('phase',['q1','q2','actor','temperature'])
+def test_nonfinite_gradients_fail_before_phase_step_and_update_counter(monkeypatch,phase):
+    learner=SACLearner(ModelConfig(width=16,heads=2,layers=1),LearningConfig(microbatch_size=64))
+    parameter=learner.log_alpha if phase=='temperature' else next(getattr(learner,phase).parameters())
+    parameter.register_hook(lambda grad:torch.full_like(grad,float('nan')))
+    optimizer=learner.alpha_optimizer if phase=='temperature' else getattr(learner,phase+'_optimizer')
+    called=[]; original=optimizer.step
+    monkeypatch.setattr(optimizer,'step',lambda *a,**k:(called.append(True),original(*a,**k))[-1])
+    with pytest.raises(FloatingPointError,match=phase): learner.update(transitions(),{'s':scene()})
+    assert not called and learner.updates==0
+
+
+@pytest.mark.parametrize('phase',['q1','q2','actor','temperature'])
+def test_nonfinite_parameters_after_step_fail_without_admission(monkeypatch,phase):
+    learner=SACLearner(ModelConfig(width=16,heads=2,layers=1),LearningConfig(microbatch_size=64))
+    parameter=learner.log_alpha if phase=='temperature' else next(getattr(learner,phase).parameters())
+    optimizer=learner.alpha_optimizer if phase=='temperature' else getattr(learner,phase+'_optimizer')
+    original=optimizer.step
+    def corrupt(*args,**kwargs):
+        result=original(*args,**kwargs)
+        with torch.no_grad(): parameter.fill_(float('nan'))
+        return result
+    monkeypatch.setattr(optimizer,'step',corrupt)
+    with pytest.raises(FloatingPointError,match=phase): learner.update(transitions(),{'s':scene()})
+    assert learner.updates==0
+
+
+def test_numerical_diagnostics_are_finite_and_alpha_zero_has_no_floor():
+    learner=SACLearner(ModelConfig(width=16,heads=2,layers=1),LearningConfig(microbatch_size=64))
+    with torch.no_grad(): learner.log_alpha.fill_(-1000.)
+    metrics=learner.update(transitions(),{'s':scene()})
+    for key in ('actor_grad_norm','q1_grad_norm','q2_grad_norm','temperature_grad_norm',
+        'q1_selected_std','q2_selected_std','td_target_std','q1_td_error_std','q2_td_error_std'):
+        assert np.isfinite(metrics[key]) and metrics[key]>=0
+    assert metrics['alpha']==0.0 and metrics['alpha_position_underflow']==1.0
+    assert metrics['log_alpha_position'] < -900
+
+
+def test_q_and_td_quantiles_match_saved_update_samples(monkeypatch):
+    learner=SACLearner(ModelConfig(width=16,heads=2,layers=1),LearningConfig(microbatch_size=64))
+    saved={}; original=learner.td_targets
+    def capture(samples,scenes):
+        targets=original(samples,scenes); saved['targets']=targets.clone(); return targets
+    monkeypatch.setattr(learner,'td_targets',capture)
+    for name in ('q1','q2'):
+        network=getattr(learner,name); forward=network.forward_packed
+        def captured(batch,truth,_forward=forward,_name=name):
+            output=_forward(batch,truth)
+            if _name not in saved and torch.is_grad_enabled():
+                indices=torch.as_tensor(np.cumsum((0,)+batch.action_counts[:-1])+[t.action for t in transitions()])
+                saved[_name]=output[indices].detach().clone()
+            return output
+        monkeypatch.setattr(network,'forward_packed',captured)
+    metrics=learner.update(transitions(),{'s':scene()})
+    streams={'q1':saved['q1'],'q2':saved['q2'],'td_target':saved['targets'],
+        'td':torch.cat(((saved['q1']-saved['targets']).abs(),(saved['q2']-saved['targets']).abs()))}
+    for name,values in streams.items():
+        expected=torch.quantile(values,torch.tensor([.5,.95,.99])).tolist()
+        for percentile,value in zip(('p50','p95','p99'),expected):
+            assert metrics[name+'_'+percentile]==pytest.approx(value,abs=1e-6)
+
+
+def test_nonfinite_loss_rejected_even_if_gradient_hooks_return_finite_values(monkeypatch):
+    learner=SACLearner(ModelConfig(width=16,heads=2,layers=1),LearningConfig(microbatch_size=64))
+    monkeypatch.setattr(learner,'td_targets',lambda rows,scenes:torch.full((len(rows),),float('nan')))
+    for network in (learner.q1,learner.q2):
+        for parameter in network.parameters(): parameter.register_hook(lambda grad:torch.zeros_like(grad))
+    with pytest.raises(FloatingPointError,match='q1.*loss'):
+        learner.update(transitions(),{'s':scene()})
+    assert learner.updates==0
+
+
+@pytest.mark.parametrize('after_step',[False,True])
+def test_split_heading_temperature_is_guarded(monkeypatch,after_step):
+    learner=SACLearner(ModelConfig(width=16,heads=2,layers=1),
+        LearningConfig(microbatch_size=64,entropy_mode='position_heading'))
+    if after_step:
+        original=learner.heading_alpha_optimizer.step
+        def corrupt(*args,**kwargs):
+            result=original(*args,**kwargs)
+            with torch.no_grad(): learner.log_alpha_heading.fill_(float('nan'))
+            return result
+        monkeypatch.setattr(learner.heading_alpha_optimizer,'step',corrupt)
+    else: learner.log_alpha_heading.register_hook(lambda grad:torch.full_like(grad,float('nan')))
+    with pytest.raises(FloatingPointError,match='temperature'):
+        learner.update(transitions(),{'s':scene()})
+    assert learner.updates==0

@@ -20,10 +20,13 @@ def cell_counts(state, scenes):
 
 
 class PhaseIndex:
-    def __init__(self, completion_bonus=20., task_scope=''):
+    def __init__(self, completion_bonus=20., task_scope='', exploration_reward_scale=1.):
         if not math.isfinite(completion_bonus) or completion_bonus <= 0:
             raise ValueError('positive completion bonus required for success proof')
         self.completion_bonus = completion_bonus
+        if not math.isfinite(exploration_reward_scale) or exploration_reward_scale <= 0:
+            raise ValueError('exploration reward scale must be positive and finite')
+        self.exploration_reward_scale = exploration_reward_scale
         if task_scope not in ('','whole_cave_v1'):raise ValueError('unknown replay task scope')
         self.task_scope = task_scope
         self.sampling = ''
@@ -73,8 +76,8 @@ class PhaseIndex:
         if phase == 'new_finish' and transition.terminated and transition.step_index is not None:
             after, total = cell_counts(transition.next_privileged, scenes)
             p = transition.parts
-            base = p.removed_frontiers_in/50 - .002*p.distance_m - .005*p.turn_rad/math.pi - .001
-            if after*100 >= 99*total and math.isclose(transition.reward-base,
+            base = self.exploration_reward_scale*p.removed_frontiers_in/50 - .002*p.distance_m - .005*p.turn_rad/math.pi - .001
+            if after*100 >= 99*total and math.isclose(transition.reward-transition.parts.approach_reward-base,
                     self.completion_bonus, rel_tol=0., abs_tol=1e-6):
                 self.ends[episode] = (transition.step_index, index)
         self._status = None

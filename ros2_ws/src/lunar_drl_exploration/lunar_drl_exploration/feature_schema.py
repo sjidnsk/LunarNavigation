@@ -37,6 +37,11 @@ def require_frontier_semantics(record):
 
 
 def require_observation_identity(observation):
+    if observation.schema == 'task_graph_v5':
+        from .candidate_observation import CandidateObservation
+        if not isinstance(observation, CandidateObservation):
+            raise ValueError('task_graph_v5 requires a CandidateObservation contract')
+        return
     if (observation.schema != OBSERVATION_SCHEMA or observation.features.ndim != 2 or
             observation.features.shape[1] != NODE_FEATURE_DIM):
         raise ValueError(f'expected {OBSERVATION_SCHEMA} observation schema with {NODE_FEATURE_DIM} columns')

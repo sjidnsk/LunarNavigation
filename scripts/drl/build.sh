@@ -7,10 +7,10 @@ exec env -u AMENT_PREFIX_PATH -u COLCON_PREFIX_PATH -u CMAKE_PREFIX_PATH \
   bash --noprofile --norc -c '
     set -e
     DRL_ROOT=$1; shift
-    DRL_CACHE=${DRL_CACHE:-$HOME/.cache/lunar-drl-redesign/jazzy}
-    source "${DRL_ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
+    DRL_CACHE=${DRL_CACHE:-$HOME/.cache/lunar-drl-redesign/humble}
+    source "${DRL_ROS_SETUP:-/opt/ros/humble/setup.bash}"
     set -u
-    if [[ "$ROS_DISTRO" != jazzy ]]; then echo "Use a separate Jazzy build cache" >&2; exit 2; fi
+    if [[ "$ROS_DISTRO" != humble ]]; then echo "Use a separate Humble build cache" >&2; exit 2; fi
     cd "$DRL_ROOT"
     export CMAKE_BUILD_PARALLEL_LEVEL=${DRL_BUILD_JOBS:-2}
     exec python3 "$DRL_ROOT/scripts/drl/build_cache.py" "$DRL_ROOT" "$DRL_CACHE" "$@"

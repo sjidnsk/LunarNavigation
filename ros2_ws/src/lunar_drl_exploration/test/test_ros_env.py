@@ -8,6 +8,25 @@ from lunar_drl_exploration.sensor import SensorModel
 from lunar_drl_exploration.ros_messages import MeasurementBuffer, grid_message
 
 
+def test_physical_entry_is_distinct_from_visibility_and_kept_after_exit():
+    from types import SimpleNamespace
+    from lunar_drl_exploration.ros_env import RosExplorationEnv
+    env=object.__new__(RosExplorationEnv)
+    env._initial_inside_task=False;env._first_entry=None
+    env._first_roi={'decisions':0}  # Seeing task cells is not physical entry.
+    env._approach_start_distance=2.;env.steps=3;env._step_active=True
+    env.task=SimpleNamespace(polygon=np.array([[0,0],[2,0],[2,2],[0,2]]))
+    env.plant=SimpleNamespace(pose=Pose(-1,1,0),distance_m=5.,simulation_s=8.)
+    env._record_task_entry()
+    assert env._first_entry is None
+    env.plant.pose=Pose(0,1,0)
+    env._record_task_entry()
+    first=dict(env._first_entry)
+    assert first['decisions']==4 and first['distance_m']==3.
+    env.plant.pose=Pose(-1,1,0);env._record_task_entry()
+    assert env._first_entry==first
+
+
 def test_coalesced_frames_retain_only_actual_hits_until_native_ack():
     t=TerrainGrid.from_heights(np.zeros((100,100),np.float32),.2,(-10.,-10.),load_platform_config())
     a=SensorModel.observe(t,Pose(.1,.1,0),SensorSpec(range_m=2))

@@ -19,6 +19,25 @@ def _merge_progress(status, progress):
     return dict(status, **progress)
 
 
+def dispatch_candidates(pending, reservations, course=None, *, bootstrap_missing=()):
+    """Reselect after each reservation, preserving course and bootstrap priority.
+
+    Yields candidates only; the owner still checks credit, admission budget and
+    stop/barrier state before reserving and sending each grant.
+    """
+    remaining={e:t for e,t in pending.items() if e not in reservations}
+    while remaining:
+        if course is None:
+            selected=next(iter(remaining))
+        elif bootstrap_missing:
+            candidates=[e for e in remaining if course.active.get(e) in bootstrap_missing]
+            selected=min(candidates) if candidates else None
+        else:
+            selected=course.select_pending(remaining,reservations)
+        if selected is None:return
+        yield selected,remaining.pop(selected)
+
+
 class AdmissionLedger:
     def __init__(self, replay, schedule, bootstrap=None, *, prefill=False):
         self.replay, self.schedule = replay, schedule
@@ -112,6 +131,7 @@ class Curriculum:
             saved=self._resume_specs.pop(str(env_id),None)
             if saved is not None:
                 self.course.activate(env_id,saved['curriculum_task'])
+                if self.config.moon_entry_curriculum:self.course.bind_entry_spec(env_id,saved)
                 return saved
             serial=self.state['episodes_issued'];self.state['episodes_issued']=serial+1
             seed=((int(self.config.seed)+2)<<32)+serial
@@ -125,6 +145,9 @@ class Curriculum:
                     from .course_two_rebalance import fresh_spec
                     spec=fresh_spec(self.config,task,ordinal,self.catalog_templates)
                 else:spec=deepcopy(self.catalog[task][ordinal])
+                if self.config.moon_entry_curriculum:
+                    spec=self.course.entry.apply(spec,ordinal)
+                    self.course.bind_entry_spec(env_id,spec)
                 self.state['active_specs'][str(env_id)]=spec
                 return spec
             if task.startswith('c2_'):
@@ -203,7 +226,7 @@ class Curriculum:
 
 
 def initial_model_checksum(learner):
-    """Compare identical Actor/twin-Q initial tensor values across paired arms."""
+    """Identify Actor/twin-Q tensor values independently of checkpoint encoding."""
     import hashlib
     digest = hashlib.sha256()
     for group in ('actor', 'q1', 'q2'):
@@ -303,6 +326,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     """
     import multiprocessing as mp
     import os
+    import hashlib
     import pickle
     from pathlib import Path
     import random
@@ -346,8 +370,9 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     if not resume and (Path(config.output_dir) / 'resume.pt').exists():
         raise ValueError('resume.pt already exists; use --resume or a new output directory')
     learner = SACLearner(config.model, config.learning, device=device)
-    # The legacy multi-stage runner compares this random-initialization lineage.
-    initial_checksum = initial_model_checksum(learner) if config.paired_scene_sequence else None
+    # Preserve from-scratch lineage as well as historical paired-run identity.
+    record_initial = bool(config.paired_scene_sequence or config.cave_generator_version)
+    initial_checksum = initial_model_checksum(learner) if record_initial else None
     replay = ReplayBuffer(config.replay_max_bytes)
     schedule = UpdateSchedule(config.warmup, config.update_ratio, config.max_update_credit)
     replay_rng, curriculum_rng = np.random.default_rng(config.seed), np.random.default_rng(config.seed + 1)
@@ -367,13 +392,14 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
             source_replay_sha256 = hashlib.sha256(state.record['replay']).hexdigest()
         restored = state.restore(learner, config)
         replay, schedule = restored.replay, restored.schedule
+        source_replay_sha256 = hashlib.sha256(state.record['replay']).hexdigest()
         replay_rng, curriculum_rng = restored.replay_rng, restored.curriculum_rng
         curriculum_state, collector_state, counters = restored.curriculum, restored.collector_state, restored.counters
         # Release the loaded replay snapshot before the new capture; learned
         # tensors/replay are now owned by the learner and restored buffer.
         del state, restored
     fork_state = None
-    restored_checksum = initial_model_checksum(learner) if config.paired_scene_sequence else None
+    restored_checksum = initial_model_checksum(learner) if record_initial else None
     initial_identity = (initial_training_identity(learner, replay=replay, schedule=schedule,
         replay_rng=replay_rng, curriculum_rng=curriculum_rng, curriculum_state=curriculum_state,
         collector_state=collector_state, counters=counters, source_replay_sha256=source_replay_sha256,
@@ -392,7 +418,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
         probe_extent=probe_extent, probe_budget=probe_budget)
     course = curriculum.course
     if config.course_two_variant:
-        replay.enable_course_two_sampling(completion_bonus=config.completion_bonus, task_scope=config.course_two_task_scope, sampling=config.course_two_sampling, scene_profile=config.course_two_scene_profile)
+        replay.enable_course_two_sampling(completion_bonus=config.completion_bonus, task_scope=config.course_two_task_scope, sampling=config.course_two_sampling, scene_profile=config.course_two_scene_profile, exploration_reward_scale=config.exploration_reward_scale, scene_tasks=config.course_two_scene_tasks)
     def learning_ready():
         if config.course_two_variant == 'C3' or collect_only and config.course_two_variant=='C2':
             return replay.course_two_index.status()['ready']
@@ -416,7 +442,8 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
     if config.reward_diagnostics:
         from .reward_diagnostics import RewardDiagnostics
         diagnostics = RewardDiagnostics(config.environments, completion_bonus=config.completion_bonus,
-            success_coverage=config.success_coverage, state=counters.get('reward_diagnostics'))
+            success_coverage=config.success_coverage, state=counters.get('reward_diagnostics'),
+            exploration_reward_scale=config.exploration_reward_scale)
     boundary = UpdateBoundary()
     metrics = MetricsWriter(Path(config.output_dir) / 'metrics.jsonl', config.metrics_max_bytes,
         total_max_bytes=config.total_output_max_bytes)
@@ -438,6 +465,9 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
         probe=dict(extent_m=probe_extent, budget=probe_budget, max_new_transitions=max_transitions),
         resume=resume, initial_model_checksum=initial_checksum,
         restored_model_checksum=restored_checksum, initial_state_identity=initial_identity)
+    if resume:
+        observations['restored_replay'] = dict(count=len(replay), bytes=replay.bytes_used,
+            task_counts=replay.task_counts, snapshot_sha256=source_replay_sha256)
     if fork_provenance is not None:
         observations['fork'] = fork_provenance
     if arrival_contract_migrations is not None:
@@ -502,12 +532,16 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
 
     def save():
         nonlocal last_checkpoint_transitions
-        path = manager.save(capture())
+        state = capture()
+        path = manager.save(state)
         last_checkpoint_transitions = schedule.transitions
         persist_diagnostics()
         metrics.append(dict(event='checkpoint', transitions=schedule.transitions,
             updates=schedule.updates, actor_version=collector_state['actor_version'],
-            unfinished_reservations=schedule.inflight, path=str(path)))
+            unfinished_reservations=schedule.inflight, path=str(path),
+            replay_count=len(replay), replay_bytes=replay.bytes_used,
+            replay_snapshot_bytes=len(state.record['replay']),
+            replay_integrity=state.record['replay_integrity']))
 
     def final_command(kind):
         nonlocal final_phase, final_deadline, final_version
@@ -654,9 +688,14 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     visible_count = int(np.unpackbits(transition.next_privileged.observed & scene.packed_reference).sum())
                     status['reference_coverage'] = visible_count / len(scene.reference_indices) if len(scene.reference_indices) else 0.
                     status.update(new_area_m2=transition.parts.new_area_m2,
-                        reward=transition.reward, terminated=transition.terminated, truncated=transition.truncated,
+                        reward=transition.reward, base_reward=transition.reward-transition.parts.approach_reward,
+                        approach_reward=transition.parts.approach_reward, terminated=transition.terminated, truncated=transition.truncated,
                         actor_version=transition.actor_version, observed_nodes=len(transition.observation.node_ids),
                         observed_edges=len(transition.observation.edges))
+                    if config.approach_reward is not None:
+                        from .approach_potential import observation_distance
+                        status.update(region_distance_before_m=observation_distance(transition.observation),
+                            region_distance_after_m=observation_distance(transition.next_observation))
                     wall = message.get('execution', {}).get('wall_s', 0)
                     status['actual_rtf'] = message.get('execution', {}).get('simulation_s', 0) / wall if wall else None
                     if admitted:
@@ -771,17 +810,10 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     metrics.append(dict(event='replay_bootstrap_repaid',
                         transitions=schedule.transitions, updates=schedule.updates, credit=str(schedule.credit)))
             if not stopping and not normal_draining and not barrier_pending and not repay_before_dispatch:
-                dispatch_items = list(pending_requests.items())
-                if course is not None:
-                    if bootstrap is not None and bootstrap['active']:
-                        missing = [task for task in bootstrap['required_tasks'] if replay.task_counts.get(task,0) == 0]
-                        candidates = [env for env in pending_requests if course.active.get(env) in missing
-                            and env not in reservations]
-                        selected = min(candidates) if candidates else (None if missing
-                            else course.select_pending(pending_requests, reservations))
-                    else:
-                        selected = course.select_pending(pending_requests, reservations)
-                    dispatch_items = [] if selected is None else [(selected, pending_requests[selected])]
+                missing=[]
+                if course is not None and bootstrap is not None and bootstrap['active']:
+                    missing=[task for task in bootstrap['required_tasks'] if replay.task_counts.get(task,0)==0]
+                dispatch_items=dispatch_candidates(pending_requests,reservations,course,bootstrap_missing=missing)
                 for env_id, token in dispatch_items:
                     if manager.stop_requested:
                         stop(manager.requested_reason or 'stop requested')
@@ -792,6 +824,7 @@ def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, 
                     if (bootstrap is not None and bootstrap['active'] and
                             bootstrap['admitted']+schedule.inflight >= bootstrap['required']):
                         break
+                    if not schedule.can_dispatch(prefill=collect_only):break
                     if schedule.can_dispatch(prefill=collect_only):
                         if env_id in reservations: raise RuntimeError('second reservation for environment')
                         if collect_only:schedule.reserve_dispatch(prefill=True)

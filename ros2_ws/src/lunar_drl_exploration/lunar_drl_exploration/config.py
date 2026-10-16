@@ -109,19 +109,37 @@ class ModelConfig:
     heads: int = 8
     layers: int = 6
     actor_score_bound: float = 0.0
+    architecture_version: str = 'region_relation_v2'
 
     def __post_init__(self):
         if self.width <= 0 or self.heads <= 0 or self.width % self.heads or self.layers <= 0:
             raise ValueError("positive width divisible by heads and positive layers required")
         if not np.isfinite(self.actor_score_bound) or self.actor_score_bound < 0:
             raise ValueError("actor_score_bound must be finite and nonnegative")
+        if self.architecture_version not in ('region_relation_v2', 'candidate_geometry_v3'):
+            raise ValueError('architecture_version must be region_relation_v2 or candidate_geometry_v3')
+        if self.architecture_version == 'candidate_geometry_v3' and (self.width, self.heads, self.layers) != (128, 8, 6):
+            raise ValueError('candidate_geometry_v3 fixes width=128, heads=8 and layers=6')
+
+    @property
+    def observation_schema(self):
+        return 'task_graph_v5' if self.architecture_version == 'candidate_geometry_v3' else OBSERVATION_SCHEMA
 
 
 def canonical_model_config(record):
-    """Only legacy v3's missing score parameterization defaults to unbounded."""
+    """Restore only explicit v2 identities; constructor defaults are not migrations."""
     result = dict(record)
+    if 'region_query_mode' in result:
+        raise ValueError('region_query_mode is retired; create region_relation_v2 from scratch')
+    if result.get('architecture_version') not in ('region_relation_v2', 'candidate_geometry_v3'):
+        raise ValueError('explicit architecture_version=region_relation_v2 or candidate_geometry_v3 required')
     result.setdefault('actor_score_bound', 0.0)
+    try:
+        ModelConfig(**result)
+    except TypeError as error:
+        raise ValueError('invalid model config fields') from error
     return result
+
 
 
 @dataclass(frozen=True)
@@ -133,6 +151,7 @@ class LearningConfig:
     polyak: float = 0.005
     initial_alpha: float = 5e-5
     maximum_alpha: float = 1e-4
+    maximum_position_alpha: float | None = None
     target_entropy_factor: float = 0.10
     return_steps: int = 1
     entropy_mode: str = 'joint'
@@ -147,6 +166,10 @@ class LearningConfig:
             raise ValueError('position_aux_weight must be 0.0 for task-frontier retraining')
         if self.entropy_mode not in ('joint', 'position_heading'):
             raise ValueError('entropy_mode must be joint or position_heading')
+        if self.maximum_position_alpha is not None and not (
+                type(self.maximum_position_alpha) in (int, float) and
+                np.isfinite(self.maximum_position_alpha) and self.maximum_position_alpha > 0):
+            raise ValueError('maximum_position_alpha must be finite and positive or None')
         optimization = (self.learning_rate, self.gamma, self.polyak, self.initial_alpha,
             self.maximum_alpha, self.target_entropy_factor, self.position_target_entropy_factor,
             self.heading_target_entropy_factor)
@@ -162,10 +185,17 @@ class LearningConfig:
         if not 0 < self.gamma <= 1:
             raise ValueError("task reward requires 0 < gamma <= 1")
         if not (0 < self.initial_alpha <= self.maximum_alpha and
+                self.initial_alpha <= self.effective_maximum_position_alpha and
                 0 < self.polyak <= 1 and self.learning_rate > 0 and
                 self.target_entropy_factor >= 0 and self.position_target_entropy_factor >= 0 and
                 self.heading_target_entropy_factor >= 0):
             raise ValueError("invalid SAC optimization settings")
+
+    @property
+    def effective_maximum_position_alpha(self):
+        if self.entropy_mode == 'joint' or self.maximum_position_alpha is None:
+            return self.maximum_alpha
+        return self.maximum_position_alpha
 
 
 def canonical_learning_config(record):
@@ -177,16 +207,26 @@ def canonical_learning_config(record):
     result.setdefault('heading_target_entropy_factor', 0.10)
     result.setdefault('temperature_learning_rate', None)
     result.setdefault('position_aux_weight', 0.0)
+    result.setdefault('maximum_position_alpha', None)
     # Replay semantics omit optimizer controls. If initial_alpha is absent, its
-    # default must not constrain the recorded cap. Use the cap as a validation-
-    # only witness (0 < cap <= cap); never insert this control into the record.
+    # default must not constrain the recorded caps. Use their minimum as a
+    # validation-only witness; never insert this control into the record.
     validation = dict(result)
-    if 'initial_alpha' not in validation and 'maximum_alpha' in validation:
-        validation['initial_alpha'] = validation['maximum_alpha']
     try:
-        LearningConfig(**validation)
+        if 'initial_alpha' not in validation and 'maximum_alpha' in validation:
+            validation['initial_alpha'] = validation['maximum_alpha']
+            if (validation['entropy_mode'] == 'position_heading' and
+                    validation['maximum_position_alpha'] is not None):
+                validation['initial_alpha'] = min(validation['initial_alpha'],
+                                                  validation['maximum_position_alpha'])
+        validated = LearningConfig(**validation)
     except TypeError as error:
         raise ValueError('invalid learning config fields') from error
+    # Compare effective caps: an explicitly repeated shared cap is compatible
+    # with old records, and joint entropy never uses the independent position cap.
+    if (validated.entropy_mode == 'joint' or
+            validated.maximum_position_alpha == validated.maximum_alpha):
+        result['maximum_position_alpha'] = None
     return result
 
 
@@ -195,6 +235,8 @@ class TrainingConfig:
     """Operational defaults and explicit experience semantics; no Torch/native import."""
     model: ModelConfig = field(default_factory=ModelConfig)
     learning: LearningConfig = field(default_factory=LearningConfig)
+    approach_reward: dict | None = None
+    exploration_reward_scale: float = 1.0
     completion_bonus: float = 5.0
     success_coverage: float = 0.99
     sensor: 'SensorSpec' = field(default_factory=lambda: SensorSpec())
@@ -202,6 +244,8 @@ class TrainingConfig:
     seed: int = 20260915
     paired_scene_sequence: bool = False
     ordered_curriculum: bool = False
+    cave_generator_version: str = ''
+    cave_split_manifest_hash: str = ''
     course_two: bool = False
     course_two_variant: str = ''
     course_two_catalog: str = ''
@@ -209,6 +253,8 @@ class TrainingConfig:
     course_two_task_scope: str = ''
     course_two_sampling: str = ''
     course_two_scene_profile: str = ''
+    course_two_scene_tasks: tuple = ('moon_outside', 'moon_inside', 'cave_inside')
+    moon_entry_curriculum: str = ''
     ordered_rehearsal_fraction: float = .2
     ordered_rehearsal_by_phase: tuple | None = None
     ordered_budget_rule: dict | None = None
@@ -253,6 +299,14 @@ class TrainingConfig:
                 else self.ordered_rehearsal_by_phase[phase])
 
     def __post_init__(self):
+        if bool(self.cave_generator_version) != bool(self.cave_split_manifest_hash):
+            raise ValueError('cave generator version and split manifest hash required together')
+        if self.cave_generator_version:
+            import re
+            if self.cave_generator_version != 'cave_topology_v2':
+                raise ValueError('cave_generator_version must be cave_topology_v2')
+            if not re.fullmatch(r'[0-9a-f]{64}', self.cave_split_manifest_hash):
+                raise ValueError('cave_split_manifest_hash must be lowercase sha256')
         boundaries = self.curriculum_transition_boundaries
         if self.policy_graph_mode not in ('fine', 'a2'):
             raise ValueError('policy_graph_mode must be fine or a2')
@@ -276,6 +330,15 @@ class TrainingConfig:
         if self.course_two_sampling not in ('','scene_episode_v1') or (self.course_two_sampling and
                 (self.course_two_variant!='C3' or self.course_two_task_scope!='whole_cave_v1')):
             raise ValueError('scene episode sampling requires whole-cave C3')
+        if self.course_two_scene_tasks not in (
+                ('moon_outside', 'moon_inside', 'cave_inside'), ('moon_outside', 'cave_inside')):
+            raise ValueError('unsupported active scene tasks')
+        if len(self.course_two_scene_tasks)==2 and self.course_two_sampling!='scene_episode_v1':
+            raise ValueError('two-scene scope requires scene episode sampling')
+        if self.moon_entry_curriculum not in ('','near_to_far_v1') or (self.moon_entry_curriculum and
+                (self.course_two_scene_tasks!=('moon_outside','cave_inside') or
+                 self.course_two_scene_profile!='distance_sensor_10_30_v1')):
+            raise ValueError('entry curriculum requires the two-scene distance/sensor protocol')
         if self.course_two_scene_profile not in ('','distance_sensor_10_30_v1') or (
                 self.course_two_scene_profile and self.course_two_sampling!='scene_episode_v1'):
             raise ValueError('distance/sensor scene profile requires three-scene sampling')
@@ -310,6 +373,11 @@ class TrainingConfig:
             raise ValueError('stagnation position tolerance must be positive and finite')
         if self.stagnation_window_steps and not 0 < self.stagnation_max_positions < self.stagnation_window_steps:
             raise ValueError('enabled stagnation window must exceed max positions')
+        from .approach_potential import validate_spec
+        validate_spec(self.approach_reward)
+        if (isinstance(self.exploration_reward_scale, bool) or
+                not np.isfinite(self.exploration_reward_scale) or self.exploration_reward_scale <= 0):
+            raise ValueError('exploration reward scale must be positive and finite')
         if not np.isfinite(self.completion_bonus) or self.completion_bonus < 0:
             raise ValueError('completion bonus must be finite and nonnegative')
         if not 0 < self.success_coverage <= 1:
@@ -360,13 +428,13 @@ def config_record(value):
 def resume_semantics(config):
     """Full replay continuation, including count units and experience meanings."""
     record = config_record(config)
-    learning = {key: value for key, value in record['learning'].items()
+    learning = {key: value for key, value in canonical_learning_config(record['learning']).items()
                 if key not in ('microbatch_size','learning_rate','polyak','initial_alpha',
                                'temperature_learning_rate')}
     platform = {key: value for key, value in record['platform'].items()
                 if key != 'capability_path'}
     result = dict(model=record['model'], learning=learning,
-        observation_schema=OBSERVATION_SCHEMA, action_schema='local_metric_pose_v3',
+        observation_schema=config.model.observation_schema, action_schema='local_metric_pose_v3',
         privileged_schema=PRIVILEGED_SCHEMA, learner_schema=LEARNER_SCHEMA,
         frontier_semantics=frontier_semantics(),
         graph_geometry=dict(coverage_radius_m=2.,connection_limit_m=8.,stretch=1.2,
@@ -385,8 +453,16 @@ def resume_semantics(config):
         schedule=dict(warmup=config.warmup, ratio=config.update_ratio),
         curriculum_budgets=record['curriculum_budgets'],
         curriculum_extents_m=record['curriculum_extents_m'])
-    # Legacy checkpoints implicitly used pi/12. Preserve that exact resume
-    # contract; explicit changes must be admitted by an audited migration.
+    if config.model.architecture_version == 'candidate_geometry_v3':
+        result['candidate_geometry'] = dict(version='candidate_geometry_v3',
+            coordinates='frozen_robot_frame_v1', relation='nearest_closed_region_vector_v1',
+            distance='original_known_graph_dijkstra_v1',
+            view='inside_outside_frontiers_history_physical_8_headings_v1',
+            virtual='connectivity_token_excluded_from_real_read_and_actions_v1')
+    if config.cave_generator_version:
+        result['cave_dataset'] = dict(generator_version=config.cave_generator_version,
+            split_manifest_hash=config.cave_split_manifest_hash)
+    # Legacy implicit yaw semantics remain compatible with historical checkpoints.
     if config.goal_yaw_tolerance_rad != math.pi / 12:
         result['goal_yaw_tolerance_rad'] = config.goal_yaw_tolerance_rad
     if config.ordered_curriculum:
@@ -420,9 +496,14 @@ def resume_semantics(config):
             if config.course_two_sampling:
                 result['course_two'].update(learning_protocol=config.course_two_sampling,
                     scene='three_ordinary_scenes_v1',old_rehearsal=0.,tasks=['moon_outside','moon_inside','cave_inside'])
+                if len(config.course_two_scene_tasks)==2:
+                    result['course_two'].update(scene='two_ordinary_scenes_v1',
+                        tasks=list(config.course_two_scene_tasks))
             if config.course_two_scene_profile:
                 from .course_two_sensors import semantics
                 result['course_two'].update(semantics())
+                if len(config.course_two_scene_tasks)==2:
+                    result['course_two']['scene']='two_ordinary_distance_sensor_10_30_v1'
     if config.paired_scene_sequence:
         result['scene_sequence'] = dict(mode='paired_slot_episode_v1',
             seed=config.seed, environments=config.environments)
@@ -432,18 +513,31 @@ def resume_semantics(config):
             window_steps=config.stagnation_window_steps,
             max_positions=config.stagnation_max_positions,
             position_tolerance_m=config.stagnation_position_tolerance_m)
+    if config.approach_reward is not None:
+        result['approach_reward']=dict(config.approach_reward,terminal_potential=0.,truncation_bootstrap=True)
+    if config.moon_entry_curriculum:
+        from .entry_curriculum import semantics
+        result['moon_entry_curriculum']=semantics()
+        result['course_two'].update(outside_distance_m=[2.,50.],
+            outside_start_distribution='entry_curriculum_mixture_v1')
+    if config.exploration_reward_scale != 1.:
+        result['exploration_reward_scale'] = config.exploration_reward_scale
+        result['reward'] = result['reward'].replace('removed_frontiers_in/50',
+            'exploration_reward_scale*removed_frontiers_in/50')
     return result
 
 
 def training_config_from_record(record):
     """Reconstruct a JSON/spawn configuration without importing models or terrain."""
     values = dict(record)
-    values['model'] = ModelConfig(**values['model'])
+    values['model'] = ModelConfig(**canonical_model_config(values['model']))
     values['learning'] = LearningConfig(**values['learning'])
     values['sensor'] = SensorSpec(**values['sensor'])
     platform = dict(values['platform'])
     platform['capability'] = MappingProxyType(dict(platform['capability']))
     values['platform'] = PlatformConfig(**platform)
+    if 'course_two_scene_tasks' in values:
+        values['course_two_scene_tasks'] = tuple(values['course_two_scene_tasks'])
     if 'curriculum_transition_boundaries' in values:
         values['curriculum_transition_boundaries'] = tuple(values['curriculum_transition_boundaries'])
     if 'curriculum_mixtures' in values:

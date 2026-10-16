@@ -147,7 +147,10 @@ class Reader:
             stamp = (stat.st_mtime_ns, stat.st_size)
             if key not in self.cache or self.cache[key][0] != stamp:
                 with path.open('rb') as stream:
-                    digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+                    hasher = hashlib.sha256()
+                    for block in iter(lambda: stream.read(1024**2), b''):
+                        hasher.update(block)
+                    digest = hasher.hexdigest()
                 self.cache[key] = (stamp, digest)
             return self.cache[key][1]
         except OSError:

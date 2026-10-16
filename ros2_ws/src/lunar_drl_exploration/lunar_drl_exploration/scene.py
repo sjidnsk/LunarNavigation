@@ -34,7 +34,8 @@ def polygon_boundary_distance(x,y,polygon):
 class Scene:
     GENERATOR_VERSION = 5
 
-    def __init__(self, seed, family, extent_m, resolution_m=0.2, platform=None, *, context_margin_m=12.):
+    def __init__(self, seed, family, extent_m, resolution_m=0.2, platform=None, *, context_margin_m=12.,
+                 cave_generator_version='', mother_graph_id=None, dataset_split='train'):
         if family not in ("moon", "cave"):
             raise ValueError("family must be moon or cave")
         if not math.isfinite(extent_m) or not 20 <= extent_m <= 1000:
@@ -54,10 +55,21 @@ class Scene:
         self.extent_m = float(extent_m)
         self.resolution_m = float(resolution_m)
         self.platform = platform
+        self.cave_geometry = None
+        self.generator_version = self.GENERATOR_VERSION
+        if cave_generator_version:
+            from .cave_topology import VERSION, select_mother, build_geometry
+            if family != 'cave' or cave_generator_version != VERSION:
+                raise ValueError('invalid cave generator version')
+            mother = select_mother(dataset_split, self.seed, mother_graph_id=mother_graph_id)
+            self.cave_geometry = build_geometry(mother, self.seed, self.extent_m)
+            self.generator_version = VERSION
+        elif mother_graph_id is not None or dataset_split != 'train':
+            raise ValueError('topology group requires cave_topology_v2')
         e = self.extent_m
         margin = self.context_margin_m = float(context_margin_m)
         identity = dict(
-            version=self.GENERATOR_VERSION,
+            version=self.generator_version,
             seed=self.seed,
             family=family,
             extent_m=e,
@@ -65,6 +77,8 @@ class Scene:
             capability=dict(platform.capability),
             observation_model_version=OBSERVATION_MODEL_VERSION,
         )
+        if self.cave_geometry is not None:
+            identity.update(mother_graph_id=self.cave_geometry['mother_graph_id'],dataset_split=dataset_split)
         if margin!=12.:identity['context_margin_m']=margin
         self.scene_id = hashlib.sha256(
             json.dumps(identity, sort_keys=True).encode()
@@ -102,6 +116,10 @@ class Scene:
                         rng.uniform(0.5, 2.0),
                     )
                 )
+        elif self.cave_geometry is not None:
+            self._rooms = list(self.cave_geometry['rooms'])
+            self._passages = list(self.cave_geometry['passages'])
+            self._nominal_start = tuple(self.cave_geometry['anchor_xy'])
         else:
             # A main loop includes legitimate terrain outside the task; narrow
             # spurs and a sealed chamber remain part of the same unchanged scene.
@@ -153,6 +171,12 @@ class Scene:
             float(origin[0] + nx * resolution_m),
             float(origin[1] + ny * resolution_m),
         )
+
+    @property
+    def anchor_room(self):
+        """Explicit v2 anchor, with historical main-room ownership retained."""
+        node = self.cave_geometry['anchor_node'] if self.cave_geometry is not None else 0
+        return self._rooms[node]
 
     def height_tile(self, x0, y0, width, height):
         if (
@@ -242,7 +266,7 @@ class Scene:
         else:
             # The structural main room defines cave ownership; never choose a
             # nearby detached pocket or the large elevated wall plateau instead.
-            cx, cy, room_radius = self._rooms[0]
+            cx, cy, room_radius = self.anchor_room
             x, y = terrain.world_to_cell(cx, cy)
             radius = math.ceil(room_radius / self.resolution_m)
             y0, y1 = max(0, y - radius), min(self.shape[0], y + radius + 1)
@@ -384,7 +408,7 @@ class TerrainGrid:
         )
         terrain.generator_descriptor = MappingProxyType(
             {
-                "generator_version": scene.GENERATOR_VERSION,
+                "generator_version": scene.generator_version,
                 "observation_model_version": OBSERVATION_MODEL_VERSION,
                 "provided_bounds": scene.bounds,
                 "seed": scene.seed,
@@ -397,6 +421,20 @@ class TerrainGrid:
                 "scene_id": scene.scene_id,
             }
         )
+        if scene.cave_geometry is not None:
+            from .cave_topology import qualify_native, manifest_hash
+            geometry = scene.cave_geometry
+            terrain.generator_descriptor = MappingProxyType(dict(terrain.generator_descriptor,
+                cave_generator_version=scene.generator_version,
+                mother_graph_id=geometry['mother_graph_id'],
+                mother_graph_edges=geometry['edges'],
+                mother_graph_node_count=len(geometry['rooms']),
+                structure_signature=geometry['structure_signature'],
+                dataset_split=geometry['dataset_split'],
+                geometry_seed=geometry['geometry_seed'],
+                anchor_node=geometry['anchor_node'],anchor_xy=geometry['anchor_xy'],
+                cave_split_manifest_hash=manifest_hash(),
+                native_wheeled_summary=qualify_native(scene,terrain)))
         return terrain
 
     def world_to_cell(self, x, y):

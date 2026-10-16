@@ -1,10 +1,10 @@
 """Short paired evaluations retain strict budget, scene and resume identity."""
 import pytest
-from test_task_frontier_controller import module,paired_fixture,ROOT
+from test_task_frontier_controller import module,paired_fixture,ROOT,local_controller
 
 
 def shortened(tmp_path):
-    c=module('controller');root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
+    c=local_controller(tmp_path);root=tmp_path/'owned';c.prepare(root,ROOT/'config/drl_task_frontier.yaml')
     plan=dict(group_indices=[0,2,4,7,9],budget=256)
     c.write(root/'evaluation-plan.json',plan);(root/'cases.json').unlink()
     cases=c.freeze_cases(c.LEGACY/'artifacts/baseline-summary.json',root/'cases.json',**plan)
@@ -28,7 +28,7 @@ def test_five_groups_freeze_exact_original_scenes_and_256_budget(tmp_path):
 
 @pytest.mark.parametrize('groups,budget',[([0,0],256),([10],256),([],256),([0],0),([True],256),([0],True)])
 def test_invalid_short_plan_is_rejected(tmp_path,groups,budget):
-    c=module('controller')
+    c=local_controller(tmp_path)
     with pytest.raises(ValueError):
         c.freeze_cases(c.LEGACY/'artifacts/baseline-summary.json',tmp_path/'cases.json',group_indices=groups,budget=budget)
 
