@@ -206,7 +206,8 @@ class RequestLocalPlanningView final {
   // may enter measured free space once and cannot reenter assumed space.
   [[nodiscard]] bool CertifySegment(Vec3 from, Vec3 to,
                                     StartPhase initial,
-                                    StartPhase final) const noexcept;
+                                    StartPhase final,
+                                    const SearchControl* control = nullptr) const noexcept;
 
   [[nodiscard]] std::optional<StartPhase> AdvanceGridStep(
       StartPhase phase, GridIndex current, GridIndex next) const noexcept;
