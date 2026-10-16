@@ -40,6 +40,7 @@ class PathExecutor:
         self.no_progress_s = 0.0
         self._best_progress = 0.0
         self._best_angle = math.inf
+        self._alignment_anchor = None
         self._stop_index = 0
         self._chosen = False
         self.final = True
@@ -61,6 +62,7 @@ class PathExecutor:
         self.failure = None
         self._chosen = False
         self._motion_anchor = None
+        self._alignment_anchor = None
         self.no_progress_s = 0.0
 
     def set_path(self, points, identity=None, final=True):
@@ -85,6 +87,11 @@ class PathExecutor:
             self.identity = identity
             return True
         hot_update = self.rolling_updates and same_session and self.phase == "TRACKING"
+        if not (
+            self.rolling_updates and same_session
+            and self.phase in ("ALIGNING", "BRAKING")
+        ):
+            self._alignment_anchor = None
         keep_final_alignment = (
             self.rolling_updates and same_session and self.phase == "FINAL_ALIGN"
             and self.final and final and self.path is not None
@@ -329,11 +336,21 @@ class PathExecutor:
                 state
             ):
                 self.phase = "TRACKING"
+                self._alignment_anchor = None
                 self.no_progress_s = 0.0
                 self._best_progress = self.progress_m
             else:
-                if abs(self.heading_error) < self._best_angle - 0.01:
-                    self._best_angle = abs(self.heading_error)
+                # 在当前目标下比较实测航向，避免引用修订或微小切线抖动伪造进展。
+                # 超过对齐容差的新目标才重建基准；BRAKING 的停稳门槛仍在上方。
+                anchor = self._alignment_anchor
+                new_target = (
+                    anchor is None
+                    or abs(angle(desired - anchor[0])) > p.alignment_tolerance_rad
+                )
+                if new_target or (
+                    abs(self.heading_error) < abs(angle(desired - anchor[1])) - 0.01
+                ):
+                    self._alignment_anchor = (desired, state.yaw_rad)
                     self.no_progress_s = 0.0
                 else:
                     self.no_progress_s += dt

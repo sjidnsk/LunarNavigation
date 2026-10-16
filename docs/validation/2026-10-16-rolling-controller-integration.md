@@ -8,6 +8,7 @@
 
 - `execution.py`、`limits.py` 固定提取自应用提交
   `800b4f11b7a5d0b38e20e25d13c2c7cb79041c36`，含 `6b9c1645` 到达修正；保留原主线到达回归。
+  I1 修复后 execution.py 在该来源上增加初始对齐航向锚点，已不再与来源逐字一致。
 - `node.py` 仅采用 `b5059eb8edd77dd0b50a5fcc3ed7ae31e0e72c91` 的滚动参数和执行器构造，
   加同一固定应用源的 `note_command` 发布记录；不引入应用硬件/平台策略或改变 TF 策略。
 - 成熟执行器依赖横向速度停稳判断，故最小提取同应用源 `tracking.py` 的末尾默认字段
@@ -22,9 +23,13 @@
 
 `PathExecutor` 构造器默认 `rolling_updates=False`。节点 `enable_rolling_updates=True`
 仅在 `incremental_reference` 生效；显式 false、`motion_reference`、`incremental_path` 保留旧切换行为。
-热替换不消耗每次停车，但方向改变、过大偏差、曲率不可行仍制动；停滞/对齐超时和故障锁存不被引用修订隐藏。
+TRACKING 热替换保留连续执行，方向改变、过大偏差、曲率不可行仍制动。
+本轮行为验证覆盖 TRACKING 停滞、FINAL_ALIGN 等价修订停滞，以及 I1 新增的初始 ALIGNING
+等价修订停滞、真实航向改善、实质新目标、停稳后失败与 clear；验证范围见下节。
+主线在非 TRACKING 反馈后 hold/freeze 并丢弃待处理 rolling，只是降低触发机会；
+PathExecutor 必须独立维持本地超时契约，不能依赖上游 hold。
 
-## 当前验证
+## 初次提交 52b6dfa5 的验证记录
 
 环境为宿主 `/opt/ros/humble`，`ROS_DOMAIN_ID=226`、`ROS_LOCALHOST_ONLY=1`。
 仅隔离测试节点，无车辆、仿真服务或真实命令输入。构建/日志在仓库外
@@ -93,3 +98,38 @@ runner 在仓库根执行 `python3 -m pytest -q -p no:cacheprovider`，显式绑
 `NOT_RUN`：Jazzy、Orin、真实 DDS 输入/rosbag、RViz、TCP 动力学、车辆闭环、训练、返航 480 请求矩阵、
 新增覆盖指标、导航 core/ROS 整包重构建与测试、全项目部署资格验收。没有以其他专题历史结果代替本轮验证。
 本报告为实现者自审记录，不能替代主任务安排的独立审查；候选尚未落地长期主线。
+
+
+## I1 修复回合 1（2026-10-16）
+
+修复基线 52b6dfa5a81aa03508c812635de35a356eb32d06。独立审查发现初始 ALIGNING
+在每次同会话 revision 后重置最佳角误差，固定姿态被反复误记为改善。
+只设置一次引用的原探针对照会超时，持续 revision 则保持 ALIGNING；本轮先复现此 RED。
+
+初始对齐现在保留“有效目标航向、最佳实测航向”的锚点。等价几何、重采样/尾部延长、
+小于等于既有 alignment_tolerance_rad 的切线变化，都在当前目标下比较实测航向改善；
+引用本身不能伪造进展。真实角误差改善超过既有 0.01 rad 门槛可续期；有效目标变化
+超过既有对齐容差时才重建基准。新引用仍进入 BRAKING，只有测得停稳后才继续对齐。
+新会话、显式 clear、进入 TRACKING 时清理对齐锚点；FINAL_ALIGN 和故障锁存原逻辑保留。
+没有禁用热更新或修改生产 timeout/限速/容差。
+
+|本轮检查|实际结果|日志（task-5-humble/ 内）|
+|---|---|---|
+|原审查探针 RED|exit 1；单引用超时，连续 revision 仍 ALIGNING|logs/fix-round1-alignment-probe-red.log|
+|新增行为用例 RED|6 failed、1 passed、69 deselected|logs/fix-round1-alignment-tests-red.log|
+|新增行为用例 GREEN|7 passed、69 deselected|logs/fix-round1-alignment-tests-green.log|
+|原审查探针 GREEN|exit 0；两种输入均 FAILED/ALIGNMENT_STALLED，预算 0.35s|logs/fix-round1-alignment-probe-green.log|
+|controller 全包 + 五个相关契约|259 passed（191 controller + 68 contract）|logs/fix-round1-controller-contracts.log|
+|Humble configure/build/install、串行 CTest|6/6 组通过；191 用例，零失败/错误/跳过|logs/fix-round1-*-controller.log、fix-round1-xunit-counts.json|
+|全仓 pytest 尝试|exit 1；两个 test_evidence.py 的既有收集冲突，未执行全量|logs/fix-round1-pytest-repository.log|
+
+新增 7 例覆盖三种连续修订停滞、真实航向改善后再次停滞、实质新切线先停稳且预算有限、
+超时先 BRAKING 再 FAILED/锁存/clear、新会话预算。既有 TRACKING 热更新、FINAL_ALIGN、
+最终位置丢失和节点模式边界均包含在 191 项 controller 回归中。
+
+使用前述同一 Humble runner 和只读消息依赖。精确命令、作者自审和报告副本在
+/home/kai/CodexDownloads/lunar_navigation/branch-integration-20261016/task-5-report.md
+的“I1 修复回合 1”节；独立审查仍交主 agent，不以作者自审替代。
+本轮未重跑扩大 root 离线集或 BASE 两项失败；前述原始记录仍属初次提交。
+原 source-manifest.json 也是初次提交证据，不证明修复后的 execution.py 与应用源一致。
+Jazzy、Orin、车辆/真实服务、GPU、训练、core/ROS 整包、返航矩阵和新增覆盖指标仍 NOT_RUN。

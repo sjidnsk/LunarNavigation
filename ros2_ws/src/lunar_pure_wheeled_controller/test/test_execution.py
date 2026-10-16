@@ -323,3 +323,118 @@ def test_final_position_loss_is_retained_in_rolling_and_legacy_modes(rolling):
     result = executor.update(TrackingState(.5, 0., 0.), .05)
     assert result.command.failure_reason == "GOAL_POSITION_LOST"
     assert not result.command.complete
+
+
+@pytest.mark.parametrize("geometry", ["identical", "resampled_tail", "tangent_jitter"])
+def test_rolling_initial_alignment_revisions_cannot_hide_stall(geometry):
+    executor = PathExecutor(
+        replace(TrackingPolicy(), no_progress_timeout_s=0.3), rolling_updates=True
+    )
+    for tick in range(20):
+        if geometry == "resampled_tail":
+            points = ((0, 0, 0), (2, 0, 0), (5 + tick, 0, 0))
+        elif geometry == "tangent_jitter":
+            points = ((0, 0, 0), (5, 0.1 * (-1) ** tick, 0))
+        else:
+            points = ((0, 0, 0), (5, 0, 0))
+        executor.set_path(points, identity=("alignment", tick + 1), final=False)
+        result = executor.update(TrackingState(0, 0, -1), 0.05)
+    assert result.phase == "FAILED"
+    assert result.command.failure_reason == "ALIGNMENT_STALLED"
+    assert result.command.linear_x_mps == result.command.angular_z_radps == 0
+    assert executor.identity == ("alignment", 20)
+
+
+def test_rolling_initial_alignment_actual_yaw_progress_renews_budget():
+    executor = PathExecutor(
+        replace(TrackingPolicy(), no_progress_timeout_s=0.3), rolling_updates=True
+    )
+    for tick in range(18):
+        executor.set_path(
+            ((0, 0, 0), (5, 0, 0)), identity=("alignment", tick + 1), final=False
+        )
+        yaw = -1 + max(0, tick - 5) * 0.04
+        result = executor.update(TrackingState(0, 0, yaw), 0.05)
+        assert result.phase == "ALIGNING"
+        assert result.command.failure_reason is None
+        assert result.command.angular_z_radps > 0
+    # 实测航向改善可以续期，但随后固定姿态仍应超时。
+    for tick in range(18, 30):
+        executor.set_path(
+            ((0, 0, 0), (5, 0, 0)), identity=("alignment", tick + 1), final=False
+        )
+        result = executor.update(TrackingState(0, 0, yaw), 0.05)
+    assert result.phase == "FAILED"
+    assert result.command.failure_reason == "ALIGNMENT_STALLED"
+
+
+def test_rolling_initial_alignment_new_tangent_brakes_then_gets_own_budget():
+    executor = PathExecutor(
+        replace(TrackingPolicy(), no_progress_timeout_s=0.3), rolling_updates=True
+    )
+    old_path = ((0, 0, 0), (5, 0, 0))
+    new_path = ((0, 0, 0), (4, 3, 0))
+    executor.set_path(old_path, identity=("alignment", 1), final=False)
+    for _ in range(6):
+        assert executor.update(TrackingState(0, 0, -0.5), 0.05).phase == "ALIGNING"
+    executor.set_path(new_path, identity=("alignment", 2), final=False)
+    result = executor.update(TrackingState(0, 0, -0.5, angular_radps=0.1), 0.05)
+    assert result.phase == "BRAKING"
+    assert result.command.linear_x_mps == result.command.angular_z_radps == 0
+    # 新目标比原目标离当前航向更远，不能误用旧角误差而立即超时。
+    for tick in range(3, 9):
+        executor.set_path(new_path, identity=("alignment", tick), final=False)
+        result = executor.update(TrackingState(0, 0, -0.5), 0.05)
+        assert result.phase == "ALIGNING"
+        assert result.command.angular_z_radps > 0
+    for tick in range(9, 20):
+        executor.set_path(new_path, identity=("alignment", tick), final=False)
+        result = executor.update(TrackingState(0, 0, -0.5), 0.05)
+    assert result.phase == "FAILED"
+    assert result.command.failure_reason == "ALIGNMENT_STALLED"
+
+
+def test_rolling_initial_alignment_timeout_brakes_latches_and_clear_restarts():
+    executor = PathExecutor(
+        replace(TrackingPolicy(), no_progress_timeout_s=0.3), rolling_updates=True
+    )
+    points = ((0, 0, 0), (5, 0, 0))
+    executor.set_path(points, identity=("alignment", 1), final=False)
+    for _ in range(6):
+        executor.update(TrackingState(0, 0, -1), 0.05)
+    executor.set_path(points, identity=("alignment", 2), final=False)
+    assert executor.update(TrackingState(0, 0, -1), 0.05).phase == "ALIGNING"
+    result = executor.update(TrackingState(0, 0, -1, angular_radps=0.1), 0.05)
+    assert result.phase == "BRAKING"
+    assert result.command.failure_reason is None
+    assert result.command.linear_x_mps == result.command.angular_z_radps == 0
+    executor.set_path(points, identity=("alignment", 3), final=False)
+    result = executor.update(TrackingState(0, 0, -0.5, angular_radps=0.1), 0.05)
+    assert result.phase == "BRAKING"
+    assert result.command.failure_reason is None
+    result = executor.update(TrackingState(0, 0, -0.5), 0.05)
+    assert result.phase == "FAILED"
+    assert result.command.failure_reason == "ALIGNMENT_STALLED"
+    executor.clear()
+    executor.set_path(points, identity=("alignment", 4), final=False)
+    result = executor.update(TrackingState(0, 0, -0.5, angular_radps=0.1), 0.05)
+    assert result.phase == "BRAKING"
+    assert result.command.linear_x_mps == result.command.angular_z_radps == 0
+    assert executor.update(TrackingState(0, 0, -0.5), 0.05).phase == "ALIGNING"
+
+
+def test_new_alignment_session_gets_a_fresh_budget():
+    executor = PathExecutor(
+        replace(TrackingPolicy(), no_progress_timeout_s=0.3), rolling_updates=True
+    )
+    points = ((0, 0, 0), (5, 0, 0))
+    executor.set_path(points, identity=("old", 1), final=False)
+    for _ in range(6):
+        executor.update(TrackingState(0, 0, -1), 0.05)
+    executor.set_path(points, identity=("new", 1), final=False)
+    for _ in range(6):
+        result = executor.update(TrackingState(0, 0, -1), 0.05)
+        assert result.phase == "ALIGNING"
+    for _ in range(3):
+        result = executor.update(TrackingState(0, 0, -1), 0.05)
+    assert result.command.failure_reason == "ALIGNMENT_STALLED"
