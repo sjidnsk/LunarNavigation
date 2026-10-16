@@ -66,7 +66,7 @@ def test_shared_plan_motion_action_is_the_only_external_message_contract() -> No
 
 
 def test_ros_wrapper_has_fixed_capabilities_launch_and_interface_contracts() -> None:
-    """The wrapper exposes three capabilities plus its two fixed runtime contracts."""
+    """固定基础能力、Orin 部署能力和运行接口配置，不接受意外新增配置。"""
     assert ROS_PACKAGE.is_dir(), "lunar_pure_planner_ros package is required"
     assert {
         path.name for path in CONFIGURATION_ROOT.glob("*.yaml")
@@ -74,12 +74,20 @@ def test_ros_wrapper_has_fixed_capabilities_launch_and_interface_contracts() -> 
         "wheel.yaml",
         "legged.yaml",
         "hopper.yaml",
+        "wheel_orin.yaml",
+        "legged_orin.yaml",
         "pure_planner.yaml",
         "external_interfaces.yaml",
         "pure_exploration.yaml",
         "exploration_navigation.yaml",
         "incremental_navigation_interfaces.yaml",
         "drl_exploration.yaml",
+        "drl_candidate_geometry_v3.yaml",
+        "drl_exploration_recovery.yaml",
+        "drl_exploration_small.yaml",
+        "drl_exploration_stagnation.yaml",
+        "drl_ordered_curriculum.yaml",
+        "drl_task_frontier.yaml",
     }
 
     forbidden_fragments = {
@@ -94,6 +102,8 @@ def test_ros_wrapper_has_fixed_capabilities_launch_and_interface_contracts() -> 
         "wheel.yaml",
         "legged.yaml",
         "hopper.yaml",
+        "wheel_orin.yaml",
+        "legged_orin.yaml",
         "pure_planner.yaml",
     ):
         configuration_path = CONFIGURATION_ROOT / configuration_name

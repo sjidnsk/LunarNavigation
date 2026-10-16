@@ -1,5 +1,38 @@
 # 强化学习统一开发入口
 
+## 2026-10-17 开发整合与运行身份分离
+
+开发整合线为 `dev/drl-exploration`，物理路径为
+`/mnt/data/WS/lunar-navigation/lunar-runtime/.worktrees/drl-exploration-redesign`。
+主线承载完整项目的已验收模块；DRL 训练/研究代码完成适用代码验收后可晋级，
+模型收敛、策略效果与 Orin 实车输入适配分别验收。本专题候选等待独立审查与主 agent 合入。
+
+2026-10-16 的 78 文件预算冻结版本随后由导航恢复版本替换为 **79 文件**。
+原 [deployed 清单](drl/formal-runtime-source-manifest.json) 记录运行身份
+`8470d67be1e6e5fc2dfa7e0a3351017bff35b07c630a9bd40246ba34c83b09da`；
+冻结包是 `/mnt/data/WS/lunar-navigation/.runtime/candidate-geometry-v3/source-navigation-recovery-20261016-r2/lunar_drl_exploration`，
+运行 cwd 为 `/mnt/data/WS/lunar-navigation/.worktrees/drl-navigation-recovery-20261016`。
+此信息来自切换记录及本轮只读源码核验，不以历史 PID 推断当前进程存活状态。
+
+本次开发修复只改变 `Trial.extend` 检查点引用生命周期，训练前和评测前释放 loaded state，
+避免控制器在子进程期间持有完整回放。新的 [开发源码清单](drl/development-source-manifest.json)
+仍为 79 文件，标记 `not_deployed`；与旧运行清单仅 `course_two_trial.py` 不同。
+运行冻结包、配置和旧 manifest 不改写；默认 verifier 继续以旧 deployed 清单为准，
+在新开发源码上报告该文件 changed 是预期漂移检测，不表示可覆盖运行包。
+
+从本仓库根显式分别只读核验：
+
+```bash
+python3 scripts/drl/verify_formal_source.py --manifest docs/drl/development-source-manifest.json --package ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration
+python3 scripts/drl/verify_formal_source.py --manifest docs/drl/formal-runtime-source-manifest.json --package /mnt/data/WS/lunar-navigation/.runtime/candidate-geometry-v3/source-navigation-recovery-20261016-r2/lunar_drl_exploration
+```
+
+逐项历史处置、奖励监看工具来源与主线兼容方案见
+[2026-10-17 开发归并](drl/2026-10-17-development-integration.md)。以下日期段保留当时记录，
+其中旧 78 文件、路径、PID、启动命令与验证数量不能覆盖本节；本次不切换训练运行入口。
+
+---
+
 ## 2026-10-16 正式训练版本源码整合
 
 唯一开发整合线为 `dev/drl-exploration`，工作树为项目根下

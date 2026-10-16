@@ -257,7 +257,7 @@ def worker_rows(s, width, details=False, limit=None):
                         f" · {'原场景回归' if c.get('evaluation_role')=='regression' else '传感器适应'}",width)
     elif phase in ('training','prefill') and s['active_training']:
         widths = [4,14,14,10,9,10,9,9] if width>=110 else [4,12,12,8,8,8,7,7]
-        heads = ['槽位','课程任务','状态','决策','覆盖率','新增 m²','奖励','导航倍率']
+        heads = ['槽位','课程任务','状态','决策','覆盖率','新增 m²','单步奖励','导航倍率']
         if width >= 115:
             widths += [11,12]
             heads += ['传感器','上次导航']
@@ -285,12 +285,61 @@ def worker_rows(s, width, details=False, limit=None):
                 rows += wrap(detail,width)
                 rows += wrap(f"     固定传感器 {num(sensor.get('range_m'),0)}m / {num(sensor.get('fov_deg'),0)}° · "
                     f"上次导航 {REASONS.get(p.get('reason_code'),p.get('reason_code') or '—')}",width)
+                reward = next((r for r in s.get('episode_rewards',{}).get('current',[])
+                    if r['env']==int(env) and r['episode_id']==p.get('episode_id')),None)
+                if reward:
+                    rows += episode_reward_detail(reward,width)
     if not rows:
         out.append(('当前没有可展示的活动任务；历史结果见训练/评测页。','dim'))
     elif limit is not None and len(rows)>limit:
         out += rows[:limit]+[(f'还有 {len(rows)-limit} 行 · 按 2 查看全部并行任务','dim')]
     else:
         out += rows
+    return out
+
+
+def episode_reward_detail(row, width):
+    if not row['complete']:
+        return [(text,'warn') for text,_ in wrap(
+            f"     记录不全 · 已记录 {row['recorded_steps']}/{row['steps']} 步，整场累计暂不可用",width)]
+    return wrap(f"     本回合累计：接近辅助 {num(row['approach_reward'],2)}"
+        f" · 总奖励 {num(row['reward_sum'],2)}",width)
+
+
+def episode_reward_rows(s, width):
+    out = section('每个场景的回合奖励 · 从该回合第一个策略动作累计',width)
+    out += [('仅显示本回合累计：接近辅助、总奖励（已包含接近辅助）。','dim'),
+        (f"按环境与回合编号区分，换场景重新累计 · 日志 {duration(s.get('episode_rewards_age'))} 前",'dim')]
+    data = s.get('episode_rewards') or {}
+    for group, title in [('current','当前场景' if s['active_training'] else '最近场景快照'),
+            ('recent','最近结束的场景 · 最多 12 个')]:
+        out += section(title,width)
+        rows = data.get(group,[])
+        if not rows:
+            out.append(('暂无可用回合记录。','dim'))
+            continue
+        widths = [4,12,10,8,5,7,10,10]
+        if width>=76:
+            out.append((table(['环境','回合编号','任务','状态','步数','覆盖率',
+                '接近辅助','总奖励'],widths),'dim'))
+        for row in rows:
+            outcome = row['outcome']
+            status = {'active':'未结束','success':'完成','interrupted':'中断','terminated':'终止',
+                'truncated':{'STAGNATION':'停滞','APPROACH_BUDGET':'接近到限',
+                    'DECISION_BUDGET':'预算到限'}.get(row.get('truncation_reason'),'截断')}.get(outcome,'—')
+            if not row['complete']:
+                status = '记录不全'
+            prefix = [f"E{row['env']:02}",row['episode_id'] or '准备场景',
+                name(row.get('curriculum_task')),status,row['steps'],pct(row.get('reference_coverage'))]
+            style = 'warn' if not row['complete'] or outcome in ('truncated','interrupted','terminated') else 'normal'
+            if width>=76:
+                values = [row.get(k) if row['complete'] else None for k in ('approach_reward','reward_sum')]
+                out.append((table(prefix+[num(v,2) for v in values],widths),style))
+            else:
+                out += [(text,style) for text,_ in wrap(' · '.join(map(str,prefix[:4]))+
+                    f" · {row['steps']} 步 · 覆盖 {prefix[-1]}",width)]
+                out += episode_reward_detail(row,width)
+    out.append(('记录不全时显示 —，不把日志缺失的部分当作零奖励。','dim'))
     return out
 
 
@@ -551,7 +600,7 @@ def body(s, view, width, height=42, log=()):
             out += wrap('阶段步/覆盖为最近一次验收指标；验证后还会复演前序。指标较旧会标黄，进程存活另行核查。',width)
         return out+worker_rows(s,width,details=True)
     if view == 'training':
-        return training_stats(s,width)+task_table(s,width)+replay_table(s,width)+learning_rows(s,width)+protocol(s,width)
+        return episode_reward_rows(s,width)+training_stats(s,width)+task_table(s,width)+replay_table(s,width)+learning_rows(s,width)+protocol(s,width)
     if view == 'evaluation':
         return evaluation_table(s,width,'candidate')+evaluation_table(s,width,'baseline')+gate_rows(s,width)+failure_rows(s,width)
     out = resources(s,width)+section('运行证据 / 恢复信息',width)

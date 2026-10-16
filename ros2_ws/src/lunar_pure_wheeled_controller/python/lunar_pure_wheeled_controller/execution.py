@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from .path_geometry import Polyline, angle
-from .limits import tracking_speed
+from .limits import rolling_tracking_command, tracking_speed
 from .tracking import TrackingCommand, TrackingPolicy, TrackingState, _valid_policy
 
 
@@ -20,10 +20,14 @@ class ExecutionResult:
 
 
 class PathExecutor:
-    def __init__(self, policy: TrackingPolicy):
+    def __init__(self, policy: TrackingPolicy, *, rolling_updates=False):
         if not _valid_policy(policy):
             raise ValueError("invalid execution limits")
         self.policy = policy
+        self.rolling_updates = rolling_updates
+        self._motion_anchor = None
+        self._replacement_direction = None
+        self._reproject = False
         self.identity = None
         self.path = None
         self.phase = "WAITING"
@@ -36,15 +40,32 @@ class PathExecutor:
         self.no_progress_s = 0.0
         self._best_progress = 0.0
         self._best_angle = math.inf
+        self._alignment_anchor = None
+        self._alignment_direction = None
         self._stop_index = 0
         self._chosen = False
         self.final = True
+        self._last_angular_command = 0.0
+        self._last_linear_command = 0.0
+
+    def note_angular_command(self, value):
+        """Track emitted commands, including node-level stops on stale input."""
+        self._last_angular_command = value
+
+    def note_command(self, linear, angular):
+        self._last_linear_command = linear
+        self.note_angular_command(angular)
 
     def clear(self):
+        self.note_command(0.0, 0.0)
         self.path = None
         self.phase = "WAITING"
         self.failure = None
         self._chosen = False
+        self._motion_anchor = None
+        self._alignment_anchor = None
+        self._alignment_direction = None
+        self.no_progress_s = 0.0
 
     def set_path(self, points, identity=None, final=True):
         path = Polyline(points)
@@ -60,10 +81,35 @@ class PathExecutor:
                     self.failure = "REFERENCE_MUTATED"
                     self.phase = "BRAKING"
                 return False
+        same_session = identity is not None and self.identity is not None and identity[0] == self.identity[0]
+        if self.rolling_updates and same_session and self.failure is not None:
+            # Navigation may have published this revision before receiving our
+            # failure. Keep the fault latched but report it with the current ID;
+            # only invalidation/clear may restart execution.
+            self.identity = identity
+            return True
+        hot_update = self.rolling_updates and same_session and self.phase == "TRACKING"
+        if not (
+            self.rolling_updates and same_session
+            and self.phase in ("ALIGNING", "BRAKING")
+        ):
+            self._alignment_anchor = None
+            self._alignment_direction = None
+        keep_final_alignment = (
+            self.rolling_updates and same_session and self.phase == "FINAL_ALIGN"
+            and self.final and final and self.path is not None
+            and math.dist(path.points[-1], self.path.points[-1]) <= self.policy.goal_position_tolerance_m
+            and abs(angle(path.final_yaw - self.path.final_yaw)) <= self.policy.goal_yaw_tolerance_rad
+        )
+        self._replacement_direction = self.direction if hot_update else None
+        self._reproject = hot_update
+        if not (self.rolling_updates and same_session):
+            self.no_progress_s = 0.0
+            self._motion_anchor = None
         self.path = path
         self.identity = identity
         self.final = final
-        self.phase = "BRAKING"
+        self.phase = "FINAL_ALIGN" if keep_final_alignment else ("TRACKING" if hot_update else "BRAKING")
         self.progress_m = 0.0
         self.index = 0
         self.error = 0.0
@@ -72,13 +118,14 @@ class PathExecutor:
         self._chosen = False
         self._stop_index = 0
         self.failure = None
-        self.no_progress_s = 0.0
         self._best_progress = 0.0
-        self._best_angle = math.inf
+        if not keep_final_alignment:
+            self._best_angle = math.inf
         self.stops = path.stop_arcs(self.policy.corner_angle_rad)
         return True
 
     def _result(self, v=0.0, w=0.0) -> ExecutionResult:
+        self.note_command(v, w)
         command = TrackingCommand(
             v,
             w,
@@ -97,7 +144,7 @@ class PathExecutor:
     def _stopped(self, state):
         p = self.policy
         return (
-            abs(state.linear_mps) <= p.stopped_linear_mps
+            math.hypot(state.linear_mps, state.lateral_mps) <= p.stopped_linear_mps
             and abs(state.angular_radps) <= p.stopped_angular_radps
         )
 
@@ -125,7 +172,11 @@ class PathExecutor:
                 error,
             )
         bound = p.max_angular_accel_radps2 * dt
-        w = max(state.angular_radps - bound, min(state.angular_radps + bound, target))
+        # Slew the command itself. Anchoring at measured rate can prevent
+        # braking when plant gain or feedback lag makes measurement exceed
+        # the commanded limit; measured speed still governs _stopped().
+        previous = self._last_angular_command
+        w = max(previous - bound, min(previous + bound, target))
         return self._result(0.0, max(-p.max_angular_radps, min(p.max_angular_radps, w)))
 
     def update(self, state: TrackingState, dt: float) -> ExecutionResult:
@@ -138,6 +189,7 @@ class PathExecutor:
                     state.y_m,
                     state.yaw_rad,
                     state.linear_mps,
+                    state.lateral_mps,
                     state.angular_radps,
                     dt,
                 )
@@ -164,18 +216,22 @@ class PathExecutor:
                 if self.failure:
                     self.phase = "FAILED" if self._stopped(state) else "BRAKING"
             return self._result()
+        initial_reach = None
+        if self._reproject:
+            initial_reach = math.hypot(state.x_m-line.points[0][0], state.y_m-line.points[0][1]) + p.lookahead_m
         projection = line.project(
             state.x_m,
             state.y_m,
             None if not self._chosen else self.index,
             (
-                None
+                initial_reach
                 if not self._chosen
                 else self.progress_m
                 + max(p.lookahead_m, abs(state.linear_mps) * dt)
                 + 0.25
             ),
         )
+        self._reproject = False
         self.index = projection.index
         self.progress_m = max(self.progress_m, projection.s)
         self.error = projection.error
@@ -188,13 +244,25 @@ class PathExecutor:
             return self._result()
         if not self._chosen:
             heading = line.headings[self.index] if line.headings else line.final_yaw
-            self.direction = (
-                -1
-                if p.allow_reverse
-                and abs(angle(heading - state.yaw_rad))
-                > p.reverse_heading_threshold_rad
-                else 1
-            )
+            # 同一对齐 episode 的等价几何沿用方向，避免倒车阈值抖动翻转目标。
+            alignment_direction = self._alignment_direction
+            if (
+                alignment_direction is not None
+                and abs(angle(heading - alignment_direction[0])) <= p.alignment_tolerance_rad
+            ):
+                self.direction = alignment_direction[1]
+            else:
+                self.direction = (
+                    -1
+                    if p.allow_reverse
+                    and abs(angle(heading - state.yaw_rad))
+                    > p.reverse_heading_threshold_rad
+                    else 1
+                )
+                self._alignment_direction = (heading, self.direction)
+            if self._replacement_direction is not None and self.direction != self._replacement_direction:
+                self.phase = "BRAKING"
+            self._replacement_direction = None
             self._chosen = True
             self._stop_index = next(
                 (i for i, s in enumerate(self.stops) if s >= self.progress_m - 1e-8),
@@ -242,6 +310,9 @@ class PathExecutor:
                 self.phase = "BRAKING"
                 return self._result()
             if at_end:
+                if self.rolling_updates and not self.final:
+                    self.phase = "COMPLETED"
+                    return self._result()
                 error = angle(line.final_yaw - state.yaw_rad)
                 if abs(error) <= yaw_tolerance:
                     self.phase = "COMPLETED"
@@ -277,11 +348,22 @@ class PathExecutor:
                 state
             ):
                 self.phase = "TRACKING"
+                self._alignment_anchor = None
+                self._alignment_direction = None
                 self.no_progress_s = 0.0
                 self._best_progress = self.progress_m
             else:
-                if abs(self.heading_error) < self._best_angle - 0.01:
-                    self._best_angle = abs(self.heading_error)
+                # 在当前目标下比较实测航向，避免引用修订或微小切线抖动伪造进展。
+                # 超过对齐容差的新目标才重建基准；BRAKING 的停稳门槛仍在上方。
+                anchor = self._alignment_anchor
+                new_target = (
+                    anchor is None
+                    or abs(angle(desired - anchor[0])) > p.alignment_tolerance_rad
+                )
+                if new_target or (
+                    abs(self.heading_error) < abs(angle(desired - anchor[1])) - 0.01
+                ):
+                    self._alignment_anchor = (desired, state.yaw_rad)
                     self.no_progress_s = 0.0
                 else:
                     self.no_progress_s += dt
@@ -290,7 +372,16 @@ class PathExecutor:
                     self.phase = "BRAKING"
                     return self._result()
                 return self._rotation(state, self.heading_error, dt)
-        if self.progress_m > self._best_progress + 0.01:
+        if self.rolling_updates:
+            position = (state.x_m, state.y_m)
+            if self._motion_anchor is None:
+                self._motion_anchor = position
+            if math.dist(position, self._motion_anchor) > 0.01:
+                self._motion_anchor = position
+                self.no_progress_s = 0.0
+            else:
+                self.no_progress_s += dt
+        elif self.progress_m > self._best_progress + 0.01:
             self._best_progress = self.progress_m
             self.no_progress_s = 0.0
         else:
@@ -324,8 +415,15 @@ class PathExecutor:
                 p.max_angular_radps / abs(k),
                 math.sqrt(p.max_lateral_accel_mps2 / abs(k)),
             )
-        current = max(0.0, self.direction * state.linear_mps)
-        speed = tracking_speed(k, speed, current, state.angular_radps, dt, p)
+        current = max(0.0, self.direction * self._last_linear_command)
+        if self.rolling_updates:
+            command = rolling_tracking_command(k, speed, current, self._last_angular_command, dt, p)
+            if command is None:
+                self.phase = "BRAKING"
+                return self._result()
+            return self._result(self.direction * command[0], command[1])
+        speed = tracking_speed(k, speed, current, self._last_angular_command, dt, p)
+
         if speed is None:
             self.phase = "BRAKING"
             return self._result()

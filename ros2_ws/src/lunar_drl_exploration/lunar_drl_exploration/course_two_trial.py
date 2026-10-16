@@ -358,7 +358,9 @@ class Trial(ctl.Controller):
             state=checkpoint(current);remaining=ctl.remaining_budget(target,state.record['schedule']['transitions'])
             self.save(phase='training',arm='C3',target_transitions=target,
                 block_index=index,blocks_total=blocks,block_start_transitions=start['transitions']+(index-1)*size)
-            if remaining or Fraction(state.record['schedule']['credit'])>=1:
+            needs_training=remaining or Fraction(state.record['schedule']['credit'])>=1
+            del state
+            if needs_training:
                 args=[sys.executable,'-m','lunar_drl_exploration.cli','train','--config',str(directory/'config.json'),
                     '--resume','--max-transitions',str(remaining),'--domain-base','180']
                 if not self.spawn(args,'train-'+label,DRL_COURSE_TWO_STAGE='A1'):return False
@@ -366,6 +368,7 @@ class Trial(ctl.Controller):
             if (state.record['schedule']['transitions']!=target or
                     state.record['schedule']['updates']!=start['updates']+index*size//4):
                 raise ValueError('extended block stopped before its exact training boundary')
+            del state
             frozen=directory/f'block{index:02d}.pt'
             if not frozen.exists():shutil.copyfile(current,frozen)
             elif ctl.sha(frozen)!=ctl.sha(current):raise ValueError('extended checkpoint changed during evaluation')

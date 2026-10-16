@@ -8,6 +8,8 @@ from pathlib import Path
 import shutil
 import time
 
+from course_two_trial_rewards import EpisodeRewards
+
 
 GROUPS = ('moon_outside','moon_inside','cave_inside','new', 'old', 'diagnostic', 'visible', 'moon_cover', 'cave_cover', 'moon_finish', 'cave_finish',
     'cover', 'finish', 'return', 'detour')
@@ -111,6 +113,7 @@ class Reader:
         self.system_time = 0
         self.system = {}
         self.cpu = None
+        self.episode_rewards = EpisodeRewards(self.root/'arms/C3/training/run/metrics.jsonl')
 
     def read(self, path, compact=None):
         path = Path(path)
@@ -327,10 +330,13 @@ class Reader:
             warnings.append('已有门槛记录缺少本轮完整评测/模型证据，暂不显示通过结论。')
             gate = {}
         checkpoint_path = run/'resume.pt'
+        reward_boundary = ((identity.get('reward_adjustment') or {}).get('boundary') or {}).get('transitions', 0)
+        episode_rewards = self.episode_rewards.snapshot(progress, boundary=reward_boundary)
         return dict(root=str(self.root), now=now, state=state, identity=identity, live=live, status=status,
             state_age=self.age(self.root/'state.json', now), warnings=warnings,
             qualification=qualification, baseline=baseline, candidate=candidate, evaluation=evaluation,
             progress=progress, progress_age=progress_age, active_training=active_training,
+            episode_rewards=episode_rewards, episode_rewards_age=self.age(run/'metrics.jsonl', now),
             resources=self.resources(now), eta=eta,
             limits={kind:(self.read(self.root/(kind+'-settings.json')) or {}).get('workers')
                 for kind in ('qualification', 'evaluation', 'training')},

@@ -1,4 +1,4 @@
-"""Read-only verification of the exact deployed training package source."""
+"""Read-only verification of distinct development and deployed source identities."""
 import hashlib
 import importlib.util
 import json
@@ -23,8 +23,8 @@ def fixture(tmp_path):
     return package,manifest
 
 
-def test_recorded_formal_package_is_complete():
-    report=verifier()(ROOT/'ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration',ROOT/'docs/drl/formal-runtime-source-manifest.json')
+def test_recorded_development_package_is_complete():
+    report=verifier()(ROOT/'ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration',ROOT/'docs/drl/development-source-manifest.json')
     assert report['ok'],report
     assert report['file_count']==79
 
@@ -65,3 +65,16 @@ def test_portable_config_preserves_formal_training_values():
     assert (config.model.width,config.model.heads,config.model.layers)==(128,8,6)
     assert (config.goal_position_tolerance_m,config.goal_yaw_tolerance_rad)==(.1,.05)
     assert not Path(config.artifact_root).is_absolute()
+
+
+def test_deployed_manifest_remains_immutable_and_distinct_from_development():
+    path=ROOT/'docs/drl/formal-runtime-source-manifest.json'
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == '00bf70663cc394768d8ba5fc262a2ce56cdb76c5a84905f911aca8c62586c5cb'
+    deployed=json.loads(path.read_text())
+    development=json.loads((ROOT/'docs/drl/development-source-manifest.json').read_text())
+    assert len(deployed['files']) == len(development['files']) == 79
+    assert development['deployment_status'] == 'not_deployed'
+    assert development['based_on_deployed_runtime'] == deployed['deployed_runtime']
+    assert 'deployed_runtime' not in development
+    changed={name for name in deployed['files'] if deployed['files'][name]!=development['files'][name]}
+    assert changed == {'course_two_trial.py'}

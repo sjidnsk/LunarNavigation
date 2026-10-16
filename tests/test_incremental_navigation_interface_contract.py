@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import re
 from pathlib import Path
 
 import yaml
@@ -156,7 +158,19 @@ def test_single_stack_config_has_only_shared_mode_platform_and_node_defaults() -
     assert "motion_primitives" not in text
     assert "footprint_xy_m" not in text
     navigation_source = NAVIGATION_SOURCE.read_text(encoding="utf-8")
-    assert 'declare_parameter<double>("local_window_size_m", 64.0)' in navigation_source
+    # 节点独立启动默认 32 m，统一 launch 通过 YAML 显式覆盖为 64 m。
+    assert 'declare_parameter<double>("local_window_size_m", 32.0)' in navigation_source
+    launch_path = ROOT / "launch/exploration_navigation.launch.py"
+    tree = ast.parse(launch_path.read_text(encoding="utf-8"))
+    compose = next(node for node in tree.body
+                   if isinstance(node, ast.FunctionDef) and node.name == "_incremental_parameters")
+    namespace = {"ParameterValue": lambda value, value_type: value_type(value)}
+    exec(compile(ast.Module(body=[compose], type_ignores=[]), str(launch_path), "exec"), namespace)
+    navigation, _ = namespace["_incremental_parameters"](
+        config, common, "wheel", "/test/wheel.yaml", False
+    )
+    assert navigation["local_window_size_m"] == config["navigation"]["local_window_size_m"]
+    assert "parameters=[navigation]" in launch_path.read_text(encoding="utf-8")
 
 
 def test_incremental_explorer_consumes_only_the_published_three_state_map() -> None:
@@ -220,12 +234,24 @@ def test_stack_config_launch_and_cpp_keep_the_exploration_map_contract_closed() 
     assert "result.data[output_index] = 100;" in projector
     assert "rclcpp::KeepLast{1}" in publisher
     assert ".reliable().transient_local()" in publisher
-    # One configured exploration endpoint; the optional fine diagnostic map has
-    # its own topic and must not be mistaken for another exploration owner.
-    assert publisher.count("std::move(topic), ConfiguredExplorationMapQos(node)") == 1
-    assert '"publish_local_fine_map", false' in publisher
-    assert '"local_fine_map_topic", "/Car/T4/mapping/local_fine_map"' in publisher
-    assert "fine_topic, ExplorationMapQos()" in publisher
+    # 按成员、主题与 QoS 绑定验证探索输出，局部细图为独立可选通道。
+    compact = re.sub(r"\s+", "", publisher)
+    channels = re.findall(
+        r"(\w+)(?:\(|=)node\.create_publisher<nav_msgs::msg::OccupancyGrid>"
+        r"\((std::move\(topic\),ConfiguredExplorationMapQos\(node\)|fine_topic,ExplorationMapQos\(\))\)",
+        compact,
+    )
+    assert dict(channels) == {
+        "publisher_": "std::move(topic),ConfiguredExplorationMapQos(node)",
+        "local_fine_publisher_": "fine_topic,ExplorationMapQos()",
+    }
+    assert len(channels) == len(dict(channels))
+    assert len(channels) == compact.count("create_publisher<nav_msgs::msg::OccupancyGrid>")
+    assert 'if(enabled){local_fine_publisher_=node.create_publisher<' in compact
+    assert '"local_fine_map_topic","/Car/T4/mapping/local_fine_map"' in compact
+    publish_body = publisher.split("bool IncrementalMapPublisher::Publish(", 1)[1]
+    assert "publisher_->publish(std::move(message));" in publish_body
+    assert "local_fine_publisher_->publish" not in publish_body
     assert navigation.count(
         "exploration_map_publisher(node, parameters.exploration_map_topic)"
     ) == 1

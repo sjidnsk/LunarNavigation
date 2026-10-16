@@ -6,21 +6,28 @@
 
 ## 分支职责
 
-- `import/pure-planner-orin-main` 是从原仓库导入的只读来源快照，固定基线为提交
+- `integration/pure-planner-orin` 是完整项目架构的主集成线，承载地图、导航、规划、控制、探索及
+  已实现并通过适用验证的其他模块算法。成熟 DRL 代码模块可通过模块晋级进入主线；训练权重仍在
+  学习不等于模块代码不得集成，代码验收、策略效果和应用部署验收分别记录。
+- 三个长期应用线是 `app/orin-unreal-simulation`（TCP 仿真）、`app/orin-real-vehicle`（轮式实车
+  Orin）、`app/orin-legged-vehicle`（足式实车 Orin），承接主线成熟能力并独立验证平台适配。
+- 两个长期开发集成线是 `dev/terrain-confidence`、`dev/drl-exploration`。各模块的
+  `feat/*`、`fix/*`、`test/*`、`docs/*` 等专题从所属开发线派生，在独立 worktree 完成后先回
+  owner；成熟功能经接口、行为、测试和依赖审查后晋级主线，再同步相关应用线。
+- 通用修复以主线为 owner，先在独立专题验证回主线，再兼容合并或明确适配到其他长期线；不把
+  整个未完成的专用模型/训练模块作为公共修复上送。该限制不禁止成熟 DRL 模块正常晋级。
+- `import/pure-planner-orin-main` 为只读来源快照：提交
   `200c1ea4188b772ee8589708473eee1391fa950d`、tree
-  `dc7789c0131a523d110be6faae54f212e9bc2c7c`。不得在该分支开发、提交、合并、rebase、
-  force-push 或移动分支指针。
-- `integration/pure-planner-orin` 是 pure-planner 的集成主线，不是
-  `import/pure-planner-orin-main` 的待回合分支。任何开发结果都不得反向合入 import 分支。
-- `integration/pure-planner-orin` 整合跨模块、跨场景的公共能力；`dev/*` 是从集成主线
-  派生的模块或场景开发整合线。当前强化学习开发线为 `dev/drl-exploration`。
-- 专项功能、修复、测试、文档分支分别使用 `feat/*`、`fix/*`、`test/*`、`docs/*`，
-  从所属开发线派生并使用独立 worktree，验证后合回所属开发线。公共能力修改从 integration
-  派生，验证后回到 integration，再由各开发线同步；不得把 DRL 专用模型/训练代码当成公共修复合入主线。
-- 不把本历史合入 `lunar-runtime` 的其他主线、开发分支或远程默认分支，除非用户明确批准仓库级
-  整合方案。
-- Humble/Orin 稳定或发布分支只能在用户明确要求时从 integration 创建；发布修复中的通用修改
-  必须同步回 integration，不得只留在部署分支。
+  `dc7789c0131a523d110be6faae54f212e9bc2c7c`。禁止开发、提交、反向合入、rebase、强推或移动指针。
+- `feat/drl-formal-version-20261016` 保留正式源码里程碑，`release/orin-humble-20260911` 保留
+  历史精简发布来源；二者都不是额外长期开发线，也不替代完整主线或最新运行身份。
+- 上述六长期线之外，未经用户明确批准仓库级整合，不把导入历史合入旧 `lunar-runtime` 的其他
+  主线、开发线或远程默认分支。新的 Humble/Orin 稳定或发布分支仅在用户明确要求时从主线创建；
+  发布修复中的通用修改必须同步回主线。
+- 每个临时分支须有六长期线之一作为 owner，记录来源 SHA、处置及验证边界；谱系覆盖或 patch-id
+  等价不代替功能验收。历史架构、已替代实验保留来源，不能因独有提交就整支回合。
+- 分支流向、模块归属和 86 分支逐项台账见 [分支管理](docs/分支管理.md) 与
+  [分支整合台账](docs/分支整合台账.md)。本次授权的整合仍须独立审查和适用验证。
 - 未经用户明确要求，不合并、不推送、不创建 PR、不设置 upstream，也不删除分支或 worktree。
 
 ## 多会话与工作树安全

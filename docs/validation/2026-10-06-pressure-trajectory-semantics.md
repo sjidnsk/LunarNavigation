@@ -15,6 +15,8 @@
 
 验证：JavaScript `node --check` 通过；内置浏览器实际刷新后核对图例与画面。显示文件 SHA256：`0dd376eb0b8aa0f53c034efdfe7af33ad4226194a6a19add8a9d942a52a0c03d`。
 
-![修正后的站位连线图例](/home/kai/CodexDownloads/lunar_navigation/drl-integration-20261012/evidence/pressure-trajectory-clarification-20261006.jpg)
+![修正后的站位连线图例](/home/kai/CodexDownloads/lunar_navigation/branch-integration-20261016/evidence/pressure-trajectory-clarification-20261006.jpg)
 
 这份记录只验证显示语义修正，不是全部 40 回合完成或 A2 效果提升的验收证明。
+
+2026-10-17：图像仅复制到上述仓库外批次 evidence 路径，Git 不收录 JPG。原图来自 `feat/drl-region-contraction-20261006`；SHA256 `5463bf974a18cc158a9db94997bd818246ab5c35cc82b4ac6163840524b26f28`，原图保持不变。

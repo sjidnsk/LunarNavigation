@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -232,3 +233,129 @@ def test_panel_accepts_only_hash_bound_adopted_baseline(ui,evaluated_root):
     path=root/'evaluation/baseline/n0.json';value=json.loads(path.read_text())
     value['wall_s']=99.;write(path,value)
     assert ui.Reader(root,lambda _:None).snapshot()['baseline']['done']==4
+
+
+def reward_step(episode,env,step,transition,*,exploration=2.,approach=0.,completed=False):
+    # The large cumulative turn includes initialization and MUST NOT be charged again.
+    base=exploration-.002*5.-.005-.001+(20. if completed else 0.)
+    return dict(event='transition',episode_id=episode,env=env,steps=step,transitions=transition,
+        token=transition,seed=transition,curriculum_task='moon_outside',budget=256,
+        reward=base+approach,base_reward=base,approach_reward=approach,
+        last_execution=dict(distance_m=5.,turn_rad=math.pi),turn_rad=999.,
+        reference_coverage=.99 if completed else .4,completed=completed,
+        terminated=completed,truncated=False)
+
+
+def reward_log(root,rows,*,append=False,environments=None):
+    run=root/'arms/C3/training/run'
+    write(root/'arms/C3/config.json',dict(completion_bonus=20.))
+    write(root/'state.json',dict(status='paused',phase='training'))
+    if environments is None:
+        environments={str(row['env']):row for row in rows}
+    write(run/'progress.json',dict(transitions=max((r['transitions'] for r in rows),default=0),
+        environments=environments))
+    with (run/'metrics.jsonl').open('a' if append else 'w',encoding='utf-8') as stream:
+        for row in rows:stream.write(json.dumps(row,ensure_ascii=False)+'\n')
+    return run/'metrics.jsonl'
+
+
+def test_scene_rewards_separate_interleaved_episodes_and_show_only_two_rewards(ui,root):
+    rows=[reward_step('outside-a',0,1,1,approach=.5),
+        reward_step('outside-b',1,1,2,exploration=4.,approach=-.7),
+        reward_step('outside-a',0,2,3,exploration=3.,approach=-.2,completed=True)]
+    reward_log(root,rows)
+    reader=ui.Reader(root,lambda _:None)
+    s=reader.snapshot();episodes=s.get('episode_rewards',{})
+    assert 'current' in episodes, 'monitor needs per-episode rewards'
+    active=episodes['current'][0];ended=episodes['recent'][0]
+    assert active['episode_id']=='outside-b' and ended['episode_id']=='outside-a'
+    assert active['reward_sum']==pytest.approx(3.284)
+    assert ended['reward_sum']==pytest.approx(25.268)
+    assert ended['approach_reward']==pytest.approx(.3)
+    assert ended['complete'] and ended['recorded_steps']==ended['steps']==2
+    text='\n'.join(t for t,_ in ui.body(s,'training',144))
+    for token in ['每个场景的回合奖励','outside-a','outside-b','25.27','3.28','-0.70']:
+        assert token in text
+    assert '累计总奖励' not in text
+    header=next(line for line in text.splitlines() if line.startswith('环境 '))
+    assert header.split()==['环境','回合编号','任务','状态','步数','覆盖率','接近辅助','总奖励']
+    before={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    assert reader.snapshot()['episode_rewards']==episodes
+    assert ui.Reader(root,lambda _:None).snapshot()['episode_rewards']==episodes
+    assert before=={p:p.read_bytes() for p in root.rglob('*') if p.is_file()}
+
+
+def test_scene_rewards_incremental_reads_wait_for_complete_lines_and_reset_on_new_episode(ui,root):
+    first=reward_step('first',0,1,1,approach=-.5)
+    path=reward_log(root,[first]);reader=ui.Reader(root,lambda _:None)
+    initial=reader.snapshot().get('episode_rewards',{})
+    assert 'current' in initial, 'monitor needs per-episode rewards'
+    second=reward_step('first',0,2,2,completed=True)
+    payload=json.dumps(second)+'\n'
+    with path.open('a') as f:f.write(payload[:-10])
+    assert reader.snapshot()['episode_rewards']['current'][0]['recorded_steps']==1
+    with path.open('a') as f:f.write(payload[-10:])
+    third=reward_step('second',0,1,3,exploration=6.)
+    reward_log(root,[third],append=True)
+    s=reader.snapshot()['episode_rewards']
+    assert s['current'][0]['episode_id']=='second'
+    assert s['current'][0]['reward_sum']==pytest.approx(5.984)
+    assert s['recent'][0]['episode_id']=='first' and s['recent'][0]['recorded_steps']==2
+
+
+def test_scene_rewards_survive_in_place_log_compaction_without_double_counting(ui,root):
+    rows=[reward_step('long',0,i,i,approach=-.1) for i in range(1,5)]
+    path=reward_log(root,rows[:3]);reader=ui.Reader(root,lambda _:None)
+    assert 'current' in reader.snapshot().get('episode_rewards',{})
+    # Rolling writer replaces the prefix in-place; inode and size can stay alike.
+    reward_log(root,rows[1:])
+    row=reader.snapshot()['episode_rewards']['current'][0]
+    assert row['complete'] and row['recorded_steps']==4
+    assert row['reward_sum']==pytest.approx(4*1.884)
+    # A reopened monitor cannot invent the discarded first action.
+    recovered=ui.Reader(root,lambda _:None).snapshot()
+    row=recovered['episode_rewards']['current'][0]
+    assert not row['complete'] and row['recorded_steps']==3
+    text='\n'.join(t for t,_ in ui.body(recovered,'training',144))
+    assert '记录不全' in text and '5.65' not in text
+
+
+def test_scene_rewards_exclude_old_bound_and_do_not_transfer_old_episode_to_reset(ui,root):
+    write(root/'identity.json',dict(reward_adjustment=dict(boundary=dict(transitions=100))))
+    rows=[reward_step('old-bound',0,1,99,exploration=999.),
+        reward_step('new-bound',0,1,101,approach=-.5)]
+    reward_log(root,rows,environments={'0':dict(episode_id='brand-new',steps=0,
+        curriculum_task='cave_inside',state='READY',initial_reference_coverage=.1)})
+    s=ui.Reader(root,lambda _:None).snapshot()
+    assert 'current' in s.get('episode_rewards',{})
+    row=s['episode_rewards']['current'][0]
+    assert row['episode_id']=='brand-new' and row['reward_sum']==0.
+    assert row['complete'] and row['recorded_steps']==0
+    assert all(r['episode_id']!='old-bound' for r in s['episode_rewards']['recent'])
+    assert '999' not in '\n'.join(t for t,_ in ui.body(s,'training',144))
+
+
+@pytest.mark.parametrize('bad', ['missing_auxiliary','step_gap','invalid_reward'])
+def test_scene_rewards_never_present_incomplete_records_as_full_return(ui,root,bad):
+    rows=[reward_step('incomplete',0,1,1),reward_step('incomplete',0,2,2)]
+    if bad=='missing_auxiliary':rows[0].pop('approach_reward')
+    elif bad=='step_gap':rows[1]['steps']=3
+    else:rows[0]['reward']=float('nan')
+    reward_log(root,rows)
+    s=ui.Reader(root,lambda _:None).snapshot()
+    assert 'current' in s.get('episode_rewards',{})
+    assert not s['episode_rewards']['current'][0]['complete']
+    assert '记录不全' in '\n'.join(t for t,_ in ui.body(s,'training',144))
+
+
+@pytest.mark.parametrize('width,height',[(80,24),(154,46)])
+def test_scene_reward_table_remains_readable_with_all_twelve_environments(ui,root,width,height):
+    reward_log(root,[reward_step(f'episode-{i:02}',i,1,i+1,approach=-.5) for i in range(12)])
+    s=ui.Reader(root,lambda _:None).snapshot()
+    text='\n'.join(t for t,_ in ui.body(s,'training',width-1))
+    assert '每个场景的回合奖励' in text
+    assert all(f'E{i:02}' in text for i in range(12))
+    first,_,_=ui.frame(s,'training',width,height)
+    last,_,_=ui.frame(s,'training',width,height,100000)
+    assert all(ui.cells(t)<width for t,_ in first+last)
+    assert 'P 保存停止' in first[-1][0]

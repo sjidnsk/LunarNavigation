@@ -270,7 +270,7 @@ def test_benchmark_uses_real_frozen_actor_and_all_modes_on_one_observation(tmp_p
     model = Actor(ModelConfig(width=8, heads=2, layers=1)).eval()
     actor_path = tmp_path / 'actor.pt'
     torch.save(dict(schema=OBSERVATION_SCHEMA, frontier_semantics=frontier_semantics(),
-        model_config=dict(width=8, heads=2, layers=1, actor_score_bound=0.),
+        model_config=dict(width=8, heads=2, layers=1, actor_score_bound=0., architecture_version='region_relation_v2'),
         version=1, state_dict=model.state_dict()), actor_path)
     features = np.zeros((8, 27), np.float32)
     features[:, 2] = 1.
