@@ -26,7 +26,7 @@ def fixture(tmp_path):
 def test_recorded_formal_package_is_complete():
     report=verifier()(ROOT/'ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration',ROOT/'docs/drl/formal-runtime-source-manifest.json')
     assert report['ok'],report
-    assert report['file_count']==78
+    assert report['file_count']==79
 
 
 @pytest.mark.parametrize('change',['changed','missing','extra'])

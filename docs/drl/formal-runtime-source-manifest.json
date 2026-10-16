@@ -1,8 +1,8 @@
 {
   "schema": "formal_drl_source_v1",
-  "deployed_runtime": "1c57d3118181fda5fc588d3be0281d2b280381d7871f6cae53d1715fbd996ba5",
+  "deployed_runtime": null,
   "config_sha256": "8d159d7e55fcb42aa23aef21900595199d8371f809543b3b83ef2ef1618deefb",
-  "source_epoch": "navigation-budget-20261016",
+  "source_epoch": "navigation-recovery-20261016",
   "package": "lunar_drl_exploration",
   "files": {
     "course_two_qualification.py": "2aeda2e48391987f38010350871df35f89a32c71799dfe5694383d36e774480e",
@@ -30,7 +30,8 @@
     "contracts.py": "caf1c4cbdd864d40f6161233b3ae2023b1c7fcd67ba4907c140851cc46ea7830",
     "course_two_scene.py": "35e42e2210183e9b50a37132d06277aa84b67f0b003b13e686783a269f42f21e",
     "course_two_rebalance.py": "60505cd9ee0529cc29203967507a6fafb5e84f8a4bddedd2ba30e49e04da616d",
-    "ros_messages.py": "8241419a0cbd7853842ff5490007978b198a9e58909985996cd0a6c123dcba79",
+    "ros_messages.py": "843f7df132314e8a6e80f8be5face4d365382378e921f45498e7fe01ecee26de",
+    "navigation_failure.py": "8297d1ea0f2eac23de139034b8ca8f4302421e58a1820a92f6b3937bd7fe5954",
     "task_analysis.py": "52cd508a2ae6f32a3cd77c5d9e98d7acc4730639f0c1ba05b77a3ef5d88f67ff",
     "coverage.py": "c0ce49c76631c3badcb7aaa364893c554b557402a679c1fe7a172c75128de793",
     "region_query_trial.py": "279d3dc95e9bdec15a3a24be9e4f537b0d03a660263240533659fea755bc7022",
@@ -64,7 +65,7 @@
     "domain_lease.py": "f0a91b686c45bbd1eaa7f0072b4152c78a3f73b78b5c4b673c02596525680f0f",
     "course_two_sensors.py": "28486750defdedf0dc31f2a8dc6ad50e37b90bc1c45d6595b42d35414ccd72aa",
     "cli.py": "d810f917ef23f11bf29da1585c48309eca0ad187a4d3ccfa63b4301dbe829059",
-    "ros_env.py": "991aa5ea36292811ec3bf77741232d053e800549d36b468c75f0a725de50177f",
+    "ros_env.py": "b1c61f478d578fe8cd96def1345ecb0e60a7785ff0185f5310b7d7dd2aa77583",
     "course_two_trial.py": "46bff3327ec784193adbb9ec0b5c9df648da6be7939ec3b55a784bbc27db8666",
     "geometry.py": "644a208842fc260b348dbd63a9ed5da783c1fc0b28d7b92f7a02d5817e1ec056",
     "evaluation.py": "df5782e4959d3bd73c8d22eed41e60b6367d81f5c635403044a0ca2ed477d345",
@@ -87,15 +88,15 @@
   "native_navigation": [
     [
       "native:lunar_incremental_navigation_core:lib/liblunar_incremental_navigation_core.so",
-      "c42cb8c10904e2ea90a07efc1dc35b5db78b95340f5e7fc685f262dced0f701d"
+      "7ed107a050f140a6302d8e3ed911f75c2f78f078153ffbd35628c32874265dc1"
     ],
     [
       "native:lunar_incremental_navigation_ros:lib/liblunar_incremental_navigation_ros.so",
-      "4210194514acf3719e573d37a0a05f1d0e7ad0b98b82a6d01b525585fa54ed84"
+      "75559743347eb4ed42c37e07c1e11ef2130d0542277311a78378d67e0046490c"
     ],
     [
       "native:lunar_incremental_navigation_ros:lib/lunar_incremental_navigation_ros/lunar_incremental_navigation_node",
-      "c46fc530fd667daceb613202f44a38a74d86668caaecf8c975300f14726197d9"
+      "7ca7e14111ad477985b5fbbbb1f9d87d56de88172df4dba1af2dad6eacb05e9f"
     ]
   ],
   "controller_execution": [
@@ -144,11 +145,14 @@
       "ec3873303a615108287d3a86b049c9d2d1749bba905c296e24c4ab8073a5e7d5"
     ]
   ],
-  "scope": "Exact deployed Python package; existing public navigation source retained; native install and runtime configuration contribute separately to runtime identity",
+  "scope": "Frozen navigation-recovery candidate. Native support and phase legality fixes; failure-only Python diagnostics. Model, learner, replay semantics, sensor, physical limits and training configuration unchanged. Activation requires preserved naturally saved block 14 and an audited runtime adoption; live identity remains authoritative until then.",
   "portable_config_sha256": "7f4340e5a965882d1b96924b15729bb682297c4be2cb91a22e89081261224839",
   "portable_config_path_fields": [
     "platform.capability_path",
     "output_dir",
     "artifact_root"
-  ]
+  ],
+  "previous_deployed_runtime": "1c57d3118181fda5fc588d3be0281d2b280381d7871f6cae53d1715fbd996ba5",
+  "candidate_runtime": "db923a3d24373e8f5d67a01901ae659c9b6997d40aa15993f2a5e8e69e6e47b1",
+  "activation_status": "validated_candidate_waiting_for_saved_block_14"
 }
