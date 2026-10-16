@@ -31,6 +31,7 @@ set(LUNAR_INCREMENTAL_NAVIGATION_PRODUCTION_SOURCES
   src/local/local_target_selector.cpp
   src/local/local_goal_region.cpp
   src/local/request_local_start_patch.cpp
+  src/local/phase_motion.cpp
   src/local/phase_aware_path_simplifier.cpp
   src/session/planning_cycle.cpp
   src/session/rolling_update_policy.cpp

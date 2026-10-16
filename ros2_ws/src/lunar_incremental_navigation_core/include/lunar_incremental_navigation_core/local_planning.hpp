@@ -202,6 +202,15 @@ class RequestLocalPlanningView final {
            base_->State(index) == FineCellState::kFree;
   }
 
+  // Certify the entire closed segment, including corner contacts. A prefix
+  // may enter measured free space once and cannot reenter assumed space.
+  [[nodiscard]] bool CertifySegment(Vec3 from, Vec3 to,
+                                    StartPhase initial,
+                                    StartPhase final) const noexcept;
+
+  [[nodiscard]] std::optional<StartPhase> AdvanceGridStep(
+      StartPhase phase, GridIndex current, GridIndex next) const noexcept;
+
   [[nodiscard]] bool CanCertifyLeggedSupport(
       const GridIndex index, const bool is_initial_support) const noexcept {
     const LocalCellSource source = Source(index);
