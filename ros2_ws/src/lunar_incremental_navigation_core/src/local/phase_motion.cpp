@@ -8,7 +8,12 @@ namespace lunar::incremental_navigation {
 
 bool RequestLocalPlanningView::CertifySegment(
     const Vec3 from, const Vec3 to, const StartPhase initial,
-    const StartPhase final) const noexcept {
+    const StartPhase final, const SearchControl* control) const noexcept {
+  std::size_t visited = 0;
+  const auto interrupted = [&] {
+    return control != nullptr && (control->canceled() || control->expired());
+  };
+  if (interrupted()) return false;
   if (initial == StartPhase::kNormal && final != initial) return false;
   const auto start = local::SupercoverWorldToCell(geometry_, from);
   const auto end = local::SupercoverWorldToCell(geometry_, to);
@@ -23,7 +28,8 @@ bool RequestLocalPlanningView::CertifySegment(
   }
   if (initial == final) {
     return local::VisitSupercoverCells(geometry_, from, to, [&](GridIndex cell) {
-      return matches(Source(cell), initial);
+      return (visited++ % 64 != 0 || !interrupted()) &&
+             matches(Source(cell), initial);
     });
   }
 
@@ -43,6 +49,7 @@ bool RequestLocalPlanningView::CertifySegment(
   long double first_evidence = 1.0L;
   const bool covered = local::VisitSupercoverCells(
       geometry_, from, to, [&](GridIndex cell) {
+        if (visited++ % 64 == 0 && interrupted()) return false;
         const auto source = Source(cell);
         if (source != LocalCellSource::kStartAssumedFree &&
             source != LocalCellSource::kEvidenceFree) return false;

@@ -117,7 +117,7 @@ class PhaseGeometry final {
 
   [[nodiscard]] bool Legal(const PathPoint& a, const PathPoint& b) const {
     return !Interrupted(control_) && view_.CertifySegment(
-        a.pose.position_m, b.pose.position_m, a.phase, b.phase) &&
+        a.pose.position_m, b.pose.position_m, a.phase, b.phase, &control_) &&
         !Interrupted(control_);
   }
 
@@ -238,7 +238,7 @@ std::vector<PathPoint> SimplifyPhaseAwarePath(
     for (std::size_t i = 0; i < raw.size(); ++i) {
       const auto& from = raw[i == 0 ? 0 : i - 1];
       if (!view.CertifySegment(from.pose.position_m, raw[i].pose.position_m,
-                               from.phase, raw[i].phase)) return {};
+                               from.phase, raw[i].phase, &control)) return {};
     }
     return {raw.begin(), raw.end()};
   }
@@ -248,7 +248,7 @@ std::vector<PathPoint> SimplifyPhaseAwarePath(
     if (Interrupted(control)) return {};
     if (begin > 0 && !view.CertifySegment(
             raw[begin - 1].pose.position_m, raw[begin].pose.position_m,
-            raw[begin - 1].phase, raw[begin].phase)) return {};
+            raw[begin - 1].phase, raw[begin].phase, &control)) return {};
     std::size_t end = begin + 1;
     while (end < raw.size() && raw[end].phase == raw[begin].phase) ++end;
     if (!SimplifyPhase(view, raw.subspan(begin, end - begin), output, control)) {

@@ -134,6 +134,20 @@ TEST(PhaseAwareMotion, CornerContactsAndActualStartShareOnePhaseRule) {
   EXPECT_TRUE(SimplifyPhaseAwarePath(view, crossing).empty());
 }
 
+TEST(PhaseAwareSimplifier, ShortPathsHonorDeadlineDuringCertification) {
+  const auto fine = MakeFine({{{1, 1}, FineCellState::kFree},
+                              {{2, 1}, FineCellState::kFree}});
+  const RequestLocalPlanningView view(fine, {.position_m = {1.5, 1.5}}, 0., {});
+  const std::vector<PathPoint> raw{P(1.5, 1.5, StartPhase::kNormal),
+                                    P(2.5, 1.5, StartPhase::kNormal)};
+  const auto deadline = SteadyClock::time_point{} + std::chrono::seconds(1);
+  int checks = 0;
+  SearchControl control{.deadline = deadline, .now = [&] {
+    return ++checks == 1 ? SteadyClock::time_point{} : deadline;
+  }};
+  EXPECT_TRUE(SimplifyPhaseAwarePath(view, raw, control).empty());
+}
+
 // Captured failing terminal edges from the real planned outbound/return probe.
 // Only the four cells touching the terminal corner intersect these segments.
 TEST(GridSupercover, CapturedTerminalCornersDoNotTraversePastTheEndpoint) {
