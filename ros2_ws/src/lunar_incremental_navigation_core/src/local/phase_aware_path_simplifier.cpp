@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "local/grid_supercover.hpp"
+#include "local/terrain_segment_cost.hpp"
 #include "local/boundary_distance_index.hpp"
 
 namespace lunar::incremental_navigation {
@@ -172,6 +173,10 @@ class PhaseGeometry final {
     clearance[i] = geometry.Evaluate(path[i], path[i + 1]);
     if (clearance[i] < 0) return false;
   }
+  std::vector<long double> cost_prefix(path.size(), 0.L);
+  for (std::size_t i=1;i<path.size();++i)
+    cost_prefix[i]=cost_prefix[i-1]+local::TerrainSegmentCost(
+        view,path[i-1].pose.position_m,path[i].pose.position_m,control);
   output.push_back(path.front());
   std::size_t anchor = 0;
   while (anchor + 1 < path.size()) {
@@ -189,7 +194,11 @@ class PhaseGeometry final {
       // shortcuts cannot accumulate a sequence of tolerance relaxations.
       const long double tolerance = 64 * std::numeric_limits<double>::epsilon() *
                                     std::max(1.0L, minimum[j]);
-      if (candidate >= 0 && candidate + tolerance >= minimum[j]) {
+      const long double shortcut_cost=local::TerrainSegmentCost(
+          view,path[anchor].pose.position_m,path[j].pose.position_m,control);
+      const long double original_cost=cost_prefix[j]-cost_prefix[anchor];
+      if (candidate >= 0 && candidate + tolerance >= minimum[j] &&
+          shortcut_cost <= original_cost + 1e-12L*std::max(1.L,original_cost)) {
         selected = j;
         break;
       }

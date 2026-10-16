@@ -113,7 +113,8 @@ TEST(LeggedTerrainBasic, FiveCentimeterTerrainPreservesPhysicalLimits) {
     Terrain missing;
     missing.geometry.resolution_m = resolution;
     missing.at(8, 7) = std::numeric_limits<float>::quiet_NaN();
-    EXPECT_EQ(Evaluate(missing).state, IntrinsicCellState::kUnknown);
+    EXPECT_EQ(Evaluate(missing).state, resolution <= .1
+        ? IntrinsicCellState::kFree : IntrinsicCellState::kUnknown);
     Terrain isolated;
     isolated.geometry.resolution_m = resolution;
     isolated.at(7, 7) = .25F;

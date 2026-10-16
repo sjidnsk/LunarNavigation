@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <array>
+#include <bitset>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -27,12 +29,15 @@ struct TraversalCostWeights final {
   double slope{};
   double relief{};
   double clearance{};
+  double confidence{};
 };
 
 struct FineSnapshotMetrics final {
   std::size_t updated_cells{};
   std::size_t elevation_cells_examined{};
   std::size_t elevation_cache_tiles{};
+  std::size_t ground_cells_estimated{};
+  std::size_t ground_cache_bytes{};
   std::size_t allocated_cells{};
   std::size_t allocated_bytes{};
   double derivation_ms{};
@@ -42,19 +47,31 @@ class FineTraversabilityTile final {
  public:
   using StateArray = std::array<FineCellState, kGridTileCellCount>;
   using CostArray = std::array<double, kGridTileCellCount>;
+  using ConfidenceArray = std::array<float, kGridTileCellCount>;
+
+  using GroundArray = std::array<float, kGridTileCellCount>;
+  static GroundArray UnknownGround() {
+    GroundArray result; result.fill(std::numeric_limits<float>::quiet_NaN()); return result;
+  }
 
   FineTraversabilityTile(const FineTraversabilityTile&) = default;
   FineTraversabilityTile(FineTraversabilityTile&&) noexcept = default;
   FineTraversabilityTile& operator=(const FineTraversabilityTile&) = delete;
   FineTraversabilityTile& operator=(FineTraversabilityTile&&) = delete;
 
-  FineTraversabilityTile(StateArray states, CostArray traversal_costs)
+  FineTraversabilityTile(const StateArray& states, const CostArray& traversal_costs)
+      : FineTraversabilityTile(states, traversal_costs, DefaultConfidence(states)) {}
+
+  FineTraversabilityTile(const StateArray& states, const CostArray& traversal_costs,
+                        const ConfidenceArray& confidence, const GroundArray& ground = UnknownGround())
       : states_(std::move(states)),
-        traversal_costs_(std::move(traversal_costs)) {
+        traversal_costs_(std::move(traversal_costs)), confidence_(std::move(confidence)), ground_(std::move(ground)) {
     for (std::size_t offset = 0U; offset < kGridTileCellCount; ++offset) {
       if (!ValidState(states_[offset]) ||
           !std::isfinite(traversal_costs_[offset]) ||
-          traversal_costs_[offset] < 0.0) {
+          traversal_costs_[offset] < 0.0 ||
+          !std::isfinite(confidence_[offset]) || confidence_[offset] < 0.f ||
+          confidence_[offset] > 1.f) {
         throw std::invalid_argument(
             "fine tile states and traversal costs must be valid");
       }
@@ -76,6 +93,17 @@ class FineTraversabilityTile final {
     return traversal_costs_[offset];
   }
 
+  [[nodiscard]] const ConfidenceArray& confidence_values() const noexcept { return confidence_; }
+  [[nodiscard]] double Confidence(std::size_t offset) const noexcept {
+    if (states_[offset] == FineCellState::kUnknown) return 0.;
+    return confidence_[offset];
+  }
+
+  [[nodiscard]] const GroundArray& ground_values() const noexcept { return ground_; }
+  [[nodiscard]] std::optional<float> GroundHeight(std::size_t offset) const noexcept {
+    return std::isfinite(ground_[offset]) ? std::optional<float>(ground_[offset]) : std::nullopt;
+  }
+
   [[nodiscard]] bool IsUnobserved(const std::size_t offset) const noexcept {
     return offset < kGridTileCellCount &&
            states_[offset] == FineCellState::kUnknown &&
@@ -83,6 +111,12 @@ class FineTraversabilityTile final {
   }
 
  private:
+  static ConfidenceArray DefaultConfidence(const StateArray& states) {
+    ConfidenceArray result{};
+    for(std::size_t i=0;i<result.size();++i)
+      result[i]=states[i]==FineCellState::kUnknown?0.f:1.f;
+    return result;
+  }
   [[nodiscard]] static bool ValidState(const FineCellState state) noexcept {
     switch (state) {
       case FineCellState::kUnknown:
@@ -95,6 +129,8 @@ class FineTraversabilityTile final {
 
   StateArray states_;
   CostArray traversal_costs_;
+  ConfidenceArray confidence_;
+  GroundArray ground_;
 };
 
 using FineTraversabilityTileDirectory =
@@ -149,6 +185,7 @@ class FineTraversabilitySnapshot final {
         !IsFiniteNonnegative(cost_weights_.slope) ||
         !IsFiniteNonnegative(cost_weights_.relief) ||
         !IsFiniteNonnegative(cost_weights_.clearance) ||
+        !IsFiniteNonnegative(cost_weights_.confidence) ||
         !IsFiniteNonnegative(metrics_.derivation_ms)) {
       throw std::invalid_argument(
           "fine snapshot parameters must be finite and nonnegative");
@@ -190,6 +227,17 @@ class FineTraversabilitySnapshot final {
     return elevation_;
   }
 
+  // Planning elevation: retain measured intervals; use supported ground for
+  // sampling holes only. Raw elevation() remains unchanged and auditable.
+  [[nodiscard]] std::optional<ElevationRange> PlanningElevationRangeAt(GridIndex index) const noexcept {
+    if (!geometry_.Contains(index)) return {};
+    if (auto raw = elevation_->ElevationRangeAt(index)) return raw;
+    if (State(index) != FineCellState::kFree || Confidence(index) <= 0.) return {};
+    const auto tile = FindTile(TileForCell(index));
+    const auto height = tile ? tile->GroundHeight(TileCellOffset(index)) : std::nullopt;
+    return height ? std::optional<ElevationRange>(ElevationRange{*height,*height}) : std::nullopt;
+  }
+
   [[nodiscard]] std::shared_ptr<const FineTraversabilityTile> FindTile(
       const TileIndex index) const noexcept {
     return tiles_.Find(index);
@@ -219,6 +267,12 @@ class FineTraversabilitySnapshot final {
     }
     const auto tile = FindTile(TileForCell(index));
     return tile ? tile->TraversalCost(TileCellOffset(index)) : 0.0;
+  }
+
+  [[nodiscard]] double Confidence(const GridIndex index) const noexcept {
+    if (!geometry_.Contains(index)) return 0.;
+    const auto tile = FindTile(TileForCell(index));
+    return tile ? tile->Confidence(TileCellOffset(index)) : 0.;
   }
 
   [[nodiscard]] std::span<const TileIndex> changed_tiles() const noexcept {

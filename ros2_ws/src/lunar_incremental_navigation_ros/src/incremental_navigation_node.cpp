@@ -231,6 +231,12 @@ struct RuntimeParameters final {
       parameters.profile.terrain_background_half_width_m < 0.0) {
     throw std::runtime_error("PLANNER_ERROR: invalid terrain background half-width");
   }
+  parameters.profile.confidence_weight = node.declare_parameter<double>(
+      "confidence_weight", parameters.profile.confidence_weight);
+  if (!std::isfinite(parameters.profile.confidence_weight) ||
+      parameters.profile.confidence_weight < 0.0) {
+    throw std::runtime_error("PLANNER_ERROR: confidence_weight must be finite and nonnegative");
+  }
   parameters.profile.clearance_weight = node.declare_parameter<double>(
       "clearance_weight", parameters.profile.clearance_weight);
   if (!std::isfinite(parameters.profile.clearance_weight) ||
