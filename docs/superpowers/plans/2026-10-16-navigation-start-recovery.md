@@ -60,8 +60,8 @@ Files: controller execution tests/source only if necessary; DRL `ros_env.py` and
 
 - [x] Review whole diff and run affected core/ROS/controller/DRL suites, sequential performance cases and source/boundary checks.
 - [x] Stage frozen runtime, native libraries and manifest; certify new runtime in isolated ROS domains.
-- [ ] At naturally saved block-14 boundary verify checkpoint serialization and full replay count/hash; back up checkpoint and all identity/history records.
-- [ ] Adopt new runtime with unchanged config/checkpoint, audited historical epochs and same run/ClearML task.
+- [x] At naturally saved block-14 boundary verify checkpoint serialization and full replay count/hash; back up checkpoint and all identity/history records.
+- [x] Adopt new runtime with unchanged config/checkpoint, audited historical epochs and same run/ClearML task.
 - [ ] Resume and prove sampled replay, incrementing updates, unchanged schedule continuity and active runtime hashes.
 - [ ] Report exact verification limits; Orin/real vehicle remain NOT_RUN.
 
@@ -96,3 +96,8 @@ Final review: One independent whole-branch review found three Important issues a
 Ruling: Repair only the signal-test fixture handshake — production `PYTHONOPTIMIZE=1` strips blocking I/O hidden inside the spawned fixture's asserts, reproducing the same failure on the old frozen runtime — explicit waits fix all 15 signal-boundary cases without changing training code. If this ruling were wrong, a production atomic-update issue could be masked; the unchanged old runtime passing the corrected real-signal cases and exact schedule/learner/replay checks distinguish that risk.
 
 Ruling: Keep old experiment identity authoritative until activation — the reviewed candidate has its own frozen source epoch, launcher and binary hashes — a mistaken identity transition could invalidate old evaluations; immutable historical epochs and full-file hashes are required at adoption.
+
+- Saved-boundary activation: after the user notified block completion, verified natural block-14 completion at 116605 transitions / 28672 updates, no trainer running. Paused evaluation only. Preserved checkpoint SHA `7a8979e855aee409ca64c299ac70915cf6909fdc6ec147d4be65e5264d5c51b0`, all 13540 replay entries and serialized replay SHA `c4b34a00c49315b1c619df814ec4fcefebaaece8cca4d1f3eb2324b9ef79f71c`. Independent backup and 1879 historical file hashes are retained.
+- Activated reviewed runtime at 2026-10-16 18:15:22 Asia/Shanghai; same run and ClearML task. Eight live native workers load the final new libraries; old partial block-14 evaluation and live data are archived. The new runtime reruns block-14 quick evaluation before normal block-15 learning. The scoped watchdog HOLD was released only after live native runtime verification.
+
+Ruling: Use the user-notified already-saved boundary rather than restarting the old observer — the observer was explicitly disarmed at the user request; trainer completion and absence were independently reverified before pausing evaluation — a mistaken boundary would risk interrupting new collection, so exact saved schedule, empty in-flight credit, trainer absence, evaluation phase and unchanged checkpoint stat were all checked.

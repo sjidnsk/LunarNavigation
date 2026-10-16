@@ -1,6 +1,6 @@
 {
   "schema": "formal_drl_source_v1",
-  "deployed_runtime": null,
+  "deployed_runtime": "8470d67be1e6e5fc2dfa7e0a3351017bff35b07c630a9bd40246ba34c83b09da",
   "config_sha256": "8d159d7e55fcb42aa23aef21900595199d8371f809543b3b83ef2ef1618deefb",
   "source_epoch": "navigation-recovery-20261016-r2",
   "package": "lunar_drl_exploration",
@@ -145,7 +145,7 @@
       "ec3873303a615108287d3a86b049c9d2d1749bba905c296e24c4ab8073a5e7d5"
     ]
   ],
-  "scope": "Frozen navigation-recovery candidate. Native support and phase legality fixes; failure-only Python diagnostics. Model, learner, replay semantics, sensor, physical limits and training configuration unchanged. Activation requires preserved naturally saved block 14 and an audited runtime adoption; live identity remains authoritative until then.",
+  "scope": "Activated navigation-recovery runtime after naturally saved block 14. Native support and phase legality fixes; failure-only Python diagnostics. Same complete checkpoint, 13540 replay entries, model, learner, sensor, physical limits, training configuration and run/ClearML task. Historical evaluations retain their original runtime attribution.",
   "portable_config_sha256": "7f4340e5a965882d1b96924b15729bb682297c4be2cb91a22e89081261224839",
   "portable_config_path_fields": [
     "platform.capability_path",
@@ -154,6 +154,6 @@
   ],
   "previous_deployed_runtime": "1c57d3118181fda5fc588d3be0281d2b280381d7871f6cae53d1715fbd996ba5",
   "candidate_runtime": "8470d67be1e6e5fc2dfa7e0a3351017bff35b07c630a9bd40246ba34c83b09da",
-  "activation_status": "validated_candidate_waiting_for_saved_block_14",
+  "activation_status": "active_after_preserved_saved_block_14",
   "previous_candidate_runtime": "db923a3d24373e8f5d67a01901ae659c9b6997d40aa15993f2a5e8e69e6e47b1"
 }
