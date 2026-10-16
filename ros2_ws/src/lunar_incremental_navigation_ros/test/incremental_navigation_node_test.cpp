@@ -791,6 +791,17 @@ TEST(IncrementalNavigationNode, LocalMapQosCanBeOverriddenForVolatileReplay) {
   EXPECT_EQ(profile.durability, RMW_QOS_POLICY_DURABILITY_VOLATILE);
 }
 
+TEST(IncrementalNavigationNode, PhysicalGoalPrecisionIsConfigurableAndStartupOwned) {
+  auto options=ServerOptions("drl_precision");
+  options.append_parameter_override("goal_position_tolerance_m",0.05);
+  auto server=std::make_shared<IncrementalNavigationNode>(options,IncrementalNavigationNodeDependencies{});
+  EXPECT_DOUBLE_EQ(server->get_parameter("goal_position_tolerance_m").as_double(),0.05);
+  EXPECT_FALSE(server->set_parameters_atomically({rclcpp::Parameter("goal_position_tolerance_m",0.3)}).successful);
+  options=ServerOptions("invalid_precision");
+  options.append_parameter_override("goal_position_tolerance_m",0.0);
+  EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(options,IncrementalNavigationNodeDependencies{}),std::invalid_argument);
+}
+
 TEST(IncrementalNavigationNode, StartupParametersRequireRestart) {
   auto server = std::make_shared<IncrementalNavigationNode>(
       ServerOptions("startup_parameters"), IncrementalNavigationNodeDependencies{});
@@ -808,7 +819,7 @@ TEST(IncrementalNavigationNode, DirectDeploymentDefaultsAndExplicitOverrides) {
   EXPECT_FALSE(defaults->get_parameter("platform_config").as_string().empty());
   EXPECT_TRUE(defaults->get_parameter("enable_tracking_feedback").as_bool());
   EXPECT_DOUBLE_EQ(defaults->get_parameter("rolling_replan_period_s").as_double(), 0.5);
-  EXPECT_EQ(defaults->get_parameter("tf_topic").as_string(), "/P4/input/map_to_odom");
+  EXPECT_EQ(defaults->get_parameter("tf_topic").as_string(), "/tf");
   EXPECT_DOUBLE_EQ(defaults->get_parameter("goal_position_tolerance_m").as_double(), 0.1);
   EXPECT_DOUBLE_EQ(defaults->get_parameter("goal_yaw_tolerance_rad").as_double(), 0.05);
   rclcpp::NodeOptions wheel_options;
@@ -1442,7 +1453,7 @@ TEST(IncrementalNavigationNode, RejectsNonpositiveConfiguredGoalTolerances) {
     auto options = ServerOptions(name, false);
     options.append_parameter_override(name, 0.0);
     EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(
-        options, IncrementalNavigationNodeDependencies{}), std::runtime_error);
+        options, IncrementalNavigationNodeDependencies{}), std::invalid_argument);
   }
 }
 

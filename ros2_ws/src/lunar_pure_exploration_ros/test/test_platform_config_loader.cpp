@@ -93,7 +93,7 @@ TEST(PlatformConfigLoader, LoadsPlannerInstalledWheelGeometry) {
   EXPECT_DOUBLE_EQ(config.geometry.footprint_vertices[2].y, -0.409);
   EXPECT_DOUBLE_EQ(config.geometry.footprint_vertices[3].x, -0.591);
   EXPECT_DOUBLE_EQ(config.geometry.footprint_vertices[3].y, 0.409);
-  EXPECT_DOUBLE_EQ(config.geometry.minimum_clearance_m, 0.2);
+  EXPECT_DOUBLE_EQ(config.geometry.minimum_clearance_m, 0.4);
 }
 
 TEST(PlatformConfigLoader, IncrementalDeploymentProfilesAcceptNavigationMargin) {
@@ -238,7 +238,7 @@ TEST(PlatformConfigLoader, AcceptsAnyFinitePolygonWithAtLeastThreeVertices) {
       std::move(contents),
       "footprint_xy_m: [[0.591, 0.409], [0.591, -0.409], [-0.591, -0.409], [-0.591, 0.409]]",
       "footprint_xy_m: [[0.0, 0.0], [2.0, 0.0], [0.0, 1.0]]");
-  contents = ReplaceOnce(std::move(contents), "minimum_clearance_m: 0.2",
+  contents = ReplaceOnce(std::move(contents), "minimum_clearance_m: 0.4",
                          "minimum_clearance_m: 0.0");
   const TemporaryYaml yaml{std::move(contents)};
 
@@ -258,13 +258,13 @@ TEST(PlatformConfigLoader, RejectsMalformedFootprintAndClearance) {
                      "footprint_xy_m: [[.inf, 0.0], [1.0, 0.0], [0.0, 1.0]]"},
            std::pair{"footprint_xy_m: [[0.591, 0.409], [0.591, -0.409], [-0.591, -0.409], [-0.591, 0.409]]",
                      "footprint_xy_m: [[-.inf, 0.0], [1.0, 0.0], [0.0, 1.0]]"},
-           std::pair{"minimum_clearance_m: 0.2",
+           std::pair{"minimum_clearance_m: 0.4",
                      "minimum_clearance_m: -0.01"},
-           std::pair{"minimum_clearance_m: 0.2",
+           std::pair{"minimum_clearance_m: 0.4",
                      "minimum_clearance_m: .nan"},
-           std::pair{"minimum_clearance_m: 0.2",
+           std::pair{"minimum_clearance_m: 0.4",
                      "minimum_clearance_m: .inf"},
-           std::pair{"minimum_clearance_m: 0.2",
+           std::pair{"minimum_clearance_m: 0.4",
                      "minimum_clearance_m: -.inf"}}) {
     const TemporaryYaml yaml{
         ReplaceOnce(WheelYaml(), replacement.first, replacement.second)};

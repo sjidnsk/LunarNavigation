@@ -1,0 +1,948 @@
+"""Single learner owner of replay, exact update credit and continuation state."""
+
+
+FINAL_CONFIRM_TIMEOUT_S = 12.
+
+
+def within_admission_budget(admitted, inflight, *, baseline, maximum):
+    """Reserve room for already granted actions before starting another one."""
+    return maximum is None or admitted - baseline + inflight < maximum
+
+
+def _merge_progress(status, progress):
+    """Never attach an earlier episode's completion fields to reset progress."""
+    if status.get('state') == 'RESETTING':
+        return dict(status)
+    if (progress.get('episode_id') is not None and status.get('episode_id') is not None
+            and progress['episode_id'] != status['episode_id']):
+        return dict(progress)
+    return dict(status, **progress)
+
+
+def dispatch_candidates(pending, reservations, course=None, *, bootstrap_missing=()):
+    """Reselect after each reservation, preserving course and bootstrap priority.
+
+    Yields candidates only; the owner still checks credit, admission budget and
+    stop/barrier state before reserving and sending each grant.
+    """
+    remaining={e:t for e,t in pending.items() if e not in reservations}
+    while remaining:
+        if course is None:
+            selected=next(iter(remaining))
+        elif bootstrap_missing:
+            candidates=[e for e in remaining if course.active.get(e) in bootstrap_missing]
+            selected=min(candidates) if candidates else None
+        else:
+            selected=course.select_pending(remaining,reservations)
+        if selected is None:return
+        yield selected,remaining.pop(selected)
+
+
+class AdmissionLedger:
+    def __init__(self, replay, schedule, bootstrap=None, *, prefill=False):
+        self.replay, self.schedule = replay, schedule
+        self.bootstrap = bootstrap
+        self.prefill = prefill
+        self.active_scenes = {}
+        self.last_admitted = {}
+
+    def scene(self, env_id, scenes):
+        if len(scenes) != 1:
+            raise ValueError('exactly one active scene per environment required')
+        self.active_scenes[env_id] = scenes
+
+    def admit(self, env_id, token, transition):
+        previous = self.last_admitted.get(env_id, -1)
+        if token <= previous:
+            return False
+        self.replay.add(transition, self.active_scenes[env_id])
+        self.schedule.collected(reserved=True,prefill=self.prefill)
+        if self.bootstrap is not None and self.bootstrap['active']:
+            from .replay import transition_task
+            task = transition_task(transition, self.active_scenes[env_id])
+            if task not in self.bootstrap['required_tasks']:
+                raise ValueError('A2 bootstrap admission outside active course tasks')
+            self.bootstrap['admitted'] += 1
+            counts = self.bootstrap['by_task']
+            counts[task] = counts.get(task, 0) + 1
+            if len(self.replay) != self.bootstrap['admitted']:
+                raise ValueError('A2 bootstrap replay budget cannot retain all 64 admissions')
+        self.last_admitted[env_id] = token
+        return True
+
+
+class Curriculum:
+    """Admission-count schedule: early small; middle 25/75; late 15/25/60.
+
+    Configurable initial stage boundaries are 20k and 60k valid transitions.
+    Distribution changes only when an environment requests a new episode.
+    """
+    def __init__(self, config, rng, state=None, *, probe_extent=None, probe_budget=None):
+        self.config, self.rng = config, rng
+        import copy
+        self.state = copy.deepcopy(state or {'episodes_issued': 0})
+        self.probe_extent, self.probe_budget = probe_extent, probe_budget
+        self.course = None
+        self._resume_specs={}
+        if config.course_two:
+            import os
+            from .course_two import CourseTwo
+            saved=self.state.get('course')
+            stage=os.environ.get('DRL_COURSE_TWO_STAGE',saved['stage'] if saved else 'A1')
+            if config.course_two_variant:
+                from .course_two_rebalance import RebalancedCourse,load_catalog,course_for
+                if stage!='A1':raise ValueError('rebalance later stages require separate qualification')
+                self.course=course_for(config,state=saved)
+                self.catalog,self.catalog_templates=load_catalog(config)
+            else:self.course=CourseTwo(stage,state=saved,success_coverage=config.success_coverage)
+            saved_sensor=self.state.get('sensor_curriculum') or dict(range_limit=20.,easy=True)
+            sensor_curriculum=dict(range_limit=float(os.environ.get('DRL_COURSE_TWO_RANGE_LIMIT',str(saved_sensor['range_limit']))),
+                easy=os.environ.get('DRL_COURSE_TWO_RANGE_EASY','1' if saved_sensor['easy'] else '0')=='1') if stage=='B' else None
+            if sensor_curriculum and sensor_curriculum['range_limit'] not in (20.,40.,70.,100.):
+                raise ValueError('invalid range curriculum anchor')
+            if saved is not None and (stage!=saved['stage'] or
+                    sensor_curriculum!=self.state.get('sensor_curriculum')):
+                # A promotion begins a new allocation; otherwise all slots can
+                # retain old episodes until the bounded update credit fills,
+                # before the new task has enough data to permit any update.
+                self.state['active_specs']={}
+            else:self._resume_specs=copy.deepcopy(self.state.get('active_specs',{}))
+            self.state['sensor_curriculum']=sensor_curriculum
+            self.state['course']=self.course.state_dict()
+            self.state.setdefault('active_specs',{})
+        if config.ordered_curriculum:
+            import os
+            from .ordered_curriculum import OrderedCourse
+            phase = int(os.environ.get('DRL_COURSE_PHASE', '0'))
+            if state is not None and 'course' not in state:
+                raise ValueError('mixed curriculum cannot restore into ordered course')
+            self.course = OrderedCourse(phase, config.ordered_rehearsal_for_phase(phase),
+                state=self.state.get('course'), success_coverage=config.success_coverage)
+            if config.environments < phase + 1:
+                raise ValueError('ordered course needs at least one slot per active task')
+            self.state['course'] = self.course.state_dict()
+
+    def next(self, env_id, transitions):
+        if self.config.course_two:
+            from .course_two_scene import make_case
+            from .ordered_curriculum import area_budget
+            if not 0 <= env_id < self.config.environments: raise ValueError('invalid environment slot')
+            self.course.release(env_id)
+            saved=self._resume_specs.pop(str(env_id),None)
+            if saved is not None:
+                self.course.activate(env_id,saved['curriculum_task'])
+                if self.config.moon_entry_curriculum:self.course.bind_entry_spec(env_id,saved)
+                return saved
+            serial=self.state['episodes_issued'];self.state['episodes_issued']=serial+1
+            seed=((int(self.config.seed)+2)<<32)+serial
+            task=self.course.next_task();self.course.activate(env_id,task)
+            ordinals=self.state.setdefault('course_two_ordinals',{})
+            ordinal=ordinals.get(task,0);ordinals[task]=ordinal+1
+            if self.config.course_two_variant:
+                from copy import deepcopy
+                from .course_two_rebalance import CatalogExhausted
+                if ordinal>=len(self.catalog[task]):
+                    from .course_two_rebalance import fresh_spec
+                    spec=fresh_spec(self.config,task,ordinal,self.catalog_templates)
+                else:spec=deepcopy(self.catalog[task][ordinal])
+                if self.config.moon_entry_curriculum:
+                    spec=self.course.entry.apply(spec,ordinal)
+                    self.course.bind_entry_spec(env_id,spec)
+                self.state['active_specs'][str(env_id)]=spec
+                return spec
+            if task.startswith('c2_'):
+                stage=task[3:]
+                sensor_course=self.state.get('sensor_curriculum') if stage=='B' else None
+                limit=sensor_course['range_limit'] if sensor_course else 100.
+                easy=bool(sensor_course and sensor_course['easy'])
+                case=make_case(seed,stage,ordinal,range_limit=limit,
+                    range_m=limit if easy else None,easy=easy)
+                spec=dict(seed=seed,family=case['family'],extent=case['roi_width_m'],
+                    start_mode='outside',curriculum_task=task,episode_budget=case['episode_budget'],course_two_case=case)
+            else:
+                family,start=task.split('_');low,high=self.config.curriculum_extents_m[0]
+                extent=float(self.rng.uniform(low,high))
+                spec=dict(seed=seed,family=family,extent=extent,start_mode=start,curriculum_task=task,
+                    episode_budget=area_budget(extent,self.config.ordered_budget_rule))
+            self.state['active_specs'][str(env_id)]=spec
+            return spec
+        if self.course is not None:
+            from .ordered_curriculum import area_budget
+            if not 0 <= env_id < self.config.environments:
+                raise ValueError('ordered curriculum requires a valid environment slot')
+            # Namespace differs from frozen evaluation. Issued serial persists
+            # across phase changes and learner restarts; no map is reissued.
+            serial = self.state['episodes_issued']
+            self.state['episodes_issued'] = serial + 1
+            seed = ((int(self.config.seed) + 1) << 32) + serial
+            low, high = self.config.curriculum_extents_m[0]
+            extent = self.probe_extent if self.probe_extent is not None else float(self.rng.uniform(low, high))
+            self.course.release(env_id)
+            task = self.course.next_task()
+            self.course.activate(env_id, task)
+            family, start_mode = task.split('_')
+            return dict(seed=seed, family=family, extent=extent, start_mode=start_mode,
+                curriculum_task=task, episode_budget=self.probe_budget if self.probe_budget is not None
+                else area_budget(extent, self.config.ordered_budget_rule))
+        if self.config.paired_scene_sequence:
+            import numpy as np
+            if not 0 <= env_id < self.config.environments:
+                raise ValueError('paired curriculum requires a valid environment slot')
+            counts = self.state.setdefault('slot_episodes', {})
+            episode = counts.get(str(env_id), 0)
+            # 24 bits per episode and 8 bits per slot keep training namespaces
+            # disjoint from evaluation and independent of reset arrival order.
+            if episode >= 2**24 or env_id >= 256:
+                raise ValueError('paired scene identity exhausted')
+            seed = ((int(self.config.seed) + 1) << 32) + (env_id << 24) + episode
+            rng = np.random.default_rng(np.random.SeedSequence([self.config.seed, env_id, episode]))
+            low, high = self.config.curriculum_extents_m[0]
+            extent = self.probe_extent if self.probe_extent is not None else float(rng.uniform(low, high))
+            counts[str(env_id)] = episode + 1
+            self.state['episodes_issued'] += 1
+            return dict(seed=seed, family='moon' if env_id % 2 == 0 else 'cave', extent=extent,
+                episode_budget=self.probe_budget or self.config.curriculum_budgets[0])
+        stage = sum(transitions >= boundary for boundary in self.config.curriculum_transition_boundaries)
+        probabilities = self.config.curriculum_mixtures[stage]
+        size = int(self.rng.choice(3, p=probabilities))
+        low, high = self.config.curriculum_extents_m[size]
+        extent = self.probe_extent if self.probe_extent is not None else float(self.rng.uniform(low, high))
+        # Separate disjoint evaluation seed namespace; a monotonic issued counter
+        # avoids accidental reuse on resume while RNG restores terrain selection.
+        serial = self.state['episodes_issued']
+        self.state['episodes_issued'] = serial + 1
+        seed = ((int(self.config.seed) + 1) << 32) + serial
+        return dict(seed=seed, family='moon' if env_id % 2 == 0 else 'cave', extent=extent,
+            episode_budget=self.probe_budget or self.config.curriculum_budgets[size])
+
+    def snapshot(self):
+        from copy import deepcopy
+        if self.course is not None:self.state['course']=self.course.state_dict()
+        result=deepcopy(self.state)
+        if self.config.course_two:
+            result['active_specs']={key:value for key,value in result.get('active_specs',{}).items()
+                if int(key) in self.course.active or key in self._resume_specs}
+        return result
+
+
+def initial_model_checksum(learner):
+    """Identify Actor/twin-Q tensor values independently of checkpoint encoding."""
+    import hashlib
+    digest = hashlib.sha256()
+    for group in ('actor', 'q1', 'q2'):
+        for name, value in sorted(getattr(learner, group).state_dict().items()):
+            value = value.detach().cpu().contiguous()
+            digest.update(f'{group}.{name}:{value.dtype}:{tuple(value.shape)}:'.encode())
+            digest.update(value.numpy().tobytes())
+    return digest.hexdigest()
+
+
+def state_checksum(record):
+    """Content identity for nested training state, independent of storage IDs."""
+    import hashlib
+    import numpy as np
+    import torch
+    digest = hashlib.sha256()
+
+    def token(value):
+        value = value if isinstance(value, bytes) else str(value).encode('utf-8')
+        digest.update(str(len(value)).encode('ascii') + b':' + value)
+
+    def visit(value):
+        token(type(value).__name__)
+        if isinstance(value, dict):
+            token(len(value))
+            for key in sorted(value, key=lambda item: (type(item).__name__, repr(item))):
+                visit(key)
+                visit(value[key])
+        elif isinstance(value, (list, tuple)):
+            token(len(value))
+            for item in value:
+                visit(item)
+        elif isinstance(value, torch.Tensor):
+            tensor = value.detach().cpu().contiguous()
+            token(tensor.dtype)
+            token(tuple(tensor.shape))
+            token(tensor.numpy().tobytes())
+        elif isinstance(value, np.ndarray):
+            token(value.dtype.str)
+            token(value.shape)
+            token(value.tobytes())
+        elif isinstance(value, bytes):
+            token(value)
+        elif value is None or isinstance(value, (str, int, float, bool, np.generic)):
+            token(repr(value))
+        else:
+            raise TypeError(f'unsupported training identity value: {type(value).__name__}')
+
+    visit(record)
+    return digest.hexdigest()
+
+
+def initial_training_identity(learner, *, replay, schedule, replay_rng, curriculum_rng,
+                              curriculum_state, collector_state, counters, source_replay_sha256,
+                              excluded_learning_fields=('polyak',)):
+    """Read-only identity except the explicitly tested learning variable."""
+    import random
+    import numpy as np
+    import torch
+    state = learner.state_dict()
+    state['learning_config'] = dict(state['learning_config'])
+    if tuple(excluded_learning_fields) not in ((), ('polyak',), ('return_steps',), ('entropy_mode',)):
+        raise ValueError('paired identity may exclude only its one tested learning variable')
+    if tuple(excluded_learning_fields) == ('entropy_mode',):
+        if state['learning_config']['entropy_mode'] == 'position_heading':
+            for duplicate, source in (('log_alpha_heading', 'log_alpha'),
+                    ('heading_alpha_optimizer', 'alpha_optimizer')):
+                if state_checksum(state[duplicate]) != state_checksum(state[source]):
+                    raise ValueError('paired initial entropy temperature histories must be identical')
+                del state[duplicate]
+    for field in excluded_learning_fields:
+        del state['learning_config'][field]
+    rng = dict(python=random.getstate(), numpy=np.random.get_state(),
+               torch_cpu=torch.get_rng_state(),
+               torch_cuda=torch.cuda.get_rng_state_all() if learner.device.type == 'cuda' else [],
+               replay=replay_rng.bit_generator.state, curriculum=curriculum_rng.bit_generator.state)
+    return dict(schema='paired_initial_state_v1', learner_sha256=state_checksum(state),
+        rng_sha256=state_checksum(rng), collector_sha256=state_checksum(collector_state),
+        curriculum_sha256=state_checksum(curriculum_state),
+        counters_sha256=state_checksum(counters),
+        source_replay_sha256=source_replay_sha256, replay_count=len(replay),
+        schedule=schedule.state_dict(), excluded_learning_fields=list(excluded_learning_fields))
+
+
+def run_training(config, *, resume=False, fork_from=None, fork_experiment=None, device='cuda', max_transitions=None,
+                 domain_base=210, probe_extent=None, probe_budget=None, collect_only=False,
+                 env_factory='lunar_drl_exploration.ros_env:RosExplorationEnv'):
+    """Run finite or continuous training; max_transitions counts this-run admissions.
+
+    The only replay/optimizer owner is this process. Periodic saves ACK-drain at
+    a completed update boundary; unfinished goals are retained live until resume
+    of dispatch. A restored run repays saved integral credit before dispatching
+    new work; resume with a zero budget only drains that credit. Fractional
+    credit is retained. An explicit learned A2 fork first rebuilds its replay
+    with exactly 64 admissions, then repays the preserved credit. Finite runs
+    confirm the final Actor before stopping.
+    """
+    import multiprocessing as mp
+    import os
+    import hashlib
+    import pickle
+    from pathlib import Path
+    import random
+    import signal
+    import subprocess
+    import sys
+    import time
+    from .worker import numerical_threads
+    numerical_threads(config.learner_threads)
+    import numpy as np
+    import torch
+    from .checkpoint import CheckpointManager, TrainingState, UpdateBoundary, validate_replay_bootstrap
+    from .collector import collector_main
+    from .ipc import Duplex
+    from .config import config_record
+    from .metrics import MetricsWriter, ResourceMonitor, ResourceLimitError
+    from .replay import ReplayBuffer, loads_transport
+    from .sac import SACLearner
+    from .schedule import UpdateSchedule
+    if resume and fork_from is not None:
+        raise ValueError('resume and fork_from are mutually exclusive')
+    if fork_experiment is not None and (fork_from is None or resume):
+        raise ValueError('fork experiment requires an explicit new fork')
+    if collect_only and (not config.course_two_variant or max_transitions is None or not 0<max_transitions<=4096):
+        raise ValueError('collect-only requires bounded rebalance preparation of at most 4096 admissions')
+    if config.seed < 0: raise ValueError('training seed must be nonnegative')
+    if max_transitions is not None and (max_transitions < 0 or (max_transitions == 0 and not resume)):
+        raise ValueError('max_transitions must be positive, or zero with resume for credit drain')
+    if not 0 <= domain_base <= 233 - config.environments:
+        raise ValueError('isolated worker DDS domains must be within 0..232')
+    if config.model.width != 128 or config.model.heads != 8 or config.model.layers != 6:
+        raise ValueError('training requires full 128/8/6 graph model')
+    # Validate the source and empty destination before creating any run artifacts.
+    fork_state = (TrainingState.fork_from(fork_from, config, experiment=fork_experiment)
+                  if fork_from is not None else None)
+    torch.set_num_threads(config.learner_threads)
+    random.seed(config.seed); np.random.seed(config.seed % 2**32); torch.manual_seed(config.seed)
+    manager = CheckpointManager(config.output_dir, config.save_interval_s,
+        total_max_bytes=config.total_output_max_bytes, snapshot_max_bytes=config.snapshot_max_bytes,
+        artifact_root=config.artifact_root)
+    if not resume and (Path(config.output_dir) / 'resume.pt').exists():
+        raise ValueError('resume.pt already exists; use --resume or a new output directory')
+    learner = SACLearner(config.model, config.learning, device=device)
+    # Preserve from-scratch lineage as well as historical paired-run identity.
+    record_initial = bool(config.paired_scene_sequence or config.cave_generator_version)
+    initial_checksum = initial_model_checksum(learner) if record_initial else None
+    replay = ReplayBuffer(config.replay_max_bytes)
+    schedule = UpdateSchedule(config.warmup, config.update_ratio, config.max_update_credit)
+    replay_rng, curriculum_rng = np.random.default_rng(config.seed), np.random.default_rng(config.seed + 1)
+    curriculum_state = None
+    collector_state = dict(actor_record=learner.actor_state(), actor_version=0,
+        policy_rng=torch.Generator().manual_seed(config.seed + 2).get_state(), sequences={})
+    counters = dict(transitions=0, aborted=0, recoveries=0)
+    fork_provenance = None
+    arrival_contract_migrations = None
+    source_replay_sha256 = None
+    if resume or fork_state is not None:
+        state = manager.load(config) if resume else fork_state
+        fork_provenance = state.record.get('fork')
+        arrival_contract_migrations = state.record.get('arrival_contract_migrations')
+        if config.paired_scene_sequence:
+            import hashlib
+            source_replay_sha256 = hashlib.sha256(state.record['replay']).hexdigest()
+        restored = state.restore(learner, config)
+        replay, schedule = restored.replay, restored.schedule
+        source_replay_sha256 = hashlib.sha256(state.record['replay']).hexdigest()
+        replay_rng, curriculum_rng = restored.replay_rng, restored.curriculum_rng
+        curriculum_state, collector_state, counters = restored.curriculum, restored.collector_state, restored.counters
+        # Release the loaded replay snapshot before the new capture; learned
+        # tensors/replay are now owned by the learner and restored buffer.
+        del state, restored
+    fork_state = None
+    restored_checksum = initial_model_checksum(learner) if record_initial else None
+    initial_identity = (initial_training_identity(learner, replay=replay, schedule=schedule,
+        replay_rng=replay_rng, curriculum_rng=curriculum_rng, curriculum_state=curriculum_state,
+        collector_state=collector_state, counters=counters, source_replay_sha256=source_replay_sha256,
+        # Paired normalization applies only to a fresh fork. After learning,
+        # independent temperatures legitimately diverge and must both be hashed.
+        excluded_learning_fields=() if resume else {'paired-multistep': ('return_steps',),
+            'paired-entropy': ('entropy_mode',)}.get(
+                (fork_provenance or {}).get('experiment'), ('polyak',)))
+        if config.paired_scene_sequence else None)
+    trace_keys = ('trace_samples', 'trace_length_sum', 'trace_multi_count',
+                  'trace_legacy_count', 'trace_coefficient_mass_sum')
+    trace_totals = dict(counters.get('trace_totals', {key: 0 for key in trace_keys}))
+    if collector_state['actor_record']['version'] != collector_state['actor_version']:
+        raise ValueError('saved collector weights/publication identity disagree')
+    curriculum = Curriculum(config, curriculum_rng, curriculum_state,
+        probe_extent=probe_extent, probe_budget=probe_budget)
+    course = curriculum.course
+    if config.course_two_variant:
+        replay.enable_course_two_sampling(completion_bonus=config.completion_bonus, task_scope=config.course_two_task_scope, sampling=config.course_two_sampling, scene_profile=config.course_two_scene_profile, exploration_reward_scale=config.exploration_reward_scale, scene_tasks=config.course_two_scene_tasks)
+    def learning_ready():
+        if config.course_two_variant == 'C3' or collect_only and config.course_two_variant=='C2':
+            return replay.course_two_index.status()['ready']
+        if collect_only:
+            from .course_two_rebalance import preparation_ready
+            return preparation_ready(config.course_two_variant,replay)
+        return not config.course_two or course.ready_for_learning(replay.task_counts)
+    if config.course_two_variant and not collect_only and not learning_ready():
+        raise ValueError('rebalance requires completed qualified replay prefill before learning')
+    if course is not None:course.backfill_coverage(replay)
+    bootstrap = validate_replay_bootstrap(config, schedule, counters, replay=replay)
+    if bootstrap is not None and bootstrap['active']:
+        # Existing course promotion may add a task before collection begins.
+        # Keep its long-term quotas, and fill missing classes before the batch.
+        bootstrap['required_tasks'] = list(course.weights)
+        if max_transitions == 0:
+            raise ValueError('active A2 replay bootstrap cannot use a zero-admission resume')
+    ledger = AdmissionLedger(replay, schedule, bootstrap, prefill=collect_only)
+    ledger.last_admitted = dict(counters.get('last_admitted', {}))
+    diagnostics = None
+    if config.reward_diagnostics:
+        from .reward_diagnostics import RewardDiagnostics
+        diagnostics = RewardDiagnostics(config.environments, completion_bonus=config.completion_bonus,
+            success_coverage=config.success_coverage, state=counters.get('reward_diagnostics'),
+            exploration_reward_scale=config.exploration_reward_scale)
+    boundary = UpdateBoundary()
+    metrics = MetricsWriter(Path(config.output_dir) / 'metrics.jsonl', config.metrics_max_bytes,
+        total_max_bytes=config.total_output_max_bytes)
+    context = mp.get_context('spawn')
+    connection, child = context.Pipe()
+    process = context.Process(target=collector_main,
+        args=(child, config_record(config), pickle.dumps(collector_state, protocol=5)),
+        kwargs=dict(domain_base=domain_base, env_factory=env_factory), name='drl-cpu-collector')
+    previous_signals = {sig: signal.signal(sig, manager.request_sigint) for sig in (signal.SIGINT, signal.SIGTERM)}
+    baseline = schedule.transitions
+    started = time.monotonic()
+    pending_requests = {}
+    reservations = {}
+    env_status = {}
+    env_owners = {}
+    observations = dict(learner=dict(pid=os.getpid(), device=str(learner.device),
+        numeric_threads=torch.get_num_threads(), package_path=__file__,
+        torch_path=torch.__file__, cuda_initialized=torch.cuda.is_initialized()), workers={},
+        probe=dict(extent_m=probe_extent, budget=probe_budget, max_new_transitions=max_transitions),
+        resume=resume, initial_model_checksum=initial_checksum,
+        restored_model_checksum=restored_checksum, initial_state_identity=initial_identity)
+    if resume:
+        observations['restored_replay'] = dict(count=len(replay), bytes=replay.bytes_used,
+            task_counts=replay.task_counts, snapshot_sha256=source_replay_sha256)
+    if fork_provenance is not None:
+        observations['fork'] = fork_provenance
+    if arrival_contract_migrations is not None:
+        observations['arrival_contract_migrations'] = arrival_contract_migrations
+    # Bounded recent episode identities suffice for run auditing; counters remain cumulative.
+    episode_ids = []
+    barrier_pending = False
+    stopping = False
+    normal_draining = max_transitions == 0
+    repay_before_dispatch = (not collect_only and schedule.can_update and not (bootstrap is not None and bootstrap['active'])
+        and learning_ready())
+    final_phase = None
+    final_version = None
+    final_deadline = None
+    terminal_saved = False
+    stopped = False
+    exit_drain_deadline = None
+    stop_reason = None
+    last_metrics = started
+    last_summary = started
+    last_checkpoint_transitions = schedule.transitions if resume else None
+    last_update = {}
+    observed_publication = collector_state['actor_version']
+    try:
+        code_revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True,
+            stderr=subprocess.DEVNULL).strip()
+    except (OSError, subprocess.CalledProcessError): code_revision = 'unavailable'
+
+    def capture():
+        counters['last_admitted'] = dict(ledger.last_admitted)
+        counters['trace_totals'] = dict(trace_totals)
+        if course is not None:
+            curriculum.state['course'] = course.state_dict()
+            counters['course'] = course.state_dict()
+        if diagnostics is not None:
+            counters['reward_diagnostics'] = diagnostics.state_dict()
+        state = TrainingState.capture(learner=learner, config=config, replay=replay,
+            schedule=schedule, boundary=boundary, replay_rng=replay_rng, curriculum_rng=curriculum_rng,
+            curriculum=curriculum.snapshot(), collector_state=collector_state, counters=counters,
+            fork=fork_provenance, arrival_contract_migrations=arrival_contract_migrations)
+        return state
+
+    def persist_diagnostics():
+        nonlocal last_summary
+        from .artifacts import atomic_json
+        if course is not None:
+            atomic_json(Path(config.output_dir)/'course-summary.json',
+                dict(course.summary(), transitions=schedule.transitions, updates=schedule.updates,
+                    training_boundary=dict(transitions=schedule.transitions,
+                    updates=schedule.updates, last_checkpoint_transitions=last_checkpoint_transitions)),
+                max_bytes=1024**2)
+        if diagnostics is None:
+            last_summary = time.monotonic()
+            return
+        boundary_record = dict(transitions=schedule.transitions, updates=schedule.updates,
+            last_checkpoint_transitions=last_checkpoint_transitions)
+        atomic_json(Path(config.output_dir)/'reward-summary.json',
+            dict(diagnostics.summary(), training_boundary=boundary_record), max_bytes=1024**2)
+        atomic_json(Path(config.output_dir)/'reward-cases.json',
+            dict(diagnostics.cases(), training_boundary=boundary_record), max_bytes=16*1024**2)
+        last_summary = time.monotonic()
+
+    def save():
+        nonlocal last_checkpoint_transitions
+        state = capture()
+        path = manager.save(state)
+        last_checkpoint_transitions = schedule.transitions
+        persist_diagnostics()
+        metrics.append(dict(event='checkpoint', transitions=schedule.transitions,
+            updates=schedule.updates, actor_version=collector_state['actor_version'],
+            unfinished_reservations=schedule.inflight, path=str(path),
+            replay_count=len(replay), replay_bytes=replay.bytes_used,
+            replay_snapshot_bytes=len(state.record['replay']),
+            replay_integrity=state.record['replay_integrity']))
+
+    def final_command(kind):
+        nonlocal final_phase, final_deadline, final_version
+        final_phase = {'PUBLISH': 'PUBLISHED', 'BARRIER': 'BARRIER', 'STOP': 'STOPPED'}[kind]
+        from .collector import STOP_GRACE_TIMEOUT_S
+        # STOP includes cooperative worker teardown; publication/barrier remain
+        # short control acknowledgements. This bound is shared across workers.
+        budget = FINAL_CONFIRM_TIMEOUT_S + (STOP_GRACE_TIMEOUT_S if kind == 'STOP' else 0.)
+        final_deadline = time.monotonic() + budget
+        message = dict(kind=kind)
+        if kind == 'PUBLISH':
+            final_version = learner.updates
+            message['payload'] = pickle.dumps(learner.actor_state(), protocol=5)
+        connection.send(message)
+
+    def stop(reason):
+        nonlocal stopping, stop_reason
+        if stop_reason is None or normal_draining: stop_reason = reason
+        manager.request_save(reason, stop=True)
+        stopping = True
+        pending_requests.clear()
+        # Complete updates are atomic; preserve all remaining earned credit.
+        # Keep the collector alive until it confirms this final Actor.
+        if final_phase is None:
+            final_command('PUBLISH')
+
+    def record_run():
+        owned = [os.getpid(), process.pid] + [pid for pids in env_owners.values() for pid in pids]
+        manager.write_run(config, owned_pids=[pid for pid in owned if pid is not None],
+            code_revision=code_revision, extra=observations)
+
+    def status_record():
+        elapsed = max(time.monotonic() - started, 1e-9)
+        return dict(event='progress', wall_s=elapsed, transitions=schedule.transitions,
+            new_transitions=schedule.transitions-baseline, updates=schedule.updates,
+            transitions_per_s=(schedule.transitions-baseline)/elapsed,
+            updates_per_s=(schedule.updates-start_updates)/elapsed, credit=float(schedule.credit),
+            inflight=schedule.inflight, actor_version=observed_publication,
+            replay_count=len(replay), replay_bytes=replay.bytes_used,
+            collect_only=collect_only,prefill_transitions=schedule.prefill_transitions,
+            **({'balanced_replay':dict(replay.course_two_index.status(),last_batch=replay.course_two_index.last_batch)}
+                if replay.course_two_index is not None else {}),
+            **({'replay_bootstrap': dict(bootstrap)} if bootstrap is not None else {}),
+            save_in_s=max(0., config.save_interval_s-(time.monotonic()-manager.last_save)),
+            environments=env_status, learning=last_update, trace_totals=dict(trace_totals),
+            **({'course': dict(course.summary(), transitions=schedule.transitions, updates=schedule.updates)}
+                if course is not None else {}),
+            gpu_memory=(dict(allocated_bytes=torch.cuda.memory_allocated(learner.device),
+                reserved_bytes=torch.cuda.memory_reserved(learner.device),
+                peak_allocated_bytes=torch.cuda.max_memory_allocated(learner.device))
+                if learner.device.type == 'cuda' else None))
+
+    from .terminal import TrainingTerminal
+    terminal = TrainingTerminal(environments=config.environments, warmup=config.warmup, target=max_transitions)
+    start_updates = schedule.updates
+    try:
+        # An initial good checkpoint also protects a first-update infrastructure failure.
+        if not resume: save()
+        if fork_from is not None: record_run()
+        process.start(); child.close()
+        connection = Duplex(connection, config.environments,
+            publication_window=(config.max_update_credit + config.actor_publish_updates - 1) //
+                config.actor_publish_updates)
+        record_run()
+        while not stopped:
+            if manager.stop_requested and not stopping:
+                stop(manager.requested_reason or 'stop requested')
+            if final_deadline is not None and time.monotonic() >= final_deadline:
+                raise RuntimeError(f'collector final {final_phase} confirmation timed out')
+            if connection.poll(.01):
+                try: message = connection.recv()
+                except EOFError as exc:
+                    raise RuntimeError('collector transport ended before acknowledged stop') from exc
+                kind = message['kind']; env_id = message.get('env')
+                if kind == 'NEED_RESET':
+                    if not stopping and not normal_draining:
+                        from .course_two_rebalance import CatalogExhausted
+                        try:
+                            if config.course_two_sampling=='scene_episode_v1':course.set_supply(replay.course_two_index.status())
+                            spec = curriculum.next(env_id, schedule.transitions)
+                        except CatalogExhausted as exc:
+                            stop(str(exc));continue
+                        env_status[env_id] = dict(state='RESETTING', seed=spec['seed'],
+                            family=spec['family'], extent_m=spec['extent'], budget=spec['episode_budget'],
+                            **({key: spec[key] for key in ('start_mode', 'curriculum_task')} if course is not None else {}))
+                        connection.send(dict(kind='RESET', env=env_id, spec=spec))
+                elif kind == 'SCENE':
+                    scenes = loads_transport(message['payload'])
+                    ledger.scene(env_id, scenes)
+                    metadata = message['metadata']
+                    if config.course_two_variant and metadata.get('resolved_course_two_case'):
+                        from .course_two_qualification import spec_for
+                        resolved=metadata['resolved_course_two_case']
+                        original=curriculum.state['active_specs'][str(env_id)]
+                        if resolved['seed']!=original['seed'] or resolved['curriculum_task']!=original['curriculum_task']:
+                            raise ValueError('native qualification changed task/seed identity')
+                        curriculum.state['active_specs'][str(env_id)]=spec_for(resolved)
+                    if course is not None:
+                        # Includes infrastructure recovery: a fresh SCENE never
+                        # inherits unfinished episode duration or collision state.
+                        task = next(iter(scenes.values())).generator_descriptor.get('curriculum_task')
+                        if task != course.active.get(env_id):
+                            raise ValueError('worker scene disagrees with frozen course task')
+                        course.reset_episode(env_id)
+                    if diagnostics is not None:
+                        diagnostics.reset(env_id, 'RESET')
+                    env_status[env_id] = dict(metadata, state='READY')
+                    episode_ids.append(metadata['episode_id'])
+                    del episode_ids[:-config.environments * 2]
+                    observations['workers'].setdefault(str(env_id), {})['scene'] = dict(metadata,
+                        truth_nodes=sum(len(scene.positions) for scene in scenes.values()),
+                        truth_edges=sum(len(scene.edges) for scene in scenes.values()),
+                        reference_cells=sum(len(scene.reference_indices) for scene in scenes.values()))
+                elif kind == 'RESERVE':
+                    if not stopping and not normal_draining: pending_requests[env_id] = message['token']
+                elif kind == 'DONE':
+                    transition = loads_transport(message['payload'])
+                    is_new = message['token'] > ledger.last_admitted.get(env_id, -1)
+                    if is_new and reservations.get(env_id) != message['token']:
+                        raise RuntimeError('completion lacks its learner-owned dispatch reservation')
+                    admitted = ledger.admit(env_id, message['token'], transition)
+                    if admitted:
+                        reservations.pop(env_id)
+                        counters['transitions'] = schedule.transitions
+                        if course is not None:
+                            course.admitted(env_id)
+                        if bootstrap is not None and bootstrap['active'] and bootstrap['admitted'] == bootstrap['required']:
+                            if any(replay.task_counts.get(task,0) == 0 for task in bootstrap['required_tasks']):
+                                raise ValueError('A2 bootstrap needs a real sample for every positive-weight course task')
+                            bootstrap['active'] = False
+                            repay_before_dispatch = schedule.can_update
+                            metrics.append(dict(event='replay_bootstrap_complete',
+                                transitions=schedule.transitions, updates=schedule.updates,
+                                credit=str(schedule.credit), replay_count=len(replay), task_counts=replay.task_counts))
+                    # Order is transactional replay admission -> collected -> ACK.
+                    connection.send(dict(kind='ACK', env=env_id, token=message['token']))
+                    status = env_status.setdefault(env_id, {})
+                    status.update(message.get('progress', {}))
+                    execution = message.get('execution', {})
+                    status.update({key: value for key, value in execution.items()
+                        if key not in ('distance_m', 'turn_rad', 'simulation_s', 'wall_s')})
+                    status['last_execution'] = execution
+                    scene = ledger.active_scenes[env_id][transition.next_privileged.scene_id]
+                    visible_count = int(np.unpackbits(transition.next_privileged.observed & scene.packed_reference).sum())
+                    status['reference_coverage'] = visible_count / len(scene.reference_indices) if len(scene.reference_indices) else 0.
+                    status.update(new_area_m2=transition.parts.new_area_m2,
+                        reward=transition.reward, base_reward=transition.reward-transition.parts.approach_reward,
+                        approach_reward=transition.parts.approach_reward, terminated=transition.terminated, truncated=transition.truncated,
+                        actor_version=transition.actor_version, observed_nodes=len(transition.observation.node_ids),
+                        observed_edges=len(transition.observation.edges))
+                    if config.approach_reward is not None:
+                        from .approach_potential import observation_distance
+                        status.update(region_distance_before_m=observation_distance(transition.observation),
+                            region_distance_after_m=observation_distance(transition.next_observation))
+                    wall = message.get('execution', {}).get('wall_s', 0)
+                    status['actual_rtf'] = message.get('execution', {}).get('simulation_s', 0) / wall if wall else None
+                    if admitted:
+                        if course is not None:
+                            if config.course_two:course.record_progress(env_id,status)
+                            course.observe(env_id, terminated=transition.terminated,
+                                truncated=transition.truncated, coverage=status['reference_coverage'],
+                                collision=execution.get('reason_code') == 'COLLISION' or
+                                    bool(execution.get('geometry_failure', False)))
+                        if diagnostics is not None:
+                            before_count = int(np.unpackbits(
+                                transition.privileged.observed & scene.packed_reference).sum())
+                            diagnostics.observe(env_id, transition,
+                                before_coverage=before_count/len(scene.reference_indices) if len(scene.reference_indices) else 0.,
+                                after_coverage=status['reference_coverage'],
+                                family=status.get('family', 'other'), extent_m=status.get('extent_m', 0.),
+                                execution=execution, truncation_reason=status.get('truncation_reason'),
+                                seed=status.get('seed'))
+                        metrics.append(dict(status, event='transition', env=env_id, token=message['token'],
+                            transitions=schedule.transitions, episode_id=transition.episode_id))
+                    if collect_only and learning_ready() and schedule.transitions-baseline>=64:
+                        normal_draining=True;pending_requests.clear()
+                        stop_reason='qualified replay prefill ready; zero optimizer updates'
+                    if config.course_two_variant and not collect_only and not learning_ready():
+                        stop('required replay phase lost; no fallback sampling')
+                    if max_transitions is not None and schedule.transitions-baseline >= max_transitions:
+                        normal_draining = True
+                        pending_requests.clear()
+                        if stop_reason is None:
+                            stop_reason = ('max new transitions reached; A2 bootstrap credit retained'
+                                if bootstrap is not None and bootstrap['active'] else
+                                'max new transitions reached; credit drained')
+                elif kind == 'ABORTED':
+                    if reservations.get(env_id) == message['token']:
+                        schedule.cancel_dispatch(); reservations.pop(env_id)
+                        counters['aborted'] = counters.get('aborted', 0) + 1
+                    metrics.append(dict(message, event='unfinished_excluded'))
+                elif kind in ('BARRIER', 'STOPPED'):
+                    collector_state = pickle.loads(message['payload'])
+                    if counters['transitions'] != schedule.transitions:
+                        raise RuntimeError('admission counter differs at barrier')
+                    if kind == 'STOPPED':
+                        if final_phase != 'STOPPED':
+                            raise RuntimeError('collector stopped before final Actor confirmation')
+                        if schedule.inflight or reservations: raise RuntimeError('stop left unaccounted reservations')
+                        if collector_state['actor_version'] != final_version:
+                            raise RuntimeError('stopped collector Actor differs from final learner')
+                        if not terminal_saved: save()
+                        stopped = True
+                        final_deadline = None
+                    elif final_phase == 'BARRIER':
+                        if schedule.inflight or reservations:
+                            raise RuntimeError('terminal barrier left unaccounted reservations')
+                        if (collector_state['actor_version'] != final_version or
+                                collector_state['actor_record']['version'] != final_version):
+                            raise RuntimeError('terminal collector Actor differs from final learner')
+                        save()
+                        terminal_saved = True
+                        stopping = True
+                        final_command('STOP')
+                    else:
+                        # A periodic barrier may already be queued when stop is
+                        # requested; it cannot stand in for the final snapshot.
+                        if not stopping: save()
+                        if not stopping: connection.send(dict(kind='RESUME'))
+                    barrier_pending = False
+                elif kind == 'PUBLISHED':
+                    observed_publication = message['version']
+                    if final_phase == 'PUBLISHED' and observed_publication == final_version:
+                        final_command('STOP' if stopping else 'BARRIER')
+                elif kind == 'FATAL':
+                    raise RuntimeError('Collector fatal: ' + message['reason'])
+                elif kind == 'RECOVERY':
+                    if diagnostics is not None:
+                        diagnostics.reset(env_id, 'RECOVERY')
+                    counters['recoveries'] = counters.get('recoveries', 0) + 1
+                    terminal.event(f"E{env_id} 基础设施恢复，第 {message['attempt']} 次：{message['reason']}")
+                    metrics.append(dict(message, event='recovery'))
+                elif kind == 'OWNERSHIP':
+                    env_owners[env_id] = ([message['worker_pid']] if message['worker_pid'] else []) + message['child_pids']
+                elif kind == 'WORKER_HELLO':
+                    observations['workers'].setdefault(str(env_id), {}).update(message)
+                    if message['torch_loaded']: raise RuntimeError('Torch imported in ROS worker')
+                elif kind == 'COLLECTOR_HELLO': observations['collector'] = message
+                elif kind == 'STATUS':
+                    progress = message['progress']
+                    env_status[env_id] = _merge_progress(env_status.get(env_id, {}), progress)
+                    worker_pid = observations['workers'].get(str(env_id), {}).get('pid')
+                    env_owners[env_id] = ([worker_pid] if worker_pid else []) + list(progress.get('owned_pids', []))
+                elif kind == 'EPISODE_END':
+                    if course is not None and message.get('zero_decisions') and env_id in course.active:
+                        success = message['reason'] == 'COVERAGE_REACHED'
+                        course.observe(env_id, terminated=True, truncated=False,
+                            coverage=env_status[env_id]['initial_reference_coverage'], collision=False)
+                    metrics.append(dict(message, event='episode_end'))
+                else: raise RuntimeError('unexpected learner message ' + kind)
+            if not process.is_alive() and not stopped:
+                # Process exit can precede the reader's final large-frame
+                # handoff. Keep consuming ordered inbox/EOF, without dispatch
+                # or updates. The deadline bounds broken transport, not normal
+                # delivery latency; there is no sleep-based completion guess.
+                if exit_drain_deadline is None: exit_drain_deadline = time.monotonic() + 12
+                if time.monotonic() >= exit_drain_deadline:
+                    raise RuntimeError('collector transport drain timed out before acknowledged stop')
+                continue
+            if manager.stop_requested and not stopping:
+                stop(manager.requested_reason or 'stop requested')
+            if repay_before_dispatch and not schedule.can_update:
+                repay_before_dispatch = False
+                if bootstrap is not None and not bootstrap['active'] and not bootstrap.get('repaid', False):
+                    bootstrap['repaid'] = True
+                    metrics.append(dict(event='replay_bootstrap_repaid',
+                        transitions=schedule.transitions, updates=schedule.updates, credit=str(schedule.credit)))
+            if not stopping and not normal_draining and not barrier_pending and not repay_before_dispatch:
+                missing=[]
+                if course is not None and bootstrap is not None and bootstrap['active']:
+                    missing=[task for task in bootstrap['required_tasks'] if replay.task_counts.get(task,0)==0]
+                dispatch_items=dispatch_candidates(pending_requests,reservations,course,bootstrap_missing=missing)
+                for env_id, token in dispatch_items:
+                    if manager.stop_requested:
+                        stop(manager.requested_reason or 'stop requested')
+                        break
+                    if not within_admission_budget(schedule.transitions, schedule.inflight,
+                            baseline=baseline, maximum=max_transitions):
+                        break
+                    if (bootstrap is not None and bootstrap['active'] and
+                            bootstrap['admitted']+schedule.inflight >= bootstrap['required']):
+                        break
+                    if not schedule.can_dispatch(prefill=collect_only):break
+                    if schedule.can_dispatch(prefill=collect_only):
+                        if env_id in reservations: raise RuntimeError('second reservation for environment')
+                        if collect_only:schedule.reserve_dispatch(prefill=True)
+                        else:schedule.reserve_dispatch()
+                        reservations[env_id] = token
+                        connection.send(dict(kind='GRANT', env=env_id, token=token))
+                        del pending_requests[env_id]
+            # Exactly one complete update; poll completions again before the next.
+            if (not stopping and not manager.stop_requested and not barrier_pending and final_phase is None
+                    and not collect_only and schedule.can_update and not (bootstrap is not None and bootstrap['active'])
+                    and learning_ready()):
+                with boundary.update():
+                    before_update = time.monotonic()
+                    weights = course.sampling_weights(replay.task_counts) if course is not None else None
+                    if config.course_two_variant=='C3':
+                        batch=replay.sample_course_two(replay_rng)
+                    elif config.course_two_variant=='C2':
+                        batch=replay.sample_course_two_control(replay_rng)
+                    elif config.learning.return_steps == 1:
+                        batch = (replay.sample_stratified(config.learning.batch_size, replay_rng, weights)
+                            if course is not None else replay.sample(config.learning.batch_size, replay_rng))
+                    else:
+                        sequence_kwargs = {'weights': weights} if course is not None else {}
+                        batch = replay.sample_sequences(config.learning.batch_size, replay_rng,
+                            max_steps=config.learning.return_steps, **sequence_kwargs)
+                    last_update = learner.update(batch, replay.scenes)
+                    schedule.updated()
+                    if course is not None:
+                        from .replay import transition_task
+                        anchors = batch if config.learning.return_steps == 1 else [sequence[0] for sequence in batch]
+                        course.sampled([transition_task(anchor, replay.scenes) for anchor in anchors])
+                    for key in trace_keys:
+                        trace_totals[key] += last_update[key]
+                    last_update['wall_s'] = time.monotonic() - before_update
+                if schedule.updates % config.actor_publish_updates == 0:
+                    connection.send(dict(kind='PUBLISH', payload=pickle.dumps(learner.actor_state(), protocol=5)))
+            if manager.stop_requested and not stopping: stop(manager.requested_reason or 'stop requested')
+            if (normal_draining and not stopping and final_phase is None and
+                    not barrier_pending and not schedule.inflight and
+                    (collect_only or not schedule.can_update or (bootstrap is not None and bootstrap['active'])
+                     or (config.course_two and not learning_ready()))):
+                if reservations: raise RuntimeError('drain left unmatched reservations')
+                if stop_reason is None: stop_reason = 'zero-admission resume; credit drained'
+                final_command('PUBLISH')
+            if manager.save_requested and not stopping and not normal_draining and not barrier_pending and final_phase is None:
+                connection.send(dict(kind='BARRIER')); barrier_pending = True
+            if not stopped and time.monotonic() - last_metrics >= 2:
+                record = status_record()
+                owned = [os.getpid(), process.pid] + [pid for pids in env_owners.values() for pid in pids]
+                monitor = ResourceMonitor(owned, system_reserve_bytes=config.system_reserve_bytes,
+                    owned_pss_limit_bytes=config.owned_pss_limit_bytes)
+                try:
+                    resource = monitor.observe(config.output_dir); record['resources'] = resource
+                    monitor.check(resource)
+                except (FileNotFoundError, ProcessLookupError) as exc:
+                    # Lifecycle messages may be queued behind a completed update.
+                    # Report unknown PID data; never substitute zero PSS.
+                    record['resource_unavailable'] = str(exc)
+                except ResourceLimitError as exc: stop(str(exc))
+                metrics.append(record)
+                if config.course_two:
+                    from .artifacts import atomic_json
+                    atomic_json(Path(config.output_dir)/'progress.json',record,max_bytes=4*1024**2)
+                if time.monotonic() - last_summary >= 30:
+                    persist_diagnostics()
+                terminal.render(record, phase='保存并停止' if stopping else ('补完更新' if normal_draining else ('保存检查点' if barrier_pending else None)))
+                last_metrics = time.monotonic()
+        process.join(10)
+        observations['final'] = status_record()
+        observations['final']['overshoot'] = max(0, schedule.transitions-baseline-(max_transitions if max_transitions is not None else schedule.transitions-baseline))
+        observations['final']['stop_reason'] = stop_reason or 'orderly stop'
+        observations['final']['owned_children_closed'] = not process.is_alive()
+        record_run()
+        persist_diagnostics()
+        terminal.render(status_record(), phase='已保存并停止', force=True)
+        return dict(transitions=schedule.transitions, new_transitions=schedule.transitions-baseline,
+            updates=schedule.updates, episode_ids=episode_ids, episodes_issued=curriculum.state['episodes_issued'],
+            stop_reason=stop_reason)
+    except BaseException as exc:
+        # Never overwrite the last good checkpoint after a partly applied update
+        # or an unadmitted resource-damaged completion. The reason is explicit.
+        terminal.clear()
+        print(f'DRL stopped with error; last completed checkpoint preserved: {type(exc).__name__}: {exc}', file=sys.stderr, flush=True)
+        # A poisoned optimizer boundary forbids saving, but not receiving/ACKing
+        # already finished valid work. Drain before joining the collector so it
+        # can cancel active goals and close workers rather than wait on our ACK.
+        if process.pid is not None:
+            try:
+                if process.is_alive(): connection.send(dict(kind='STOP'))
+                deadline = time.monotonic() + 12
+                while time.monotonic() < deadline:
+                    if not connection.poll(.05):
+                        continue
+                    message = connection.recv(); kind = message['kind']; env_id = message.get('env')
+                    if kind == 'SCENE': ledger.scene(env_id, loads_transport(message['payload']))
+                    elif kind == 'DONE':
+                        ledger.admit(env_id, message['token'], loads_transport(message['payload']))
+                        reservations.pop(env_id, None)
+                        connection.send(dict(kind='ACK', env=env_id, token=message['token']))
+                    elif kind == 'ABORTED' and reservations.get(env_id) == message['token']:
+                        schedule.cancel_dispatch(); reservations.pop(env_id)
+                    elif kind == 'STOPPED': break
+                process.join(2)
+            except (EOFError, OSError, ResourceLimitError, ValueError) as drain_error:
+                print(f'Fatal drain incomplete; unadmitted completion/owned reservations retained until shutdown: {drain_error}',
+                    file=sys.stderr, flush=True)
+        print(f'Fatal recovery uses last good resume; current admitted={schedule.transitions}, '
+            f'updates={schedule.updates}, remaining reservations={schedule.inflight}', file=sys.stderr, flush=True)
+        raise
+    finally:
+        for sig, handler in previous_signals.items(): signal.signal(sig, handler)
+        if process.pid is not None:
+            if process.is_alive():
+                try: connection.send(dict(kind='STOP'))
+                except (EOFError, BrokenPipeError): pass
+                process.join(12)
+            if process.is_alive(): process.terminate(); process.join(5)
+            if process.is_alive(): process.kill(); process.join(5)
+        child.close()
+        if isinstance(connection, Duplex): connection.close(flush=False)
+        else: connection.close()

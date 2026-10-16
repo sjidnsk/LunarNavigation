@@ -1,0 +1,450 @@
+"""Deterministic bounded truth geometry and native terrain derivation.
+
+Offline ownership only. No privileged raster is built on import. Geometry uses
+analytic crater/rock disks and single-layer room/passage unions. Segment-distance
+helper adapted from this repository's observability-coverage scene.py (read-only reference inspected 2026-09-15);
+no old native binding, classifier, launch-surface override or learner is reused.
+"""
+
+import hashlib
+import json
+import math
+from types import MappingProxyType
+import numpy as np
+import lunar_drl_terrain_native as native
+from .contracts import Pose, TaskSpec
+from .geometry import cell_center, world_to_cell, polygon_mask
+from .sensor import OBSERVATION_MODEL_VERSION
+
+
+def _segment_distance(x, y, ax, ay, bx, by):
+    dx, dy = bx - ax, by - ay
+    t = np.clip(((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy), 0, 1)
+    return np.hypot(x - ax - t * dx, y - ay - t * dy)
+
+
+def polygon_boundary_distance(x,y,polygon):
+    """Euclidean distance to finite edges, including corners; no raster offset."""
+    result=np.full(np.broadcast_shapes(np.shape(x),np.shape(y)),np.inf)
+    for a,b in zip(polygon,np.roll(polygon,-1,axis=0)):
+        result=np.minimum(result,_segment_distance(x,y,*a,*b))
+    return result
+
+
+class Scene:
+    GENERATOR_VERSION = 5
+
+    def __init__(self, seed, family, extent_m, resolution_m=0.2, platform=None, *, context_margin_m=12.,
+                 cave_generator_version='', mother_graph_id=None, dataset_split='train'):
+        if family not in ("moon", "cave"):
+            raise ValueError("family must be moon or cave")
+        if not math.isfinite(extent_m) or not 20 <= extent_m <= 1000:
+            raise ValueError("extent_m must be in [20,1000]")
+        if not math.isfinite(resolution_m) or resolution_m <= 0:
+            raise ValueError("resolution_m must be positive")
+        if not math.isfinite(context_margin_m) or not 12.<=context_margin_m<=200.:
+            raise ValueError('context margin must be in [12,200]')
+        if context_margin_m!=12. and family!='moon':
+            raise ValueError('expanded context is only for ordinary moon scenes')
+        if platform is None:
+            from .config import load_platform_config
+
+            platform = load_platform_config()
+        self.seed = int(seed)
+        self.family = family
+        self.extent_m = float(extent_m)
+        self.resolution_m = float(resolution_m)
+        self.platform = platform
+        self.cave_geometry = None
+        self.generator_version = self.GENERATOR_VERSION
+        if cave_generator_version:
+            from .cave_topology import VERSION, select_mother, build_geometry
+            if family != 'cave' or cave_generator_version != VERSION:
+                raise ValueError('invalid cave generator version')
+            mother = select_mother(dataset_split, self.seed, mother_graph_id=mother_graph_id)
+            self.cave_geometry = build_geometry(mother, self.seed, self.extent_m)
+            self.generator_version = VERSION
+        elif mother_graph_id is not None or dataset_split != 'train':
+            raise ValueError('topology group requires cave_topology_v2')
+        e = self.extent_m
+        margin = self.context_margin_m = float(context_margin_m)
+        identity = dict(
+            version=self.generator_version,
+            seed=self.seed,
+            family=family,
+            extent_m=e,
+            resolution_m=resolution_m,
+            capability=dict(platform.capability),
+            observation_model_version=OBSERVATION_MODEL_VERSION,
+        )
+        if self.cave_geometry is not None:
+            identity.update(mother_graph_id=self.cave_geometry['mother_graph_id'],dataset_split=dataset_split)
+        if margin!=12.:identity['context_margin_m']=margin
+        self.scene_id = hashlib.sha256(
+            json.dumps(identity, sort_keys=True).encode()
+        ).hexdigest()
+        # Independent streams leave terrain generation and its original yaw draw
+        # unchanged. One corner per quadrant gives a convex seeded quadrilateral
+        # inside the nominal extent, with all finite scene context still available.
+        task_rng = np.random.default_rng(np.random.SeedSequence([self.seed, 301]))
+        signs = np.asarray([[-1, -1], [1, -1], [1, 1], [-1, 1]])
+        polygon = signs * task_rng.uniform(0.38, 0.5, size=(4, 2)) * e
+        self.task = TaskSpec(self.scene_id, "map", polygon)
+        self.task_polygon = self.task.polygon
+        rng = np.random.default_rng(self.seed)
+        self._phase = float(rng.uniform(-math.pi, math.pi))
+        self._rocks = []
+        self._craters = []
+        self._rooms = []
+        self._passages = []
+        self._nominal_start = (-0.32 * e, -0.2 * e)
+        self._yaw = float(rng.uniform(-math.pi, math.pi))
+        if family == "moon":
+            for _ in range(max(4, int(e / 20))):
+                self._craters.append(
+                    (
+                        *rng.uniform(-0.5 * e, 0.5 * e, 2),
+                        rng.uniform(1.0, max(2.0, e * 0.05)),
+                        rng.uniform(0.2, 1.0),
+                    )
+                )
+            for _ in range(max(15, int(e / 8))):
+                self._rocks.append(
+                    (
+                        *rng.uniform(-0.5 * e - 8, 0.5 * e + 8, 2),
+                        rng.uniform(0.3, 1.5),
+                        rng.uniform(0.5, 2.0),
+                    )
+                )
+        elif self.cave_geometry is not None:
+            self._rooms = list(self.cave_geometry['rooms'])
+            self._passages = list(self.cave_geometry['passages'])
+            self._nominal_start = tuple(self.cave_geometry['anchor_xy'])
+        else:
+            # A main loop includes legitimate terrain outside the task; narrow
+            # spurs and a sealed chamber remain part of the same unchanged scene.
+            points = [
+                self._nominal_start,
+                (-e / 2 - 5, -0.2 * e),
+                (-e / 2 - 5, 0.2 * e),
+                (-0.25 * e, 0.2 * e),
+                (0, 0.2 * e),
+                (0, -0.2 * e),
+            ]
+            radius = max(2.5, 0.035 * e)
+            self._rooms = [(x, y, radius) for x, y in points]
+            edges = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 0), (0, 3)]
+            self._passages = [(*points[a], *points[b], 1.4) for a, b in edges]
+            for _ in range(max(4, int(e / 40))):
+                x, y = rng.uniform([-0.38 * e, -0.38 * e], [0.05 * e, 0.38 * e])
+                parent = points[int(rng.integers(len(points)))]
+                rr = float(rng.uniform(2.0, max(3.0, 0.03 * e)))
+                self._rooms.append((x, y, rr))
+                self._passages.append(
+                    (*parent, x, y, float(rng.choice([0.45, 1.4, 2.0])))
+                )
+            self.sealed_room = (0.32 * e, 0.22 * e, max(2.0, 0.035 * e))
+            self._rooms.append(self.sealed_room)
+
+        # Bounds include the complete analytic support plus ordinary context.
+        # Expand by whole old-lattice cells so existing world samples and RNG
+        # geometry/task/yaw/start streams do not shift with storage geometry.
+        boxes = [(-e / 2, -e / 2, e / 2, e / 2)]
+        for cx, cy, r, *_ in self._rooms + self._rocks:
+            boxes.append((cx - r, cy - r, cx + r, cy + r))
+        for cx, cy, r, *_ in self._craters:
+            boxes.append((cx - 2 * r, cy - 2 * r, cx + 2 * r, cy + 2 * r))
+        for ax, ay, bx, by, r in self._passages:
+            boxes.append(
+                (min(ax, bx) - r, min(ay, by) - r, max(ax, bx) + r, max(ay, by) + r)
+            )
+        boxes = np.asarray(boxes)
+        old_origin = np.array([-e / 2 - 12., -e / 2 - 12.])
+        low = boxes[:, :2].min(axis=0) - margin
+        high = boxes[:, 2:].max(axis=0) + margin
+        origin = old_origin + np.floor((low - old_origin) / resolution_m) * resolution_m
+        nx, ny = np.ceil((high - origin) / resolution_m).astype(int)
+        self.origin = tuple(map(float, origin))
+        self.shape = (int(ny), int(nx))
+        self.bounds = (
+            *self.origin,
+            float(origin[0] + nx * resolution_m),
+            float(origin[1] + ny * resolution_m),
+        )
+
+    @property
+    def anchor_room(self):
+        """Explicit v2 anchor, with historical main-room ownership retained."""
+        node = self.cave_geometry['anchor_node'] if self.cave_geometry is not None else 0
+        return self._rooms[node]
+
+    def height_tile(self, x0, y0, width, height):
+        if (
+            min(x0, y0) < 0
+            or min(width, height) <= 0
+            or x0 + width > self.shape[1]
+            or y0 + height > self.shape[0]
+        ):
+            raise ValueError("tile outside provided terrain bounds")
+        x = (
+            self.origin[0]
+            + (np.arange(x0, x0 + width, dtype=np.float64) + 0.5) * self.resolution_m
+        )
+        y = (
+            self.origin[1]
+            + (np.arange(y0, y0 + height, dtype=np.float64) + 0.5) * self.resolution_m
+        )
+        x = x[None, :]
+        y = y[:, None]
+        if self.family == "moon":
+            z = 0.03 * np.sin(x * 0.13 + self._phase) + 0.02 * np.cos(
+                y * 0.11 - self._phase
+            )
+            for cx, cy, r, depth in self._craters:
+                if (
+                    cx + 2 * r < x.min()
+                    or cx - 2 * r > x.max()
+                    or cy + 2 * r < y.min()
+                    or cy - 2 * r > y.max()
+                ):
+                    continue
+                q = np.hypot(x - cx, y - cy) / r
+                z += np.where(
+                    q < 2,
+                    depth
+                    * (-np.exp(-q * q * 3) + 0.25 * np.exp(-(((q - 1) / 0.2) ** 2))),
+                    0.0,
+                )
+            for cx, cy, r, rise in self._rocks:
+                if (
+                    cx + r < x.min()
+                    or cx - r > x.max()
+                    or cy + r < y.min()
+                    or cy - r > y.max()
+                ):
+                    continue
+                z += np.where((x - cx) ** 2 + (y - cy) ** 2 <= r * r, rise, 0.0)
+        else:
+            inside = np.zeros((height, width), bool)
+            for cx, cy, r in self._rooms:
+                if (
+                    cx + r < x.min()
+                    or cx - r > x.max()
+                    or cy + r < y.min()
+                    or cy - r > y.max()
+                ):
+                    continue
+                inside |= (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+            for ax, ay, bx, by, r in self._passages:
+                if (
+                    max(ax, bx) + r < x.min()
+                    or min(ax, bx) - r > x.max()
+                    or max(ay, by) + r < y.min()
+                    or min(ay, by) - r > y.max()
+                ):
+                    continue
+                inside |= _segment_distance(x, y, ax, ay, bx, by) <= r
+            z = np.where(inside, 0.0, 2.0)
+        return np.asarray(z, np.float32)
+
+    def initial_pose(self, terrain, start_mode='any', *, outside_distance_max_m=None,
+                     outside_distance_min_m=None):
+        """Uniform seeded native stance in the main component; yaw is unchanged."""
+        if start_mode not in ('any', 'inside', 'outside'):
+            raise ValueError('start_mode must be any, inside or outside')
+        if outside_distance_max_m is not None and (self.family!='moon' or start_mode!='outside'
+                or not math.isfinite(outside_distance_max_m) or outside_distance_max_m<=0):
+            raise ValueError('bounded outside distance requires an outside moon start and positive distance')
+        if outside_distance_min_m is not None and (outside_distance_max_m is None or
+                not math.isfinite(outside_distance_min_m) or
+                not 0<=outside_distance_min_m<outside_distance_max_m):
+            raise ValueError('outside distance band requires finite 0 <= min < max')
+        if terrain.terrain_id != self.scene_id:
+            raise ValueError("terrain belongs to different scene")
+        if self.family == "moon":
+            component = _largest_native_free_component(terrain.navigation)
+        else:
+            # The structural main room defines cave ownership; never choose a
+            # nearby detached pocket or the large elevated wall plateau instead.
+            cx, cy, room_radius = self.anchor_room
+            x, y = terrain.world_to_cell(cx, cy)
+            radius = math.ceil(room_radius / self.resolution_m)
+            y0, y1 = max(0, y - radius), min(self.shape[0], y + radius + 1)
+            x0, x1 = max(0, x - radius), min(self.shape[1], x + radius + 1)
+            wx = self.origin[0] + (np.arange(x0, x1) + 0.5) * self.resolution_m
+            wy = self.origin[1] + (np.arange(y0, y1) + 0.5) * self.resolution_m
+            valid = (
+                (terrain.navigation[y0:y1, x0:x1] == 1)
+                & (terrain.heights[y0:y1, x0:x1] == 0)
+                & ((wx[None, :] - cx) ** 2 + (wy[:, None] - cy) ** 2 < room_radius**2)
+            )
+            rows, cols = np.nonzero(valid)
+            if not len(rows):
+                raise ValueError("generated main room has no legal native stance")
+            nearest = np.argmin((rows + y0 - y) ** 2 + (cols + x0 - x) ** 2)
+            anchor = Pose(
+                *terrain.cell_center(int(cols[nearest] + x0), int(rows[nearest] + y0)),
+                self._yaw
+            )
+            component = terrain.reachable(anchor)
+        if start_mode != 'any':
+            task_mask = polygon_mask(terrain.shape, terrain.origin,
+                                     terrain.resolution_m, self.task.polygon)
+            if outside_distance_min_m is not None and not np.any((component!=0)&task_mask):
+                raise ValueError('outside component cannot reach the task')
+            component = (component != 0) & (task_mask if start_mode == 'inside' else ~task_mask)
+            if outside_distance_min_m is not None:
+                rows,cols=np.nonzero(component)
+                distances=polygon_boundary_distance(
+                    terrain.origin[0]+(cols+.5)*terrain.resolution_m,
+                    terrain.origin[1]+(rows+.5)*terrain.resolution_m,self.task.polygon)
+                component[rows,cols]=(distances>=outside_distance_min_m)&(distances<=outside_distance_max_m)
+            elif outside_distance_max_m is not None:
+                from scipy.ndimage import distance_transform_edt
+                component &= distance_transform_edt(~task_mask)*terrain.resolution_m<=outside_distance_max_m
+            if not np.any(component):
+                raise ValueError(f'generated main terrain has no legal {start_mode} start')
+        row_counts = np.count_nonzero(component, axis=1)
+        cumulative = np.cumsum(row_counts, dtype=np.int64)
+        if not cumulative[-1]:
+            raise ValueError("generated main terrain has no legal native stance")
+        rng = np.random.default_rng(np.random.SeedSequence([self.seed, 302]))
+        rank = int(rng.integers(int(cumulative[-1])))
+        y = int(np.searchsorted(cumulative, rank, side="right"))
+        within_row = rank - (int(cumulative[y - 1]) if y else 0)
+        x = int(np.flatnonzero(component[y])[within_row])
+        return Pose(*terrain.cell_center(x, y), self._yaw)
+
+
+def _largest_native_free_component(navigation):
+    """Exact native component partition using compact SciPy four-neighbor labels.
+
+    Native no-corner-cut diagonals always have a FREE cardinal intermediate, so
+    adding those diagonals cannot join distinct four-connected components. This
+    labels native M only; it never classifies terrain or changes FREE islands.
+    """
+    from scipy.ndimage import label
+
+    labels, _ = label(navigation == 1)  # SciPy default is cardinal connectivity.
+    sizes = np.bincount(labels.ravel())
+    sizes[0] = 0
+    if not np.any(sizes):
+        return np.zeros(navigation.shape, bool)
+    return labels == int(np.argmax(sizes))
+
+
+class TerrainGrid:
+    """Compact intrinsic B, physical navigation M and effective float32 evidence."""
+
+    def __init__(
+        self, heights, resolution_m, origin, platform, stats=None, terrain_id=None
+    ):
+        self.heights = np.ascontiguousarray(heights, dtype=np.float32)
+        if self.heights.ndim != 2 or not self.heights.size:
+            raise ValueError("nonempty height grid required")
+        self.shape = self.heights.shape
+        self.resolution_m = float(resolution_m)
+        self.origin = tuple(origin)
+        supplied = stats is not None
+        self.stats = (
+            np.ascontiguousarray(stats, dtype=np.float32).copy()
+            if supplied
+            else np.empty((*self.shape, 4), np.float32)
+        )
+        if self.stats.shape != (*self.shape, 4):
+            raise ValueError("four effective stats required")
+        if supplied:
+            known = np.isfinite(self.heights)
+            if (
+                not np.all(np.isfinite(self.stats[known]))
+                or np.any(self.stats[known, :3] < 0)
+                or not np.all(np.isin(self.stats[known, 3], [0, 1]))
+            ):
+                raise ValueError("invalid effective measurements")
+        self.intrinsic = np.empty(self.shape, np.uint8)
+        self.navigation = np.empty(self.shape, np.uint8)
+        native.derive(
+            self.heights,
+            self.resolution_m,
+            *self.origin,
+            dict(platform.capability),
+            self.stats,
+            self.intrinsic,
+            self.navigation,
+            int(supplied)
+        )
+        self.terrain_id = (
+            terrain_id
+            or hashlib.sha256(
+                self.heights.tobytes()
+                + self.stats.tobytes()
+                + json.dumps(
+                    (self.resolution_m, self.origin, dict(platform.capability)),
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+        )
+        for array in (self.heights, self.stats, self.intrinsic, self.navigation):
+            array.setflags(write=False)
+
+    @classmethod
+    def from_heights(cls, heights, resolution_m, origin, platform, *, stats=None):
+        return cls(heights, resolution_m, origin, platform, stats)
+
+    @classmethod
+    def from_scene(cls, scene):
+        heights = np.empty(scene.shape, np.float32)
+        for y in range(0, scene.shape[0], 256):
+            for x in range(0, scene.shape[1], 256):
+                h = min(256, scene.shape[0] - y)
+                w = min(256, scene.shape[1] - x)
+                heights[y : y + h, x : x + w] = scene.height_tile(x, y, w, h)
+        terrain = cls(
+            heights,
+            scene.resolution_m,
+            scene.origin,
+            scene.platform,
+            terrain_id=scene.scene_id,
+        )
+        terrain.generator_descriptor = MappingProxyType(
+            {
+                "generator_version": scene.generator_version,
+                "observation_model_version": OBSERVATION_MODEL_VERSION,
+                "provided_bounds": scene.bounds,
+                "seed": scene.seed,
+                "family": scene.family,
+                "extent_m": scene.extent_m,
+                "resolution_m": scene.resolution_m,
+                "capability_json": json.dumps(
+                    dict(scene.platform.capability), sort_keys=True
+                ),
+                "scene_id": scene.scene_id,
+            }
+        )
+        if scene.cave_geometry is not None:
+            from .cave_topology import qualify_native, manifest_hash
+            geometry = scene.cave_geometry
+            terrain.generator_descriptor = MappingProxyType(dict(terrain.generator_descriptor,
+                cave_generator_version=scene.generator_version,
+                mother_graph_id=geometry['mother_graph_id'],
+                mother_graph_edges=geometry['edges'],
+                mother_graph_node_count=len(geometry['rooms']),
+                structure_signature=geometry['structure_signature'],
+                dataset_split=geometry['dataset_split'],
+                geometry_seed=geometry['geometry_seed'],
+                anchor_node=geometry['anchor_node'],anchor_xy=geometry['anchor_xy'],
+                cave_split_manifest_hash=manifest_hash(),
+                native_wheeled_summary=qualify_native(scene,terrain)))
+        return terrain
+
+    def world_to_cell(self, x, y):
+        return world_to_cell(x, y, self.origin, self.resolution_m)
+
+    def cell_center(self, x, y):
+        return cell_center(x, y, self.origin, self.resolution_m)
+
+    def reachable(self, start):
+        x, y = self.world_to_cell(start.x, start.y)
+        result = np.empty(self.shape, np.uint8)
+        native.reachable(self.navigation, x, y, result)
+        return result

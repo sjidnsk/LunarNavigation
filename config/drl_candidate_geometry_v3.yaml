@@ -1,0 +1,216 @@
+# Portable record of the formal candidate_geometry_v3 configuration.
+# Load with training_config_from_record(yaml.safe_load(...)); do not point a new run at existing artifacts.
+model:
+  width: 128
+  heads: 8
+  layers: 6
+  actor_score_bound: 10.0
+  architecture_version: candidate_geometry_v3
+learning:
+  batch_size: 64
+  microbatch_size: 8
+  learning_rate: 1.0e-05
+  gamma: 1.0
+  polyak: 0.005
+  initial_alpha: 5.0e-05
+  maximum_alpha: 0.0001
+  maximum_position_alpha: 0.001
+  target_entropy_factor: 0.1
+  return_steps: 1
+  entropy_mode: position_heading
+  position_target_entropy_factor: 0.1
+  heading_target_entropy_factor: 0.1
+  temperature_learning_rate: 0.003
+  position_aux_weight: 0.0
+approach_reward:
+  mode: bounded_exponential_v1
+  bound: 2.0
+  scale_m: 50.0
+exploration_reward_scale: 0.5
+completion_bonus: 20.0
+success_coverage: 0.99
+sensor:
+  range_m: 10.0
+  fov_deg: 90.0
+  offset_x_m: 0.0
+  offset_y_m: 0.0
+  offset_yaw_rad: 0.0
+platform:
+  maximum_forward_speed_mps: 0.2
+  maximum_reverse_speed_mps: 0.2
+  maximum_spin_rate_radps: 1.0
+  footprint_radius_m: 0.7187224777339303
+  capability:
+    footprint_xy_m:
+    - - 0.591
+      - 0.409
+    - - 0.591
+      - -0.409
+    - - -0.591
+      - -0.409
+    - - -0.591
+      - 0.409
+    body_extent_m:
+    - 1.182
+    - 0.818
+    - 1.29996
+    wheel_diameter_m: 0.319
+    wheel_width_m: 0.148
+    wheelbase_m: 0.8175
+    track_width_m: 0.67
+    minimum_underbody_clearance_m: 0.21
+    maximum_local_obstacle_relief_m: 0.2
+    allow_unsupported_gap: false
+    maximum_forward_speed_mps: 0.2
+    maximum_reverse_speed_mps: 0.2
+    maximum_spin_rate_radps: 1.0
+    maximum_acceleration_mps2: 0.5
+    maximum_braking_deceleration_mps2: 0.5
+    maximum_yaw_acceleration_radps2: 0.5
+    maximum_lateral_acceleration_mps2: 0.5
+    maximum_curvature_per_m: 1.0
+    maximum_slope_rad: 0.3490658503988659
+    minimum_clearance_m: 0.2
+    motion_primitives:
+    - primitive_id: forward
+      kind: FORWARD
+      position_m:
+      - 0.2
+      - 0.0
+      - 0.0
+      yaw_change_rad: 0.0
+    - primitive_id: reverse
+      kind: REVERSE
+      position_m:
+      - -0.2
+      - 0.0
+      - 0.0
+      yaw_change_rad: 0.0
+    - primitive_id: forward-arc-left
+      kind: FORWARD_ARC
+      position_m:
+      - 0.19509032201612825
+      - 0.01921471959676957
+      - 0.0
+      yaw_change_rad: 0.19634954084936207
+    - primitive_id: forward-arc-right
+      kind: FORWARD_ARC
+      position_m:
+      - 0.19509032201612825
+      - -0.01921471959676957
+      - 0.0
+      yaw_change_rad: -0.19634954084936207
+    - primitive_id: reverse-arc-left
+      kind: REVERSE_ARC
+      position_m:
+      - -0.19509032201612825
+      - 0.01921471959676957
+      - 0.0
+      yaw_change_rad: -0.19634954084936207
+    - primitive_id: reverse-arc-right
+      kind: REVERSE_ARC
+      position_m:
+      - -0.19509032201612825
+      - -0.01921471959676957
+      - 0.0
+      yaw_change_rad: 0.19634954084936207
+    - primitive_id: spin-left
+      kind: SPIN_COUNTERCLOCKWISE
+      position_m:
+      - 0.0
+      - 0.0
+      - 0.0
+      yaw_change_rad: 0.19634954084936207
+    - primitive_id: spin-right
+      kind: SPIN_CLOCKWISE
+      position_m:
+      - 0.0
+      - 0.0
+      - 0.0
+      yaw_change_rad: -0.19634954084936207
+    - primitive_id: stop-switch
+      kind: STOP_AND_SWITCH
+      position_m:
+      - 0.0
+      - 0.0
+      - 0.0
+      yaw_change_rad: 0.0
+  capability_path: config/wheel.yaml
+seed: 20261014
+paired_scene_sequence: false
+ordered_curriculum: false
+cave_generator_version: cave_topology_v2
+cave_split_manifest_hash: 17180fe4443307716b8921d659b2b9dded8c9209f2a3a57c211d68cce37574a5
+course_two: true
+course_two_variant: C3
+course_two_catalog: ''
+course_two_catalog_sha: ''
+course_two_task_scope: whole_cave_v1
+course_two_sampling: scene_episode_v1
+course_two_scene_profile: distance_sensor_10_30_v1
+course_two_scene_tasks:
+- moon_outside
+- cave_inside
+moon_entry_curriculum: near_to_far_v1
+ordered_rehearsal_fraction: 0.2
+ordered_rehearsal_by_phase: null
+ordered_budget_rule:
+  mode: linear_area
+  min_extent_m: 50.0
+  max_extent_m: 100.0
+  round_to: 32
+  min_decisions: 256
+  max_decisions: 512
+policy_graph_mode: a2
+remote_frontier_positions: 32
+environments: 8
+target_rtf: 30.0
+integration_step_s: 0.05
+observation_hz: 2.0
+goal_position_tolerance_m: 0.1
+goal_yaw_tolerance_rad: 0.05
+stagnation_window_steps: 128
+stagnation_max_positions: 8
+stagnation_position_tolerance_m: 0.25
+warmup: 1024
+update_ratio: 0.25
+max_update_credit: 32
+actor_publish_updates: 16
+worker_threads: 1
+collector_threads: 2
+learner_threads: 4
+dataloader_workers: 0
+curriculum_transition_boundaries:
+- 20000
+- 60000
+curriculum_mixtures:
+- - 1.0
+  - 0.0
+  - 0.0
+- - 0.25
+  - 0.75
+  - 0.0
+- - 0.15
+  - 0.25
+  - 0.6
+curriculum_budgets:
+- 512
+- 2048
+- 8192
+curriculum_extents_m:
+- - 30
+  - 100
+- - 80
+  - 150
+- - 100
+  - 300
+replay_max_bytes: 8589934592
+snapshot_max_bytes: 8589934592
+total_output_max_bytes: 34359738368
+metrics_max_bytes: 8388608
+artifact_root: training-output/candidate-geometry-v3
+reward_diagnostics: true
+save_interval_s: 1800.0
+output_dir: training-output/candidate-geometry-v3/run
+system_reserve_bytes: 8589934592
+owned_pss_limit_bytes: null

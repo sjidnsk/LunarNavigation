@@ -12,6 +12,11 @@
 
 namespace lunar::incremental_navigation {
 
+// Uses optional center evidence when available, otherwise the native 3x3
+// elevation neighborhood. Thresholds remain in PlatformElevationEvaluator.
+[[nodiscard]] LocalTerrainMeasurements MeasureLocalTerrain(
+    const ElevationRangeView& elevation, GridIndex index);
+
 enum class IntrinsicCellState : std::uint8_t {
   kUnknown,
   kFree,
@@ -54,6 +59,13 @@ class FineCellEvaluator final {
   FineCellEvaluator(const ElevationRangeView& elevation,
                     const PlatformCapability& capability,
                     const TraversabilityProfile& profile);
+  // Request-local classification can separate derivative samples from the
+  // bounded domain certified as movement support. Persistent maps use the
+  // ordinary evaluator through the three-argument constructor.
+  FineCellEvaluator(const ElevationRangeView& elevation,
+                    const PlatformCapability& capability,
+                    const TraversabilityProfile& profile,
+                    std::unique_ptr<const PlatformElevationEvaluator> intrinsic);
   ~FineCellEvaluator();
 
   FineCellEvaluator(const FineCellEvaluator&) = delete;

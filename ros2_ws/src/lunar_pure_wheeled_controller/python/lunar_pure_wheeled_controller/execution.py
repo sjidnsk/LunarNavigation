@@ -40,6 +40,8 @@ class PathExecutor:
         self.no_progress_s = 0.0
         self._best_progress = 0.0
         self._best_angle = math.inf
+        self._alignment_anchor = None
+        self._alignment_direction = None
         self._stop_index = 0
         self._chosen = False
         self.final = True
@@ -61,6 +63,8 @@ class PathExecutor:
         self.failure = None
         self._chosen = False
         self._motion_anchor = None
+        self._alignment_anchor = None
+        self._alignment_direction = None
         self.no_progress_s = 0.0
 
     def set_path(self, points, identity=None, final=True):
@@ -85,6 +89,12 @@ class PathExecutor:
             self.identity = identity
             return True
         hot_update = self.rolling_updates and same_session and self.phase == "TRACKING"
+        if not (
+            self.rolling_updates and same_session
+            and self.phase in ("ALIGNING", "BRAKING")
+        ):
+            self._alignment_anchor = None
+            self._alignment_direction = None
         keep_final_alignment = (
             self.rolling_updates and same_session and self.phase == "FINAL_ALIGN"
             and self.final and final and self.path is not None
@@ -234,13 +244,22 @@ class PathExecutor:
             return self._result()
         if not self._chosen:
             heading = line.headings[self.index] if line.headings else line.final_yaw
-            self.direction = (
-                -1
-                if p.allow_reverse
-                and abs(angle(heading - state.yaw_rad))
-                > p.reverse_heading_threshold_rad
-                else 1
-            )
+            # 同一对齐 episode 的等价几何沿用方向，避免倒车阈值抖动翻转目标。
+            alignment_direction = self._alignment_direction
+            if (
+                alignment_direction is not None
+                and abs(angle(heading - alignment_direction[0])) <= p.alignment_tolerance_rad
+            ):
+                self.direction = alignment_direction[1]
+            else:
+                self.direction = (
+                    -1
+                    if p.allow_reverse
+                    and abs(angle(heading - state.yaw_rad))
+                    > p.reverse_heading_threshold_rad
+                    else 1
+                )
+                self._alignment_direction = (heading, self.direction)
             if self._replacement_direction is not None and self.direction != self._replacement_direction:
                 self.phase = "BRAKING"
             self._replacement_direction = None
@@ -329,11 +348,22 @@ class PathExecutor:
                 state
             ):
                 self.phase = "TRACKING"
+                self._alignment_anchor = None
+                self._alignment_direction = None
                 self.no_progress_s = 0.0
                 self._best_progress = self.progress_m
             else:
-                if abs(self.heading_error) < self._best_angle - 0.01:
-                    self._best_angle = abs(self.heading_error)
+                # 在当前目标下比较实测航向，避免引用修订或微小切线抖动伪造进展。
+                # 超过对齐容差的新目标才重建基准；BRAKING 的停稳门槛仍在上方。
+                anchor = self._alignment_anchor
+                new_target = (
+                    anchor is None
+                    or abs(angle(desired - anchor[0])) > p.alignment_tolerance_rad
+                )
+                if new_target or (
+                    abs(self.heading_error) < abs(angle(desired - anchor[1])) - 0.01
+                ):
+                    self._alignment_anchor = (desired, state.yaw_rad)
                     self.no_progress_s = 0.0
                 else:
                     self.no_progress_s += dt
