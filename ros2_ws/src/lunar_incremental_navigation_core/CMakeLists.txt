@@ -82,6 +82,7 @@ if(BUILD_TESTING)
     lunar_enable_sanitizers(${target})
   endfunction()
 
+  lunar_add_core_gtest(lunar_incremental_navigation_core_captured_start_support_regression_test test/captured_start_support_regression_test.cpp)
   lunar_add_core_gtest(lunar_incremental_navigation_core_rolling_update_policy_test test/rolling_update_policy_test.cpp)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_planning_contract_test

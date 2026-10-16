@@ -77,7 +77,7 @@ def test_transition_whole_action_baseline_and_final_budget_state():
     assert t.next_observation is obs and t.actor_version==7
 
 
-def test_native_no_path_and_timeout_with_final_state_remain_transitions(monkeypatch):
+def test_native_no_path_and_timeout_with_final_state_remain_transitions(monkeypatch,tmp_path):
     from lunar_drl_exploration.ros_env import RosExplorationEnv,InfrastructureError
     from lunar_drl_exploration.ros_messages import NavigationResult
     from lunar_drl_exploration.config import TrainingConfig
@@ -86,7 +86,7 @@ def test_native_no_path_and_timeout_with_final_state_remain_transitions(monkeypa
     from lunar_drl_exploration.plant import KinematicPlant
     from test_task_analysis import snapshot,task
     from types import SimpleNamespace
-    cfg=TrainingConfig();env=RosExplorationEnv(cfg,0)
+    cfg=TrainingConfig(artifact_root=str(tmp_path));env=RosExplorationEnv(cfg,0)
     t=TerrainGrid.from_heights(np.zeros((12,12),np.float32),1.,(0.,0.),cfg.platform)
     pose=Pose(3.5,3.5,0);s=snapshot(np.pad(np.ones((6,6),np.uint8),3),pose=pose)
     env.terrain=t;env.task=task(0,0,12,12);env.core=DecisionCore(env.task,SensorSpec(range_m=3))

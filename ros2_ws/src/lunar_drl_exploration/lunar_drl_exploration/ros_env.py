@@ -572,6 +572,7 @@ class RosExplorationEnv:
         if version<0:raise ValueError("actor_version must be nonnegative")
         observation,privileged=self.observation,self.privileged
         self._step_active=True
+        result=snap=report=None
         try:
             result=self._execute_goal(goal)
             snap=self._snapshot()
@@ -613,6 +614,43 @@ class RosExplorationEnv:
             self.native_observation=next_native;self.fine_observation=next_fine
             self.policy_graph_diagnostics=diagnostics;self.policy_graph_stats=stats
             return transition
+        except InfrastructureError as exc:
+            # Evidence collection is failure-only and must never hide the real
+            # navigation error or fabricate an observation/transition.
+            evidence='unavailable'
+            try:
+                from .navigation_failure import write_navigation_failure
+                p=self.plant.pose
+                navigation=(getattr(self.adapter,'last_goal_execution',None)
+                            if result is not None else None)
+                if navigation is None and hasattr(self.adapter,'execution_state'):
+                    navigation=self.adapter.execution_state()
+                context=dict(error=str(exc),episode_id=self.episode_id,
+                    episode_metadata=self.episode_metadata,decisions=self.steps,
+                    action_index=action_index,actor_version=version,goal=list(goal),
+                    actual_pose=[p.x,p.y,p.yaw],simulation_s=self.plant.simulation_s,
+                    distance_m=self.plant.distance_m,turn_rad=self.plant.turn_rad,
+                    result=asdict(result) if result is not None else None,
+                    report_reason=report.reason_code if report is not None else None,
+                    processed_stamp_ns=self.adapter.processed_stamp_ns,
+                    latest_sensor_stamp_ns=getattr(self,'_latest_sensor_ns',None),
+                    map_reason=getattr(self.adapter,'map_reason',None),
+                    snapshot_origin='stopped_current_response' if snap is not None else
+                        'retained_cache_not_current',
+                    navigation=navigation,
+                    diagnostics=list(getattr(self.adapter,'diagnostics',())),
+                    references=list(getattr(self.adapter,'references',())),
+                    reference_history=list(getattr(self.adapter,'reference_history',())),
+                    tracking_history=list(getattr(self.adapter,'tracking_history',())),
+                    actual_pose_history=list(getattr(self.adapter,'pose_history',())),
+                    budget=getattr(self,'last_navigation_budget',None),
+                    stderr_tail=self.owned.error_tail())
+                evidence=str(write_navigation_failure(self.config.artifact_root,
+                    self.env_id,context,snapshot=snap if snap is not None else
+                    getattr(self.adapter,'snapshot',None)))
+            except Exception as evidence_error:
+                evidence=f'evidence write failed: {evidence_error}'
+            raise InfrastructureError(f'{exc}; failure_snapshot={evidence}') from exc
         finally:self._step_active=False
 
     def progress(self):

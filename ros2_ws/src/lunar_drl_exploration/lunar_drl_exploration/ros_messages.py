@@ -137,6 +137,9 @@ class RosNavigationAdapter:
         self._execution_feedback_wall_s=0.
         self._execution_planning=self._execution_tracking=None
         self._execution_reference=self._execution_route=None
+        self.last_goal_execution=None
+        self.reference_history=deque(maxlen=16)
+        self.tracking_history=deque(maxlen=128)
         self.diagnostics=deque(maxlen=64);self.references=deque(maxlen=64);self.planning_evidence=deque(maxlen=64)
         qos=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
         state_qos=QoSProfile(depth=10,reliability=ReliabilityPolicy.BEST_EFFORT,durability=DurabilityPolicy.VOLATILE)
@@ -192,6 +195,10 @@ class RosNavigationAdapter:
             'fine_revision':int(msg.traversability_revision),
             'active':msg.state == msg.ACTIVE,'poses':len(msg.path.poses)})
         points=tuple((float(p.pose.position.x),float(p.pose.position.y)) for p in msg.path.poses)
+        if hasattr(self,'reference_history'):
+            self.reference_history.append(dict(session_id=bytes(msg.session_id.uuid).hex(),
+                segment_revision=int(msg.segment_revision),active=msg.state==msg.ACTIVE,
+                points=points))
         from .navigation_budget import polyline_length
         try:length=polyline_length(points)
         except ValueError:return
@@ -226,6 +233,8 @@ class RosNavigationAdapter:
                 progress_m=float(msg.progress_m),cross_track_m=float(msg.cross_track_m),
                 heading_error_rad=float(msg.heading_error_rad),
                 linear_speed_mps=float(msg.linear_speed_mps),angular_speed_radps=float(msg.angular_speed_radps))
+            if hasattr(self,'tracking_history'):
+                self.tracking_history.append(dict(self._execution_tracking))
 
     def execution_state(self):
         handle=self._handle
@@ -311,6 +320,7 @@ class RosNavigationAdapter:
         goal=tuple(map(float,goal))
         if len(goal)!=3 or not all(map(math.isfinite,goal)): raise ValueError('finite x/y/yaw goal required')
         self.sent_goal=goal
+        self.last_goal_execution=None
         with self._execution_lock:
             self._execution_feedback_wall_s=time.monotonic()
             self._execution_planning=self._execution_tracking=None
@@ -340,6 +350,9 @@ class RosNavigationAdapter:
         wrapped=self._result_future.result()
         if wrapped is None: raise InfrastructureError('navigation result transport lost')
         result=wrapped.result
+        # Capture while the handle still identifies this session. Once cleared,
+        # execution_state intentionally filters out that session's feedback.
+        self.last_goal_execution=self.execution_state()
         self._send_future=self._handle=self._result_future=None
         return NavigationResult(int(result.outcome),str(result.reason_code),int(result.last_segment_revision))
 
