@@ -197,24 +197,6 @@ class RequestLocalPlanningView final {
     return std::nullopt;
   }
 
-  [[nodiscard]] std::optional<StartPhase> AdvanceGridStep(
-      const StartPhase phase, const GridIndex current,
-      const GridIndex next) const noexcept {
-    const double dx = static_cast<double>(next.x) - static_cast<double>(current.x);
-    const double dy = static_cast<double>(next.y) - static_cast<double>(current.y);
-    if ((dx == 0.0 && dy == 0.0) || std::abs(dx) > 1.0 || std::abs(dy) > 1.0) {
-      return std::nullopt;
-    }
-    const auto next_phase = AdvancePhase(phase, next);
-    if (!next_phase) return std::nullopt;
-    if (dx != 0.0 && dy != 0.0 &&
-        (!AdvancePhase(phase, {.x = next.x, .y = current.y}) ||
-         !AdvancePhase(phase, {.x = current.x, .y = next.y}))) {
-      return std::nullopt;
-    }
-    return next_phase;
-  }
-
   [[nodiscard]] bool CanCertifyStationary(const Vec2 point) const noexcept {
     return stationary_support_ && point == patch_anchor_.position_m;
   }
@@ -223,6 +205,15 @@ class RequestLocalPlanningView final {
     return geometry_.Contains(index) &&
            base_->State(index) == FineCellState::kFree;
   }
+
+  // Certify the entire closed segment, including corner contacts. A prefix
+  // may enter measured free space once and cannot reenter assumed space.
+  [[nodiscard]] bool CertifySegment(Vec3 from, Vec3 to,
+                                    StartPhase initial,
+                                    StartPhase final) const noexcept;
+
+  [[nodiscard]] std::optional<StartPhase> AdvanceGridStep(
+      StartPhase phase, GridIndex current, GridIndex next) const noexcept;
 
   [[nodiscard]] bool CanCertifyLeggedSupport(
       const GridIndex index, const bool is_initial_support) const noexcept {

@@ -116,11 +116,9 @@ class PhaseGeometry final {
   }
 
   [[nodiscard]] bool Legal(const PathPoint& a, const PathPoint& b) const {
-    return local::VisitSupercoverCells(
-        view_.geometry(), a.pose.position_m, b.pose.position_m,
-        [&](GridIndex index) {
-          return !Interrupted(control_) && Allowed(view_, index, phase_);
-        });
+    return !Interrupted(control_) && view_.CertifySegment(
+        a.pose.position_m, b.pose.position_m, a.phase, b.phase) &&
+        !Interrupted(control_);
   }
 
   // Negative means illegal/interrupted. Original and replacement segments use
@@ -189,6 +187,7 @@ class PhaseGeometry final {
   }
   PhaseGeometry geometry(view, raw.front().phase, control);
   if (path.size() < 3) {
+    if (path.size() == 1 && !geometry.Legal(path[0], path[0])) return false;
     if (path.size() == 2 && !geometry.Legal(path[0], path[1])) return false;
     output.insert(output.end(), path.begin(), path.end());
     return true;
@@ -233,11 +232,23 @@ std::vector<PathPoint> SimplifyPhaseAwarePath(
     const RequestLocalPlanningView& view, std::span<const PathPoint> raw,
     const SearchControl& control) {
   if (Interrupted(control)) return {};
-  if (raw.size() < 3) return {raw.begin(), raw.end()};
+  // Same-phase runs are checked after collinear compression. Phase-switch
+  // edges are never compressed, and short paths need the same certification.
+  if (raw.size() < 3) {
+    for (std::size_t i = 0; i < raw.size(); ++i) {
+      const auto& from = raw[i == 0 ? 0 : i - 1];
+      if (!view.CertifySegment(from.pose.position_m, raw[i].pose.position_m,
+                               from.phase, raw[i].phase)) return {};
+    }
+    return {raw.begin(), raw.end()};
+  }
   std::vector<PathPoint> output;
   output.reserve(raw.size());
   for (std::size_t begin = 0; begin < raw.size();) {
     if (Interrupted(control)) return {};
+    if (begin > 0 && !view.CertifySegment(
+            raw[begin - 1].pose.position_m, raw[begin].pose.position_m,
+            raw[begin - 1].phase, raw[begin].phase)) return {};
     std::size_t end = begin + 1;
     while (end < raw.size() && raw[end].phase == raw[begin].phase) ++end;
     if (!SimplifyPhase(view, raw.subspan(begin, end - begin), output, control)) {

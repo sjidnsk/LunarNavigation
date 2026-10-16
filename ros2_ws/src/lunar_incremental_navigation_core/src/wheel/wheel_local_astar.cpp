@@ -303,15 +303,21 @@ LocalPlanResult WheelLocalPlanner::Plan(
   const bool supports_spin = SupportsSpin(capability_);
   const auto terminal_feasible = [&](const std::size_t predecessor_offset,
                                      const LocalTarget& terminal_target) {
+    const Point2 from = predecessor_offset == start_offset
+                            ? start.position_m
+                            : CellCenter(geometry, index_of(predecessor_offset));
+    if (!view.CertifySegment({.x = from.x, .y = from.y},
+                            {.x = terminal_target.center.x,
+                             .y = terminal_target.center.y},
+                            phase_[predecessor_offset], StartPhase::kNormal)) {
+      return false;
+    }
     if (!terminal_target.is_final_goal || !terminal_target.terminal_yaw_rad) {
       return true;
     }
     if (supports_spin) {
       return true;
     }
-    const Point2 from = predecessor_offset == start_offset
-                            ? start.position_m
-                            : CellCenter(geometry, index_of(predecessor_offset));
     return ArrivalYawIsFeasible(
         {.x = from.x, .y = from.y}, terminal_target.center, start.yaw_rad,
         *terminal_target.terminal_yaw_rad, config_.terminal_yaw_tolerance_rad);
@@ -397,9 +403,16 @@ LocalPlanResult WheelLocalPlanner::Plan(
       if (!geometry.Contains(next)) {
         continue;
       }
-      const auto next_phase = view.AdvanceGridStep(phase_[current.offset],
-                                                   current_index, next);
-      if (!next_phase) continue;
+      const auto next_phase = view.AdvancePhase(phase_[current.offset], next);
+      if (!next_phase) {
+        continue;
+      }
+      const auto from = current.offset == start_offset
+                            ? start.position_m : CellCenter(geometry, current_index);
+      const auto to = CellCenter(geometry, next);
+      if (!view.CertifySegment({.x = from.x, .y = from.y},
+                               {.x = to.x, .y = to.y},
+                               phase_[current.offset], *next_phase)) continue;
       // Invalid terminal edges are not inserted, so the search continues to
       // other legal entering edges instead of accepting a position-only goal.
       const auto* next_candidate = region ? region->At(next) : nullptr;
