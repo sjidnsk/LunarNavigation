@@ -13,7 +13,7 @@ namespace lunar::incremental_navigation::local {
 class RequestCellCache final {
 public:
   explicit RequestCellCache(const RequestLocalPlanningView &view)
-      : view_(view), elevation_(view.base()->elevation()),
+      : view_(view),
         lo_(view.geometry().min_inclusive()),
         hi_(view.geometry().max_exclusive()), width_(view.geometry().width()),
         pages_((view.geometry().CellCount() + kPageSize - 1) / kPageSize) {}
@@ -48,9 +48,9 @@ public:
     auto *entry = EntryAt(cell);
     // Elevation has the base snapshot's extent, not the request window's.
     if (!entry)
-      return elevation_->ElevationRangeAt(cell);
+      return view_.base()->PlanningElevationRangeAt(cell);
     if (!(entry->ready & kElevation)) {
-      const auto range = elevation_->ElevationRangeAt(cell);
+      const auto range = view_.base()->PlanningElevationRangeAt(cell);
       if (range) {
         entry->range = *range;
         entry->ready |= kKnownElevation;
@@ -99,7 +99,6 @@ private:
     return &(*page)[offset % kPageSize];
   }
   const RequestLocalPlanningView &view_;
-  std::shared_ptr<const ElevationSnapshot> elevation_;
   GridIndex lo_, hi_;
   std::size_t width_;
   std::vector<std::unique_ptr<Page>> pages_;
