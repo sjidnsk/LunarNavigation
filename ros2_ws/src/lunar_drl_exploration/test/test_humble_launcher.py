@@ -1,6 +1,7 @@
 import json
 import importlib.util
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -100,3 +101,35 @@ def test_readme_documents_humble_launcher_and_owned_build_prerequisites():
     assert 'export DRL_CACHE=' in section and 'export DRL_PYTHON=' in section
     assert 'config/drl_candidate_geometry_v3.yaml' in section
     assert '/jazzy' not in section
+
+
+def candidate_readme_example():
+    text = (ROOT/'ros2_ws/src/lunar_drl_exploration/README.md').read_text()
+    section = text.split('## Async training and operator entrypoints', 1)[1].split('`--max-transitions`', 1)[0]
+    block = section.split('```bash', 1)[1].split('```', 1)[0]
+    commands = [shlex.split(line, comments=True) for line in block.replace('\\\n', ' ').splitlines()]
+    return section, [command for command in commands if command]
+
+
+def test_candidate_readme_training_and_evaluation_load_same_configuration(monkeypatch):
+    from lunar_drl_exploration.cli import load_config, parser
+
+    monkeypatch.chdir(ROOT)
+    _, commands = candidate_readme_example()
+    train = [command for command in commands if command[0] == 'scripts/drl/train.sh']
+    evaluate = [command for command in commands if command[0] == 'scripts/drl/evaluate.sh']
+    assert len(train) == 2 and len(evaluate) == 1
+    parsed = [parser().parse_args([Path(command[0]).stem, *command[1:]]) for command in train + evaluate]
+    assert all(args.config == Path('config/drl_candidate_geometry_v3.yaml') for args in parsed)
+    configs = [load_config(args) for args in parsed]
+    assert all(config.model.architecture_version == 'candidate_geometry_v3' for config in configs)
+    assert all(config.model == configs[0].model for config in configs)
+    assert all(config.sensor == configs[0].sensor for config in configs)
+
+
+def test_candidate_readme_does_not_offer_unready_real_inference():
+    section, commands = candidate_readme_example()
+    assert not any('scripts/drl/infer.sh' in command or 'infer' in command for command in commands)
+    assert 'candidate_geometry_v3' in section
+    assert '真实输入/Orin 推理适配未完成' in section
+    assert 'NOT_READY' in section and 'NOT_RUN' in section

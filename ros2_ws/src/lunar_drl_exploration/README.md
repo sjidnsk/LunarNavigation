@@ -804,10 +804,12 @@ scripts/drl/train.sh --config config/drl_candidate_geometry_v3.yaml --output-dir
 # 仅恢复本实验自己的、身份一致的完整检查点：
 scripts/drl/train.sh --config config/drl_candidate_geometry_v3.yaml --output-dir "$DRL_OUTPUT" --resume
 scripts/drl/_run.sh export --checkpoint "$DRL_OUTPUT/resume.pt" --output "$DRL_OUTPUT/actor.pt"
-scripts/drl/evaluate.sh --actor "$DRL_OUTPUT/actor.pt" \
+scripts/drl/evaluate.sh --config config/drl_candidate_geometry_v3.yaml --actor "$DRL_OUTPUT/actor.pt" \
   --seeds 2026091501 2026091502 --families moon cave --extents 40 100 --budget 512
-scripts/drl/infer.sh --actor "$DRL_OUTPUT/actor.pt"
 ```
+
+candidate_geometry_v3 的真实输入/Orin 推理适配未完成：**NOT_READY / NOT_RUN**。
+上述 Actor 仅用于同一 candidate 配置下的训练侧评测；此命令链不提供真实输入推理或 Orin 部署步骤。
 
 `--max-transitions` is the number of **new admissions in this invocation**;
 already finished messages are drained and may produce an explicitly reported
