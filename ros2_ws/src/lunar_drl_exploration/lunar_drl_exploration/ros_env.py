@@ -445,7 +445,8 @@ class RosExplorationEnv:
         return snap
 
     def _execute_goal(self,goal):
-        self.adapter.begin_goal(goal)
+        self._navigation_attempt=None
+        self._navigation_attempt=self.adapter.begin_goal(goal)
         from .navigation_budget import NavigationBudget, BudgetPolicy
         p=self.plant.pose
         budget=NavigationBudget(start_wall_s=time.monotonic(),
@@ -572,6 +573,7 @@ class RosExplorationEnv:
         if version<0:raise ValueError("actor_version must be nonnegative")
         observation,privileged=self.observation,self.privileged
         self._step_active=True
+        self._navigation_attempt=None
         result=snap=report=None
         try:
             result=self._execute_goal(goal)
@@ -621,13 +623,18 @@ class RosExplorationEnv:
             try:
                 from .navigation_failure import write_navigation_failure
                 p=self.plant.pose
-                navigation=(getattr(self.adapter,'last_goal_execution',None)
-                            if result is not None else None)
+                attempt=self._navigation_attempt
+                current=(attempt is not None and
+                    getattr(self.adapter,'last_goal_execution_serial',None)==attempt)
+                if result is None and current:
+                    result=getattr(self.adapter,'last_goal_result',None)
+                navigation=getattr(self.adapter,'last_goal_execution',None) if current else None
                 if navigation is None and hasattr(self.adapter,'execution_state'):
                     navigation=self.adapter.execution_state()
                 context=dict(error=str(exc),episode_id=self.episode_id,
                     episode_metadata=self.episode_metadata,decisions=self.steps,
                     action_index=action_index,actor_version=version,goal=list(goal),
+                    navigation_attempt=attempt,
                     actual_pose=[p.x,p.y,p.yaw],simulation_s=self.plant.simulation_s,
                     distance_m=self.plant.distance_m,turn_rad=self.plant.turn_rad,
                     result=asdict(result) if result is not None else None,

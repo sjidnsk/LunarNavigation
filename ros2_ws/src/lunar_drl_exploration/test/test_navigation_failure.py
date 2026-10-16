@@ -44,8 +44,12 @@ def unavailable_env(monkeypatch, tmp_path):
                   observe=lambda *_: (None, NS(available=False, reason_code='INPUT_UNAVAILABLE')))
     env.adapter = NS(velocity=(0., 0.), processed_stamp_ns=10, snapshot=snap,
                      pose_history=[(10, Pose(.1, .2, .3))],
+                     last_goal_execution_serial=11,
                      last_goal_execution={'tracking': {'reason': 'CURVATURE_INFEASIBLE'}})
-    monkeypatch.setattr(env, '_execute_goal', lambda _: NavigationResult(1, 'START_BLIND_ZONE_UNRESOLVED', 2))
+    def execute(_):
+        env._navigation_attempt=11
+        return NavigationResult(1, 'START_BLIND_ZONE_UNRESOLVED', 2)
+    monkeypatch.setattr(env, '_execute_goal', execute)
     monkeypatch.setattr(env, '_snapshot', lambda: snap)
     return env
 
@@ -90,6 +94,7 @@ def test_adapter_retains_execution_context_after_result(monkeypatch):
         result=NS(outcome=1, reason_code='NO_PATH', last_segment_revision=2)))
     result = a.poll_goal()
     assert result.reason_code == 'NO_PATH' and a._handle is None
+    assert a.last_goal_result is result
     assert a.last_goal_execution['session_id'] == '01' * 16
     assert a.last_goal_execution['tracking']['reason'] == 'PATH_DEVIATED'
 
@@ -107,3 +112,29 @@ def test_failed_begin_does_not_reuse_previous_goal_execution(monkeypatch, tmp_pa
     assert record['context']['result'] is None
     assert record['context']['navigation']['tracking'] is None
     assert record['context']['snapshot_origin'] == 'retained_cache_not_current'
+
+
+def test_result_then_stop_timeout_retains_this_goal_result_and_session(monkeypatch, tmp_path):
+    from lunar_drl_exploration.ros_env import RosExplorationEnv, InfrastructureError
+    from lunar_drl_exploration.ros_messages import NavigationResult
+    env = unavailable_env(monkeypatch, tmp_path)
+    env.plant.linear_mps = .02
+    env.plant.angular_radps = 0.
+    result = NavigationResult(0, 'GOAL_REACHED', 3)
+    env.adapter.begin_goal = lambda _: 11
+    env.adapter.last_goal_execution_serial = 11
+    env.adapter.last_goal_result = result
+    env.adapter.last_goal_execution = {'session_id': 'current-session',
+                                      'tracking': {'reason': 'BRAKING'}}
+    env.adapter.poll_goal = lambda: result
+    env.adapter.execution_state = lambda: {'session_id': None, 'tracking': None}
+    monkeypatch.setattr(env, '_execute_goal', RosExplorationEnv._execute_goal.__get__(env))
+    def stop_timeout(*args, **kwargs):
+        raise InfrastructureError('wall watchdog: cancel/goal stop')
+    monkeypatch.setattr(env, '_wait', stop_timeout)
+    with pytest.raises(InfrastructureError, match='cancel/goal stop'):
+        env.step(0)
+    record = json.loads(next((tmp_path / 'navigation-failures').glob('*.json')).read_text())
+    assert record['context']['result']['reason_code'] == 'GOAL_REACHED'
+    assert record['context']['navigation']['session_id'] == 'current-session'
+    assert env.steps == 0 and env.last_execution is None

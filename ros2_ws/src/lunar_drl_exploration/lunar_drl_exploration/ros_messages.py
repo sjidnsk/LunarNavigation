@@ -138,6 +138,9 @@ class RosNavigationAdapter:
         self._execution_planning=self._execution_tracking=None
         self._execution_reference=self._execution_route=None
         self.last_goal_execution=None
+        self.last_goal_result=None
+        self.last_goal_execution_serial=None
+        self._goal_serial=0
         self.reference_history=deque(maxlen=16)
         self.tracking_history=deque(maxlen=128)
         self.diagnostics=deque(maxlen=64);self.references=deque(maxlen=64);self.planning_evidence=deque(maxlen=64)
@@ -320,7 +323,10 @@ class RosNavigationAdapter:
         goal=tuple(map(float,goal))
         if len(goal)!=3 or not all(map(math.isfinite,goal)): raise ValueError('finite x/y/yaw goal required')
         self.sent_goal=goal
+        self._goal_serial=getattr(self,'_goal_serial',0)+1
         self.last_goal_execution=None
+        self.last_goal_result=None
+        self.last_goal_execution_serial=None
         with self._execution_lock:
             self._execution_feedback_wall_s=time.monotonic()
             self._execution_planning=self._execution_tracking=None
@@ -328,6 +334,7 @@ class RosNavigationAdapter:
         request=self._action_type.Goal(target_x_m=goal[0],target_y_m=goal[1],has_target_yaw=True,target_yaw_rad=goal[2])
         self._cancel=False;self._handle=None;self._result_future=None;self._cancel_future=None
         self._send_future=self.action.send_goal_async(request)
+        return self._goal_serial
 
     def cancel_goal(self):
         self._cancel=True
@@ -353,8 +360,10 @@ class RosNavigationAdapter:
         # Capture while the handle still identifies this session. Once cleared,
         # execution_state intentionally filters out that session's feedback.
         self.last_goal_execution=self.execution_state()
+        self.last_goal_result=NavigationResult(int(result.outcome),str(result.reason_code),int(result.last_segment_revision))
+        self.last_goal_execution_serial=getattr(self,'_goal_serial',0)
         self._send_future=self._handle=self._result_future=None
-        return NavigationResult(int(result.outcome),str(result.reason_code),int(result.last_segment_revision))
+        return self.last_goal_result
 
     @property
     def inflight(self): return self._send_future is not None
