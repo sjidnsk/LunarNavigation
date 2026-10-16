@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -38,6 +39,14 @@ struct ElevationPipelineDerivers final {
   Guidance guidance;
 };
 
+struct PolicyMapSnapshotCapture final {
+  lunar::incremental_navigation::SnapshotBundle bundle;
+  std::int64_t processed_map_stamp_ns{};
+  std::uint64_t base_revision{};
+  bool full_snapshot{true};
+  std::vector<lunar::incremental_navigation::TileIndex> dirty_tiles;
+};
+
 class ElevationPipeline final {
  public:
   ElevationPipeline(lunar::incremental_navigation::PlatformCapability capability,
@@ -46,13 +55,16 @@ class ElevationPipeline final {
                     ElevationPipelineDerivers derivers = {});
 
   [[nodiscard]] lunar::incremental_navigation::ElevationUpdateResult ApplyLocal(
-      const OwnedElevationEvidence& evidence);
+      const OwnedElevationEvidence& evidence, std::int64_t map_stamp_ns = 0);
   [[nodiscard]] lunar::incremental_navigation::ElevationUpdateResult ApplyLocal(
-      const AdapterResult<OwnedElevationEvidence>& adapted);
+      const AdapterResult<OwnedElevationEvidence>& adapted,
+      std::int64_t map_stamp_ns = 0);
   [[nodiscard]] bool RunFineDerivation();
   [[nodiscard]] bool RunGuidanceDerivation();
 
   [[nodiscard]] lunar::incremental_navigation::SnapshotBundle CaptureBundle() const;
+  [[nodiscard]] PolicyMapSnapshotCapture CapturePolicyMapSnapshot(
+      std::uint64_t since_revision = 0) const;
   [[nodiscard]] std::size_t PendingFineDirtyTileCount() const;
   [[nodiscard]] std::uint64_t GuidanceDerivationCount() const;
   [[nodiscard]] lunar::incremental_navigation::ElevationMapCounters LocalCounters()
@@ -73,7 +85,19 @@ class ElevationPipeline final {
   std::set<lunar::incremental_navigation::GridIndex> pending_fine_dirty_cells_;
   std::uint64_t consumed_fine_revision_{};
   std::uint64_t guidance_derivation_count_{};
-  std::shared_ptr<const lunar::incremental_navigation::SnapshotBundle> bundle_;
+  struct PipelineSnapshot final {
+    lunar::incremental_navigation::SnapshotBundle bundle;
+    std::int64_t processed_map_stamp_ns{};
+  };
+  struct ExportJournalEntry final {
+    std::uint64_t revision{};
+    std::vector<lunar::incremental_navigation::TileIndex> dirty_tiles;
+  };
+  static constexpr std::size_t kExportJournalCapacity{128U};
+  std::deque<ExportJournalEntry> export_journal_;
+  std::uint64_t latest_accepted_raw_revision_{};
+  std::int64_t latest_accepted_map_stamp_ns{};
+  std::shared_ptr<const PipelineSnapshot> bundle_;
 };
 
 }  // namespace lunar::incremental_navigation_ros

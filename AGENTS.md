@@ -33,6 +33,12 @@
 
 ## 多会话与工作树安全
 
+- 用户于 2026-09-19 明确要求“集成主线 → 模块/场景开发线 → 专项分支”。当前 DRL 的
+  唯一活动开发整合线是 `dev/drl-exploration`，复用 `drl-exploration-redesign` 工作树；
+  以 `docs/DRL开发入口.md` 为索引。后续代码专项从该开发线派生，验证后合回；纯参数实验
+  使用相同已提交代码、不同配置和输出目录，不必另建代码分支。开发线用于整合和验证，
+  不让多个会话同时在此实现。旧训练/覆盖工作树保留作历史来源，不自动清理。
+
 - 每次开始工作先运行 `git branch --show-current`、`git status --short` 和
   `git worktree list`，确认自己位于预期分支和 worktree。
 - `integration/pure-planner-orin` 主要用于集成和验证；不要让多个会话在同一个 integration

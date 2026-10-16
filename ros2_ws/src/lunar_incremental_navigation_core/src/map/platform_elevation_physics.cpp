@@ -155,6 +155,27 @@ IntrinsicTraversalEvaluation EvaluateTerrainPatch(
     const Capability& capability, double half_width_m,
     map::TerrainObservationEstimator* shared_observations = nullptr,
     TerrainFitMethod fit_method = TerrainFitMethod::kBaseline) {
+  // 可见中心统计来自原生邻域，不用不可见高程补全或拟合覆盖其物理证据。
+  if (const auto measured = elevation.TerrainMeasurementsAt(center)) {
+    if (!measured->center_known) return {};
+    constexpr bool legged = std::is_same_v<Capability, LeggedCapability>;
+    const double relief_limit = [&] {
+      if constexpr (legged) return capability.maximum_step_height_m;
+      else return capability.maximum_local_obstacle_relief_m;
+    }();
+    bool blocked = measured->slope_rad > capability.maximum_slope_rad ||
+                   measured->relief_m > relief_limit;
+    if constexpr (!legged) {
+      blocked = blocked || measured->positive_rise_m >
+                               capability.minimum_underbody_clearance_m;
+    }
+    return {.state = blocked ? IntrinsicCellState::kBlocked
+                            : measured->neighborhood_complete
+                                  ? IntrinsicCellState::kFree
+                                  : IntrinsicCellState::kUnknown,
+            .slope_rad = measured->slope_rad,
+            .relief_m = measured->relief_m};
+  }
   map::TerrainObservationEstimator local_observations(elevation, {.fit_method=fit_method});
   auto& observations = shared_observations ? *shared_observations : local_observations;
   constexpr bool legged = std::is_same_v<Capability, LeggedCapability>;
@@ -285,6 +306,66 @@ class LeggedElevationEvaluator final : public PlatformElevationEvaluator {
 
 int TerrainBackgroundRadiusCells(double half_width_m, double resolution_m) {
   return map::ObservationBackgroundRadiusCells(half_width_m, resolution_m);
+}
+
+[[nodiscard]] LocalTerrainMeasurements MeasureLocalTerrain(
+    const ElevationRangeView& elevation, const GridIndex center) {
+  if (const auto measured = elevation.TerrainMeasurementsAt(center)) {
+    return *measured;
+  }
+  const std::optional<ElevationRange> center_range =
+      elevation.ElevationRangeAt(center);
+  if (!center_range) {
+    return {};
+  }
+
+  const double center_mid =
+      0.5 * (static_cast<double>(center_range->min_m) +
+             static_cast<double>(center_range->max_m));
+  double minimum = center_range->min_m;
+  double maximum = center_range->max_m;
+  double maximum_slope = 0.0;
+  double maximum_positive_rise = 0.0;
+  bool complete = true;
+  const double resolution_m = elevation.geometry().resolution_m();
+  for (std::int64_t dy = -1; dy <= 1; ++dy) {
+    for (std::int64_t dx = -1; dx <= 1; ++dx) {
+      if (dx == 0 && dy == 0) {
+        continue;
+      }
+      const std::optional<GridIndex> neighbor_index =
+          detail::OffsetWithinGeometry(elevation.geometry(), center, dx, dy);
+      const std::optional<ElevationRange> neighbor =
+          neighbor_index ? elevation.ElevationRangeAt(*neighbor_index)
+                         : std::nullopt;
+      if (!neighbor_index || !neighbor) {
+        complete = false;
+        continue;
+      }
+      const double neighbor_mid =
+          0.5 * (static_cast<double>(neighbor->min_m) +
+                 static_cast<double>(neighbor->max_m));
+      const double planar_distance_m =
+          resolution_m * std::hypot(static_cast<double>(dx),
+                                    static_cast<double>(dy));
+      maximum_slope =
+          std::max(maximum_slope,
+                   std::atan2(std::abs(neighbor_mid - center_mid),
+                              planar_distance_m));
+      minimum = std::min(minimum, static_cast<double>(neighbor->min_m));
+      maximum = std::max(maximum, static_cast<double>(neighbor->max_m));
+      maximum_positive_rise = std::max(
+          maximum_positive_rise,
+          static_cast<double>(neighbor->max_m) - center_mid);
+    }
+  }
+  return LocalTerrainMeasurements{
+      .center_known = true,
+      .neighborhood_complete = complete,
+      .slope_rad = maximum_slope,
+      .relief_m = maximum - minimum,
+      .positive_rise_m = std::max(0.0, maximum_positive_rise),
+  };
 }
 
 namespace {

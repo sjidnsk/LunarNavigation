@@ -1,0 +1,281 @@
+"""Immutable, transport-independent policy and replay contracts."""
+
+from dataclasses import dataclass, field
+import math
+from numbers import Integral, Real
+from types import MappingProxyType
+from typing import Mapping
+
+import numpy as np
+from .feature_schema import OBSERVATION_SCHEMA, PRIVILEGED_SCHEMA, require_observation_identity
+
+
+def freeze_array(value, *, dtype=None) -> np.ndarray:
+    """Copy an array into an immutable bytes-backed NumPy view.
+
+    ``setflags(write=False)`` alone is insufficient because a writable owner
+    can later be recovered.  A bytes object has no writable backing store.
+    """
+    array = np.ascontiguousarray(value, dtype=dtype)
+    frozen = np.frombuffer(array.tobytes(), dtype=array.dtype).reshape(array.shape)
+    return frozen
+
+
+def freeze_mapping(value: Mapping) -> Mapping:
+    return MappingProxyType(dict(value))
+
+
+def _freeze_descriptor(value):
+    """Own serializable generator metadata, including nested lists/mappings."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_descriptor(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_descriptor(item) for item in value)
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    raise TypeError("generator descriptor must contain serializable primitive metadata")
+
+
+@dataclass(frozen=True)
+class Pose:
+    x: float
+    y: float
+    yaw: float
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    task_id: str
+    frame_id: str
+    polygon: np.ndarray
+
+    def __post_init__(self):
+        object.__setattr__(self, "polygon", freeze_array(self.polygon, dtype=np.float32))
+
+
+@dataclass(frozen=True)
+class SensorSpec:
+    range_m: float = 10.0
+    fov_deg: float = 90.0
+    offset_x_m: float = 0.0
+    offset_y_m: float = 0.0
+    offset_yaw_rad: float = 0.0
+
+
+@dataclass(frozen=True)
+class MapSnapshot:
+    epoch: str
+    revision: int
+    resolution_m: float
+    origin: tuple
+    tiles: Mapping
+    pose: Pose
+    start_connections: np.ndarray
+    local_bounds: tuple
+    profile_hash: str
+    start_connection_status: str = "READY"
+    goal_position_tolerance_m: float = float("nan")
+    goal_yaw_tolerance_rad: float = float("nan")
+
+    def __post_init__(self):
+        object.__setattr__(self, "tiles", freeze_mapping(self.tiles))
+        object.__setattr__(self, "start_connections",
+                           freeze_array(self.start_connections, dtype=np.int64))
+
+
+@dataclass(frozen=True)
+class TaskReport:
+    known_area_m2: float
+    new_area_m2: float
+    frontier_cells: np.ndarray
+    witnesses: np.ndarray
+    exhausted: bool
+    revision: int
+    available: bool = True
+    reason_code: str = "READY"
+    @property
+    def completed(self):
+        """Observed opportunity exhaustion; no online truth-coverage claim."""
+        return self.available and self.exhausted
+
+    def __post_init__(self):
+        object.__setattr__(self, "frontier_cells",
+                           freeze_array(self.frontier_cells, dtype=np.int64))
+        object.__setattr__(self, "witnesses", freeze_array(self.witnesses, dtype=np.int64))
+
+
+@dataclass(frozen=True)
+class DecisionObservation:
+    node_ids: np.ndarray
+    positions: np.ndarray
+    features: np.ndarray
+    edges: np.ndarray
+    edge_lengths: np.ndarray
+    current_index: int
+    polygon: np.ndarray
+    context: np.ndarray
+    action_nodes: np.ndarray
+    action_yaws: np.ndarray
+    goals: np.ndarray
+    epoch: str
+    revision: int
+    schema: str = OBSERVATION_SCHEMA
+
+    def __post_init__(self):
+        for name, dtype in (("node_ids", np.int64), ("positions", np.float32),
+                            ("features", np.float32), ("edges", np.int64),
+                            ("edge_lengths", np.float32), ("polygon", np.float32),
+                            ("context", np.float32), ("action_nodes", np.int64),
+                            ("action_yaws", np.float32), ("goals", np.float64)):
+            object.__setattr__(self, name, freeze_array(getattr(self, name), dtype=dtype))
+        require_observation_identity(self)
+        if self.context.shape != (8,):
+            raise ValueError("context must contain 8 platform/sensor scalars")
+        if self.node_ids.shape != (self.features.shape[0],):
+            raise ValueError("node_ids must align with graph features")
+        if not 0 <= self.current_index < self.node_ids.size:
+            raise ValueError("current_index is outside graph nodes")
+        if self.goals.ndim != 2 or self.goals.shape[1] != 3:
+            raise ValueError("goals must contain world x, y, yaw")
+        if (self.action_nodes.ndim != 1 or self.action_yaws.ndim != 1 or
+                self.goals.shape[0] != self.action_nodes.size or
+                self.action_yaws.size != self.action_nodes.size):
+            raise ValueError("each action requires one yaw and frozen world goal")
+        if np.any(self.action_nodes < 0) or np.any(self.action_nodes >= self.node_ids.size):
+            raise ValueError("action nodes must index graph nodes")
+
+
+@dataclass(frozen=True)
+class PrivilegedActionContext:
+    positions: np.ndarray
+    action_positions: np.ndarray
+    action_yaws: np.ndarray
+    support_offsets: np.ndarray
+    support_indices: np.ndarray
+    support_distances: np.ndarray
+    removed_frontiers: np.ndarray
+    schema: str = PRIVILEGED_SCHEMA
+
+    def __post_init__(self):
+        if self.schema != PRIVILEGED_SCHEMA:
+            raise ValueError("incompatible privileged frontier schema")
+        counts = np.asarray(self.removed_frontiers)
+        if (counts.size and (counts.dtype.kind not in 'iu' or np.any(counts < 0)
+                            or np.any(counts > np.iinfo(np.int64).max))):
+            raise ValueError("removed_frontiers must contain nonnegative integer counts")
+        for name, dtype in (("positions", np.float64), ("action_positions", np.int64),
+                            ("action_yaws", np.float64),
+                            ("support_offsets", np.int64), ("support_indices", np.int64),
+                            ("support_distances", np.float32), ("removed_frontiers", np.int64)):
+            object.__setattr__(self, name, freeze_array(getattr(self, name), dtype=dtype))
+        n = len(self.positions)
+        if self.positions.shape != (n, 2) or not np.isfinite(self.positions).all():
+            raise ValueError("candidate positions must be finite N x 2 coordinates")
+        if n and len(np.unique(self.positions, axis=0)) != n:
+            raise ValueError("candidate positions must be unique")
+        if (self.action_positions.ndim != 1 or self.action_yaws.shape != self.action_positions.shape or
+                self.removed_frontiers.shape != self.action_positions.shape or not np.isfinite(self.action_yaws).all()):
+            raise ValueError("candidate action mapping, yaws and removed frontier counts must align")
+        if (np.any(self.action_positions < 0) or np.any(self.action_positions >= n) or
+                not np.isfinite(self.removed_frontiers).all() or np.any(self.removed_frontiers < 0)):
+            raise ValueError("invalid candidate action mapping or removed frontier count")
+        if (self.support_offsets.shape != (n + 1,) or self.support_offsets[0] != 0 or
+                np.any(np.diff(self.support_offsets) <= 0) or
+                self.support_offsets[-1] != len(self.support_indices) or
+                self.support_distances.shape != self.support_indices.shape or
+                np.any(self.support_indices < 0) or not np.isfinite(self.support_distances).all() or
+                np.any(self.support_distances < 0)):
+            raise ValueError("invalid candidate support CSR")
+
+
+@dataclass(frozen=True)
+class PrivilegedState:
+    scene_id: str
+    observed: np.ndarray
+    actions: PrivilegedActionContext | None = None
+    schema: str = PRIVILEGED_SCHEMA
+
+    def __post_init__(self):
+        if self.schema != PRIVILEGED_SCHEMA:
+            raise ValueError("incompatible privileged frontier schema")
+        object.__setattr__(self, "observed", freeze_array(self.observed, dtype=np.uint8))
+
+
+@dataclass(frozen=True)
+class PrivilegedScene:
+    """Owned static critic graph; packed cells use row-major little bit order.
+
+    The CSR mapping assigns each reference cell to its nearest static graph
+    node. It supports observed-fraction pooling without retaining terrain.
+    """
+    scene_id: str
+    positions: np.ndarray
+    edges: np.ndarray
+    edge_lengths: np.ndarray
+    reference_offsets: np.ndarray
+    reference_indices: np.ndarray
+    packed_reference: np.ndarray
+    reference_shape: tuple
+    generator_descriptor: Mapping
+
+    def __post_init__(self):
+        for name, dtype in (("positions", np.float32), ("edges", np.int64),
+                            ("edge_lengths", np.float32), ("reference_offsets", np.int64),
+                            ("reference_indices", np.int64), ("packed_reference", np.uint8)):
+            object.__setattr__(self, name, freeze_array(getattr(self, name), dtype=dtype))
+        object.__setattr__(self, "generator_descriptor", _freeze_descriptor(self.generator_descriptor))
+
+
+@dataclass(frozen=True)
+class RewardParts:
+    new_area_m2: float
+    distance_m: float
+    turn_rad: float
+    removed_frontiers_in: int
+    removed_frontiers_out: int
+    approach_reward: float = 0.
+
+    def __post_init__(self):
+        if not np.isfinite(self.approach_reward):
+            raise ValueError('approach reward must be finite')
+        for name in ('removed_frontiers_in', 'removed_frontiers_out'):
+            value = getattr(self, name)
+            if isinstance(value, (bool, np.bool_)) or not isinstance(value, Integral) or value < 0:
+                raise ValueError(f'{name} must be a nonnegative integer')
+            object.__setattr__(self, name, int(value))
+
+
+@dataclass(frozen=True)
+class Transition:
+    observation: DecisionObservation
+    action: int
+    reward: float
+    next_observation: DecisionObservation
+    privileged: PrivilegedState
+    next_privileged: PrivilegedState
+    parts: RewardParts
+    terminated: bool
+    truncated: bool
+    episode_id: str
+    actor_version: int
+    step_index: int | None = None
+    behavior_log_prob: float | None = None
+
+    def __post_init__(self):
+        # Missing together identifies legacy experience; never invent its mu.
+        if self.step_index is None and self.behavior_log_prob is None:
+            return
+        if (isinstance(self.step_index, (bool, np.bool_)) or
+                not isinstance(self.step_index, Integral) or self.step_index < 0):
+            raise ValueError('trace step_index must be a nonnegative integer')
+        if (isinstance(self.behavior_log_prob, (bool, np.bool_)) or
+                not isinstance(self.behavior_log_prob, Real)):
+            raise ValueError('trace behavior_log_prob must be finite and nonpositive')
+        try:
+            log_prob = float(self.behavior_log_prob)
+        except (OverflowError, ValueError) as error:
+            raise ValueError('trace behavior_log_prob must be finite and nonpositive') from error
+        if not math.isfinite(log_prob) or log_prob > 0:
+            raise ValueError('trace behavior_log_prob must be finite and nonpositive')
+        object.__setattr__(self, 'step_index', int(self.step_index))
+        object.__setattr__(self, 'behavior_log_prob', log_prob)

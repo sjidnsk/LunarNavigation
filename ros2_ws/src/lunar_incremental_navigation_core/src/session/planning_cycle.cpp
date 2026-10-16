@@ -4,7 +4,7 @@
 namespace lunar::incremental_navigation {
 namespace {
 double GoalPositionTolerance(const FineTraversabilitySnapshot& fine, double tolerance) {
-  return std::max(.5 * fine.geometry().resolution_m(), tolerance);
+  return tolerance;
 }
 }
 CycleCandidate ComputeCycle(const CycleRequest& request, PlanningSessionPorts& ports,
@@ -127,9 +127,14 @@ CycleCandidate ComputeCycle(const CycleRequest& request, PlanningSessionPorts& p
 
   StartPatchResult patch;
   try {
-    patch = ports.build_start_patch(
-        snapshots.fine, *local_window.geometry, state.base_link_pose, request.capability,
-        request.profile);
+    const bool stationary = target->is_final_goal && target->terminal_yaw_rad &&
+        target->center == state.base_link_pose.position_m &&
+        std::holds_alternative<WheeledCapability>(request.capability);
+    patch = stationary
+        ? RequestLocalStartPatchBuilder{}.BuildStationary(snapshots.fine, state.base_link_pose,
+              request.capability, request.profile)
+        : ports.build_start_patch(snapshots.fine, *local_window.geometry,
+              state.base_link_pose, request.capability, request.profile);
   } catch (...) {
     output.failure = SessionOutcome::kInternalError;
     output.reason_code = "INTERNAL_ERROR";
