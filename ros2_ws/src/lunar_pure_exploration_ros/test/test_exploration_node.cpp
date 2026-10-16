@@ -3167,12 +3167,14 @@ TEST_F(ExplorationNodeTest,
   server_->SetMode(FakePlannerServer::Mode::kDelayed);
   for (const std::uint8_t count : {1U, 2U}) {
     const auto references_before = ReferenceCount();
+    const auto goals_before = server_->Goals().size();
     *now += 30s;
     explorer_->PollExecution();
-    ASSERT_TRUE(WaitFor([this, count] {
+    ASSERT_TRUE(WaitFor([this, count, goals_before] {
       const auto status = LatestStatus();
       return status.has_value() && status->replan_count == count &&
-             server_->HasHandle();
+             server_->Goals().size() > goals_before &&
+             server_->HasHandle(server_->LatestRequestId());
     }));
     server_->Finish(server_->LatestRequestId(),
                     FakePlannerServer::Mode::kReachable);
