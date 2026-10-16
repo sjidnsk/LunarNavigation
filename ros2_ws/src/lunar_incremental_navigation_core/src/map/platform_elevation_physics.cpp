@@ -330,13 +330,15 @@ struct FineCellEvaluator::Impl final {
 
   Impl(const ElevationRangeView& elevation_value,
        PlatformCapability capability_value,
-       TraversabilityProfile profile_value)
+       TraversabilityProfile profile_value,
+       std::unique_ptr<const PlatformElevationEvaluator> intrinsic)
       : elevation(elevation_value),
         capability(std::move(capability_value)),
         profile(std::move(profile_value)),
-        intrinsic_evaluator(MakePlatformElevationEvaluator(capability)),
+        intrinsic_evaluator(std::move(intrinsic)),
         hard_radius_m(CircumscribedRadius(profile.planar_envelope_xy_m)) {
-    if (!FiniteNonnegative(profile.preferred_clearance_m) ||
+    if (!intrinsic_evaluator ||
+        !FiniteNonnegative(profile.preferred_clearance_m) ||
         !FiniteNonnegative(profile.slope_weight) ||
         !FiniteNonnegative(profile.relief_weight) ||
         !FiniteNonnegative(profile.clearance_weight)) {
@@ -451,7 +453,16 @@ FineCellEvaluator::FineCellEvaluator(
     const ElevationRangeView& elevation,
     const PlatformCapability& capability,
     const TraversabilityProfile& profile)
-    : impl_(std::make_unique<Impl>(elevation, capability, profile)) {}
+    : FineCellEvaluator(elevation, capability, profile,
+                        MakePlatformElevationEvaluator(capability)) {}
+
+FineCellEvaluator::FineCellEvaluator(
+    const ElevationRangeView& elevation,
+    const PlatformCapability& capability,
+    const TraversabilityProfile& profile,
+    std::unique_ptr<const PlatformElevationEvaluator> intrinsic)
+    : impl_(std::make_unique<Impl>(elevation, capability, profile,
+                                   std::move(intrinsic))) {}
 
 FineCellEvaluator::~FineCellEvaluator() = default;
 FineCellEvaluator::FineCellEvaluator(FineCellEvaluator&&) noexcept = default;

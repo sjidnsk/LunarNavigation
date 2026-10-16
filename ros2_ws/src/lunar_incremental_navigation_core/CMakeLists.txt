@@ -98,6 +98,9 @@ if(BUILD_TESTING)
     lunar_incremental_navigation_core_request_local_start_patch_test
     test/request_local_start_patch_test.cpp)
   lunar_add_core_gtest(
+    lunar_incremental_navigation_core_start_support_regression_test
+    test/request_local_start_patch_regression_test.cpp)
+  lunar_add_core_gtest(
     lunar_incremental_navigation_core_global_guidance_builder_test
     test/global_guidance_builder_test.cpp)
   lunar_add_core_gtest(
