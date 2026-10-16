@@ -1278,11 +1278,23 @@ TEST_F(IncrementalExplorationNodeTest,
   ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 3U; }));
   const auto active = server_->goal(2U);
   ASSERT_TRUE(WaitFor([this] { return suppressed_candidate_count_.load() == 2U; }));
+  // 诊断与状态是不同 topic，等待本轮活动目标对应的状态再读取。
+  std::optional<Status> status;
+  ASSERT_TRUE(WaitFor([this, &status, active] {
+    status = LastStatus();
+    return status && status->state == Status::PLANNING &&
+           status->reason_code == "NAVIGATION_GOAL_SUBMITTED" &&
+           status->current_goal.position.x == active.target_x_m &&
+           status->current_goal.position.y == active.target_y_m &&
+           status->current_goal.orientation.z == std::sin(active.target_yaw_rad / 2.0) &&
+           status->current_goal.orientation.w == std::cos(active.target_yaw_rad / 2.0);
+  }));
+  ASSERT_TRUE(status.has_value());
   EXPECT_EQ(observation_memory_count_.load(), 1U);
-  EXPECT_EQ(LastStatus()->failed_candidate_count, 1U);
+  EXPECT_EQ(status->failed_candidate_count, 1U);
   EXPECT_EQ(eligible_candidate_count_.load() + suppressed_candidate_count_.load(),
-            LastStatus()->candidate_count);
-  EXPECT_EQ(LastStatus()->reachable_candidate_count, eligible_candidate_count_.load());
+            status->candidate_count);
+  EXPECT_EQ(status->reachable_candidate_count, eligible_candidate_count_.load());
   ASSERT_TRUE(WaitFor([this, first, second, active] {
     const auto messages = FrontierMessages();
     if (messages.empty()) {

@@ -34,3 +34,11 @@ Humble 假 colcon 参数检查通过。6 个真实 TCP E2E、1 个 ROS local dem
 /home/kai/CodexDownloads/lunar_navigation/branch-integration-20261016/task-4-tcp-humble。
 Orin/实车/GPU/训练/真实外部 TCP/DDS/真实 bag 均 NOT_RUN。
 原应用工作树及活动运行代码未写入；没有推送、删除、reset、rebase 或 amend。
+ 
+补充定点同步复核：仅处理两个既有测试的异步事件等待缺口。
+FailureMemoryLimitStillCancelsThirdStuckPlanBeforeStableError 等本轮新 goal 及其 handle；
+SuppressedCandidatesAreGrayAndActiveCandidateStaysRed 等第三个目标姿态对应的
+PLANNING/NAVIGATION_GOAL_SUBMITTED 状态，单次捕获并确认 optional 存在，
+再保留原严格计数及红灰断言。未增加 sleep/超时，未修改生产逻辑。
+两用例分别10次通过，完整原 RED 与最终输出在仓库外 sync-tests-final.log 等。
+该修正为追加提交，原 merge 候选提交与证据继续保留；不重跑无关核心/native套件。
