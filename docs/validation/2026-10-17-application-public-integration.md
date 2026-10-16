@@ -32,3 +32,11 @@ native 221 passed/2 skipped；planner config 定向通过。
 未变 SAC/课程/模型复用 Task3 已审来源。GPU、训练、Orin、实车、真实外部
 服务/TCP/真实 bag NOT_RUN；只执行 Humble 本地 CPU 测试。
 原 dirty 工作树与活动运行代码不变；无推送、删除、reset/rebase/amend。
+ 
+补充定点同步复核：仅处理两个既有测试的异步事件等待缺口。
+FailureMemoryLimitStillCancelsThirdStuckPlanBeforeStableError 等本轮新 goal 及其 handle；
+SuppressedCandidatesAreGrayAndActiveCandidateStaysRed 等第三个目标姿态对应的
+PLANNING/NAVIGATION_GOAL_SUBMITTED 状态，单次捕获并确认 optional 存在，
+再保留原严格计数及红灰断言。未增加 sleep/超时，未修改生产逻辑。
+两用例分别10次通过，完整原 RED 与最终输出在仓库外 sync-tests-final.log 等。
+该修正为追加提交，原 merge 候选提交与证据继续保留；不重跑无关核心/native套件。
