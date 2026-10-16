@@ -4,6 +4,7 @@ No Scene, environment, reference calculator, learner or Critic dependency.
 """
 from dataclasses import dataclass
 from collections import deque
+from threading import Lock
 import math
 import time
 import numpy as np
@@ -116,13 +117,14 @@ class NavigationResult:
 class RosNavigationAdapter:
     """Nonblocking action/map client; caller owns spinning, time and lifecycle."""
     def __init__(self,node,*,action_name,policy_map_service,odometry_topic,
-                 diagnostics_topic,path_reference_topic,tf_topic="/tf",map_frame="map",odom_frame="odom"):
+                 diagnostics_topic,path_reference_topic,tf_topic="/tf",map_frame="map",odom_frame="odom",
+                 global_route_topic=None,tracking_status_topic=None):
         from rclpy.action import ActionClient
         from rclpy.qos import QoSProfile,ReliabilityPolicy,DurabilityPolicy
         from lunar_planning_msgs.action import NavigateToPose
         from lunar_planning_msgs.srv import GetPolicyMap
-        from lunar_planning_msgs.msg import PathReference
-        from nav_msgs.msg import Odometry
+        from lunar_planning_msgs.msg import PathReference, TrackingStatus
+        from nav_msgs.msg import Odometry, Path as RosPath
         from diagnostic_msgs.msg import DiagnosticArray
         from tf2_msgs.msg import TFMessage
         self.map_frame=map_frame;self.odom_frame=odom_frame;self._map_from_odom=None
@@ -131,13 +133,19 @@ class RosNavigationAdapter:
         self.client=node.create_client(GetPolicyMap,policy_map_service)
         self.store=PolicyMapStore();self.snapshot=None;self.processed_stamp_ns=0
         self.pose=None;self.pose_history=deque(maxlen=4096);self.velocity=(float("nan"),float("nan"));self.pose_received_monotonic=0.
+        self._execution_lock=Lock()
+        self._execution_feedback_wall_s=0.
+        self._execution_planning=self._execution_tracking=None
+        self._execution_reference=self._execution_route=None
         self.diagnostics=deque(maxlen=64);self.references=deque(maxlen=64);self.planning_evidence=deque(maxlen=64)
         qos=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
         state_qos=QoSProfile(depth=10,reliability=ReliabilityPolicy.BEST_EFFORT,durability=DurabilityPolicy.VOLATILE)
         self.subscriptions=[node.create_subscription(Odometry,odometry_topic,self._pose,state_qos),
             node.create_subscription(DiagnosticArray,diagnostics_topic,self._diagnostic,10),
             node.create_subscription(PathReference,path_reference_topic,self._reference,qos),
-            node.create_subscription(TFMessage,tf_topic,self._tf,state_qos)]
+            node.create_subscription(TFMessage,tf_topic,self._tf,state_qos),
+            node.create_subscription(RosPath,global_route_topic or action_name.rsplit('/',1)[0]+'/route',self._route,qos),
+            node.create_subscription(TrackingStatus,tracking_status_topic or action_name.rsplit('/',1)[0]+'/tracking',self._tracking,state_qos)]
         self._map_future=None;self._send_future=None;self._handle=None;self._result_future=None
         self._cancel=False;self._cancel_future=None;self.sent_goal=None
         self._force_full=False;self.map_reason="NO_RESPONSE"
@@ -163,10 +171,19 @@ class RosNavigationAdapter:
             if stamp_value<=stamp:return pose
         return None
 
+    def _current_session(self,session):
+        handle=self._handle
+        return handle is not None and handle.accepted and session==bytes(handle.goal_id.uuid).hex()
+
     def _diagnostic(self,msg):
         for status in msg.status:
             values={v.key:v.value for v in status.values}
             self.diagnostics.append(values)
+            with self._execution_lock:
+                if self._current_session(values.get('session_id')):
+                    self._execution_feedback_wall_s=time.monotonic()
+                    if values.get('cycle_result'):
+                        self._execution_planning=(values['session_id'],values['cycle_result'],time.monotonic())
             if values.get("cycle_result") in ("PLAN_FOUND","GOAL_REACHED","NO_PATH","TIMEOUT"):
                 self.planning_evidence.append(values)
 
@@ -174,6 +191,69 @@ class RosNavigationAdapter:
         self.references.append({'session_id':bytes(msg.session_id.uuid).hex(),'segment_revision':int(msg.segment_revision),
             'fine_revision':int(msg.traversability_revision),
             'active':msg.state == msg.ACTIVE,'poses':len(msg.path.poses)})
+        points=tuple((float(p.pose.position.x),float(p.pose.position.y)) for p in msg.path.poses)
+        from .navigation_budget import polyline_length
+        try:length=polyline_length(points)
+        except ValueError:return
+        with self._execution_lock:
+            if not self._current_session(bytes(msg.session_id.uuid).hex()):return
+            self._execution_feedback_wall_s=time.monotonic()
+            self._execution_reference=dict(session_id=bytes(msg.session_id.uuid).hex(),
+                segment_revision=int(msg.segment_revision),active=msg.state==msg.ACTIVE,
+                route_length_m=length,points=points)
+
+    def _route(self,msg):
+        # Global Path has no session UUID. Only a finite route ending at the
+        # currently requested target can contribute to its journey estimate.
+        goal=self.sent_goal
+        if goal is None or msg.header.frame_id!=getattr(self,'map_frame','map'):
+            return
+        points=tuple((float(p.pose.position.x),float(p.pose.position.y)) for p in msg.poses)
+        if not points or math.hypot(points[-1][0]-goal[0],points[-1][1]-goal[1])>1.:
+            return
+        from .navigation_budget import polyline_length
+        try:length=polyline_length(points)
+        except ValueError:return
+        with self._execution_lock:
+            self._execution_route=dict(target=tuple(goal[:2]),route_length_m=length,points=points)
+
+    def _tracking(self,msg):
+        with self._execution_lock:
+            if not self._current_session(bytes(msg.session_id.uuid).hex()):return
+            self._execution_feedback_wall_s=time.monotonic()
+            self._execution_tracking=dict(session_id=bytes(msg.session_id.uuid).hex(),received_wall_s=time.monotonic(),
+                segment_revision=int(msg.segment_revision),state=int(msg.state),reason=str(msg.reason),
+                progress_m=float(msg.progress_m),cross_track_m=float(msg.cross_track_m),
+                heading_error_rad=float(msg.heading_error_rad),
+                linear_speed_mps=float(msg.linear_speed_mps),angular_speed_radps=float(msg.angular_speed_radps))
+
+    def execution_state(self):
+        handle=self._handle
+        session=bytes(handle.goal_id.uuid).hex() if handle is not None else None
+        with self._execution_lock:
+            planning=self._execution_planning
+            reference=self._execution_reference
+            tracking=self._execution_tracking
+            route=self._execution_route
+            feedback=self._execution_feedback_wall_s
+        if reference is not None and reference['session_id']!=session:reference=None
+        if tracking is not None and tracking['session_id']!=session:tracking=None
+        reason=planning[1] if planning is not None and planning[0]==session else None
+        if (tracking is not None and (planning is None or tracking['received_wall_s']>planning[2])
+                and tracking['reason'] in ('TRACKING','ALIGNING','FINAL_ALIGN','BRAKING')):
+            reason=None
+        lengths=[]
+        if route is not None and self.sent_goal is not None and route['target']==tuple(self.sent_goal[:2]):
+            lengths.append(route['route_length_m'])
+        else:route=None
+        if reference is not None and reference['active']:lengths.append(reference['route_length_m'])
+        return dict(session_id=session,accepted=handle is not None and handle.accepted,
+            send_done=self._send_future is not None and self._send_future.done(),
+            result_pending=self._result_future is not None and not self._result_future.done(),
+            feedback_wall_s=feedback,planning_reason=reason,
+            route_length_m=max(lengths) if lengths else None,
+            global_route=route,reference=reference,tracking=tracking)
+
 
     @property
     def ready(self): return self.client.service_is_ready() and self.action.server_is_ready()
@@ -231,6 +311,10 @@ class RosNavigationAdapter:
         goal=tuple(map(float,goal))
         if len(goal)!=3 or not all(map(math.isfinite,goal)): raise ValueError('finite x/y/yaw goal required')
         self.sent_goal=goal
+        with self._execution_lock:
+            self._execution_feedback_wall_s=time.monotonic()
+            self._execution_planning=self._execution_tracking=None
+            self._execution_reference=self._execution_route=None
         request=self._action_type.Goal(target_x_m=goal[0],target_y_m=goal[1],has_target_yaw=True,target_yaw_rad=goal[2])
         self._cancel=False;self._handle=None;self._result_future=None;self._cancel_future=None
         self._send_future=self.action.send_goal_async(request)

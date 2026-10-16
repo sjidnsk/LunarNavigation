@@ -5,6 +5,8 @@ This object never imports Torch and never resets inside step().
 """
 from dataclasses import asdict, dataclass
 import math
+import json
+from pathlib import Path
 import os
 import threading
 import time
@@ -401,16 +403,50 @@ class RosExplorationEnv:
 
     def _execute_goal(self,goal):
         self.adapter.begin_goal(goal)
-        deadline=time.monotonic()+self.wall_timeout_s
+        from .navigation_budget import NavigationBudget, BudgetPolicy
+        p=self.plant.pose
+        budget=NavigationBudget(start_wall_s=time.monotonic(),
+            start_simulation_s=self.plant.simulation_s,pose=(p.x,p.y,p.yaw),
+            route_length_m=math.hypot(goal[0]-p.x,goal[1]-p.y),
+            target_rtf=self.config.target_rtf,
+            policy=BudgetPolicy(minimum_journey_s=self.wall_timeout_s))
         result=None
         while result is None:
             if self._cancel.is_set() or self.plant.collision:self.adapter.cancel_goal()
             result=self.adapter.poll_goal()
             if result is not None:break
-            if time.monotonic()>deadline:
+            state=self.adapter.execution_state()
+            p=self.plant.pose
+            reason=budget.observe(wall_s=time.monotonic(),simulation_s=self.plant.simulation_s,
+                pose=(p.x,p.y,p.yaw),accepted=state['accepted'],
+                feedback_wall_s=state['feedback_wall_s'],route_length_m=state['route_length_m'],
+                planning_reason=state['planning_reason'])
+            self.last_navigation_budget=budget.record()
+            if reason:
                 self.adapter.cancel_goal()
-                raise InfrastructureError('navigation transport/execution wall watchdog; '+self.owned.error_tail())
+                evidence=dict(reason=reason,goal=list(goal),actual_pose=[p.x,p.y,p.yaw],
+                    simulation_s=self.plant.simulation_s,budget=self.last_navigation_budget,
+                    navigation=state,owned_pids=list(self.owned.pids),stderr_tail=self.owned.error_tail())
+                snapshot='unavailable'
+                try:
+                    folder=Path(self.config.artifact_root)/'navigation-watchdogs'
+                    folder.mkdir(parents=True,exist_ok=True)
+                    path=folder/f'env-{self.env_id}-{time.time_ns()}-{uuid.uuid4().hex[:8]}.json'
+                    # ROS diagnostics may contain inf/nan; encode these as null.
+                    def finite(value):
+                        if isinstance(value,float) and not math.isfinite(value):return None
+                        if isinstance(value,dict):return {k:finite(v) for k,v in value.items()}
+                        if isinstance(value,(list,tuple)):return [finite(v) for v in value]
+                        return value
+                    path.write_text(json.dumps(finite(evidence),ensure_ascii=False,indent=2,allow_nan=False)+'\n')
+                    snapshot=str(path)
+                except (OSError,TypeError,ValueError) as exc:
+                    snapshot=f'write failed: {exc}'
+                raise InfrastructureError(f'navigation {reason}; elapsed={budget.record()["elapsed_wall_s"]:.1f}s; '
+                    f'budget={budget.budget_s:.1f}s; route={budget.route_length_m:.1f}m; '
+                    f'actual_rtf={budget.effective_rtf:.2f}; snapshot={snapshot}; '+self.owned.error_tail())
             self._pump()
+        self.last_navigation_budget=budget.record()
         # Result completion can precede the controller's last braking command.
         self._wait(lambda:velocity_is_stopped((self.plant.linear_mps,self.plant.angular_radps)),
                    'cancel/goal stop',timeout=10.)
