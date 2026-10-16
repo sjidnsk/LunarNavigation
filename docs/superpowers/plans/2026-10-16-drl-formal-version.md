@@ -52,8 +52,8 @@
 **Files:** Update docs/DRL开发入口.md and validation summary; no active runtime files changed.
 **Interfaces:** Consumes reviewed candidate commits and passing validation; produces dev at the exact validated commit plus before/after noninterference evidence.
 
-- [ ] Perform fresh read-only whole-branch review; resolve material findings without changing deployed behavior.
-- [ ] Confirm dev remains clean and unchanged since capture; merge --ff-only the validated branch into dev as explicitly authorized.
-- [ ] Reverify78-file manifest, package import/runtime identity, configuration and affected tests from dev.
-- [ ] Verify active service/source/config identities and old worktree changes remain intact; report any legitimate training progress separately.
-- [ ] Keep all old branches/worktrees; record remaining deployment/cwd/cache migration as future work.
+- [x] Perform fresh read-only whole-branch review; resolve material findings without changing deployed behavior.
+- [x] Confirm dev remains clean and unchanged since capture; merge --ff-only the validated branch into dev as explicitly authorized.
+- [x] Reverify78-file manifest, package import/runtime identity, configuration and affected tests from dev.
+- [x] Verify active service/source/config identities and old worktree changes remain intact; report any legitimate training progress separately.
+- [x] Keep all old branches/worktrees; record remaining deployment/cwd/cache migration as future work.
