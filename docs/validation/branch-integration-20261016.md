@@ -20,14 +20,14 @@ main 生产锚点 `d452677ae0c681dc865bac35a4092beab3034f9b`，公共两测试�
 |Task4A 三应用|各原26/25/31快照、逐段兼容d452、各自接口/配置/入口/控制器；闭包与失败详下表。三app两测试各10次，共60通过|S/task-4-report.md、task-4-test-sync-evidence.json、app-landings.json、task-4-landing-verification.json|
 |Task7，95d0/158a|仅两公共测试文件；main overlay各10次共20通过，未改生产；terrain仅转同两测试并确认其余树等于355e，未在terrain重跑完整套件。独立review PASS（Critical/Important/Minor均0）后root实际ff main/dev及terrain|S/task-7-report.md、task-7-landing.json；task-7-humble证据目录以报告内路径为准|
 
-上述验证均为 Humble-only CPU、串行性能场景及外置 build/install/log；未用 Jazzy 输出替代 Humble。Task2/5 的只读既有消息依赖使用报告指定 runtime install，完整依赖与命令以各报告为准。Task3 launcher 要求 PYTHONOPTIMIZE=1；pytest 重写测试断言仍执行，但非测试模块 assert 不执行，保留优化解释器警告。开发源码清单含79文件；旧 deployed manifest SHA256 `00bf70663cc394768d8ba5fc262a2ce56cdb76c5a84905f911aca8c62586c5cb` 未改。开发源码成熟与训练权重/策略收敛、部署输入适配是不同资格。
+上述验证使用 Humble-only CPU 环境，build/install/log 均置于仓库外；有限场景探针串行执行，P3、完整全量/增量性能及性能资格验证仍 NOT_RUN；未用 Jazzy 输出替代 Humble。Task2/5 的只读既有消息依赖使用报告指定 runtime install，完整依赖与命令以各报告为准。Task3 launcher 要求 PYTHONOPTIMIZE=1；pytest 重写测试断言仍执行，但非测试模块 assert 不执行，保留优化解释器警告。开发源码清单含79文件；旧 deployed manifest SHA256 `00bf70663cc394768d8ba5fc262a2ce56cdb76c5a84905f911aca8c62586c5cb` 未改。开发源码成熟与训练权重/策略收敛、部署输入适配是不同资格。
 
 ## 应用快照、安装资源与实际二进制
 
 |应用|原 BASE|原字节 snapshot（单父 BASE）|最终验证摘要|
 |---|---|---|---|
 |TCP|4273314e4bb2893c7cfd9ecb61cc71955f799cae|253e19f825a5e4e571f420c5ce14daf7984a8557，26条|core389、navROS129、controller205、contracts68、native221+2skip；普通producer2；应用129pass/7skip/1环境FAIL|
-|wheel|800b4f11b7a5d0b38e20e25d13c2c7cb79041c36|76ad0a0894ca97a6bfbedbafa16b33f0188a0ee2，25条|navROS128、controller225、exploration243pass/8FAIL（251项）；contracts68、应用29、native221+2skip、普通producer2；planner配置通过|
+|wheel|800b4f11b7a5d0b38e20e25d13c2c7cb79041c36|76ad0a0894ca97a6bfbedbafa16b33f0188a0ee2，25条|navROS128、controller225、exploration组合证据243pass/8FAIL（251项）：整包初轮与loader/动作/status定点修复复验合并记录，最终HEAD未整251重跑；contracts68、应用29、native221+2skip、普通producer2；planner配置通过|
 |legged|2d6f6b9913bf6e0d4cb8ec418fae2d0d3e79b738|6aa006e68280cb756671bed88a8ebf90bee55fcb，31条|core407、navROS128、controller225；exploration初轮250/251，1时序缺口修复后定点通过；16合成场景通过；contracts68、应用51、native221+2skip、普通producer2；未重跑整251项|
 
 精确原提交 author/committer、时间、mode/SHA/路径和根独立核验见 S/task-4-snapshots.json、root-app-snapshot-verification.json。root正式原位重建同一快照对象再ff三个已审HEAD，tree精确匹配且clean；保全未改原82条快照字节。应用后续兼容修改属于快照之后的受审提交，不与原字节保全混为一谈。
