@@ -438,3 +438,78 @@ def test_new_alignment_session_gets_a_fresh_budget():
     for _ in range(3):
         result = executor.update(TrackingState(0, 0, -1), 0.05)
     assert result.command.failure_reason == "ALIGNMENT_STALLED"
+
+
+@pytest.mark.parametrize("yaw_sign", [-1, 1])
+@pytest.mark.parametrize("first_tangent_sign", [-1, 1])
+def test_rolling_alignment_threshold_jitter_latches_direction_and_times_out(
+    yaw_sign, first_tangent_sign
+):
+    policy = replace(TrackingPolicy(), no_progress_timeout_s=0.3)
+    executor = PathExecutor(policy, rolling_updates=True)
+    yaw = yaw_sign * policy.reverse_heading_threshold_rad
+    chosen_direction = None
+    for tick in range(20):
+        tangent = first_tangent_sign * 0.02 * (-1) ** tick
+        points = ((0, 0, 0), (5 * math.cos(tangent), 5 * math.sin(tangent), 0))
+        # 一个反馈周期内可以先收到多个 revision，方向状态也不能丢失。
+        for revision in (2 * tick + 1, 2 * tick + 2):
+            executor.set_path(points, identity=("threshold", revision), final=False)
+        result = executor.update(TrackingState(0, 0, yaw), 0.05)
+        if chosen_direction is None:
+            chosen_direction = result.direction
+        assert result.direction == chosen_direction
+    assert result.phase == "FAILED"
+    assert result.command.failure_reason == "ALIGNMENT_STALLED"
+    assert result.command.linear_x_mps == result.command.angular_z_radps == 0
+    assert executor.identity == ("threshold", 40)
+
+
+def test_rolling_alignment_material_tangent_change_can_reselect_direction():
+    executor = PathExecutor(
+        replace(TrackingPolicy(), no_progress_timeout_s=0.3), rolling_updates=True
+    )
+    executor.set_path(((0, 0, 0), (5, 0, 0)), identity=("alignment", 1), final=False)
+    for _ in range(6):
+        result = executor.update(TrackingState(0, 0, -0.5), 0.05)
+    assert result.direction == 1
+    points = ((0, 0, 0), (5 * math.cos(2), 5 * math.sin(2), 0))
+    executor.set_path(points, identity=("alignment", 2), final=False)
+    result = executor.update(TrackingState(0, 0, -0.5, angular_radps=0.1), 0.05)
+    assert result.phase == "BRAKING"
+    assert result.direction == -1
+    assert result.command.linear_x_mps == result.command.angular_z_radps == 0
+    for revision in range(3, 9):
+        executor.set_path(points, identity=("alignment", revision), final=False)
+        result = executor.update(TrackingState(0, 0, -0.5), 0.05)
+        assert result.phase == "ALIGNING"
+        assert result.direction == -1
+        assert result.command.angular_z_radps < 0
+    for revision in range(9, 20):
+        executor.set_path(points, identity=("alignment", revision), final=False)
+        result = executor.update(TrackingState(0, 0, -0.5), 0.05)
+    assert result.phase == "FAILED"
+    assert result.command.failure_reason == "ALIGNMENT_STALLED"
+
+
+@pytest.mark.parametrize("restart", ["clear", "new_session"])
+def test_alignment_direction_is_reselected_after_episode_restart(restart):
+    executor = PathExecutor(
+        replace(TrackingPolicy(), no_progress_timeout_s=0.3), rolling_updates=True
+    )
+    yaw = executor.policy.reverse_heading_threshold_rad
+    points = ((0, 0, 0), (5 * math.cos(0.02), 5 * math.sin(0.02), 0))
+    executor.set_path(points, identity=("old", 1), final=False)
+    assert executor.update(TrackingState(0, 0, yaw), 0.05).direction == 1
+    if restart == "clear":
+        executor.clear()
+        identity = ("old", 2)
+    else:
+        identity = ("new", 1)
+    points = ((0, 0, 0), (5 * math.cos(-0.02), 5 * math.sin(-0.02), 0))
+    executor.set_path(points, identity=identity, final=False)
+    result = executor.update(TrackingState(0, 0, yaw), 0.05)
+    assert result.phase == "ALIGNING"
+    assert result.direction == -1
+    # 新会话仍保留命令斜率限制，允许首帧先从旧负命令减速到零。
+    assert executor.update(TrackingState(0, 0, yaw), 0.05).command.angular_z_radps > 0

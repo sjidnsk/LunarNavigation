@@ -133,3 +133,40 @@ runner 在仓库根执行 `python3 -m pytest -q -p no:cacheprovider`，显式绑
 本轮未重跑扩大 root 离线集或 BASE 两项失败；前述原始记录仍属初次提交。
 原 source-manifest.json 也是初次提交证据，不证明修复后的 execution.py 与应用源一致。
 Jazzy、Orin、车辆/真实服务、GPU、训练、core/ROS 整包、返航矩阵和新增覆盖指标仍 NOT_RUN。
+
+
+## I1 修复回合 2（2026-10-17）
+
+修复基线 63b87c5408ab137cb4a31e5374934f0f6ac1caf3。回合 1 的微小切线抖动测试仅覆盖
+固定 yaw=-1，未覆盖正、负倒车选择阈值；独立复审发现 ±2.4 rad 附近每次 revision
+重新选择正反向，几何只改变 0.04 rad，内部 desired 却翻转约 pi，仍重置对齐预算。
+因此回合 1 是部分修复，其通过集合不证明该边界已解决。
+
+本轮同一对齐 episode 另保留“几何切线、已选方向”状态；当前切线相对保留基准的角差
+小于等于既有 alignment_tolerance_rad 时沿用方向。超过该容差才按原策略重选方向，
+更新几何基准；没有改 reverse_heading_threshold_rad、allow_reverse、timeout 或热更新开关。
+方向状态与实测航向进展锚点在同会话 ALIGNING/BRAKING 修订中保留，
+新会话、clear、进入 TRACKING 时清理。新引用仍先 BRAKING 并等待实测停稳。
+
+|本轮检查|实际结果|task-5-humble/ 内日志或证据|
+|---|---|---|
+|正负阈值原复审探针 RED|2 对照通过、2 持续修订失败；exit 1|logs/fix-round2-reverse-threshold-probe-red.log|
+|新增 7 例有效 RED|4 failed、3 passed、76 deselected|logs/fix-round2-direction-tests-red-final.log|
+|新增 7 例 GREEN|7 passed、76 deselected|logs/fix-round2-direction-tests-green.log|
+|未改阈值探针 GREEN|4/4 通过，均 FAILED/ALIGNMENT_STALLED、预算 0.35s|logs/fix-round2-reverse-threshold-probe-green.log|
+|未改原初始对齐探针 GREEN|2/2 通过|logs/fix-round2-original-alignment-probe-green.log|
+|controller 全包 + 五个契约|266 passed（198 controller + 68 contract）|logs/fix-round2-controller-contracts.log|
+|Humble configure/build/install、串行 CTest|6/6 组通过；198 用例、零失败/错误/跳过|logs/fix-round2-build-ctest.log、fix-round2-xunit-counts.json|
+
+新增 7 例包括正负阈值 × 首个切线正负符号的四种连续修订停滞（每反馈前两次修订），
+实质切线变化后先停稳再重新选择倒车方向且预算仍有限，以及 clear/新会话重选方向两例。
+有效 RED 的 3 passed 是已有正确行为的保护，不冒称它们均曾失败。
+回合 1 的 7 例（含真实 yaw 改善）、原 TRACKING/FINAL_ALIGN、故障锁存和节点边界均在完整套重跑。
+首次新增测试曾把新会话的反向旋转要求提前一帧，忽略既有命令斜率限制；只调整测试，
+在改生产前重新获得上述有效 RED。完整记录见 stage/task-5-report.md 的回合 2 节。
+
+本轮未重跑全仓 collection、扩大 root 离线集及两项 BASE 失败；既有全仓收集冲突和
+历史扩大离线限制继续保留。ROS 环境、只读消息 overlay 与隔离参数沿用前述配置。
+上游 hold/freeze 仍仅缓解触发机会，本地 executor/API 独立维持停滞超时。
+Jazzy、Orin、车辆/真实服务、GPU、训练、真实 DDS 时序、core/ROS 整包、返航矩阵仍 NOT_RUN。
+独立 scoped 复审由 root 执行，作者自审不代替独立复审。
