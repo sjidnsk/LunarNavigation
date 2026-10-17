@@ -1,7 +1,7 @@
 {
   "schema": "formal_drl_source_v1",
   "package": "lunar_drl_exploration",
-  "source_epoch": "development-integration-20261017",
+  "source_epoch": "development-organization-20261017",
   "deployment_status": "not_deployed",
   "based_on_deployed_runtime": "8470d67be1e6e5fc2dfa7e0a3351017bff35b07c630a9bd40246ba34c83b09da",
   "source_base_commit": "0647b8272c4a9df6bffc36da6f1e9d6a97d82e02",
@@ -26,7 +26,7 @@
     "course_two.py": "2cb526bcf81bd5e7986c7af85509e72379d332ab067d4bb9b653e3f8659fbf52",
     "course_two_control.py": "c5249b9fcac617ee8b4d2e132e0a052194226bf90f0a660a2fff23ba0d0d6465",
     "course_two_eval.py": "2f19dc44c4265fe3459a311557b81ed5c57912ae3dd89e6a8582f1290cefa6db",
-    "course_two_parallel.py": "bad98ee5664f9136c5b083a1cadcdb978900f1876736ac2bba2d27b16ba7d134",
+    "course_two_parallel.py": "eb153bcc4327e591294b3ec0cc6999bb296f0f45b95b97975f4200279de7ace3",
     "course_two_prelude.py": "0a94dc57bd5f88d32c207cc20ea04a3c6628bf6a8d83a60e9b367603717c3d72",
     "course_two_qualification.py": "2aeda2e48391987f38010350871df35f89a32c71799dfe5694383d36e774480e",
     "course_two_rebalance.py": "60505cd9ee0529cc29203967507a6fafb5e84f8a4bddedd2ba30e49e04da616d",
@@ -86,5 +86,6 @@
     "training.py": "aad1308bca166b76006893ab3f04cd05b671d11104a32a0672252d01742cce3e",
     "worker.py": "9672c85fefca83ac105a6125d612954a9309ba61b354f90e6438c72b3c94baa0"
   },
-  "scope": "Development Python source only; not a deployed runtime or native/controller binary identity."
+  "scope": "Development Python source only; not a deployed runtime or native/controller binary identity.",
+  "observed_active_runtime": "c8a6f92a56a2613ef23deff72ea34185f3264ce4968d4e8720be1659044f4a50"
 }
