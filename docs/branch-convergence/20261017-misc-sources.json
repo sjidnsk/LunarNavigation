@@ -3441,7 +3441,7 @@
         "branch": "integration/pure-planner-orin",
         "source_sha": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
         "owner": "integration/pure-planner-orin",
-        "role": "六长期角色之一，保持入口与既有职责；本轮不移动指针。"
+        "role": "六长期角色中的主集成线；source_sha 记录 before 来源身份。允许 root 在独立审查和适用验证通过后本地快进；最终实际 HEAD、落地、运行保护与备份以 S/final-inventory.json、S/landing.json、S/final-closure.json、D/complete-backup-verification.json 等外部回执为准，不预先声明执行成功。"
       }
     ],
     "drl_closed": [
