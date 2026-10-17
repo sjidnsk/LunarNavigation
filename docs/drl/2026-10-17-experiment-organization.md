@@ -11,8 +11,9 @@
 
 Task1 源码资格锚点：`3931e2f59e65a462ecbc91b7f8062fbc62e1d340`，已独立审查；44 项限定源码回归通过（记录于仓库外 task-1-report.md）。
 本 Task2 仅整理五个文档/JSON，做 UTF-8、链接、来源和分支覆盖静态核验，没有重跑这 44 项测试。
-本专题 `hk/drl-experiment-organization-20261017` 的最终文档 HEAD 不能自指；独立审查及 root 后续本地
-快进前不声称已落 dev/main，最终实际 HEAD 由本批次 external `final-inventory` / `landing` 记录。
+本专题来源为 `hk/drl-experiment-organization-20261017`，最终文档 HEAD 不在自身预写。
+实际文档/分支 HEAD、本地落地与收口结果分别以证据根中已生成的 `final-inventory.json`、
+`landing.json`、`final-closure.json` 为准，源码资格锚点与实际分支 HEAD 分开记录。
 
 仓库外证据根为 `/home/kai/CodexDownloads/lunar_navigation/drl-organization-20261017`：`before.json` 固定本轮 33 个分支的原 SHA/祖先关系，
 `archive-refs.json` 是 root create-only 归档回执，`runtime-observation-proof.json` 及
@@ -40,7 +41,7 @@ closed_failed_experiment 17、closed_technical_source 11、completed_integration
 
 |分支身份|本轮原 SHA（before）|是否 dev 祖先|archive ref|实际处置|
 |---|---|---|---|---|
-|`dev/drl-exploration`|`95d0b88e8ce33ff83c8bf2523e56eb2a4588bfb8`|是|不归入失败实验归档|唯一活动开发线；Task1 源码资格锚点，root 落地待记录|
+|`dev/drl-exploration`|`95d0b88e8ce33ff83c8bf2523e56eb2a4588bfb8`|是|不归入失败实验归档|唯一活动开发线；Task1 源码资格锚点，实际落地见证据根 landing.json|
 |`docs/drl-loop-learning-design`|`3d3513cc90ca8e38dfeee2e3598efa18f6205626`|否|`refs/archive/drl-closed/20261017/docs/drl-loop-learning-design`|旧失败实验结案（用户确认）；保留已吸收贡献与原来源，不再待整合|
 |`docs/drl-region-query-20261013`|`0fa56fd65a0deca292c4edcc930b9dae44c84a68`|否|`refs/archive/drl-closed/20261017/docs/drl-region-query-20261013`|旧失败实验结案（用户确认）；保留已吸收贡献与原来源，不再待整合|
 |`feat/drl-bounded-potential-20261012`|`ab2c1faa637faeec1e953db8256bd39a7cb7c315`|否|`refs/archive/drl-closed/20261017/feat/drl-bounded-potential-20261012`|旧失败实验结案（用户确认）；保留已吸收贡献与原来源，不再待整合|
@@ -84,7 +85,12 @@ closed_failed_experiment 17、closed_technical_source 11、completed_integration
 原历史文档仍原位保留，仅完整旧入口逐字另存，避免多个日期段争夺当前入口。
 保留全部历史来源和产物会继续占用空间；archive 是恢复定位，不表示已删除或全量备份非 Git 训练数据。
 
-root 仍须安排独立审查和最终全分支审查，再执行获授权的本地 dev/main 快进；
-落地前后核验原 refs、工作树身份/dirty 字节、旧 r2 与活动源各 79 文件、配置/identity 及进程身份。
-自然退出如实记录，不为核验而重启。root 后续更新 D 盘独立 bare 恢复库、导出并验证自包含 bundle、
-记录 final-inventory/landing 和备份边界并导出结果；这些动作在本任务中尚未执行，不推送或创建 PR。
+审查、落地、运行保护和备份分别以外部回执记录实际结果，不由本文预报成功：
+
+- 证据根 `final-inventory.json` 记录实际 refs/HEAD，`landing.json` 记录本地落地，`final-closure.json` 记录审查和最终收口。
+- 同根 `protection-before-landing.json`、`protection-after.json` 记录落地前后原 refs、工作树身份/dirty 字节、
+  旧 r2 与活动源各 79 文件、config/identity 及关键 PID/start_ticks 的实际核验；自然退出如实记录，不为核验而重启。
+- `D:/CodexDownloads/lunar_navigation/drl_organization_20261017/complete-backup-verification.json`
+  记录独立 bare 恢复库、自包含 bundle 的实际校验与备份边界。
+
+结果以已生成回执为准；源码清单或本文自身不证明落地、运行保护或备份成功。本专题不涉及推送或创建 PR。

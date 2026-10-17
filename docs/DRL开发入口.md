@@ -2,8 +2,11 @@
 
 唯一后续开发线是 `dev/drl-exploration`，保留工作树
 `/mnt/data/WS/lunar-navigation/lunar-runtime/.worktrees/drl-exploration-redesign`。
-本轮 Task1 已审源码资格锚点为 `3931e2f59e65a462ecbc91b7f8062fbc62e1d340`；本专题仍待独立文档审查及 root 本地快进落地，
-最终实际 HEAD 以本批次仓库外 `final-inventory` / `landing` 记录为准。
+本轮 Task1 已审源码资格锚点为 `3931e2f59e65a462ecbc91b7f8062fbc62e1d340`，
+本专题来源为 `hk/drl-experiment-organization-20261017`。
+本批次仓库外回执根为 `/home/kai/CodexDownloads/lunar_navigation/drl-organization-20261017`；
+实际文档/分支 HEAD、本地落地与收口结果分别以该目录已生成的 `final-inventory.json`、
+`landing.json`、`final-closure.json` 为准，本文不预写回执结果。
 
 ## 当前训练身份（2026-10-17 只读观察）
 
