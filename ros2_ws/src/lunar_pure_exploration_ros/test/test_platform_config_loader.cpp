@@ -77,6 +77,49 @@ std::string WheelYaml() { return ReadText(PlannerConfigPath("wheel.yaml")); }
 
 std::string LeggedYaml() { return ReadText(PlannerConfigPath("legged.yaml")); }
 
+// 正式 TCP 轮式配置含导航盲区字段；探索仅提取几何，不能拒绝该配置。
+TEST(PlatformConfigLoader, TcpWheelProfilePreservesGeometryWithNavigationMargin) {
+  const auto config =
+      LoadIncrementalPlatformConfig(PlannerConfigPath("wheel.yaml"), "wheel");
+  EXPECT_EQ(config.geometry.platform_id, "wheeled-lunar-explorer");
+  EXPECT_EQ(config.geometry.platform_type, "WHEELED");
+  EXPECT_EQ(config.geometry.base_frame_id, "base_footprint");
+  ASSERT_EQ(config.geometry.footprint_vertices.size(), 4U);
+  EXPECT_DOUBLE_EQ(config.geometry.footprint_vertices[0].x, 0.591);
+  EXPECT_DOUBLE_EQ(config.geometry.footprint_vertices[0].y, 0.409);
+  EXPECT_DOUBLE_EQ(config.geometry.minimum_clearance_m, 0.4);
+}
+
+TEST(PlatformConfigLoader, TcpWheelProfileAcceptsZeroOrAbsentNavigationMargin) {
+  for (const auto& replacement : {"start_blind_zone_margin_m: 0.0", ""}) {
+    const TemporaryYaml yaml{ReplaceOnce(
+        WheelYaml(), "start_blind_zone_margin_m: 3.0", replacement)};
+    EXPECT_DOUBLE_EQ(
+        LoadIncrementalPlatformConfig(yaml.path(), "wheel")
+            .geometry.minimum_clearance_m,
+        0.4);
+  }
+}
+
+TEST(PlatformConfigLoader, TcpWheelProfileRejectsInvalidNavigationMargin) {
+  for (const auto& invalid : {"-0.1", ".nan", ".inf", "-.inf", "[]", "null"}) {
+    const TemporaryYaml yaml{ReplaceOnce(
+        WheelYaml(), "start_blind_zone_margin_m: 3.0",
+        std::string{"start_blind_zone_margin_m: "} + invalid)};
+    EXPECT_THROW(LoadIncrementalPlatformConfig(yaml.path(), "wheel"),
+                 std::invalid_argument);
+  }
+}
+
+TEST(PlatformConfigLoader, TcpWheelProfileRejectsUnknownOrDuplicateRootKeys) {
+  for (const auto& suffix : {"\nunexpected_root: true\n",
+                            "\nstart_blind_zone_margin_m: 1.0\n"}) {
+    const TemporaryYaml yaml{WheelYaml() + suffix};
+    EXPECT_THROW(LoadIncrementalPlatformConfig(yaml.path(), "wheel"),
+                 std::invalid_argument);
+  }
+}
+
 TEST(PlatformConfigLoader, LoadsPlannerInstalledWheelGeometry) {
   const LoadedPlatformConfig config =
       LoadPlatformConfig(PlannerConfigPath("wheel.yaml"), "wheel");
