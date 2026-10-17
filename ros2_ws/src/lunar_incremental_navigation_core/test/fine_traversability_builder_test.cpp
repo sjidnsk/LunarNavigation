@@ -9,6 +9,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -900,6 +901,126 @@ TEST(FineTraversabilityBuilder, MethodSwitchInvalidatesProfileAndMatchesFreshDer
     }
   }
 }
+
+
+// 原生统计快返必须保留确定证据的可信度，避免完整观测被加上推断罚项。
+class NativeTerrainConfidence
+    : public testing::TestWithParam<std::tuple<bool, TerrainFitMethod>> {
+ protected:
+  PlatformCapability Capability() const {
+    return std::get<0>(GetParam())
+        ? PlatformCapability{LeggedCapabilityForTest()}
+        : PlatformCapability{WheelCapability()};
+  }
+
+  TerrainFitMethod Method() const { return std::get<1>(GetParam()); }
+
+  std::shared_ptr<const ElevationSnapshot> NativeSnapshot(
+      const LocalTerrainMeasurements measurements,
+      const bool center_visible = true) const {
+    const auto geometry = Geometry(3, 3);
+    std::vector<float> values(9, std::numeric_limits<float>::quiet_NaN());
+    values[center_visible ? 4 : 0] = 0.F;
+    std::vector<LocalTerrainMeasurements> stats(9);
+    stats[4] = measurements;
+    PersistentElevationMap map;
+    if (map.Apply({.geometry = geometry, .elevation_m = values,
+                   .map_from_source = IdentityMapTransform(),
+                   .terrain_measurements = stats}).status !=
+        ElevationUpdateResult::Status::kApplied) {
+      throw std::runtime_error("native terrain fixture was rejected");
+    }
+    return map.Snapshot();
+  }
+
+  void ExpectFlatSnapshot(const bool zero_confidence_weight) const {
+    const auto geometry = Geometry(13, 13);
+    const std::vector<float> values(geometry.CellCount(), 0.F);
+    const std::vector<LocalTerrainMeasurements> stats(
+        geometry.CellCount(), {true, true, 0., 0., 0.});
+    PersistentElevationMap map;
+    ASSERT_EQ(map.Apply({.geometry = geometry, .elevation_m = values,
+                        .map_from_source = IdentityMapTransform(),
+                        .terrain_measurements = stats}).status,
+              ElevationUpdateResult::Status::kApplied);
+    const auto raw = map.Snapshot();
+    auto profile = Profile();
+    profile.terrain_fit_method = Method();
+    if (zero_confidence_weight) profile.confidence_weight = 0.;
+    else ASSERT_DOUBLE_EQ(profile.confidence_weight, 2.);
+    FineCellEvaluator evaluator(*raw, Capability(), profile);
+    const auto fine = FineTraversabilityBuilder().Derive(raw, Capability(), profile);
+    ASSERT_TRUE(fine);
+    // 整个足迹位于完整平地内部；坡度、起伏、净空和可信度附加代价均为零。
+    for (std::int64_t y = 5; y <= 7; ++y) {
+      for (std::int64_t x = 5; x <= 7; ++x) {
+        const GridIndex center{x, y};
+        SCOPED_TRACE(testing::Message() << x << "," << y);
+        const auto cell = evaluator.Evaluate(center);
+        EXPECT_EQ(cell.state, FineCellState::kFree);
+        EXPECT_DOUBLE_EQ(cell.confidence, 1.);
+        EXPECT_DOUBLE_EQ(cell.traversal_cost, 0.);
+        EXPECT_EQ(fine->State(center), FineCellState::kFree);
+        EXPECT_DOUBLE_EQ(fine->Confidence(center), 1.);
+        EXPECT_DOUBLE_EQ(fine->TraversalCost(center), 0.);
+      }
+    }
+  }
+};
+
+TEST_P(NativeTerrainConfidence, CompleteMeasurementsCertifyFreeWithFullConfidence) {
+  const auto raw = NativeSnapshot({true, true, 0., 0., 0.});
+  ASSERT_TRUE(raw->TerrainMeasurementsAt({1, 1}));
+  const auto result = MakePlatformElevationEvaluator(Capability(), .2, Method())
+                          ->Evaluate(*raw, {1, 1});
+  EXPECT_EQ(result.state, IntrinsicCellState::kFree);
+  EXPECT_DOUBLE_EQ(result.confidence, 1.);
+}
+
+TEST_P(NativeTerrainConfidence, IncompleteFlatMeasurementsRemainUnknownWithZeroConfidence) {
+  const auto raw = NativeSnapshot({true, false, 0., 0., 0.});
+  ASSERT_TRUE(raw->TerrainMeasurementsAt({1, 1}));
+  const auto result = MakePlatformElevationEvaluator(Capability(), .2, Method())
+                          ->Evaluate(*raw, {1, 1});
+  EXPECT_EQ(result.state, IntrinsicCellState::kUnknown);
+  EXPECT_DOUBLE_EQ(result.confidence, 0.);
+}
+
+TEST_P(NativeTerrainConfidence, IncompleteBlockingMeasurementsRetainFullConfidence) {
+  const auto raw = NativeSnapshot({true, false, 0., 2., 2.});
+  ASSERT_TRUE(raw->TerrainMeasurementsAt({1, 1}));
+  const auto result = MakePlatformElevationEvaluator(Capability(), .2, Method())
+                          ->Evaluate(*raw, {1, 1});
+  EXPECT_EQ(result.state, IntrinsicCellState::kBlocked);
+  EXPECT_DOUBLE_EQ(result.confidence, 1.);
+}
+
+TEST_P(NativeTerrainConfidence, MissingCenterRemainsUnknownWithZeroConfidence) {
+  const auto raw = NativeSnapshot({false, false, 0., 0., 0.}, false);
+  ASSERT_FALSE(raw->ElevationRangeAt({1, 1}));
+  ASSERT_FALSE(raw->TerrainMeasurementsAt({1, 1}));
+  const auto result = MakePlatformElevationEvaluator(Capability(), .2, Method())
+                          ->Evaluate(*raw, {1, 1});
+  EXPECT_EQ(result.state, IntrinsicCellState::kUnknown);
+  EXPECT_DOUBLE_EQ(result.confidence, 0.);
+}
+
+TEST_P(NativeTerrainConfidence, CompleteFlatSnapshotHasNoDefaultConfidencePenalty) {
+  ExpectFlatSnapshot(false);
+}
+
+TEST_P(NativeTerrainConfidence, ZeroWeightKeepsFullConfidenceInCompleteFlatSnapshot) {
+  ExpectFlatSnapshot(true);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    BothPlatformsAndEveryFitMethod, NativeTerrainConfidence,
+    testing::Combine(testing::Bool(),
+                     testing::Values(TerrainFitMethod::kBaseline,
+                                     TerrainFitMethod::kWeightedPlane,
+                                     TerrainFitMethod::kMovingLeastSquares,
+                                     TerrainFitMethod::kGroupedRansac,
+                                     TerrainFitMethod::kGaussianProcess)));
 
 TEST(TerrainMeasurements, VisibleCenterEvidenceSurvivesEveryDevelopmentFitMethod) {
   const auto geometry = Geometry(3, 3, .05);

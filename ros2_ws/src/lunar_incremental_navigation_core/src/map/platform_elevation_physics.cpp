@@ -174,7 +174,8 @@ IntrinsicTraversalEvaluation EvaluateTerrainPatch(
                                   ? IntrinsicCellState::kFree
                                   : IntrinsicCellState::kUnknown,
             .slope_rad = measured->slope_rad,
-            .relief_m = measured->relief_m};
+            .relief_m = measured->relief_m,
+            .confidence = blocked || measured->neighborhood_complete ? 1. : 0.};
   }
   map::TerrainObservationEstimator local_observations(elevation, {.fit_method=fit_method});
   auto& observations = shared_observations ? *shared_observations : local_observations;
