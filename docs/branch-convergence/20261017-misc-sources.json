@@ -1,0 +1,3796 @@
+{
+  "schema": "lunar_misc_branch_convergence_v1",
+  "baseline_commit": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+  "scope_date": "2026-10-17",
+  "owner": "integration/pure-planner-orin",
+  "scope": "仅原98 heads中的48条零散来源结案；10研究专题暂缓。新增本轮专题由中央角色登记单独记录，不属于48来源。",
+  "classification_counts": {
+    "closed_historical": 3,
+    "closed_superseded": 21,
+    "closed_adapted": 7,
+    "closed_adopted": 17
+  },
+  "sources": [
+    {
+      "id": 8,
+      "branch": "docs/dual-target-runtime-deployment",
+      "source_sha": "4928943914390819f7864b05a8a9ec3628a32c10",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_historical",
+      "disposition_reason": "旧 runtime 独立根谱系；deployment/luna_runtime、scripts/luna、tests/deployment 在 main 均不存在。5282eb2a 的 validate_host 直接导入仅修复已退役 launcher，不是当前脚本遗漏。双目标操作大文档绑定 fallback/PlanMotion、旧 profile 和模型安装契约，不能搬成当前完整架构部署说明。未跟踪 deployment/config/wheel.yaml 仍为未完成能力资料草稿，只保留原位/WIP/外部保存，不把草稿计为待上线部署。",
+      "adopted_scope": "历史资料与来源提交保全，结束旧待整合状态。旧 runtime 独立根谱系；deployment/luna_runtime、scripts/luna、tests/deployment 在 main 均不存在。5282eb2a 的 validate_host 直接导入仅修复已退役 launcher，不是当前脚本遗漏。双目标操作大文档绑定 fallback/PlanMotion、旧 profile 和模型安装契约，不能搬成当前完整架构部署说明。未跟踪 deployment/config/wheel.yaml 仍为未完成能力资料草稿，只保留原位/WIP/外部保存，不把草稿计为待上线部署。",
+      "excluded_scope": "不迁入旧运行管理器，不执行历史计划，不以来源保全声明算法、部署或运行能力已采用。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "4928943914390819f7864b05a8a9ec3628a32c10",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "no_common_root",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "4928943914390819f7864b05a8a9ec3628a32c10",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "no_common_root",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "4928943914390819f7864b05a8a9ec3628a32c10",
+          "path": "deployment/docs/COMMANDS.runtime.md",
+          "description": "来源实际文件；tip first-parent changed paths; unrelated history, not whole branch delta"
+        },
+        {
+          "kind": "file",
+          "revision": "4928943914390819f7864b05a8a9ec3628a32c10",
+          "path": "deployment/docs/README.runtime.md",
+          "description": "来源实际文件；tip first-parent changed paths; unrelated history, not whole branch delta"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "scripts/orin/build.sh",
+          "blob": "69b441cfcc38f21348e30e4117b34285d635d89f",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "scripts/orin/deploy.sh",
+          "blob": "d2515e29b4a066240c551228dc16367d9f742caf",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "docs/操作指令.md",
+          "blob": "b5e0bf2d47162bf95f1f65ff36b395cbcc702b4f",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/docs/dual-target-runtime-deployment",
+      "archive_sha": "4928943914390819f7864b05a8a9ec3628a32c10",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 9,
+      "branch": "docs/hopper-grid-v1-planning-design",
+      "source_sha": "cd834699df7c31da3f09a752edcd335d9d29eed2",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "Hopper Grid V1 / 统一证据流设计的独立历史方案；main 保留另一套 pure Hopper 实现，未声明该设计等价落地。按既有 owner 处置结束旧设计来源，若重新要求稀疏 HopperMap/单跳执行，应另立需求与验收，不为结案发明该功能。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。Hopper Grid V1 / 统一证据流设计的独立历史方案；main 保留另一套 pure Hopper 实现，未声明该设计等价落地。按既有 owner 处置结束旧设计来源，若重新要求稀疏 HopperMap/单跳执行，应另立需求与验收，不为结案发明该功能。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "cd834699df7c31da3f09a752edcd335d9d29eed2",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "cd834699df7c31da3f09a752edcd335d9d29eed2",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "cd834699df7c31da3f09a752edcd335d9d29eed2",
+          "path": "docs/superpowers/plans/2026-08-31-hopper-grid-v1-planning.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "cd834699df7c31da3f09a752edcd335d9d29eed2",
+          "path": "docs/superpowers/plans/2026-08-31-hopper-unified-evidence-flow.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "cd834699df7c31da3f09a752edcd335d9d29eed2",
+          "path": "docs/superpowers/specs/2026-08-31-hopper-grid-v1-planning-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_planner_core/src/hopper/hopper_planner.cpp",
+          "blob": "f105f77395eff3be79bdbb13941c17990cf2e212",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "docs/分支管理.md",
+          "blob": "e9cc106f61af7b66cff4551fd1230d8fdc6f6210",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/docs/hopper-grid-v1-planning-design",
+      "archive_sha": "cd834699df7c31da3f09a752edcd335d9d29eed2",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 10,
+      "branch": "docs/import-pure-planner-orin-main",
+      "source_sha": "ae7b4b35b05fbe4d5e94f42ab372e2a2fcc20068",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_historical",
+      "disposition_reason": "设计要求只读导入 200c1ea4188b772ee8589708473eee1391fa950d/tree dc7789c0131a523d110be6faae54f212e9bc2c7c；实际 import ref 正确且为 main 祖先。计划自身属于旧 runtime 无共同根，不需要合入计划来完成已完成导入。",
+      "adopted_scope": "历史资料与来源提交保全，结束旧待整合状态。设计要求只读导入 200c1ea4188b772ee8589708473eee1391fa950d/tree dc7789c0131a523d110be6faae54f212e9bc2c7c；实际 import ref 正确且为 main 祖先。计划自身属于旧 runtime 无共同根，不需要合入计划来完成已完成导入。",
+      "excluded_scope": "不迁入旧运行管理器，不执行历史计划，不以来源保全声明算法、部署或运行能力已采用。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "ae7b4b35b05fbe4d5e94f42ab372e2a2fcc20068",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "no_common_root",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "ae7b4b35b05fbe4d5e94f42ab372e2a2fcc20068",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "no_common_root",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "ae7b4b35b05fbe4d5e94f42ab372e2a2fcc20068",
+          "path": "docs/superpowers/plans/2026-08-30-pure-planner-orin-main-branch-import.md",
+          "description": "来源实际文件；tip first-parent changed paths; unrelated history, not whole branch delta"
+        },
+        {
+          "kind": "file",
+          "revision": "ae7b4b35b05fbe4d5e94f42ab372e2a2fcc20068",
+          "path": "docs/superpowers/specs/2026-08-30-pure-planner-orin-main-branch-import-design.md",
+          "description": "来源实际文件；tip first-parent changed paths; unrelated history, not whole branch delta"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "AGENTS.md",
+          "blob": "051ea483e257bd49a21fadc0e74e810c6209b0bb",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "docs/分支管理.md",
+          "blob": "e9cc106f61af7b66cff4551fd1230d8fdc6f6210",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "200c1ea4188b772ee8589708473eee1391fa950d",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "tree": "dc7789c0131a523d110be6faae54f212e9bc2c7c",
+          "description": "导入计划指定的实际只读来源已为主线祖先；计划自身为无共同根历史。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/docs/import-pure-planner-orin-main",
+      "archive_sha": "ae7b4b35b05fbe4d5e94f42ab372e2a2fcc20068",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 11,
+      "branch": "docs/incremental-exploration-planner-integration-design",
+      "source_sha": "93a9d47e202c295bbc08193fd2f2588d647d6433",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "旧设计针对 legacy PlanMotion 与 incremental_v2 显式模式、一份地图两类只读视图；main 已在 26cf17c0/56bbeed1/cb8ca3cc 及后续 demo/controller 集成承接新架构。设计分支自身不再列待回合；四个适配候选由另一审阅者独立核对，本结论不抢占其行为资格。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。旧设计针对 legacy PlanMotion 与 incremental_v2 显式模式、一份地图两类只读视图；main 已在 26cf17c0/56bbeed1/cb8ca3cc 及后续 demo/controller 集成承接新架构。设计分支自身不再列待回合；四个适配候选由另一审阅者独立核对，本结论不抢占其行为资格。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "93a9d47e202c295bbc08193fd2f2588d647d6433",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "93a9d47e202c295bbc08193fd2f2588d647d6433",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "93a9d47e202c295bbc08193fd2f2588d647d6433",
+          "path": "docs/superpowers/plans/2026-09-03-incremental-exploration-navigation-integration.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "93a9d47e202c295bbc08193fd2f2588d647d6433",
+          "path": "docs/superpowers/specs/2026-09-03-exploration-decision-navigation-separation-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/exploration_map_projector.cpp",
+          "blob": "4f80486e5b28fb6365af578983fa12d7a53ae55d",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_ros/src/incremental_exploration_node.cpp",
+          "blob": "1c79ba09a31db75bdc00d1306d8960c23f39634c",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "docs/validation/2026-09-03-incremental-exploration-navigation.md",
+          "blob": "d7fa6f6d3f0ad92120bc18e15934efefc80345bd",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/docs/incremental-exploration-planner-integration-design",
+      "archive_sha": "93a9d47e202c295bbc08193fd2f2588d647d6433",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 13,
+      "branch": "feat/adaptive-navigation-20261015",
+      "source_sha": "112e49f82836471cabc193156265d20be60e6cfe",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adapted",
+      "disposition_reason": "112e49f8 仅在已采用祖先 69e13d77 上保全 scripts/navigation 的14份文件。compare_navigation.py 与 test_comparison_contract.py 当前 main blob 与来源完全相同；README 已重写当前工具边界。其余11份 Python 与旧 README 绑定固定场景、旧 ABI/路径、历史报告和运行资产，原样保留来源；不需要为了历史闭环报告而恢复旧训练/ROS入口。",
+      "adopted_scope": "112e49f8 仅在已采用祖先 69e13d77 上保全 scripts/navigation 的14份文件。compare_navigation.py 与 test_comparison_contract.py 当前 main blob 与来源完全相同；README 已重写当前工具边界。其余11份 Python 与旧 README 绑定固定场景、旧 ABI/路径、历史报告和运行资产，原样保留来源；不需要为了历史闭环报告而恢复旧训练/ROS入口。",
+      "excluded_scope": "其余11份旧 Python 与旧 README 的固定场景、旧 ABI/路径和运行资产仅保留来源，不恢复旧实验。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "112e49f82836471cabc193156265d20be60e6cfe",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "112e49f82836471cabc193156265d20be60e6cfe",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "112e49f82836471cabc193156265d20be60e6cfe",
+          "path": "scripts/navigation/README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "112e49f82836471cabc193156265d20be60e6cfe",
+          "path": "scripts/navigation/analyze_comparison.py",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "112e49f82836471cabc193156265d20be60e6cfe",
+          "path": "scripts/navigation/closed_loop_navigation.py",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "scripts/navigation/README.md",
+          "blob": "84e647c5b596591e64e068108f2d6c8269cde8a1",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "docs/分支整合台账.md",
+          "blob": "4caed0dd7c3c42e7e58735a0e410a8b1fe3ba4d1",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "blob_equality",
+          "source_revision": "112e49f82836471cabc193156265d20be60e6cfe",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "scripts/navigation/compare_navigation.py",
+          "source_blob": "5d1c251ed67fd28ff6d0a46c8f429c18fd2d4fb0",
+          "target_blob": "5d1c251ed67fd28ff6d0a46c8f429c18fd2d4fb0",
+          "description": "两份通用离线工具已提炼，实际 blob 相同。"
+        },
+        {
+          "kind": "blob_equality",
+          "source_revision": "112e49f82836471cabc193156265d20be60e6cfe",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "scripts/navigation/test_comparison_contract.py",
+          "source_blob": "9b3088f3006b680b76cb82a231b7222b0bb6ae88",
+          "target_blob": "9b3088f3006b680b76cb82a231b7222b0bb6ae88",
+          "description": "两份通用离线工具已提炼，实际 blob 相同。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/adaptive-navigation-20261015",
+      "archive_sha": "112e49f82836471cabc193156265d20be60e6cfe",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 30,
+      "branch": "feat/exploration-coverage-definition",
+      "source_sha": "036ad64acc33cdb0c9afeb59548e40bb6c82e00e",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adapted",
+      "disposition_reason": "036ad64a 只新增已确认设计，main 同路径完整保留原文前缀并加后继注记；CoverageStats 实查仍七字段。估计排除面积/有效覆盖率、连通统计、完成切换尚未实现，作为未来需求明确记录，不把该分支继续排为待merge，也不把DRL当前成功口径回退为旧设计。",
+      "adopted_scope": "036ad64a 只新增已确认设计，main 同路径完整保留原文前缀并加后继注记；CoverageStats 实查仍七字段。估计排除面积/有效覆盖率、连通统计、完成切换尚未实现，作为未来需求明确记录，不把该分支继续排为待merge，也不把DRL当前成功口径回退为旧设计。",
+      "excluded_scope": "估计排除面积、有效覆盖率、连通统计及完成条件切换尚未实现；另列未来需求。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "036ad64acc33cdb0c9afeb59548e40bb6c82e00e",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "036ad64acc33cdb0c9afeb59548e40bb6c82e00e",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "036ad64acc33cdb0c9afeb59548e40bb6c82e00e",
+          "path": "docs/superpowers/specs/2026-09-08-exploration-coverage-definition-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "docs/superpowers/specs/2026-09-08-exploration-coverage-definition-design.md",
+          "blob": "125055f784497a665716c4add65c9c6e036c9d16",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_core/include/lunar_pure_exploration_core/coverage.hpp",
+          "blob": "cc59853345d9ec988d5b7171272de8512c5a7300",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "text_prefix",
+          "source_revision": "036ad64acc33cdb0c9afeb59548e40bb6c82e00e",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "docs/superpowers/specs/2026-09-08-exploration-coverage-definition-design.md",
+          "description": "当前同路径保留原设计全文前缀并加后继注记，仅确认设计采用，统计实现仍暂缓。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/exploration-coverage-definition",
+      "archive_sha": "036ad64acc33cdb0c9afeb59548e40bb6c82e00e",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 31,
+      "branch": "feat/global-local-planning-rviz",
+      "source_sha": "41a83e2ab2bdf27ebbc810e706b241661088f0cb",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "旧 global-local RViz/同步会话与pure planner包阶段；当前 incremental ROS/core + 69e13d77 异步安全前缀是明确后继实现。当前路径和测试可追溯，但不把旧可视化或时序预算历史当作当前运行复验。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。旧 global-local RViz/同步会话与pure planner包阶段；当前 incremental ROS/core + 69e13d77 异步安全前缀是明确后继实现。当前路径和测试可追溯，但不把旧可视化或时序预算历史当作当前运行复验。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "41a83e2ab2bdf27ebbc810e706b241661088f0cb",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "41a83e2ab2bdf27ebbc810e706b241661088f0cb",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "41a83e2ab2bdf27ebbc810e706b241661088f0cb",
+          "path": ".superpowers/sdd/2026-09-02-global-local-planning-rviz/task-2-report.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "41a83e2ab2bdf27ebbc810e706b241661088f0cb",
+          "path": ".superpowers/sdd/2026-09-02-global-local-planning-rviz/task-5-report.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "41a83e2ab2bdf27ebbc810e706b241661088f0cb",
+          "path": ".superpowers/sdd/2026-09-02-global-local-planning-rviz/task-6-report.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/planning_snapshot_visualization.cpp",
+          "blob": "2b1fd5cd316343700d28891cf1884b89bec7178a",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/session/planning_session_coordinator.cpp",
+          "blob": "42f02c797a8565d7eb8e4a96718c6a5d46cf5880",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/global-local-planning-rviz",
+      "archive_sha": "41a83e2ab2bdf27ebbc810e706b241661088f0cb",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 32,
+      "branch": "feat/glp-contracts",
+      "source_sha": "4e0519f37912fe0ab9b8449777b1e2dcccb54e19",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "会话/路径契约的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。会话/路径契约的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "4e0519f37912fe0ab9b8449777b1e2dcccb54e19",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "4e0519f37912fe0ab9b8449777b1e2dcccb54e19",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "4e0519f37912fe0ab9b8449777b1e2dcccb54e19",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "4e0519f37912fe0ab9b8449777b1e2dcccb54e19",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "4e0519f37912fe0ab9b8449777b1e2dcccb54e19",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/include/lunar_incremental_navigation_core/types/path_reference.hpp",
+          "blob": "3d3c841d550bda04848f666732cc0aeee66549db",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/include/lunar_incremental_navigation_core/types/planning_cycle.hpp",
+          "blob": "2b99ed2c4b741d6917877fb3e987041e0298275c",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-contracts",
+      "archive_sha": "4e0519f37912fe0ab9b8449777b1e2dcccb54e19",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 33,
+      "branch": "feat/glp-fine-traversability",
+      "source_sha": "b6007a464dcf2047a81dd1d67063866d1120e369",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "fine通行性与lineage/饱和cost的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。fine通行性与lineage/饱和cost的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "b6007a464dcf2047a81dd1d67063866d1120e369",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "b6007a464dcf2047a81dd1d67063866d1120e369",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "b6007a464dcf2047a81dd1d67063866d1120e369",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "b6007a464dcf2047a81dd1d67063866d1120e369",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "b6007a464dcf2047a81dd1d67063866d1120e369",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/map/fine_traversability_builder.cpp",
+          "blob": "0e111636da20bf9d60e2e89324f64e8cd91b0ce1",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/test/fine_traversability_builder_test.cpp",
+          "blob": "56a66da8071b8d136fb9b071ca1be06cee756db0",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-fine-traversability",
+      "archive_sha": "b6007a464dcf2047a81dd1d67063866d1120e369",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 34,
+      "branch": "feat/glp-global-guidance-map",
+      "source_sha": "1ef48eb4dd00a8796593c74637931ad99ec6bf02",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "全局引导tile持久化的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。全局引导tile持久化的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "1ef48eb4dd00a8796593c74637931ad99ec6bf02",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "1ef48eb4dd00a8796593c74637931ad99ec6bf02",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "1ef48eb4dd00a8796593c74637931ad99ec6bf02",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "1ef48eb4dd00a8796593c74637931ad99ec6bf02",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "1ef48eb4dd00a8796593c74637931ad99ec6bf02",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/map/global_guidance_builder.cpp",
+          "blob": "b96716e524a2df2acfaa1936a0bf6f57283e1596",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/test/global_guidance_builder_test.cpp",
+          "blob": "54551084007379d468ba3954a109680d42e6d5d6",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-global-guidance-map",
+      "archive_sha": "1ef48eb4dd00a8796593c74637931ad99ec6bf02",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 35,
+      "branch": "feat/glp-global-route",
+      "source_sha": "392d66ba2fdcb6144be369f56705a6dfaaa547f1",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "有界全局路由及缓存halo的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。有界全局路由及缓存halo的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "392d66ba2fdcb6144be369f56705a6dfaaa547f1",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "392d66ba2fdcb6144be369f56705a6dfaaa547f1",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "392d66ba2fdcb6144be369f56705a6dfaaa547f1",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "392d66ba2fdcb6144be369f56705a6dfaaa547f1",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "392d66ba2fdcb6144be369f56705a6dfaaa547f1",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/global/global_route_planner.cpp",
+          "blob": "f072a9241f07fcf75393e2b879006247049284cb",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/global/adaptive_route_planner.cpp",
+          "blob": "1edb8cf6bd72473333ed10483f97156a95d77291",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/test/global_route_planner_v2_test.cpp",
+          "blob": "e6cd58bd885651a1622d06a22c2655647dc3a14d",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-global-route",
+      "archive_sha": "392d66ba2fdcb6144be369f56705a6dfaaa547f1",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 36,
+      "branch": "feat/glp-legged-local",
+      "source_sha": "55ab46d888f78178f287bcbdff843be2c1f37aa8",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "足式局部证据惰性认证的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。足式局部证据惰性认证的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "55ab46d888f78178f287bcbdff843be2c1f37aa8",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "55ab46d888f78178f287bcbdff843be2c1f37aa8",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "55ab46d888f78178f287bcbdff843be2c1f37aa8",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "55ab46d888f78178f287bcbdff843be2c1f37aa8",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "55ab46d888f78178f287bcbdff843be2c1f37aa8",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/legged/legged_local_planner.cpp",
+          "blob": "00f017e1c007468d7c2f2024f54c911a6b001206",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/test/legged_local_planner_v2_test.cpp",
+          "blob": "a45e4694c9c2cdf9b94e4d825c98f4bd731e28f2",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-legged-local",
+      "archive_sha": "55ab46d888f78178f287bcbdff843be2c1f37aa8",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 37,
+      "branch": "feat/glp-local-target",
+      "source_sha": "5b19a54f9b7ff111c0fdd0ebbb380459223e4a72",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "局部目标有界选择的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。局部目标有界选择的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "5b19a54f9b7ff111c0fdd0ebbb380459223e4a72",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "5b19a54f9b7ff111c0fdd0ebbb380459223e4a72",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "5b19a54f9b7ff111c0fdd0ebbb380459223e4a72",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "5b19a54f9b7ff111c0fdd0ebbb380459223e4a72",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "5b19a54f9b7ff111c0fdd0ebbb380459223e4a72",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/local/local_target_selector.cpp",
+          "blob": "731152cb97206efeb2c63575a0561181e8a50909",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/local/local_goal_region.cpp",
+          "blob": "854efc422fb3f188a034019ad3e33f0c797f83c2",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/test/local_target_selector_test.cpp",
+          "blob": "b8192741586d259646fb7e4c6d71c9e9fd9210ba",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-local-target",
+      "archive_sha": "5b19a54f9b7ff111c0fdd0ebbb380459223e4a72",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 38,
+      "branch": "feat/glp-persistent-elevation",
+      "source_sha": "143a56835fd1b323c70286a554edc6dd83392cff",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "持久高程及碰撞证据的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。持久高程及碰撞证据的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "143a56835fd1b323c70286a554edc6dd83392cff",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "143a56835fd1b323c70286a554edc6dd83392cff",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "143a56835fd1b323c70286a554edc6dd83392cff",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "143a56835fd1b323c70286a554edc6dd83392cff",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "143a56835fd1b323c70286a554edc6dd83392cff",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/map/persistent_elevation_map.cpp",
+          "blob": "f5b79f8508363072537c9bffa4db4ad8f5d5503e",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/test/persistent_elevation_map_test.cpp",
+          "blob": "71e70dd40dd7bd05564b11ad168c767922be1930",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-persistent-elevation",
+      "archive_sha": "143a56835fd1b323c70286a554edc6dd83392cff",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 39,
+      "branch": "feat/glp-planning-types",
+      "source_sha": "37fdbc04237cf23bf00835d0df393953e3a166e5",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "不可变tile目录/隐藏边界的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。不可变tile目录/隐藏边界的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "37fdbc04237cf23bf00835d0df393953e3a166e5",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "37fdbc04237cf23bf00835d0df393953e3a166e5",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "37fdbc04237cf23bf00835d0df393953e3a166e5",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "37fdbc04237cf23bf00835d0df393953e3a166e5",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "37fdbc04237cf23bf00835d0df393953e3a166e5",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/include/lunar_incremental_navigation_core/types/persistent_tile_directory.hpp",
+          "blob": "1b62a0d1e7c072feec0e9ad9fbbcd378fad38afe",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/test/planning_snapshot_contract_test.cpp",
+          "blob": "f66e75733eb9a1ee96581b2ced0cf927a48bebc0",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-planning-types",
+      "archive_sha": "37fdbc04237cf23bf00835d0df393953e3a166e5",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 40,
+      "branch": "feat/glp-remove-old-path",
+      "source_sha": "54c3be87da00bd67f21da2fd820a5071feea143c",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "旧surface迁移收口的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。旧surface迁移收口的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "54c3be87da00bd67f21da2fd820a5071feea143c",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "54c3be87da00bd67f21da2fd820a5071feea143c",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "54c3be87da00bd67f21da2fd820a5071feea143c",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "54c3be87da00bd67f21da2fd820a5071feea143c",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "54c3be87da00bd67f21da2fd820a5071feea143c",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/session/planning_session_coordinator.cpp",
+          "blob": "42f02c797a8565d7eb8e4a96718c6a5d46cf5880",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_navigation_node.cpp",
+          "blob": "9f269d8d0ce8c72dda461f7106dc0ce7a8cda841",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-remove-old-path",
+      "archive_sha": "54c3be87da00bd67f21da2fd820a5071feea143c",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 41,
+      "branch": "feat/glp-ros-control-plane",
+      "source_sha": "c64951fcb8b15e3ed46d5084611a20ee66bb7b92",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "ROS取消/终态仲裁的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。ROS取消/终态仲裁的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "c64951fcb8b15e3ed46d5084611a20ee66bb7b92",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "c64951fcb8b15e3ed46d5084611a20ee66bb7b92",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "c64951fcb8b15e3ed46d5084611a20ee66bb7b92",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "c64951fcb8b15e3ed46d5084611a20ee66bb7b92",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "c64951fcb8b15e3ed46d5084611a20ee66bb7b92",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_navigation_node.cpp",
+          "blob": "9f269d8d0ce8c72dda461f7106dc0ce7a8cda841",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/accepted_goal_finalizer.hpp",
+          "blob": "7f570ef1416f7de24c224a51ce621a3f3c992468",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-ros-control-plane",
+      "archive_sha": "c64951fcb8b15e3ed46d5084611a20ee66bb7b92",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 42,
+      "branch": "feat/glp-ros-elevation",
+      "source_sha": "7958ae1d75e5ba067316c147ca4dad44926fc3e5",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "elevation lineage及并发合并的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。elevation lineage及并发合并的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "7958ae1d75e5ba067316c147ca4dad44926fc3e5",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "7958ae1d75e5ba067316c147ca4dad44926fc3e5",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "7958ae1d75e5ba067316c147ca4dad44926fc3e5",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "7958ae1d75e5ba067316c147ca4dad44926fc3e5",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "7958ae1d75e5ba067316c147ca4dad44926fc3e5",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/elevation_pipeline.cpp",
+          "blob": "7e561e33aaea211b18d40a14c2c1c14123c3dae8",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/input_store.cpp",
+          "blob": "6ddc548e402193e032caf7181e450b7dc0794e7a",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-ros-elevation",
+      "archive_sha": "7958ae1d75e5ba067316c147ca4dad44926fc3e5",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 43,
+      "branch": "feat/glp-session-coordinator",
+      "source_sha": "7ab1f581294595b79597e0c379363139dde01bfa",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "会话安全语义的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。会话安全语义的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "7ab1f581294595b79597e0c379363139dde01bfa",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "7ab1f581294595b79597e0c379363139dde01bfa",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "7ab1f581294595b79597e0c379363139dde01bfa",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "7ab1f581294595b79597e0c379363139dde01bfa",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "7ab1f581294595b79597e0c379363139dde01bfa",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/session/planning_session_coordinator.cpp",
+          "blob": "42f02c797a8565d7eb8e4a96718c6a5d46cf5880",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/test/planning_session_coordinator_test.cpp",
+          "blob": "f07125b516c54bbe9f0f0f072b1ea0da8130e9a0",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-session-coordinator",
+      "archive_sha": "7ab1f581294595b79597e0c379363139dde01bfa",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 44,
+      "branch": "feat/glp-start-patch",
+      "source_sha": "c5e3eba33f1dc425bf5efaafdd4db67d982eecd6",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "请求局部起点patch的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。请求局部起点patch的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "c5e3eba33f1dc425bf5efaafdd4db67d982eecd6",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "c5e3eba33f1dc425bf5efaafdd4db67d982eecd6",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "c5e3eba33f1dc425bf5efaafdd4db67d982eecd6",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "c5e3eba33f1dc425bf5efaafdd4db67d982eecd6",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "c5e3eba33f1dc425bf5efaafdd4db67d982eecd6",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/local/request_local_start_patch.cpp",
+          "blob": "fa664e6b2ecf6f98fb8d6e8fdc293c0e13d0e44f",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/test/request_local_start_patch_regression_test.cpp",
+          "blob": "411cbe189439741df51dc82b960b8fe250e97802",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-start-patch",
+      "archive_sha": "c5e3eba33f1dc425bf5efaafdd4db67d982eecd6",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 45,
+      "branch": "feat/glp-wheel-local",
+      "source_sha": "45d42f51a843b28839518b5b857872843f107468",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "轮式高分辨率A*/后处理安全的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。轮式高分辨率A*/后处理安全的旧GLP/pure-planner中间实现。当前incremental包由26cf17c0/56bbeed1/cb8ca3cc引入，随后在69e13d77安全前缀与恢复修正上继续演进；列出的当前源码/测试作为明确替代去向。保留旧提交与文档作为算法来源，不将独有提交数或路径相似性当作完整功能等价证明，不回灌旧同步/PlanMotion架构。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "45d42f51a843b28839518b5b857872843f107468",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "45d42f51a843b28839518b5b857872843f107468",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "45d42f51a843b28839518b5b857872843f107468",
+          "path": "docs/superpowers/plans/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "45d42f51a843b28839518b5b857872843f107468",
+          "path": "docs/superpowers/specs/2026-08-31-source-neutral-traversability-map-design.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "45d42f51a843b28839518b5b857872843f107468",
+          "path": "docs/superpowers/specs/2026-09-01-global-local-path-planning-redesign.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/wheel/wheel_local_astar.cpp",
+          "blob": "5b75a5638dc8221b703b77cf6cdc0989d1fd26d5",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/local/phase_aware_path_simplifier.cpp",
+          "blob": "cf97609b0b8f4b49bdf07762f32efdb3dd9bdaf5",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/test/wheel_local_planner_test.cpp",
+          "blob": "3a7d7d8a0404ae82b3b71c893f33712642c23a8a",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/glp-wheel-local",
+      "archive_sha": "45d42f51a843b28839518b5b857872843f107468",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 46,
+      "branch": "feat/hopper-grid-v1-planning",
+      "source_sha": "ac326594c1bd41df48ced1bc883c5263a3789c05",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "旧 Hopper Grid V1、HopperMap及单次着陆demo的阶段来源；当前主线保留pure Hopper另一实现。接受按旧架构结束来源的处置，未声称完整HopSegment/单跳执行链已等价实现；重新需要这些能力须单独新需求，不整支回合。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。旧 Hopper Grid V1、HopperMap及单次着陆demo的阶段来源；当前主线保留pure Hopper另一实现。接受按旧架构结束来源的处置，未声称完整HopSegment/单跳执行链已等价实现；重新需要这些能力须单独新需求，不整支回合。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "ac326594c1bd41df48ced1bc883c5263a3789c05",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "ac326594c1bd41df48ced1bc883c5263a3789c05",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "ac326594c1bd41df48ced1bc883c5263a3789c05",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "ac326594c1bd41df48ced1bc883c5263a3789c05",
+          "path": "config/pure_planner.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "ac326594c1bd41df48ced1bc883c5263a3789c05",
+          "path": "docs/superpowers/plans/2026-08-31-hopper-demo-single-hop-execution.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_planner_core/src/hopper/hopper_planner.cpp",
+          "blob": "f105f77395eff3be79bdbb13941c17990cf2e212",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_planner_core/src/hopper/hop_certifier.cpp",
+          "blob": "b55f32c42fb1e45701352da133a476a948e24d2f",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/hopper-grid-v1-planning",
+      "archive_sha": "ac326594c1bd41df48ced1bc883c5263a3789c05",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 47,
+      "branch": "feat/incremental-exploration-rviz-demo",
+      "source_sha": "2ebe61f3ed1c82e1358f523acbef4ec12639e190",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adapted",
+      "disposition_reason": "已等价承接且继续演进：真实 incremental 导航/探索、局部高程场景、ACTIVE 路径模拟器、可选 RViz 与只作显示的 ground truth 均保留，无需迁移。",
+      "adopted_scope": "已等价承接且继续演进：真实 incremental 导航/探索、局部高程场景、ACTIVE 路径模拟器、可选 RViz 与只作显示的 ground truth 均保留，无需迁移。",
+      "excluded_scope": "旧功能路径中已演进部分不逐字回灌；运行/设备验证未执行。",
+      "evidence": [
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "launch/incremental_exploration_navigation_rviz.launch.py",
+          "start_line": 27,
+          "end_line": 85,
+          "description": "_compose: wheel/legged、0.2/0.1、独立 demo 话题及共享 action/map"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "launch/incremental_exploration_navigation_rviz.launch.py",
+          "start_line": 86,
+          "end_line": 164,
+          "description": "真实导航/探索、scenario/emulator、可选 RViz；无 Car_Cmd_Vel"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_demo_motion_emulator_node.cpp",
+          "start_line": 73,
+          "end_line": 105,
+          "description": "ACTIVE PathReference 转换为 follower，输出 odometry"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_demo_scenario.cpp",
+          "start_line": 36,
+          "end_line": 51,
+          "description": "IsObserved 扇形视野过滤替代旧方形全部观测"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_demo_scenario_node.cpp",
+          "start_line": 88,
+          "end_line": 105,
+          "description": "demo publishers 与可选 ground_truth"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/CMakeLists.txt",
+          "start_line": 78,
+          "end_line": 140,
+          "description": "demo targets 及 launch/rviz 安装"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "tests/launch/test_incremental_exploration_navigation_rviz_contract.py",
+          "start_line": 75,
+          "end_line": 231,
+          "description": "当前契约覆盖入口、可视化隔离、ACTIVE follower 与 shutdown；本轮未执行"
+        },
+        {
+          "kind": "merge_base",
+          "source_revision": "2ebe61f3ed1c82e1358f523acbef4ec12639e190",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "merge_base": "d73823e4bba54ab8cce726786bb841b564d6a483",
+          "description": "适配候选与当前 owner 的实际共同基线；不以 patch-id 代替功能审阅。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "2ebe61f3ed1c82e1358f523acbef4ec12639e190",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "launch/incremental_exploration_navigation_rviz.launch.py",
+          "source_blob": "be71db3540b0e0ffff86d82d9e1c501c860cbbba",
+          "target_blob": "ba092466e33fb10fc2d54fd0fa7e56dbd94d662d",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "2ebe61f3ed1c82e1358f523acbef4ec12639e190",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_demo_motion_emulator_node.cpp",
+          "source_blob": "bd686114e8c49b87b9e173a9ae9a9eea1e510951",
+          "target_blob": "b555f390179f9933b168bbed33cef7fbb9948fe3",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "2ebe61f3ed1c82e1358f523acbef4ec12639e190",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_demo_scenario.cpp",
+          "source_blob": "1278acd5c55fb768380cce97356a087eb90a28ee",
+          "target_blob": "5172d10788b542963cd98a90a3bcdeb359660c46",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "2ebe61f3ed1c82e1358f523acbef4ec12639e190",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_demo_scenario_node.cpp",
+          "source_blob": "bed783626afdf9b0796aba0d1c2db333c7b53e4f",
+          "target_blob": "02749d0910b2b45f2a9ebfae62d6dccf8de33864",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "2ebe61f3ed1c82e1358f523acbef4ec12639e190",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/CMakeLists.txt",
+          "source_blob": "236615e77b072f5850e3bc7a96d4162ef6ad3ce0",
+          "target_blob": "ea647e613a38dfaa886ca1e8bb5a99d981342b35",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "2ebe61f3ed1c82e1358f523acbef4ec12639e190",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "tests/launch/test_incremental_exploration_navigation_rviz_contract.py",
+          "source_blob": "0afe2a7e07ce82716eb28c5ae83265a83ba30a39",
+          "target_blob": "424a05f05e335bb41f6ef4e4ee500a040eed130b",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/incremental-exploration-rviz-demo",
+      "archive_sha": "2ebe61f3ed1c82e1358f523acbef4ec12639e190",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 48,
+      "branch": "feat/incremental-navigation-stack-modes",
+      "source_sha": "412019debe6543a5de0b4e06c69315d4563aa7a6",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adapted",
+      "disposition_reason": "已等价承接并强化：统一 YAML、legacy/incremental_v2 单栈分流、参数覆盖和显式 legacy 独立回退均存在，无需迁移。",
+      "adopted_scope": "已等价承接并强化：统一 YAML、legacy/incremental_v2 单栈分流、参数覆盖和显式 legacy 独立回退均存在，无需迁移。",
+      "excluded_scope": "旧功能路径中已演进部分不逐字回灌；运行/设备验证未执行。",
+      "evidence": [
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "launch/exploration_navigation.launch.py",
+          "start_line": 93,
+          "end_line": 131,
+          "description": "_incremental_parameters: 同一 platform_config/action/map、frames、QoS"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "launch/exploration_navigation.launch.py",
+          "start_line": 134,
+          "end_line": 197,
+          "description": "显式 legacy 在读 incremental YAML 前分支，只 include legacy planner/explorer"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "launch/exploration_navigation.launch.py",
+          "start_line": 199,
+          "end_line": 227,
+          "description": "incremental_v2 仅构造增量 navigation/exploration"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "config/exploration_navigation.yaml",
+          "start_line": 1,
+          "end_line": 51,
+          "description": "单一 stack/common/exploration/navigation 配置"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "tests/launch/test_exploration_navigation_launch.py",
+          "start_line": 185,
+          "end_line": 340,
+          "description": "默认/覆盖/legacy 不依赖增量包与 YAML/非法 mode 契约；本轮未执行"
+        },
+        {
+          "kind": "merge_base",
+          "source_revision": "412019debe6543a5de0b4e06c69315d4563aa7a6",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "merge_base": "d73823e4bba54ab8cce726786bb841b564d6a483",
+          "description": "适配候选与当前 owner 的实际共同基线；不以 patch-id 代替功能审阅。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "412019debe6543a5de0b4e06c69315d4563aa7a6",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "launch/exploration_navigation.launch.py",
+          "source_blob": "4bb5afe934458493f5506b0ca9c2062a89db5439",
+          "target_blob": "9b6a400462ff3e425df1d01a37ecf9119a1ae2c9",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "412019debe6543a5de0b4e06c69315d4563aa7a6",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "config/exploration_navigation.yaml",
+          "source_blob": "f58e17d964fce7f5713f1c72ec35171f141656a2",
+          "target_blob": "68426493ec2fea9bf845dbe5ec1fe11d33b0bcf5",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "412019debe6543a5de0b4e06c69315d4563aa7a6",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "tests/launch/test_exploration_navigation_launch.py",
+          "source_blob": "f069e0b9c1094740403d4f9b650edfad0e6c78c5",
+          "target_blob": "e4eb0d9b024beb94a208192517809362602ca879",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/incremental-navigation-stack-modes",
+      "archive_sha": "412019debe6543a5de0b4e06c69315d4563aa7a6",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 55,
+      "branch": "feat/rolling-local-planning",
+      "source_sha": "b5059eb8edd77dd0b50a5fcc3ed7ae31e0e72c91",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adapted",
+      "disposition_reason": "成熟 rolling 执行器来源为应用 800b4f11，不以 b5059eb8 整支为准；b5059eb8 只选取节点滚动参数/构造器。fdcf27b0 已为 main/dev 祖先，Task5 两轮超时与倒车阈值修复也在其内。旧同步协调器不回灌到69e13d77后异步安全前缀；新问题应在现行rolling实现上复现，不恢复旧协调器。",
+      "adopted_scope": "成熟 rolling 执行器来源为应用 800b4f11，不以 b5059eb8 整支为准；b5059eb8 只选取节点滚动参数/构造器。fdcf27b0 已为 main/dev 祖先，Task5 两轮超时与倒车阈值修复也在其内。旧同步协调器不回灌到69e13d77后异步安全前缀；新问题应在现行rolling实现上复现，不恢复旧协调器。",
+      "excluded_scope": "不恢复旧同步协调器；成熟执行器依据应用800b4f11提炼，b5059eb8仅选节点参数/构造器。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "b5059eb8edd77dd0b50a5fcc3ed7ae31e0e72c91",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "b5059eb8edd77dd0b50a5fcc3ed7ae31e0e72c91",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "b5059eb8edd77dd0b50a5fcc3ed7ae31e0e72c91",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "b5059eb8edd77dd0b50a5fcc3ed7ae31e0e72c91",
+          "path": "config/incremental_navigation_interfaces.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "b5059eb8edd77dd0b50a5fcc3ed7ae31e0e72c91",
+          "path": "docs/superpowers/plans/2026-09-23-rolling-local-planning.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/execution.py",
+          "blob": "53cb400828f2ba77edb6bedfe47449e79dac3b74",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/node.py",
+          "blob": "17d2075045428a4dfc96f8ec77c506a9ad4e96d2",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "docs/validation/2026-10-16-rolling-controller-integration.md",
+          "blob": "b25e5894b7c4bf97d9a7fa76e1f87f38a6ae8080",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "fdcf27b0c17093e7e79b62efd995a67c83dcacc2",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "description": "成熟rolling提炼与后续修复实际落地提交；不把原b5059eb8整支当作已采用。"
+        },
+        {
+          "kind": "file",
+          "revision": "800b4f11b7a5d0b38e20e25d13c2c7cb79041c36",
+          "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/execution.py",
+          "description": "成熟应用rolling执行器的实际来源，而非b5059eb8整支。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/rolling-local-planning",
+      "archive_sha": "b5059eb8edd77dd0b50a5fcc3ed7ae31e0e72c91",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 57,
+      "branch": "feat/unreal-tcp-exploration-planning-test",
+      "source_sha": "b92d8c2eeeed703b179f8048798574b88dbda872",
+      "owner": "app/orin-unreal-simulation",
+      "disposition": "closed_superseded",
+      "disposition_reason": "与main无共同根的旧Unreal/TerrainFrame两端实验及旧runtime。owner app已有OBJ/TCP仿真、P4 Unreal target、协议与部署说明作为当前路径。旧双端TerrainFrame方案未据此称等价实现；结束旧实验来源，不合入旧部署/模型runtime大谱系。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。与main无共同根的旧Unreal/TerrainFrame两端实验及旧runtime。owner app已有OBJ/TCP仿真、P4 Unreal target、协议与部署说明作为当前路径。旧双端TerrainFrame方案未据此称等价实现；结束旧实验来源，不合入旧部署/模型runtime大谱系。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "b92d8c2eeeed703b179f8048798574b88dbda872",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "no_common_root",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "b92d8c2eeeed703b179f8048798574b88dbda872",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "no_common_root",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "b92d8c2eeeed703b179f8048798574b88dbda872",
+          "target_branch": "app/orin-unreal-simulation",
+          "target_revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "b92d8c2eeeed703b179f8048798574b88dbda872",
+          "path": "docs/superpowers/plans/2026-08-24-unreal-terrain-frame-two-end-implementation.md",
+          "description": "来源实际文件；tip first-parent changed paths; unrelated history, not whole branch delta"
+        },
+        {
+          "kind": "file",
+          "revision": "b92d8c2eeeed703b179f8048798574b88dbda872",
+          "path": "docs/superpowers/specs/2026-08-24-unreal-terrain-frame-runtime-design.md",
+          "description": "来源实际文件；tip first-parent changed paths; unrelated history, not whole branch delta"
+        },
+        {
+          "kind": "file",
+          "revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "path": "ros2_ws/src/lunar_obj_tcp_sim/lunar_obj_tcp_sim/protocol.py",
+          "blob": "8b0ab0cbd00b76ad2883b2daac92b6f03dcde28a",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "path": "deployment/p4_unreal_target/README_CN.md",
+          "blob": "8c40699ad4707863dfc350313ba6655a8d11d836",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "path": "docs/TCP仿真部署说明.md",
+          "blob": "f764ad9300fc1a331e91a4b4fe6aac8bd0665bee",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/unreal-tcp-exploration-planning-test",
+      "archive_sha": "b92d8c2eeeed703b179f8048798574b88dbda872",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 58,
+      "branch": "feat/wheel-parametric-capability",
+      "source_sha": "d068faf7c79071416e658bcd32fa0a8cf19ed2f1",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "与main无共同根，lunar_planner_core/lunar_planner_ros 的旧wheel/hopper参数谱系。main 的pure capability/Orin配置是当前边界；d068faf7 的旧ROS gravity传播等不能按同名或独有提交机械移植。历史能力来源保留；不新增旧PlanMotion兼容层。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。与main无共同根，lunar_planner_core/lunar_planner_ros 的旧wheel/hopper参数谱系。main 的pure capability/Orin配置是当前边界；d068faf7 的旧ROS gravity传播等不能按同名或独有提交机械移植。历史能力来源保留；不新增旧PlanMotion兼容层。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "d068faf7c79071416e658bcd32fa0a8cf19ed2f1",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "no_common_root",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "d068faf7c79071416e658bcd32fa0a8cf19ed2f1",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "no_common_root",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "d068faf7c79071416e658bcd32fa0a8cf19ed2f1",
+          "path": ".superpowers/sdd/2026-08-20-hopper-parametric-capability/task-1-report.md",
+          "description": "来源实际文件；tip first-parent changed paths; unrelated history, not whole branch delta"
+        },
+        {
+          "kind": "file",
+          "revision": "d068faf7c79071416e658bcd32fa0a8cf19ed2f1",
+          "path": "ros2_ws/src/lunar_planner_core/include/lunar_planner_core/frame_transform.hpp",
+          "description": "来源实际文件；tip first-parent changed paths; unrelated history, not whole branch delta"
+        },
+        {
+          "kind": "file",
+          "revision": "d068faf7c79071416e658bcd32fa0a8cf19ed2f1",
+          "path": "ros2_ws/src/lunar_planner_core/src/hierarchical/frame_transform.cpp",
+          "description": "来源实际文件；tip first-parent changed paths; unrelated history, not whole branch delta"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_planner_core/include/lunar_pure_planner_core/types/platform_capability.hpp",
+          "blob": "905f80e95e98e7f7cdcff9808a99ffe5ef468747",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "config/wheel.yaml",
+          "blob": "cd6011648c327859e5eb6ce893bd18bc434aef07",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/feat/wheel-parametric-capability",
+      "archive_sha": "d068faf7c79071416e658bcd32fa0a8cf19ed2f1",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 59,
+      "branch": "fix/arrival-contract-20261015",
+      "source_sha": "03ad962c61f1ba246e49a7a567f6e484bf90ae26",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adopted",
+      "disposition_reason": "03ad962c 已在 main/dev 谱系内，现有 arrival 后继修复与执行回归继续有效；完成来源不再列待整合。祖先证明只确认提交采用，不替代设备验收。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。03ad962c 已在 main/dev 谱系内，现有 arrival 后继修复与执行回归继续有效；完成来源不再列待整合。祖先证明只确认提交采用，不替代设备验收。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "03ad962c61f1ba246e49a7a567f6e484bf90ae26",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "03ad962c61f1ba246e49a7a567f6e484bf90ae26",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/fix/arrival-contract-20261015",
+      "archive_sha": "03ad962c61f1ba246e49a7a567f6e484bf90ae26",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 69,
+      "branch": "fix/incremental-exploration-legged-geometry",
+      "source_sha": "c7b1b2b4541f0f578714c0ab75575b3f6231e4da",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adapted",
+      "disposition_reason": "已等价承接：足式矩形 footprint、clearance、incremental 专用加载入口及 legacy 轮式边界保留，无需迁移。",
+      "adopted_scope": "已等价承接：足式矩形 footprint、clearance、incremental 专用加载入口及 legacy 轮式边界保留，无需迁移。",
+      "excluded_scope": "旧功能路径中已演进部分不逐字回灌；运行/设备验证未执行。",
+      "evidence": [
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_ros/src/platform_config_loader.cpp",
+          "start_line": 144,
+          "end_line": 204,
+          "description": "ParseLegged: 识别 LEGGED，body_extent 有限正值，half extent 矩形及非负 clearance"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_ros/src/platform_config_loader.cpp",
+          "start_line": 207,
+          "end_line": 248,
+          "description": "LoadPlatformConfigImpl allow_legged；legacy false，incremental true"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_ros/src/incremental_exploration_node.cpp",
+          "start_line": 100,
+          "end_line": 111,
+          "description": "LoadParameters 调用 LoadIncrementalPlatformConfig"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_core/src/safe_pose_validator.cpp",
+          "start_line": 66,
+          "end_line": 81,
+          "description": "ValidateAndNormalizeFootprint 接受 WHEELED/LEGGED，保留 footprint 与 clearance 校验"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_core/test/test_candidate_generator.cpp",
+          "start_line": 283,
+          "end_line": 293,
+          "description": "AcceptsLeggedDecisionGeometry"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_ros/test/test_platform_config_loader.cpp",
+          "start_line": 99,
+          "end_line": 177,
+          "description": "尺寸/clearance/非法字段与 legacy selector 边界测试存在；本轮未执行"
+        },
+        {
+          "kind": "merge_base",
+          "source_revision": "c7b1b2b4541f0f578714c0ab75575b3f6231e4da",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "merge_base": "d73823e4bba54ab8cce726786bb841b564d6a483",
+          "description": "适配候选与当前 owner 的实际共同基线；不以 patch-id 代替功能审阅。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "c7b1b2b4541f0f578714c0ab75575b3f6231e4da",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_ros/src/platform_config_loader.cpp",
+          "source_blob": "81c4c077ce77660fe7259f799f461bf84fd87f0e",
+          "target_blob": "0c716bd09d4b8bb3c675c645a56ca2021b4968fc",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "c7b1b2b4541f0f578714c0ab75575b3f6231e4da",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_ros/src/incremental_exploration_node.cpp",
+          "source_blob": "c593953b0808150206b06a98932b4280ae39d609",
+          "target_blob": "1c79ba09a31db75bdc00d1306d8960c23f39634c",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "c7b1b2b4541f0f578714c0ab75575b3f6231e4da",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_core/src/safe_pose_validator.cpp",
+          "source_blob": "0d229b843b9ae1f1be38ab9726dce02ee95287bf",
+          "target_blob": "0d229b843b9ae1f1be38ab9726dce02ee95287bf",
+          "relation": "same_blob",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "c7b1b2b4541f0f578714c0ab75575b3f6231e4da",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_core/test/test_candidate_generator.cpp",
+          "source_blob": "6cba841b6f3b5a37982391b9b19306785271e50e",
+          "target_blob": "3dfceb354af69ff966b337cb4733b1fa204266f2",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "c7b1b2b4541f0f578714c0ab75575b3f6231e4da",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_pure_exploration_ros/test/test_platform_config_loader.cpp",
+          "source_blob": "6e7b4b66a39a1a40652b15a4612a9aed6955d6ea",
+          "target_blob": "cd4d0c6504de27a50dd0ba539e36b12681ea9f64",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/fix/incremental-exploration-legged-geometry",
+      "archive_sha": "c7b1b2b4541f0f578714c0ab75575b3f6231e4da",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 70,
+      "branch": "fix/legged-rolling-default",
+      "source_sha": "529a5be02f34e4ce02473f8c8a5b62d7ed9d93f3",
+      "owner": "app/orin-legged-vehicle",
+      "disposition": "closed_adopted",
+      "disposition_reason": "529a5be0 为 app/orin-legged-vehicle 祖先；app已承接自身 rolling 默认与主线成熟能力。结束专题，不反向整体晋级应用配置。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。529a5be0 为 app/orin-legged-vehicle 祖先；app已承接自身 rolling 默认与主线成熟能力。结束专题，不反向整体晋级应用配置。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "529a5be02f34e4ce02473f8c8a5b62d7ed9d93f3",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "529a5be02f34e4ce02473f8c8a5b62d7ed9d93f3",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "529a5be02f34e4ce02473f8c8a5b62d7ed9d93f3",
+          "target_branch": "app/orin-legged-vehicle",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "529a5be02f34e4ce02473f8c8a5b62d7ed9d93f3",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "529a5be02f34e4ce02473f8c8a5b62d7ed9d93f3",
+          "path": "config/cyclonedds_p3.xml",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "529a5be02f34e4ce02473f8c8a5b62d7ed9d93f3",
+          "path": "config/exploration_navigation.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/fix/legged-rolling-default",
+      "archive_sha": "529a5be02f34e4ce02473f8c8a5b62d7ed9d93f3",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 71,
+      "branch": "fix/navigation-budget-20261016",
+      "source_sha": "8b05c7130104090c5d4b25583920bda899196db3",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adopted",
+      "disposition_reason": "8b05c713 是当前 main 与 dev 的真祖先，旧台账“待完成：owner审阅”已经过时，须纠正为已采用历史来源结案。无需重新cherry-pick/merge，也不触碰受保护训练现场。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。8b05c713 是当前 main 与 dev 的真祖先，旧台账“待完成：owner审阅”已经过时，须纠正为已采用历史来源结案。无需重新cherry-pick/merge，也不触碰受保护训练现场。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "8b05c7130104090c5d4b25583920bda899196db3",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "8b05c7130104090c5d4b25583920bda899196db3",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/fix/navigation-budget-20261016",
+      "archive_sha": "8b05c7130104090c5d4b25583920bda899196db3",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 72,
+      "branch": "fix/navigation-start-recovery-20261016",
+      "source_sha": "0cdaddec19581cc6a56dfe49cf7cc694af46cf39",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_historical",
+      "disposition_reason": "0cdaddec 独有内容仅 docs/superpowers/plans/2026-10-16-navigation-start-recovery.md；真正公共代码254c0237、ff68191f、3760ba19均已在main。计划Task4未勾选且运行身份已过时，当前完成/切换记录已在docs/drl/2026-10-16-navigation-recovery-cutover.md；不复制旧计划为当前操作，不新增恢复功能。",
+      "adopted_scope": "历史资料与来源提交保全，结束旧待整合状态。0cdaddec 独有内容仅 docs/superpowers/plans/2026-10-16-navigation-start-recovery.md；真正公共代码254c0237、ff68191f、3760ba19均已在main。计划Task4未勾选且运行身份已过时，当前完成/切换记录已在docs/drl/2026-10-16-navigation-recovery-cutover.md；不复制旧计划为当前操作，不新增恢复功能。",
+      "excluded_scope": "不迁入旧运行管理器，不执行历史计划，不以来源保全声明算法、部署或运行能力已采用。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "0cdaddec19581cc6a56dfe49cf7cc694af46cf39",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "0cdaddec19581cc6a56dfe49cf7cc694af46cf39",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "0cdaddec19581cc6a56dfe49cf7cc694af46cf39",
+          "path": "docs/superpowers/plans/2026-10-16-navigation-start-recovery.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "docs/drl/2026-10-16-navigation-recovery-cutover.md",
+          "blob": "616f5a02dd0ed675f72a8765a0f8d95449ceb5ec",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/local/request_local_start_patch.cpp",
+          "blob": "fa664e6b2ecf6f98fb8d6e8fdc293c0e13d0e44f",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/test/request_local_start_patch_regression_test.cpp",
+          "blob": "411cbe189439741df51dc82b960b8fe250e97802",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "254c0237ee13b75cc7f955880bd4d7d5d0646377",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "description": "启动恢复公共修复已采用；独有保全计划不当作待执行恢复功能。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "ff68191f72ea2217a2d80218ee6fb60ce78a9718",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "description": "启动恢复公共修复已采用；独有保全计划不当作待执行恢复功能。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "3760ba19781d5523599664cebe61f858c707f7b8",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "description": "启动恢复公共修复已采用；独有保全计划不当作待执行恢复功能。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/fix/navigation-start-recovery-20261016",
+      "archive_sha": "0cdaddec19581cc6a56dfe49cf7cc694af46cf39",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 73,
+      "branch": "fix/observability-coverage",
+      "source_sha": "a73d561903d145c08769b639076d0e0b3e175481",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_superseded",
+      "disposition_reason": "a73d5619 是df469d16上的173路径旧DRL/已知空间/跟踪复合快照，非一个可观测性小修。来源设计明确C/O/K在线v3已被高程可见性固定CoverageReference v4取代；current dev/main 又采用新CoverageHistory/reference.py/sensor.py契约，旧frontier/observation_graph/native visibility ABI已退役。5路径仍逐字一致不代表整支等价，其他旧源码/验证留源。发现一处文档来源缺口：main历史observability设计/plan头只指c6473ae7并保留“尚未实现”正文，建议追加a73d5619曾实施后被替代的说明和统一开发入口，不能整包导入旧实现。",
+      "adopted_scope": "结束已替代来源的待整合状态；当前承接入口和历史来源可查。a73d5619 是df469d16上的173路径旧DRL/已知空间/跟踪复合快照，非一个可观测性小修。来源设计明确C/O/K在线v3已被高程可见性固定CoverageReference v4取代；current dev/main 又采用新CoverageHistory/reference.py/sensor.py契约，旧frontier/observation_graph/native visibility ABI已退役。5路径仍逐字一致不代表整支等价，其他旧源码/验证留源。发现一处文档来源缺口：main历史observability设计/plan头只指c6473ae7并保留“尚未实现”正文，建议追加a73d5619曾实施后被替代的说明和统一开发入口，不能整包导入旧实现。",
+      "excluded_scope": "不整支导入旧架构或固定实验，不把替代路径存在解释为旧能力全部等价；历史未采用范围按本条理由及 follow_up 保留。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "a73d561903d145c08769b639076d0e0b3e175481",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "a73d561903d145c08769b639076d0e0b3e175481",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "a73d561903d145c08769b639076d0e0b3e175481",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "a73d561903d145c08769b639076d0e0b3e175481",
+          "path": "config/drl_exploration.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "a73d561903d145c08769b639076d0e0b3e175481",
+          "path": "config/incremental_navigation_interfaces.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "docs/DRL开发入口.md",
+          "blob": "9dd3366ec25b1105b73a91fb2b899447fc74a641",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/reference.py",
+          "blob": "b1d22cfaf27edfb5d09a3a2dc3587edd4e83d1bc",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/coverage.py",
+          "blob": "35563b30be1067dc4294b35c36291acab95829db",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "path": "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/sensor.py",
+          "blob": "9d33777a2c1fca12c185902589af94d042e7f586",
+          "description": "审阅指定的当前承接或替代入口；采用边界见 disposition_reason，不据文件存在宣称旧架构整体等价。"
+        },
+        {
+          "kind": "file",
+          "revision": "a73d561903d145c08769b639076d0e0b3e175481",
+          "path": "docs/superpowers/specs/2026-09-09-observability-coverage-design.md",
+          "description": "来源头部记录当时已实施及被高程可见性固定参考替代。"
+        },
+        {
+          "kind": "file",
+          "revision": "a73d561903d145c08769b639076d0e0b3e175481",
+          "path": "docs/superpowers/plans/2026-09-09-observability-coverage.md",
+          "description": "来源计划记录当时实施验证，不代表本轮执行。"
+        },
+        {
+          "kind": "file",
+          "revision": "a73d561903d145c08769b639076d0e0b3e175481",
+          "path": "docs/validation/2026-09-09-observability-coverage.md",
+          "description": "a73历史实施与验证记录，仅作来源证据。"
+        },
+        {
+          "kind": "file",
+          "revision": "a73d561903d145c08769b639076d0e0b3e175481",
+          "path": "docs/validation/2026-09-09-height-visibility-training-coverage.md",
+          "description": "a73历史固定CoverageReference替代记录，仅作来源证据。"
+        },
+        {
+          "kind": "file",
+          "revision": "a73d561903d145c08769b639076d0e0b3e175481",
+          "path": "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/model.py",
+          "description": "MODEL_VERSION = 4仅属于a73历史实现，不是当前运行版本。"
+        },
+        {
+          "kind": "file",
+          "revision": "a73d561903d145c08769b639076d0e0b3e175481",
+          "path": "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/reference.py",
+          "description": "a73历史CoverageReference实现。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/fix/observability-coverage",
+      "archive_sha": "a73d561903d145c08769b639076d0e0b3e175481",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。",
+      "documentation_action": "本轮只在两份现有observability历史文档前置补注，修复审阅指出的来源说明缺口；原全文字节保留。"
+    },
+    {
+      "id": 75,
+      "branch": "fix/real-legged-rolling-default",
+      "source_sha": "6b8766734c651f5a7498adb2b61662e11e1a7812",
+      "owner": "app/orin-real-vehicle",
+      "disposition": "closed_adopted",
+      "disposition_reason": "6b876673 为 app/orin-real-vehicle 祖先，历史名称含legged不改变实际owner。完成来源结案；当前轮式八场景历史FAIL边界继续保留，不借结案修算法。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。6b876673 为 app/orin-real-vehicle 祖先，历史名称含legged不改变实际owner。完成来源结案；当前轮式八场景历史FAIL边界继续保留，不借结案修算法。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "6b8766734c651f5a7498adb2b61662e11e1a7812",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "6b8766734c651f5a7498adb2b61662e11e1a7812",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "6b8766734c651f5a7498adb2b61662e11e1a7812",
+          "target_branch": "app/orin-real-vehicle",
+          "target_revision": "422866169329dfbf58b782a62a937f6bdeb28f32",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "6b8766734c651f5a7498adb2b61662e11e1a7812",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "6b8766734c651f5a7498adb2b61662e11e1a7812",
+          "path": "config/exploration_navigation.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "6b8766734c651f5a7498adb2b61662e11e1a7812",
+          "path": "config/incremental_navigation_interfaces.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/fix/real-legged-rolling-default",
+      "archive_sha": "6b8766734c651f5a7498adb2b61662e11e1a7812",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 82,
+      "branch": "sync/rolling-orin-legged",
+      "source_sha": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+      "owner": "app/orin-legged-vehicle",
+      "disposition": "closed_adapted",
+      "disposition_reason": "公共 rolling 能力已承接；足式关闭默认被后续足式默认开启明确替代，当前 app 两端开启且保留退出机制，无需回移旧默认。",
+      "adopted_scope": "公共 rolling 能力已承接；足式关闭默认被后续足式默认开启明确替代，当前 app 两端开启且保留退出机制，无需回移旧默认。",
+      "excluded_scope": "旧足式周期0/controller false及wheel-only限制已被后继默认开启明确替代，不回移旧默认；app YAML、平面速度和生产话题不复制进公共主线；仍为stage-one vx/omega，未证明步态或真驱动就绪。",
+      "evidence": [
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/session/rolling_update_policy.cpp",
+          "start_line": 5,
+          "end_line": 24,
+          "description": "ShouldStart 周期/距离；0、busy、frozen 不启动"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/session/planning_cycle.cpp",
+          "start_line": 158,
+          "end_line": 170,
+          "description": "ComputeCycle 按 PlatformType 分派 wheel/legged"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/session/planning_session_coordinator.cpp",
+          "start_line": 488,
+          "end_line": 522,
+          "description": "ApplyCycle 检查 session/request，rolling 失败保留有效 active_path"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_navigation_node.cpp",
+          "start_line": 558,
+          "end_line": 566,
+          "description": "默认周期跟随 tracking feedback；开启 rolling 必须 feedback"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_navigation_node.cpp",
+          "start_line": 1190,
+          "end_line": 1194,
+          "description": "单 worker 空闲、非 execution hold 时触发 rolling"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_navigation_node.cpp",
+          "start_line": 1336,
+          "end_line": 1419,
+          "description": "Prepare/worker Compute/ApplyCycle，当前快照收敛结果"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/execution.py",
+          "start_line": 84,
+          "end_line": 122,
+          "description": "同 session hot_update、failure latch 与 final alignment 保留"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/execution.py",
+          "start_line": 375,
+          "end_line": 390,
+          "description": "实际位移 stalled 判定"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/node.py",
+          "start_line": 161,
+          "end_line": 163,
+          "description": "incremental_reference 与 enable_rolling_updates gate，已去 wheel-only 限制"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "config/exploration_navigation.yaml",
+          "start_line": 41,
+          "end_line": 44,
+          "description": "足式 rolling .5 s/1 m、tracking feedback 开启"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "config/orin_legged_controller.yaml",
+          "start_line": 1,
+          "end_line": 7,
+          "description": "stage-one planar adapter；足式 incremental_reference 默认 enable_rolling_updates true"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "docs/validation/2026-09-23-legged-rolling-default.md",
+          "start_line": 3,
+          "end_line": 10,
+          "description": "后续明确需求与旧关闭默认的替代关系；双端关闭回退"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/test/incremental_navigation_node_test.cpp",
+          "start_line": 2067,
+          "end_line": 2240,
+          "description": "wheel/legged rolling、cancel、map invalidation、final align、fresh pose、worker teardown 契约；未执行"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_node.py",
+          "start_line": 843,
+          "end_line": 918,
+          "description": "足式 default/opt-out 与 versioned reference gate 契约；未执行"
+        },
+        {
+          "kind": "merge_base",
+          "source_revision": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "merge_base": "dfa3d819d2e44145346959e729389d3757db9379",
+          "description": "适配候选与当前 owner 的实际共同基线；不以 patch-id 代替功能审阅。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/session/rolling_update_policy.cpp",
+          "source_blob": "3284bc8fdcadb832d43414efd82e4f04cf016142",
+          "target_blob": "3284bc8fdcadb832d43414efd82e4f04cf016142",
+          "relation": "same_blob",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/session/planning_cycle.cpp",
+          "source_blob": "23b7315af1ea6d41d941cc4994526aaef6a42c8b",
+          "target_blob": "f804b7d03689e593bb1fb16bc956e8b8e229b2ef",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_core/src/session/planning_session_coordinator.cpp",
+          "source_blob": "136bd84b9511476681eb82e302712448a61917a1",
+          "target_blob": "42f02c797a8565d7eb8e4a96718c6a5d46cf5880",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_navigation_node.cpp",
+          "source_blob": "5a9fbac542f15260b14dff59b37f8514a3904e80",
+          "target_blob": "107d60ca17971a3e01ae3b5988683a48b85729f4",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/execution.py",
+          "source_blob": "adb45b6aef21d80f695fa793e161caa7ce4be18c",
+          "target_blob": "53cb400828f2ba77edb6bedfe47449e79dac3b74",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/node.py",
+          "source_blob": "2e8e3111c63146cc26d9db5568d4d946b5c4eec6",
+          "target_blob": "721780725a1fc6661b42fc124273772ae7703f16",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "config/exploration_navigation.yaml",
+          "source_blob": "258398c2a3ee6e6ed56f5e53cdf0fd776b577680",
+          "target_blob": "e7a903dcadb026b2ff04546c89e6c9284910a5ec",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "config/orin_legged_controller.yaml",
+          "source_blob": "6108411e2d1a56fd8bbe6adfeeb7a9ae68a14ec5",
+          "target_blob": "c916f6136ce97307f4274494242e3e0a022f2eec",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        },
+        {
+          "kind": "file_comparison",
+          "source_revision": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "ros2_ws/src/lunar_incremental_navigation_ros/test/incremental_navigation_node_test.cpp",
+          "source_blob": "73f4d278413ad52658f3b53c4f37fe4392ac9c03",
+          "target_blob": "0c383c5bdfc8d5a6d63b91de24a482f60cac15a6",
+          "relation": "owner_evolved",
+          "description": "来源与当前功能路径对照；相同/演进 blob 为辅证，具体行为由本条 owner 文件证据解释。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/sync/rolling-orin-legged",
+      "archive_sha": "028b1b7f74d3a1f9a07004894d17c345b6039a66",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 83,
+      "branch": "sync/rolling-orin-real",
+      "source_sha": "5141684e1c2d7ddd7a1cd314028335401da4fcd9",
+      "owner": "app/orin-real-vehicle",
+      "disposition": "closed_adopted",
+      "disposition_reason": "5141684e 已为 app/orin-real-vehicle 祖先，滚动部署专题已回合，不再待整合；既有设备资格不扩大。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。5141684e 已为 app/orin-real-vehicle 祖先，滚动部署专题已回合，不再待整合；既有设备资格不扩大。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "5141684e1c2d7ddd7a1cd314028335401da4fcd9",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "5141684e1c2d7ddd7a1cd314028335401da4fcd9",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "5141684e1c2d7ddd7a1cd314028335401da4fcd9",
+          "target_branch": "app/orin-real-vehicle",
+          "target_revision": "422866169329dfbf58b782a62a937f6bdeb28f32",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "5141684e1c2d7ddd7a1cd314028335401da4fcd9",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "5141684e1c2d7ddd7a1cd314028335401da4fcd9",
+          "path": "config/exploration_navigation.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "5141684e1c2d7ddd7a1cd314028335401da4fcd9",
+          "path": "config/incremental_navigation_interfaces.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/sync/rolling-orin-real",
+      "archive_sha": "5141684e1c2d7ddd7a1cd314028335401da4fcd9",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 84,
+      "branch": "sync/rolling-orin-tcp",
+      "source_sha": "dbef580d7179b2d8a1a025ccf736b35cbf19cb32",
+      "owner": "app/orin-unreal-simulation",
+      "disposition": "closed_adopted",
+      "disposition_reason": "dbef580d 已为 app/orin-unreal-simulation 祖先，TCP rolling 同步已回合，不再待整合。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。dbef580d 已为 app/orin-unreal-simulation 祖先，TCP rolling 同步已回合，不再待整合。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "dbef580d7179b2d8a1a025ccf736b35cbf19cb32",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "dbef580d7179b2d8a1a025ccf736b35cbf19cb32",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "dbef580d7179b2d8a1a025ccf736b35cbf19cb32",
+          "target_branch": "app/orin-unreal-simulation",
+          "target_revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "dbef580d7179b2d8a1a025ccf736b35cbf19cb32",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "dbef580d7179b2d8a1a025ccf736b35cbf19cb32",
+          "path": "config/incremental_navigation_interfaces.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "dbef580d7179b2d8a1a025ccf736b35cbf19cb32",
+          "path": "config/wheel.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/sync/rolling-orin-tcp",
+      "archive_sha": "dbef580d7179b2d8a1a025ccf736b35cbf19cb32",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 87,
+      "branch": "chore/branch-governance-20261016",
+      "source_sha": "490333080a25c78b2298dc26a94c7e2b827ef207",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adopted",
+      "disposition_reason": "49033308 已为main/dev祖先，治理文档与工具已采用；本轮只更新后续处置，不重复merge。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。49033308 已为main/dev祖先，治理文档与工具已采用；本轮只更新后续处置，不重复merge。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "490333080a25c78b2298dc26a94c7e2b827ef207",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "490333080a25c78b2298dc26a94c7e2b827ef207",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/chore/branch-governance-20261016",
+      "archive_sha": "490333080a25c78b2298dc26a94c7e2b827ef207",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 88,
+      "branch": "chore/confidence-integration-20261016",
+      "source_sha": "fa9158091c80eb339d7ac980c85f6bf814074b79",
+      "owner": "dev/terrain-confidence",
+      "disposition": "closed_adopted",
+      "disposition_reason": "fa915809 已为 dev/terrain-confidence 祖先，后继355ed41b/158a2e16已完成terrain集成/测试同步；只结束已采用专题，不审阅或晋级可信度候选。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。fa915809 已为 dev/terrain-confidence 祖先，后继355ed41b/158a2e16已完成terrain集成/测试同步；只结束已采用专题，不审阅或晋级可信度候选。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "fa9158091c80eb339d7ac980c85f6bf814074b79",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "fa9158091c80eb339d7ac980c85f6bf814074b79",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "fa9158091c80eb339d7ac980c85f6bf814074b79",
+          "target_branch": "dev/terrain-confidence",
+          "target_revision": "158a2e168a1d184811e51d45d328a78baf65370a",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "fa9158091c80eb339d7ac980c85f6bf814074b79",
+          "path": "AGENTS.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "fa9158091c80eb339d7ac980c85f6bf814074b79",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "fa9158091c80eb339d7ac980c85f6bf814074b79",
+          "path": "config/exploration_navigation.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/chore/confidence-integration-20261016",
+      "archive_sha": "fa9158091c80eb339d7ac980c85f6bf814074b79",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 90,
+      "branch": "chore/rolling-controller-integration-20261016",
+      "source_sha": "fdcf27b0c17093e7e79b62efd995a67c83dcacc2",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adopted",
+      "disposition_reason": "fdcf27b0 已为main/dev祖先且为Task5最后一轮direction修复，成熟rolling公共专题完成；不重复合并。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。fdcf27b0 已为main/dev祖先且为Task5最后一轮direction修复，成熟rolling公共专题完成；不重复合并。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "fdcf27b0c17093e7e79b62efd995a67c83dcacc2",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "fdcf27b0c17093e7e79b62efd995a67c83dcacc2",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/chore/rolling-controller-integration-20261016",
+      "archive_sha": "fdcf27b0c17093e7e79b62efd995a67c83dcacc2",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 91,
+      "branch": "hk/app-legged-integration-20261016",
+      "source_sha": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+      "owner": "app/orin-legged-vehicle",
+      "disposition": "closed_adopted",
+      "disposition_reason": "与app/orin-legged-vehicle同tip同tree，是已完成集成的专题别名，不是另一条应用或待回合分支。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。与app/orin-legged-vehicle同tip同tree，是已完成集成的专题别名，不是另一条应用或待回合分支。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "target_branch": "app/orin-legged-vehicle",
+          "target_revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "relation": "same_tip",
+          "same_tree": true,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "config/cyclonedds_p3.xml",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+          "path": "config/exploration_navigation.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/hk/app-legged-integration-20261016",
+      "archive_sha": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 92,
+      "branch": "hk/app-tcp-integration-20261016",
+      "source_sha": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+      "owner": "app/orin-unreal-simulation",
+      "disposition": "closed_adopted",
+      "disposition_reason": "与app/orin-unreal-simulation同tip同tree，是已完成集成专题别名，不重复merge。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。与app/orin-unreal-simulation同tip同tree，是已完成集成专题别名，不重复merge。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "target_branch": "app/orin-unreal-simulation",
+          "target_revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "relation": "same_tip",
+          "same_tree": true,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "path": "config/exploration_navigation.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+          "path": "config/incremental_navigation_interfaces.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/hk/app-tcp-integration-20261016",
+      "archive_sha": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 93,
+      "branch": "hk/app-wheel-integration-20261016",
+      "source_sha": "422866169329dfbf58b782a62a937f6bdeb28f32",
+      "owner": "app/orin-real-vehicle",
+      "disposition": "closed_adopted",
+      "disposition_reason": "与app/orin-real-vehicle同tip同tree，是已完成集成专题别名；历史轮式8项失败仍保留边界。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。与app/orin-real-vehicle同tip同tree，是已完成集成专题别名；历史轮式8项失败仍保留边界。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "422866169329dfbf58b782a62a937f6bdeb28f32",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "422866169329dfbf58b782a62a937f6bdeb28f32",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "422866169329dfbf58b782a62a937f6bdeb28f32",
+          "target_branch": "app/orin-real-vehicle",
+          "target_revision": "422866169329dfbf58b782a62a937f6bdeb28f32",
+          "relation": "same_tip",
+          "same_tree": true,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "422866169329dfbf58b782a62a937f6bdeb28f32",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "422866169329dfbf58b782a62a937f6bdeb28f32",
+          "path": "config/exploration_navigation.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "422866169329dfbf58b782a62a937f6bdeb28f32",
+          "path": "config/incremental_navigation_interfaces.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/hk/app-wheel-integration-20261016",
+      "archive_sha": "422866169329dfbf58b782a62a937f6bdeb28f32",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 94,
+      "branch": "hk/common-test-sync-20261016",
+      "source_sha": "95d0b88e8ce33ff83c8bf2523e56eb2a4588bfb8",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adopted",
+      "disposition_reason": "主要owner为integration/pure-planner-orin；95d0b88e 同时是main及dev/drl-exploration祖先，两端已采用。owner列的斜杠文本不是Git ref，不得解析成不存在的目标。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。主要owner为integration/pure-planner-orin；95d0b88e 同时是main及dev/drl-exploration祖先，两端已采用。owner列的斜杠文本不是Git ref，不得解析成不存在的目标。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "95d0b88e8ce33ff83c8bf2523e56eb2a4588bfb8",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "95d0b88e8ce33ff83c8bf2523e56eb2a4588bfb8",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/hk/common-test-sync-20261016",
+      "archive_sha": "95d0b88e8ce33ff83c8bf2523e56eb2a4588bfb8",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 95,
+      "branch": "hk/final-branch-register-20261016",
+      "source_sha": "30b556092f6b32d109ac1485bd435f774f0c81de",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "closed_adopted",
+      "disposition_reason": "30b55609 已是main/dev祖先，旧“等待独立review/root再落main”描述应改为已完成文档来源；不能继续当待合入专题。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。30b55609 已是main/dev祖先，旧“等待独立review/root再落main”描述应改为已完成文档来源；不能继续当待合入专题。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "30b556092f6b32d109ac1485bd435f774f0c81de",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "30b556092f6b32d109ac1485bd435f774f0c81de",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/hk/final-branch-register-20261016",
+      "archive_sha": "30b556092f6b32d109ac1485bd435f774f0c81de",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 96,
+      "branch": "hk/terrain-common-integration-20261016",
+      "source_sha": "355ed41b47e6833e44f249fd1e0f76ecd680bf56",
+      "owner": "dev/terrain-confidence",
+      "disposition": "closed_adopted",
+      "disposition_reason": "355ed41b 已为dev/terrain-confidence祖先，terrain公共集成完成；不借谱系覆盖宣称可信度模型成熟或晋级main。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。355ed41b 已为dev/terrain-confidence祖先，terrain公共集成完成；不借谱系覆盖宣称可信度模型成熟或晋级main。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "355ed41b47e6833e44f249fd1e0f76ecd680bf56",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "355ed41b47e6833e44f249fd1e0f76ecd680bf56",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "355ed41b47e6833e44f249fd1e0f76ecd680bf56",
+          "target_branch": "dev/terrain-confidence",
+          "target_revision": "158a2e168a1d184811e51d45d328a78baf65370a",
+          "relation": "ancestor",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "355ed41b47e6833e44f249fd1e0f76ecd680bf56",
+          "path": "AGENTS.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "355ed41b47e6833e44f249fd1e0f76ecd680bf56",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "355ed41b47e6833e44f249fd1e0f76ecd680bf56",
+          "path": "config/exploration_navigation.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/hk/terrain-common-integration-20261016",
+      "archive_sha": "355ed41b47e6833e44f249fd1e0f76ecd680bf56",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 97,
+      "branch": "hk/terrain-test-sync-20261016",
+      "source_sha": "158a2e168a1d184811e51d45d328a78baf65370a",
+      "owner": "dev/terrain-confidence",
+      "disposition": "closed_adopted",
+      "disposition_reason": "158a2e16 与dev/terrain-confidence同tip同tree，两测试同步已回合；结束专题别名，不改可信度开发线。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。158a2e16 与dev/terrain-confidence同tip同tree，两测试同步已回合；结束专题别名，不改可信度开发线。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "158a2e168a1d184811e51d45d328a78baf65370a",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "158a2e168a1d184811e51d45d328a78baf65370a",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "diverged",
+          "same_tree": false,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "158a2e168a1d184811e51d45d328a78baf65370a",
+          "target_branch": "dev/terrain-confidence",
+          "target_revision": "158a2e168a1d184811e51d45d328a78baf65370a",
+          "relation": "same_tip",
+          "same_tree": true,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "file",
+          "revision": "158a2e168a1d184811e51d45d328a78baf65370a",
+          "path": "AGENTS.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "158a2e168a1d184811e51d45d328a78baf65370a",
+          "path": "README.md",
+          "description": "来源实际文件；branch delta from merge-base"
+        },
+        {
+          "kind": "file",
+          "revision": "158a2e168a1d184811e51d45d328a78baf65370a",
+          "path": "config/exploration_navigation.yaml",
+          "description": "来源实际文件；branch delta from merge-base"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/hk/terrain-test-sync-20261016",
+      "archive_sha": "158a2e168a1d184811e51d45d328a78baf65370a",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    },
+    {
+      "id": 98,
+      "branch": "hk/drl-experiment-organization-20261017",
+      "source_sha": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+      "owner": "dev/drl-exploration",
+      "disposition": "closed_adopted",
+      "disposition_reason": "主要owner为dev/drl-exploration，已晋级采用端为integration/pure-planner-orin；before中e72c7b70与两端同tip同tree，上一轮DRL整理专题已经落地，不继续待整合。owner箭头文本不是Git ref，运行保护与训练当前身份依旧独立。",
+      "adopted_scope": "已采用的来源提交或同 tip 专题别名；实际采用端与完整 SHA 见 lineage 证据。主要owner为dev/drl-exploration，已晋级采用端为integration/pure-planner-orin；before中e72c7b70与两端同tip同tree，上一轮DRL整理专题已经落地，不继续待整合。owner箭头文本不是Git ref，运行保护与训练当前身份依旧独立。",
+      "excluded_scope": "不重复合并；不据谱系关系扩大设备、策略效果或部署资格。",
+      "evidence": [
+        {
+          "kind": "lineage",
+          "source_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "target_branch": "integration/pure-planner-orin",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "same_tip",
+          "same_tree": true,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        },
+        {
+          "kind": "lineage",
+          "source_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "target_branch": "dev/drl-exploration",
+          "target_revision": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+          "relation": "same_tip",
+          "same_tree": true,
+          "description": "仅核对提交与树关系，不替代功能或设备验收。"
+        }
+      ],
+      "archive_ref": "refs/archive/misc-closed/20261017/hk/drl-experiment-organization-20261017",
+      "archive_sha": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+      "runtime_qualification": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。"
+    }
+  ],
+  "deferred_sources": [
+    {
+      "id": 12,
+      "branch": "docs/source-neutral-traversability-map-design",
+      "source_sha": "ac293f8c79df480994c48bac8e5d7fb94546e075",
+      "owner": "dev/terrain-confidence",
+      "disposition": "deferred_long_term",
+      "scope": "source-neutral 设计/实现",
+      "preservation": "原分支、原 SHA 与工作树保留；不进入本轮48归档，不晋级候选，不重新评估突破。"
+    },
+    {
+      "id": 14,
+      "branch": "feat/compound-return-stress",
+      "source_sha": "fe6f08cfa918578773430324f08a8a2bf61c288e",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "deferred_long_term",
+      "scope": "返航/关键帧研究",
+      "preservation": "原分支、原 SHA 与工作树保留；不进入本轮48归档，不晋级候选，不重新评估突破。"
+    },
+    {
+      "id": 49,
+      "branch": "feat/keyframe-return-navigation",
+      "source_sha": "4ecb7cd6cc53de0edfedcc6b9a1d71897040e24d",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "deferred_long_term",
+      "scope": "返航/关键帧研究",
+      "preservation": "原分支、原 SHA 与工作树保留；不进入本轮48归档，不晋级候选，不重新评估突破。"
+    },
+    {
+      "id": 50,
+      "branch": "feat/keyframe-return-refactor",
+      "source_sha": "a6da5e98ec70108571ec6fdd1b836888e7671b09",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "deferred_long_term",
+      "scope": "返航/关键帧研究",
+      "preservation": "原分支、原 SHA 与工作树保留；不进入本轮48归档，不晋级候选，不重新评估突破。"
+    },
+    {
+      "id": 51,
+      "branch": "feat/keyframe-return-stress",
+      "source_sha": "7c6108344c97739ee58da7dacfe9e7add5e0cc25",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "deferred_long_term",
+      "scope": "返航/关键帧研究",
+      "preservation": "原分支、原 SHA 与工作树保留；不进入本轮48归档，不晋级候选，不重新评估突破。"
+    },
+    {
+      "id": 52,
+      "branch": "feat/lightweight-return-home",
+      "source_sha": "a07f96245953db8234126a710cabf5f61fbd129e",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "deferred_long_term",
+      "scope": "返航/关键帧研究",
+      "preservation": "原分支、原 SHA 与工作树保留；不进入本轮48归档，不晋级候选，不重新评估突破。"
+    },
+    {
+      "id": 53,
+      "branch": "feat/map-keyframe-return",
+      "source_sha": "5af8db660d43e487b2816b219c3f0ca65ca93ced",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "deferred_long_term",
+      "scope": "返航/关键帧研究",
+      "preservation": "原分支、原 SHA 与工作树保留；不进入本轮48归档，不晋级候选，不重新评估突破。"
+    },
+    {
+      "id": 54,
+      "branch": "feat/return-region-connectors",
+      "source_sha": "f1a854adbe6f3d8f64f7c4eb60a309979911dfa5",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "deferred_long_term",
+      "scope": "返航/关键帧研究",
+      "preservation": "原分支、原 SHA 与工作树保留；不进入本轮48归档，不晋级候选，不重新评估突破。"
+    },
+    {
+      "id": 56,
+      "branch": "feat/source-neutral-traversability-map",
+      "source_sha": "0a0b23113adc474eb301a9faa374b686652f69fd",
+      "owner": "dev/terrain-confidence",
+      "disposition": "deferred_long_term",
+      "scope": "source-neutral 设计/实现",
+      "preservation": "原分支、原 SHA 与工作树保留；不进入本轮48归档，不晋级候选，不重新评估突破。"
+    },
+    {
+      "id": 74,
+      "branch": "fix/reachable-local-goals",
+      "source_sha": "bd39d264f15078c5e545f087604ee9287103aa86",
+      "owner": "integration/pure-planner-orin",
+      "disposition": "deferred_long_term",
+      "scope": "返航/关键帧研究",
+      "preservation": "原分支、原 SHA 与工作树保留；不进入本轮48归档，不晋级候选，不重新评估突破。"
+    }
+  ],
+  "retained_roles": {
+    "permanent": [
+      {
+        "id": 1,
+        "branch": "app/orin-legged-vehicle",
+        "source_sha": "4377d2762122e5eb9ed147b3a6883d17b4bbe4dd",
+        "owner": "app/orin-legged-vehicle",
+        "role": "六长期角色之一，保持入口与既有职责；本轮不移动指针。"
+      },
+      {
+        "id": 2,
+        "branch": "app/orin-real-vehicle",
+        "source_sha": "422866169329dfbf58b782a62a937f6bdeb28f32",
+        "owner": "app/orin-real-vehicle",
+        "role": "六长期角色之一，保持入口与既有职责；本轮不移动指针。"
+      },
+      {
+        "id": 3,
+        "branch": "app/orin-unreal-simulation",
+        "source_sha": "f7abebc2f00c421e28c6adca5a1ae6bace54a816",
+        "owner": "app/orin-unreal-simulation",
+        "role": "六长期角色之一，保持入口与既有职责；本轮不移动指针。"
+      },
+      {
+        "id": 4,
+        "branch": "dev/drl-exploration",
+        "source_sha": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+        "owner": "dev/drl-exploration",
+        "role": "六长期角色之一，保持入口与既有职责；本轮不移动指针。"
+      },
+      {
+        "id": 5,
+        "branch": "dev/terrain-confidence",
+        "source_sha": "158a2e168a1d184811e51d45d328a78baf65370a",
+        "owner": "dev/terrain-confidence",
+        "role": "六长期角色之一，保持入口与既有职责；本轮不移动指针。"
+      },
+      {
+        "id": 77,
+        "branch": "integration/pure-planner-orin",
+        "source_sha": "e72c7b709e7876c2eee1434e48948ca490ac1dfc",
+        "owner": "integration/pure-planner-orin",
+        "role": "六长期角色之一，保持入口与既有职责；本轮不移动指针。"
+      }
+    ],
+    "drl_closed": [
+      {
+        "id": 6,
+        "branch": "docs/drl-loop-learning-design",
+        "source_sha": "3d3513cc90ca8e38dfeee2e3598efa18f6205626",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/docs/drl-loop-learning-design",
+        "archive_sha": "3d3513cc90ca8e38dfeee2e3598efa18f6205626"
+      },
+      {
+        "id": 7,
+        "branch": "docs/drl-region-query-20261013",
+        "source_sha": "0fa56fd65a0deca292c4edcc930b9dae44c84a68",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/docs/drl-region-query-20261013",
+        "archive_sha": "0fa56fd65a0deca292c4edcc930b9dae44c84a68"
+      },
+      {
+        "id": 15,
+        "branch": "feat/drl-bounded-potential-20261012",
+        "source_sha": "ab2c1faa637faeec1e953db8256bd39a7cb7c315",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-bounded-potential-20261012",
+        "archive_sha": "ab2c1faa637faeec1e953db8256bd39a7cb7c315"
+      },
+      {
+        "id": 16,
+        "branch": "feat/drl-exploration-complete-design",
+        "source_sha": "a0f190c88f1a500fa71b13d65ff52eeec1cfb467",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-exploration-complete-design",
+        "archive_sha": "a0f190c88f1a500fa71b13d65ff52eeec1cfb467"
+      },
+      {
+        "id": 17,
+        "branch": "feat/drl-exploration-training",
+        "source_sha": "c6473ae70eb4a0297d4cd975ca88346ea7597d89",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-exploration-training",
+        "archive_sha": "c6473ae70eb4a0297d4cd975ca88346ea7597d89"
+      },
+      {
+        "id": 18,
+        "branch": "feat/drl-factorized-entropy",
+        "source_sha": "96778aeb99f6bb1319f45c52738b1361dd477d55",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-factorized-entropy",
+        "archive_sha": "96778aeb99f6bb1319f45c52738b1361dd477d55"
+      },
+      {
+        "id": 20,
+        "branch": "feat/drl-input-action-v5-20261014",
+        "source_sha": "e2b2b5bf9a65f47c9e3d51c1adb405bfe41da4c3",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-input-action-v5-20261014",
+        "archive_sha": "e2b2b5bf9a65f47c9e3d51c1adb405bfe41da4c3"
+      },
+      {
+        "id": 21,
+        "branch": "feat/drl-integration-20261012",
+        "source_sha": "31a4eacce515d3314e99ecb82f087dddc3cf9572",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-integration-20261012",
+        "archive_sha": "31a4eacce515d3314e99ecb82f087dddc3cf9572"
+      },
+      {
+        "id": 22,
+        "branch": "feat/drl-multistep",
+        "source_sha": "32155954f14b69d69ecb06d3b73bc7f7e09d084b",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-multistep",
+        "archive_sha": "32155954f14b69d69ecb06d3b73bc7f7e09d084b"
+      },
+      {
+        "id": 23,
+        "branch": "feat/drl-outside-specialist-20261013",
+        "source_sha": "5123340f49a987689af98b97afb7279cd44b97ff",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-outside-specialist-20261013",
+        "archive_sha": "5123340f49a987689af98b97afb7279cd44b97ff"
+      },
+      {
+        "id": 24,
+        "branch": "feat/drl-position-aux",
+        "source_sha": "dcca338bc501d9d40694dc609119826f95824595",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-position-aux",
+        "archive_sha": "dcca338bc501d9d40694dc609119826f95824595"
+      },
+      {
+        "id": 25,
+        "branch": "feat/drl-position-temperature-20261013",
+        "source_sha": "d7de50d41e782052a70f73f8b012930082697d0d",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-position-temperature-20261013",
+        "archive_sha": "d7de50d41e782052a70f73f8b012930082697d0d"
+      },
+      {
+        "id": 26,
+        "branch": "feat/drl-region-contraction-20261006",
+        "source_sha": "37b5964c688e895ff870c5dcc35e47b206318fd5",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-region-contraction-20261006",
+        "archive_sha": "37b5964c688e895ff870c5dcc35e47b206318fd5"
+      },
+      {
+        "id": 27,
+        "branch": "feat/drl-region-query-20261013",
+        "source_sha": "5a0d017cea6a0792280d50999166f212df015a50",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-region-query-20261013",
+        "archive_sha": "5a0d017cea6a0792280d50999166f212df015a50"
+      },
+      {
+        "id": 28,
+        "branch": "feat/drl-region-relation-v2-20261014",
+        "source_sha": "ef7cefa805fbdba165d78e8b06e4620171c86070",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-region-relation-v2-20261014",
+        "archive_sha": "ef7cefa805fbdba165d78e8b06e4620171c86070"
+      },
+      {
+        "id": 29,
+        "branch": "feat/drl-task-frontier",
+        "source_sha": "bc8e60d7ce32b0c74ddfc7bb788c36c9417aed7b",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/feat/drl-task-frontier",
+        "archive_sha": "bc8e60d7ce32b0c74ddfc7bb788c36c9417aed7b"
+      },
+      {
+        "id": 60,
+        "branch": "fix/drl-area-budget",
+        "source_sha": "b70e1019bbddd9bc78d83333bb48b1c572565386",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/fix/drl-area-budget",
+        "archive_sha": "b70e1019bbddd9bc78d83333bb48b1c572565386"
+      },
+      {
+        "id": 61,
+        "branch": "fix/drl-arrival-contract-20261015",
+        "source_sha": "09d316f181a050a5325ef2edf9f8aca65d8858f7",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/fix/drl-arrival-contract-20261015",
+        "archive_sha": "09d316f181a050a5325ef2edf9f8aca65d8858f7"
+      },
+      {
+        "id": 62,
+        "branch": "fix/drl-checkpoint-memory-20261013",
+        "source_sha": "4c660a303c864d209e70e0d92c044886625c6531",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/fix/drl-checkpoint-memory-20261013",
+        "archive_sha": "4c660a303c864d209e70e0d92c044886625c6531"
+      },
+      {
+        "id": 63,
+        "branch": "fix/drl-coverage99-success",
+        "source_sha": "fe9cab83f6c7a87d41a62d9d763d5594d94e7930",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/fix/drl-coverage99-success",
+        "archive_sha": "fe9cab83f6c7a87d41a62d9d763d5594d94e7930"
+      },
+      {
+        "id": 64,
+        "branch": "fix/drl-evaluation-budget",
+        "source_sha": "4123c1836d0ea0437b7de1548ba6ccf6b521c1ed",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/fix/drl-evaluation-budget",
+        "archive_sha": "4123c1836d0ea0437b7de1548ba6ccf6b521c1ed"
+      },
+      {
+        "id": 65,
+        "branch": "fix/drl-full-replay-resume-20261014",
+        "source_sha": "bae8c0e51e9e173bb50a80d6b38d6c110c667fc4",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/fix/drl-full-replay-resume-20261014",
+        "archive_sha": "bae8c0e51e9e173bb50a80d6b38d6c110c667fc4"
+      },
+      {
+        "id": 67,
+        "branch": "fix/drl-stagnation-budget",
+        "source_sha": "b79fa5d547284cfea99b158422eb5802576d03fe",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/fix/drl-stagnation-budget",
+        "archive_sha": "b79fa5d547284cfea99b158422eb5802576d03fe"
+      },
+      {
+        "id": 68,
+        "branch": "fix/drl-undiscounted-completion",
+        "source_sha": "fda3a31e8ddf3412298333b8316681ebc0bab9b5",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/fix/drl-undiscounted-completion",
+        "archive_sha": "fda3a31e8ddf3412298333b8316681ebc0bab9b5"
+      },
+      {
+        "id": 78,
+        "branch": "perf/drl-frontier-performance",
+        "source_sha": "d9207e00b6a455568a6d04682f5142d746ba1828",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/perf/drl-frontier-performance",
+        "archive_sha": "d9207e00b6a455568a6d04682f5142d746ba1828"
+      },
+      {
+        "id": 79,
+        "branch": "perf/drl-message-aggregation-20261013",
+        "source_sha": "d2c965a027f0df773bb8ea20bb773ea56817a2d7",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/perf/drl-message-aggregation-20261013",
+        "archive_sha": "d2c965a027f0df773bb8ea20bb773ea56817a2d7"
+      },
+      {
+        "id": 80,
+        "branch": "perf/drl-observation-cache",
+        "source_sha": "3e98dc27598f77584235ab8323eae3224d72822e",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/perf/drl-observation-cache",
+        "archive_sha": "3e98dc27598f77584235ab8323eae3224d72822e"
+      },
+      {
+        "id": 85,
+        "branch": "test/drl-coverage-completion",
+        "source_sha": "96f8ba1f50806f2c640a4de72c5e13b04a91bcb7",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/test/drl-coverage-completion",
+        "archive_sha": "96f8ba1f50806f2c640a4de72c5e13b04a91bcb7"
+      },
+      {
+        "id": 86,
+        "branch": "test/drl-loop-learning",
+        "source_sha": "d5de79c0b157506dc6ea59078372a1415e94d1c9",
+        "owner": "dev/drl-exploration",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/test/drl-loop-learning",
+        "archive_sha": "d5de79c0b157506dc6ea59078372a1415e94d1c9"
+      },
+      {
+        "id": 89,
+        "branch": "chore/drl-integration-20261016",
+        "source_sha": "d452677ae0c681dc865bac35a4092beab3034f9b",
+        "owner": "dev/drl-exploration → integration/pure-planner-orin",
+        "role": "上一轮已结案 DRL 来源，既有归档保留；不计本轮48，不重做实验。",
+        "archive_ref": "refs/archive/drl-closed/20261017/chore/drl-integration-20261016",
+        "archive_sha": "d452677ae0c681dc865bac35a4092beab3034f9b"
+      }
+    ],
+    "milestone": [
+      {
+        "id": 19,
+        "branch": "feat/drl-formal-version-20261016",
+        "source_sha": "ea20a3e9723398ed449906e20477f45da7161cd2",
+        "owner": "dev/drl-exploration",
+        "role": "只读导入/正式源码/历史发布里程碑，非新增长期开发线，非当前运行身份。"
+      },
+      {
+        "id": 76,
+        "branch": "import/pure-planner-orin-main",
+        "source_sha": "200c1ea4188b772ee8589708473eee1391fa950d",
+        "owner": "integration/pure-planner-orin",
+        "role": "只读导入/正式源码/历史发布里程碑，非新增长期开发线，非当前运行身份。"
+      },
+      {
+        "id": 81,
+        "branch": "release/orin-humble-20260911",
+        "source_sha": "418ea95bc9d58b949d12507613a7964cdb2cc1ef",
+        "owner": "integration/pure-planner-orin",
+        "role": "只读导入/正式源码/历史发布里程碑，非新增长期开发线，非当前运行身份。"
+      }
+    ],
+    "protected_runtime": [
+      {
+        "id": 66,
+        "branch": "fix/drl-navigation-recovery-20261016",
+        "source_sha": "0647b8272c4a9df6bffc36da6f1e9d6a97d82e02",
+        "owner": "dev/drl-exploration",
+        "role": "受保护活动训练来源；仅记录 before 冻结身份，当前运行保护由 root 独立回执验证。"
+      }
+    ]
+  },
+  "follow_up": [
+    {
+      "id": "coverage_statistics",
+      "status": "future_requirement_not_this_round",
+      "owner": "integration/pure-planner-orin",
+      "source_ids": [
+        30
+      ],
+      "scope": "估计排除面积、有效覆盖率、连通统计与完成条件切换尚未实现；未来按设计负例、撤销、任务外连通、无有效种子、无观测不产生奖励分别验收，不修改当前DRL成功口径。"
+    },
+    {
+      "id": "legacy_deployment_capability_material",
+      "status": "future_requirement_not_this_round",
+      "owner": "integration/pure-planner-orin",
+      "source_ids": [
+        8,
+        57,
+        58
+      ],
+      "scope": "旧deployment/config/wheel.yaml仅为未完成能力资料草稿，保留原位/WIP/外部保存；旧双目标luna管理器、TerrainFrame两端方案与旧参数能力未承诺等价采用，未来从当前owner另行设计实现与验收。"
+    },
+    {
+      "id": "hopper_unadopted_capabilities",
+      "status": "future_requirement_not_this_round",
+      "owner": "integration/pure-planner-orin",
+      "source_ids": [
+        9,
+        46
+      ],
+      "scope": "Hopper Grid V1的稀疏HopperMap、完整HopSegment及单跳执行链未声明等价实现；保留旧来源，确需能力时独立提出需求与目标平台验收。"
+    }
+  ],
+  "validation_boundary": "本轮只读 Git/源码及文档静态核对；未重新运行算法、Jazzy、Humble、Orin、ROS/RViz、DDS、rosbag、车辆、GPU或训练；历史验证不作为本轮运行通过证明，来源结案不扩大模型、运行或部署资格。",
+  "preservation_policy": "48 create-only archive refs已由root实际创建，本文件逐条引用实际回执；原分支与工作树均保留。来源结案不清理原目录，不移动其他长期指针。",
+  "inputs": [
+    "before.json",
+    "scope-catalogue.json",
+    "audit-adapters.md",
+    "audit-adapters.json",
+    "audit-sources.md",
+    "audit-sources.json",
+    "root-adjudications.md",
+    "archive-refs.json"
+  ]
+}
