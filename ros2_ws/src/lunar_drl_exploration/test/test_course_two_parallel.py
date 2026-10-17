@@ -153,3 +153,85 @@ def test_explicit_hash_bound_baseline_adoption_preserves_original_proof(tmp_path
     with pytest.raises(ValueError):cached_result(tmp_path,path,dict(proof,actor_sha='different'))
     ctl.write(path,dict(result,wall_s=4.))
     with pytest.raises(ValueError):cached_result(tmp_path,path,proof)
+
+
+@pytest.fixture
+def domain_busy_result(pool):
+    parallel, controller, actor, cases, commands = pool
+    proof = dict(actor_sha=ctl.sha(actor), config_sha=ctl.sha(controller.root/'config.json'),
+                 runtime='test-runtime', case=cases[0])
+    record = dict(status='failed', proof=proof, row=dict(
+        case_id='c0', kind='new', completed=False, initial_completed=False,
+        collisions=0, error='DomainBusy: evaluation domain lease is occupied',
+        trajectory=[]))
+    path = controller.root/'evaluation/round/c0.json'
+    ctl.write(path, record)
+    return parallel, controller, actor, cases, commands, path, record
+
+
+def test_domain_busy_counts_failure_and_continues_without_rewriting_result(domain_busy_result):
+    _, controller, actor, cases, commands, path, record = domain_busy_result
+    ctl.write(controller.root/'evaluation-settings.json', dict(workers=1, error_policy='count_failure'))
+    before = path.read_bytes()
+    rows = controller.screen(actor, cases, 'round')
+    assert [row['case_id'] for row in rows] == [case['case_id'] for case in cases]
+    failed = rows[0]
+    assert failed['completed'] is False
+    assert failed['error'] == record['row']['error']
+    assert failed['evaluation_failure_kind'] == 'infrastructure'
+    assert failed['truncation_reason'] == 'INFRASTRUCTURE_ERROR'
+    assert failed['final_coverage'] is None
+    assert failed['coverage_source'] == 'unavailable'
+    assert failed['collisions'] is None
+    assert sum(row.get('evaluation_failure_kind') == 'infrastructure' for row in rows) == 1
+    assert sum(row['completed'] for row in rows) == 5
+    assert controller.state['evaluation_done'] == 6
+    assert (controller.root/'c5.started').exists()
+    assert len(commands) == 5
+    assert path.read_bytes() == before
+    assert ctl.read(path) == record
+    assert ctl.read(path.parent/'summary.json')['rows'] == rows
+    assert_reaped(controller.root)
+    snapshots = {p: p.read_bytes() for p in path.parent.glob('*.json')}
+    commands.clear()
+    assert controller.screen(actor, cases, 'round') == rows
+    assert not commands
+    assert {p: p.read_bytes() for p in snapshots} == snapshots
+
+
+def test_domain_busy_stop_policy_still_raises(domain_busy_result):
+    _, controller, actor, cases, commands, path, _ = domain_busy_result
+    before = path.read_bytes()
+    ctl.write(controller.root/'evaluation-settings.json', dict(workers=1, error_policy='stop'))
+    with pytest.raises(RuntimeError, match='DomainBusy'):
+        controller.screen(actor, cases, 'round')
+    assert not commands
+    assert path.read_bytes() == before
+    assert not (path.parent/'summary.json').exists()
+
+
+@pytest.mark.parametrize('field', ['actor_sha', 'config_sha', 'runtime', 'case'])
+def test_domain_busy_proof_errors_still_raise(domain_busy_result, field):
+    parallel, controller, _, cases, _, path, record = domain_busy_result
+    ctl.write(controller.root/'evaluation-settings.json', dict(workers=1, error_policy='count_failure'))
+    expected = dict(record['proof'])
+    expected[field] = cases[1] if field == 'case' else 'foreign'
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='identity'):
+        parallel.cached_result(controller.root, path, expected)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('error', [
+    'ValueError: damaged record', 'AssertionError: invalid checkpoint',
+    'DomainBusy without prefix delimiter', 'DomainBusyOther: unrelated error',
+])
+def test_non_domain_busy_data_failures_still_raise(domain_busy_result, error):
+    parallel, controller, _, _, _, path, record = domain_busy_result
+    ctl.write(controller.root/'evaluation-settings.json', dict(workers=1, error_policy='count_failure'))
+    record['row']['error'] = error
+    ctl.write(path, record)
+    before = path.read_bytes()
+    with pytest.raises(RuntimeError, match='evaluation infrastructure error'):
+        parallel.cached_result(controller.root, path, record['proof'])
+    assert path.read_bytes() == before

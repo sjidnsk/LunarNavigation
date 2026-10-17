@@ -59,6 +59,10 @@ def cached_result(root,output,proof):
             or row.get('kind')!=proof['case']['kind']):
         raise ValueError('cached evaluation identity changed: '+str(output))
     if result.get('status')!='finished' or row.get('error'):
+        # DDS lease refusal is a single-case communication startup failure.
+        # Keep the raw result/proof; no simulator observation means unknown collision.
+        if enabled(root) and result.get('status')=='failed' and isinstance(row.get('error'),str) and row['error'].startswith('DomainBusy:'):
+            return dict(result,row=counted_failure(dict(row,collisions=None)))
         if enabled(root) and result.get('status')=='failed' and isinstance(row.get('error'),str) and row['error'].startswith(('InfrastructureError:','WorkerExit:')):
             return dict(result,row=counted_failure(row))
         raise RuntimeError('evaluation infrastructure error: '+str(row.get('error')))
