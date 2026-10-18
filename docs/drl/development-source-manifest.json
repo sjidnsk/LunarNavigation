@@ -1,7 +1,7 @@
 {
   "schema": "formal_drl_source_v1",
   "package": "lunar_drl_exploration",
-  "source_epoch": "development-organization-20261017",
+  "source_epoch": "development-navigation-execution-safety-20261018",
   "deployment_status": "not_deployed",
   "based_on_deployed_runtime": "8470d67be1e6e5fc2dfa7e0a3351017bff35b07c630a9bd40246ba34c83b09da",
   "source_base_commit": "0647b8272c4a9df6bffc36da6f1e9d6a97d82e02",
@@ -60,7 +60,7 @@
     "navigation_identity.py": "62b3f37cc2a6625e9e866df4220be0f3d8773386b62d281a8f523ce10c107088",
     "ordered_curriculum.py": "4b57cd0d4e5ea24ef5f3917ff1e23109e31298878c39d69fcdd7ab81e70f7939",
     "paired_experiment.py": "4953165e11e0176e13a6b795bed1caa21b6d987b81c79614eec6b60279afa799",
-    "plant.py": "327f5e50cc83f8137b2436fba16a298fdcaa8c3fe9a822b33a20087152c049ab",
+    "plant.py": "aa0370d4671d3a47d77404e835bc619bcfa1cb3221d6051fa9986f461dcce086",
     "policy_graph.py": "a87747fb01395ac3b668c4ff409b72e82e8a2f1b15f5662cfc520e56be3836c7",
     "privileged.py": "b38b6c9be957a7f4c44144a3fd74e82adae939ff7ac6ecb931fcc3395d443591",
     "processes.py": "591e45d5abfdfdfb6af89fcab1c7f0173a18952bdc10f48220da6d504562ff42",

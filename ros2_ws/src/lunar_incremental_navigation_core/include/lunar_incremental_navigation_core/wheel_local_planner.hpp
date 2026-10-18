@@ -13,6 +13,9 @@
 
 namespace lunar::incremental_navigation {
 
+// Candidate continuous corridor beyond fine-map vehicle inflation.
+inline constexpr double kWheelExecutionClearanceM = 0.01;
+
 struct WheelLocalPlannerConfig final {
   std::size_t maximum_width_cells{kMaximumLocalPlanningWindowAxisCells};
   std::size_t maximum_height_cells{kMaximumLocalPlanningWindowAxisCells};
@@ -31,6 +34,12 @@ class WheelLocalPlanner final {
       const RequestLocalPlanningView& view, const Pose2& start,
       const LocalTarget& target, SearchDeadline deadline,
       const StopToken& stop);
+
+  // Explicit policy for isolated safety/reachability comparisons. Old ABI is kept.
+  [[nodiscard]] LocalPlanResult PlanWithClearance(
+      const RequestLocalPlanningView& view, const Pose2& start,
+      const LocalTarget& target, SearchDeadline deadline, const StopToken& stop,
+      double execution_clearance_m, bool refine_corners);
 
   [[nodiscard]] std::size_t buffer_capacity_cells() const noexcept;
   [[nodiscard]] std::size_t buffer_allocation_count() const noexcept;
@@ -54,5 +63,9 @@ class WheelLocalPlanner final {
 [[nodiscard]] std::vector<PathPoint> SimplifyPhaseAwarePath(
     const RequestLocalPlanningView& view,
     std::span<const PathPoint> raw_path, const SearchControl& control);
+[[nodiscard]] std::vector<PathPoint> SimplifyPhaseAwarePath(
+    const RequestLocalPlanningView& view,
+    std::span<const PathPoint> raw_path, const SearchControl& control,
+    double execution_clearance_m);
 
 }  // namespace lunar::incremental_navigation

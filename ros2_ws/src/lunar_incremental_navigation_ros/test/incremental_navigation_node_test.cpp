@@ -1648,7 +1648,7 @@ TEST(IncrementalNavigationNode, PendingFineCollisionInvalidatesBeforeMatchingCom
   EXPECT_EQ(control->local_calls, 2U);
 }
 
-TEST(IncrementalNavigationNode, StoppedMatchingTrackingFailureReplansAndStaleFeedbackIsIgnored) {
+TEST(IncrementalNavigationNode, StoppedTrackingRejectionIsBoundedAndStaleFeedbackIsIgnored) {
   auto control = std::make_shared<FakeControl>();
   control->segment_ends = {{.x = 3.5, .y = 0.5}};
   RunningSystem system("tracking_failure", IncrementalNavigationNodeDependencies{
@@ -1683,7 +1683,18 @@ TEST(IncrementalNavigationNode, StoppedMatchingTrackingFailureReplansAndStaleFee
   publisher->publish(status);
   std::this_thread::sleep_for(80ms);
   EXPECT_EQ(system.Paths().size(), 3U);
-  system.Cancel(goal);
+  auto result = system.Result(goal);
+  status.segment_revision = 2;
+  publisher->publish(status);
+  ASSERT_TRUE(WaitFor([&] { return system.Paths().size() >= 5U; }));
+  EXPECT_EQ(system.Paths().back().segment_revision, 3U);
+  status.segment_revision = 3;
+  publisher->publish(status);
+  ASSERT_EQ(result.wait_for(3s), std::future_status::ready);
+  const auto wrapped = result.get();
+  EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::ABORTED);
+  ASSERT_TRUE(wrapped.result);
+  EXPECT_EQ(wrapped.result->reason_code, "EXECUTION_REJECTED_REPEATED");
 }
 
 TEST(IncrementalNavigationNode,
