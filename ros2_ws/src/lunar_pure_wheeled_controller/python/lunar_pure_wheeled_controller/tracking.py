@@ -39,6 +39,9 @@ class TrackingPolicy:
     rotate_enter_rad: float = 0.7
     reverse_heading_threshold_rad: float = 2.4
     corner_angle_rad: float = 0.35
+    # Budget beyond the already footprint-inflated fine map. Match the planner.
+    execution_clearance_m: float = 0.01
+    control_response_time_s: float = 0.15
     corner_position_tolerance_m: float = 0.04
     stopped_linear_mps: float = 0.01
     stopped_angular_radps: float = 0.03

@@ -27,6 +27,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(${PROJECT_NAME}_incremental_path_test test/test_incremental_path.py)
   ament_add_pytest_test(${PROJECT_NAME}_tracking_test test/test_tracking.py)
   ament_add_pytest_test(${PROJECT_NAME}_execution_test test/test_execution.py)
+  ament_add_pytest_test(${PROJECT_NAME}_short_terminal_test test/test_short_terminal_execution.py)
   ament_add_pytest_test(${PROJECT_NAME}_node_test test/test_node.py)
 endif()
 

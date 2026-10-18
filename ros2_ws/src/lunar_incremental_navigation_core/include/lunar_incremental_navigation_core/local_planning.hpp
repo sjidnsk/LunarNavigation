@@ -213,6 +213,12 @@ class RequestLocalPlanningView final {
                                     StartPhase final,
                                     const SearchControl* control = nullptr) const noexcept;
 
+  // Extra execution clearance around the center reference, in addition to
+  // the vehicle inflation already represented by the fine map.
+  [[nodiscard]] bool CertifySegmentWithClearance(
+      Vec3 from, Vec3 to, StartPhase initial, StartPhase final,
+      double margin_m, const SearchControl* control = nullptr) const noexcept;
+
   [[nodiscard]] std::optional<StartPhase> AdvanceGridStep(
       StartPhase phase, GridIndex current, GridIndex next) const noexcept;
 

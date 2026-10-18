@@ -1198,6 +1198,69 @@ TEST(PlanningSessionCoordinator, ExtremeFiniteStartIsMapUnavailableWithoutBlindR
   EXPECT_EQ(fake.patch_calls,0);EXPECT_EQ(fake.wheel_calls,0);
 }
 
+
+TEST(PlanningSessionCoordinator, RepeatedExecutionRejectionAtUnchangedStateIsBounded) {
+  FakePorts fake;
+  auto cfg=Config();cfg.require_execution_confirmation=true;
+  PlanningSessionCoordinator c(Wheel(),{},cfg,fake.Bind());
+  ASSERT_TRUE(c.Start(SessionId{{210}}, {.target_x_m=6.5,.target_y_m=1.5}).accepted);
+  SnapshotBundle bundle{.fine=MakeFine()};
+  ASSERT_TRUE(c.PlanCycle(At(1.5,1.5),bundle,CycleTrigger::kContinue,SearchDeadline::max()).path_reference);
+  for (unsigned attempt=1;attempt<=3;++attempt) {
+    auto rejected=c.PlanCycle(At(1.5,1.5),bundle,CycleTrigger::kExecutionRejected,SearchDeadline::max());
+    if (attempt==3) {
+      ASSERT_TRUE(rejected.terminal);
+      EXPECT_EQ(rejected.terminal->result.reason_code,"EXECUTION_REJECTED_REPEATED");
+      EXPECT_EQ(rejected.terminal->result.outcome,SessionOutcome::kNoPath);
+    } else {
+      ASSERT_TRUE(rejected.path_reference);
+      EXPECT_EQ(rejected.path_reference->state,PathState::kInvalidated);
+      EXPECT_EQ(rejected.feedback.reason_code,"EXECUTION_REJECTED");
+      ASSERT_TRUE(c.PlanCycle(At(1.5,1.5),bundle,CycleTrigger::kContinue,SearchDeadline::max()).path_reference);
+    }
+  }
+}
+
+TEST(PlanningSessionCoordinator, ExecutionRejectionBudgetResetsOnProgressEvidenceAndSession) {
+  FakePorts fake;auto cfg=Config();cfg.require_execution_confirmation=true;
+  PlanningSessionCoordinator c(Wheel(),{},cfg,fake.Bind());
+  ASSERT_TRUE(c.Start(SessionId{{211}}, {.target_x_m=6.5,.target_y_m=1.5}).accepted);
+  auto exercise=[&](StateInput state,std::uint64_t revision) {
+    SnapshotBundle bundle{.fine=MakeFine(revision)};
+    auto plan=c.PlanCycle(state,bundle,CycleTrigger::kContinue,SearchDeadline::max());
+    EXPECT_TRUE(plan.path_reference);
+    auto result=c.PlanCycle(state,bundle,CycleTrigger::kExecutionRejected,SearchDeadline::max());
+    EXPECT_FALSE(result.terminal);
+    EXPECT_TRUE(result.path_reference);
+  };
+  exercise(At(1.5,1.5),1);
+  exercise(At(1.5,1.5),1);
+  exercise(At(1.5,1.5),2);
+  exercise(At(1.5,1.5),2);
+  exercise(At(1.9,1.5),2);
+  exercise(At(1.9,1.5),2);
+  exercise(At(1.9,1.5,.3),2);
+  exercise(At(1.9,1.5,.3),2);
+  ASSERT_TRUE(c.Start(SessionId{{212}}, {.target_x_m=6.5,.target_y_m=1.5}).accepted);
+  exercise(At(1.9,1.5,.3),2);
+}
+
+TEST(PlanningSessionCoordinator, DuplicateRejectionWithoutActiveReferenceDoesNotSpendBudget) {
+  FakePorts fake;auto cfg=Config();cfg.require_execution_confirmation=true;
+  PlanningSessionCoordinator c(Wheel(),{},cfg,fake.Bind());
+  ASSERT_TRUE(c.Start(SessionId{{213}}, {.target_x_m=6.5,.target_y_m=1.5}).accepted);
+  SnapshotBundle bundle{.fine=MakeFine()};
+  ASSERT_TRUE(c.PlanCycle(At(1.5,1.5),bundle,CycleTrigger::kContinue,SearchDeadline::max()).path_reference);
+  ASSERT_TRUE(c.PlanCycle(At(1.5,1.5),bundle,CycleTrigger::kExecutionRejected,SearchDeadline::max()).path_reference);
+  // A duplicate feedback can cause at most a new plan, not another rejection.
+  auto duplicate=c.PlanCycle(At(1.5,1.5),bundle,CycleTrigger::kExecutionRejected,SearchDeadline::max());
+  EXPECT_FALSE(duplicate.terminal);
+  if (!duplicate.path_reference)
+    ASSERT_TRUE(c.PlanCycle(At(1.5,1.5),bundle,CycleTrigger::kContinue,SearchDeadline::max()).path_reference);
+  auto second=c.PlanCycle(At(1.5,1.5),bundle,CycleTrigger::kExecutionRejected,SearchDeadline::max());
+  EXPECT_FALSE(second.terminal);
+}
+
 }  // namespace
 }  // namespace lunar::incremental_navigation
 
