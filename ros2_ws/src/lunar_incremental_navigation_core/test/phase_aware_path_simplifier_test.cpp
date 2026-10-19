@@ -101,6 +101,51 @@ TEST(WheelSafetyMargin, RetainsFiveCentimetersAtRecorded053Corner) {
     EXPECT_GE(CornerDistance(result.path[i-1].pose.position_m,result.path[i].pose.position_m),.05-1e-9);
 }
 
+TEST(WheelSafetyMargin, DefaultPlanPreservesRawPathClearanceAtRecordedCorner) {
+  const auto fine = CornerMarginFine();
+  const Pose2 start{.position_m = {-6.000910672459173, -21.789886775478795}};
+  const RequestLocalPlanningView view(fine, start, 0., {});
+  WheelLocalPlanner planner;
+  const auto result = planner.Plan(
+      view, start, {.center = {-6.2, -21.6}, .is_final_goal = true},
+      SteadyClock::time_point::max(), {});
+  ASSERT_EQ(result.status, LocalPlanResult::Status::kPlanFound) << result.reason_code;
+  ASSERT_GE(result.path.size(), 2U);
+  double raw_clearance = std::numeric_limits<double>::infinity();
+  for (std::size_t i = 1; i < result.raw_path.size(); ++i) {
+    raw_clearance = std::min(raw_clearance,
+        CornerDistance(result.raw_path[i - 1].pose.position_m,
+                       result.raw_path[i].pose.position_m));
+  }
+  ASSERT_TRUE(std::isfinite(raw_clearance));
+  for (std::size_t i = 1; i < result.path.size(); ++i) {
+    EXPECT_GE(CornerDistance(result.path[i - 1].pose.position_m,
+                             result.path[i].pose.position_m), raw_clearance - 1e-9);
+  }
+}
+
+TEST(WheelSafetyMargin, DefaultPlanAllowsLegalFiveMillimeterStartClearance) {
+  const auto fine = CornerMarginFine();
+  const Pose2 start{.position_m = {-6.095, -21.79}};
+  const RequestLocalPlanningView view(fine, start, 0., {});
+  WheelLocalPlanner planner;
+  const auto result = planner.Plan(
+      view, start, {.center = {-6.2, -21.6}, .is_final_goal = true},
+      SteadyClock::time_point::max(), {});
+  EXPECT_EQ(result.status, LocalPlanResult::Status::kPlanFound) << result.reason_code;
+}
+
+TEST(WheelSafetyMargin, DefaultPlanAllowsSixteenMillimeterStartClearance) {
+  const auto fine = CornerMarginFine();
+  const Pose2 start{.position_m = {-6.084, -21.79}};
+  const RequestLocalPlanningView view(fine, start, 0., {});
+  WheelLocalPlanner planner;
+  const auto result = planner.Plan(
+      view, start, {.center = {-6.2, -21.6}, .is_final_goal = true},
+      SteadyClock::time_point::max(), {});
+  EXPECT_EQ(result.status, LocalPlanResult::Status::kPlanFound) << result.reason_code;
+}
+
 TEST(WheelSafetyMargin, KeepsSingleFreeCellWideCorridorTraversable) {
   std::vector<std::pair<GridIndex,FineCellState>> cells;
   for (std::int64_t y=0;y<8;++y)

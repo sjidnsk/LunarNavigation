@@ -236,8 +236,10 @@ LocalPlanResult WheelLocalPlanner::Plan(
     const RequestLocalPlanningView& view, const Pose2& start,
     const LocalTarget& requested_target, const SearchDeadline deadline,
     const StopToken& stop) {
+  // Preserve the cost-selected route and the simplifier's relative clearance.
+  // The optional length-only corner refiner does not evaluate traversal cost.
   return PlanWithClearance(view, start, requested_target, deadline, stop,
-                           kWheelExecutionClearanceM, true);
+                           kWheelExecutionClearanceM, false);
 }
 
 LocalPlanResult WheelLocalPlanner::PlanWithClearance(

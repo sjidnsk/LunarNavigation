@@ -13,8 +13,9 @@
 
 namespace lunar::incremental_navigation {
 
-// Candidate continuous corridor beyond fine-map vehicle inflation.
-inline constexpr double kWheelExecutionClearanceM = 0.01;
+// Physical collision legality comes from the footprint-inflated map.
+// Obstacle preference is a traversal cost, not an extra admission threshold.
+inline constexpr double kWheelExecutionClearanceM = 0.0;
 
 struct WheelLocalPlannerConfig final {
   std::size_t maximum_width_cells{kMaximumLocalPlanningWindowAxisCells};
