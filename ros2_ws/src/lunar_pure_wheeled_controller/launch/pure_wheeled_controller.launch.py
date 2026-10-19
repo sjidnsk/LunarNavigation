@@ -9,6 +9,18 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 _PARAMETERS = {
     "input_mode": "motion_reference",
+    "controller_backend": "pure_pursuit",
+    "policy_map_service": "/Car/T4/mapping/get_policy_map",
+    "policy_map_timeout_s": "0.5",
+    "mppi_compute_budget_s": "0.04",
+    "mppi_nominal_response_time_s": "0.15",
+    "mppi_trace_diagnostics": "false",
+    "mppi_batch_size": "32",
+    "mppi_time_steps": "40",
+    "mppi_iterations": "1",
+    "mppi_temperature": "0.15",
+    "mppi_seed": "17",
+    "mppi_diagnostics_topic": "/Car/T4/control/mppi_diagnostics",
     "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
     "platform_config": "",
     "path_reference_topic": "/Car/T4/planning/path_reference",
