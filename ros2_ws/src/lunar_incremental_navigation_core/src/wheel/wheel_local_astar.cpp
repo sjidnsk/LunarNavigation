@@ -174,6 +174,39 @@ struct OpenEntryLater final {
   return std::abs(NormalizeAngle(arrival - requested_yaw)) <= tolerance_rad;
 }
 
+// Move only interior vertices within one phase. Every accepted update keeps
+// both complete incident segments certified; endpoints and phase switches stay fixed.
+[[nodiscard]] bool RefineCorners(const RequestLocalPlanningView& view,
+    std::vector<PathPoint>& path, double clearance_m, const SearchControl& control) {
+  for (int pass=0; pass<2; ++pass) {
+    for (std::size_t i=1; i+1<path.size(); ++i) {
+      if (Interrupted(control)) return false;
+      if (path[i-1].phase!=path[i].phase || path[i+1].phase!=path[i].phase) continue;
+      const auto before=path[i-1].pose.position_m;
+      const auto after=path[i+1].pose.position_m;
+      const auto original=path[i].pose.position_m;
+      const Vec3 middle{.x=(before.x+after.x)*.5, .y=(before.y+after.y)*.5,
+                        .z=original.z};
+      double low=0., high=1.;
+      Vec3 best=original;
+      for (int step=0; step<10; ++step) {
+        if (Interrupted(control)) return false;
+        const double t=(low+high)*.5;
+        const Vec3 candidate{.x=original.x+t*(middle.x-original.x),
+                             .y=original.y+t*(middle.y-original.y),.z=original.z};
+        if (view.CertifySegmentWithClearance(before,candidate,path[i-1].phase,
+                path[i].phase,clearance_m,&control) &&
+            view.CertifySegmentWithClearance(candidate,after,path[i].phase,
+                path[i+1].phase,clearance_m,&control)) {
+          low=t;best=candidate;
+        } else high=t;
+      }
+      path[i].pose.position_m=best;
+    }
+  }
+  return !Interrupted(control);
+}
+
 }  // namespace
 
 WheelLocalPlanner::WheelLocalPlanner() = default;
@@ -203,6 +236,17 @@ LocalPlanResult WheelLocalPlanner::Plan(
     const RequestLocalPlanningView& view, const Pose2& start,
     const LocalTarget& requested_target, const SearchDeadline deadline,
     const StopToken& stop) {
+  // Preserve the cost-selected route and the simplifier's relative clearance.
+  // The optional length-only corner refiner does not evaluate traversal cost.
+  return PlanWithClearance(view, start, requested_target, deadline, stop,
+                           kWheelExecutionClearanceM, false);
+}
+
+LocalPlanResult WheelLocalPlanner::PlanWithClearance(
+    const RequestLocalPlanningView& view, const Pose2& start,
+    const LocalTarget& requested_target, const SearchDeadline deadline,
+    const StopToken& stop, const double execution_clearance_m,
+    const bool refine_corners) {
   LocalTarget target = requested_target;
   const auto region = target.region;
   LocalPlanResult result;
@@ -213,7 +257,8 @@ LocalPlanResult WheelLocalPlanner::Plan(
     result.status = *interrupted;
     return result;
   }
-  if (!std::isfinite(start.position_m.x) ||
+  if (!std::isfinite(execution_clearance_m) || execution_clearance_m < 0.0 ||
+      !std::isfinite(start.position_m.x) ||
       !std::isfinite(start.position_m.y) || !std::isfinite(start.yaw_rad) ||
       !std::isfinite(target.center.x) || !std::isfinite(target.center.y) ||
       !std::isfinite(target.position_tolerance_m) ||
@@ -223,6 +268,9 @@ LocalPlanResult WheelLocalPlanner::Plan(
     return result;
   }
 
+  // Exact-position spin has no translational tracking error. Its existing
+  // stationary-support certificate remains authoritative; the extra execution
+  // clearance below applies to every translating segment.
   if (target.is_final_goal && target.terminal_yaw_rad &&
       target.center == start.position_m && view.CanCertifyStationary(start.position_m) &&
       capability_.maximum_spin_rate_radps > 0.0) {
@@ -306,10 +354,10 @@ LocalPlanResult WheelLocalPlanner::Plan(
     const Point2 from = predecessor_offset == start_offset
                             ? start.position_m
                             : CellCenter(geometry, index_of(predecessor_offset));
-    if (!view.CertifySegment({.x = from.x, .y = from.y},
+    if (!view.CertifySegmentWithClearance({.x = from.x, .y = from.y},
                             {.x = terminal_target.center.x,
                              .y = terminal_target.center.y},
-                            phase_[predecessor_offset], StartPhase::kNormal)) {
+                            phase_[predecessor_offset], StartPhase::kNormal, execution_clearance_m, &control)) {
       return false;
     }
     if (!terminal_target.is_final_goal || !terminal_target.terminal_yaw_rad) {
@@ -410,9 +458,9 @@ LocalPlanResult WheelLocalPlanner::Plan(
       const auto from = current.offset == start_offset
                             ? start.position_m : CellCenter(geometry, current_index);
       const auto to = CellCenter(geometry, next);
-      if (!view.CertifySegment({.x = from.x, .y = from.y},
+      if (!view.CertifySegmentWithClearance({.x = from.x, .y = from.y},
                                {.x = to.x, .y = to.y},
-                               phase_[current.offset], *next_phase)) continue;
+                               phase_[current.offset], *next_phase, execution_clearance_m, &control)) continue;
       // Invalid terminal edges are not inserted, so the search continues to
       // other legal entering edges instead of accepting a position-only goal.
       const auto* next_candidate = region ? region->At(next) : nullptr;
@@ -450,6 +498,11 @@ LocalPlanResult WheelLocalPlanner::Plan(
           std::max(result.statistics.open_peak, open.size());
       ++result.statistics.generated_states;
     }
+  }
+  // Certification can consume the deadline while rejecting the last edge.
+  if (const auto interrupted = Interrupted(control)) {
+    result.status = *interrupted;
+    return result;
   }
   if (!found) {
     if (region && reached_forward_unknown_boundary) {
@@ -528,11 +581,16 @@ LocalPlanResult WheelLocalPlanner::Plan(
     result.raw_path.clear();
     return result;
   }
-  result.path = SimplifyPhaseAwarePath(view, result.raw_path, control);
+  result.path = SimplifyPhaseAwarePath(view, result.raw_path, control, execution_clearance_m);
   if (const auto interrupted = Interrupted(control)) {
     result.status = *interrupted;
     result.raw_path.clear();
     result.path.clear();
+    return result;
+  }
+  if (refine_corners && !RefineCorners(view,result.path,execution_clearance_m,control)) {
+    result.status=Interrupted(control).value_or(LocalPlanResult::Status::kNoPath);
+    result.raw_path.clear();result.path.clear();
     return result;
   }
   if (result.path.empty() ||

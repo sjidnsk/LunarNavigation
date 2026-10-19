@@ -63,7 +63,7 @@ def cached_result(root,output,proof):
         # Keep the raw result/proof; no simulator observation means unknown collision.
         if enabled(root) and result.get('status')=='failed' and isinstance(row.get('error'),str) and row['error'].startswith('DomainBusy:'):
             return dict(result,row=counted_failure(dict(row,collisions=None)))
-        if enabled(root) and result.get('status')=='failed' and isinstance(row.get('error'),str) and row['error'].startswith(('InfrastructureError:','WorkerExit:')):
+        if enabled(root) and result.get('status')=='failed' and isinstance(row.get('error'),str) and row['error'].startswith(('InfrastructureError:','WorkerExit:','InputUnavailable:')):
             return dict(result,row=counted_failure(row))
         raise RuntimeError('evaluation infrastructure error: '+str(row.get('error')))
     return result
@@ -94,7 +94,11 @@ def screen(controller,actor,cases,label):
     directory=controller.state.get('evaluation_directory','evaluation')
     if Path(directory).name!=directory or directory in ('.','..'):raise ValueError('invalid evaluation directory')
     folder=root/directory/label;folder.mkdir(parents=True,exist_ok=True)
+    from .evaluation_navigation import load_evaluation_navigation
+    navigation=load_evaluation_navigation(root)
     common=dict(actor_sha=ctl.sha(actor),config_sha=ctl.sha(root/'config.json'),runtime=ctl.runtime_digest())
+    if (root/'evaluation-navigation.json').exists():
+        common['evaluation_navigation']=navigation
     results={};pending=deque();jobs={}
     for case in cases:
         result=cached_result(root,folder/(case['case_id']+'.json'),dict(common,case=case))

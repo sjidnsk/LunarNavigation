@@ -1148,7 +1148,7 @@ struct IncrementalNavigationNode::Impl final {
           (tracking->reason == "GOAL_POSITION_LOST" || tracking->reason == "GOAL_YAW_LOST");
       RunCycle(*state, final_pose_lost ? core::CycleTrigger::kFinalPoseLost :
           (tracking->state == lunar_planning_msgs::msg::TrackingStatus::FAILED
-          ? core::CycleTrigger::kDeviation : core::CycleTrigger::kSegmentEnd));
+          ? core::CycleTrigger::kExecutionRejected : core::CycleTrigger::kSegmentEnd));
       replan_pending = coordinator->state() == core::CoordinatorState::kReplanning;
       return;
     }

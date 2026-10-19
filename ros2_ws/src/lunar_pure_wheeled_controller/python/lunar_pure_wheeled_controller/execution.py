@@ -121,7 +121,10 @@ class PathExecutor:
         self._best_progress = 0.0
         if not keep_final_alignment:
             self._best_angle = math.inf
-        self.stops = path.stop_arcs(self.policy.corner_angle_rad)
+        # Each certified bend is an execution boundary. A shallow bend may
+        # still protect an obstacle; lookahead must not skip it across the chord.
+        # Collinear sampling vertices remain transparent.
+        self.stops = path.stop_arcs(min(self.policy.corner_angle_rad, 1e-6))
         return True
 
     def _result(self, v=0.0, w=0.0) -> ExecutionResult:
@@ -148,14 +151,15 @@ class PathExecutor:
             and abs(state.angular_radps) <= p.stopped_angular_radps
         )
 
-    def _rotation(self, state, error, dt):
+    def _rotation(self, state, error, dt, *, tolerance=None):
         p = self.policy
         self.heading_error = error
-        tolerance = (
-            p.goal_yaw_tolerance_rad * (0.5 if self.final else 1.0)
-            if self.phase == "FINAL_ALIGN"
-            else p.alignment_tolerance_rad
-        )
+        if tolerance is None:
+            tolerance = (
+                p.goal_yaw_tolerance_rad * (0.5 if self.final else 1.0)
+                if self.phase == "FINAL_ALIGN"
+                else p.alignment_tolerance_rad
+            )
         if abs(error) < tolerance:
             target = 0.0
         else:
@@ -274,7 +278,7 @@ class PathExecutor:
         tolerance = (
             p.goal_position_tolerance_m * 0.5
             if at_end and self.final
-            else p.corner_position_tolerance_m
+            else min(p.corner_position_tolerance_m, .25*p.execution_clearance_m)
         )
         distance = math.hypot(stop_xy[0] - state.x_m, stop_xy[1] - state.y_m)
         arrived = distance <= tolerance and stop_s - self.progress_m <= tolerance
@@ -325,17 +329,23 @@ class PathExecutor:
             stop_s = self.stops[self._stop_index]
             self.phase = "ALIGNING"
             self._best_angle = math.inf
-        # At a corner use the following tangent, not the already completed segment.
-        tangent_index = self.index
-        if (
-            self.progress_m
-            >= line.arcs[min(self.index + 1, len(line.arcs) - 1)]
-            - p.corner_position_tolerance_m
-        ):
-            tangent_index = min(self.index + 1, len(line.headings) - 1)
-        heading = line.headings[tangent_index] if line.headings else line.final_yaw
-        desired = angle(heading + (math.pi if self.direction < 0 else 0.0))
+        target = line.point_at(min(stop_s, self.progress_m + p.lookahead_m))
+        dx, dy = target[0] - state.x_m, target[1] - state.y_m
+        travel_yaw = state.yaw_rad + (math.pi if self.direction < 0 else 0.0)
+        # Alignment, tracking re-entry and pursuit use the same chord. Switching
+        # back to the path tangent after alignment can immediately demand another
+        # rotation at a lateral offset, without making progress along the path.
+        desired = angle(math.atan2(dy, dx) - (math.pi if self.direction < 0 else 0.0))
         self.heading_error = angle(desired - state.yaw_rad)
+        lateral = -math.sin(travel_yaw) * dx + math.cos(travel_yaw) * dy
+        k = 2 * lateral / max(dx * dx + dy * dy, 0.01**2)
+        # Tighten short-tail alignment to leave curvature/braking margin. This
+        # is a feasibility bound, not a certificate of obstacle clearance.
+        alignment_tolerance = min(
+            p.alignment_tolerance_rad,
+            0.5 * math.asin(min(1.0, p.max_curvature_per_m *
+                                max(math.hypot(dx, dy), 0.01) / 2.0)),
+        )
         if self.phase == "BRAKING":
             if not self._stopped(state):
                 return self._result()
@@ -344,7 +354,7 @@ class PathExecutor:
             self.phase = "BRAKING"
             return self._result()
         if self.phase == "ALIGNING":
-            if abs(self.heading_error) <= p.alignment_tolerance_rad and self._stopped(
+            if abs(self.heading_error) <= alignment_tolerance and self._stopped(
                 state
             ):
                 self.phase = "TRACKING"
@@ -371,7 +381,8 @@ class PathExecutor:
                     self.failure = "ALIGNMENT_STALLED"
                     self.phase = "BRAKING"
                     return self._result()
-                return self._rotation(state, self.heading_error, dt)
+                return self._rotation(state, self.heading_error, dt,
+                                      tolerance=alignment_tolerance)
         if self.rolling_updates:
             position = (state.x_m, state.y_m)
             if self._motion_anchor is None:
@@ -390,24 +401,26 @@ class PathExecutor:
             self.failure = "TRACKING_STALLED"
             self.phase = "BRAKING"
             return self._result()
-        target = line.point_at(min(stop_s, self.progress_m + p.lookahead_m))
-        dx, dy = target[0] - state.x_m, target[1] - state.y_m
         # Pure pursuit in the direction of travel; reverse yaw rate uses |v|.
-        travel_yaw = state.yaw_rad + (math.pi if self.direction < 0 else 0.0)
-        lateral = -math.sin(travel_yaw) * dx + math.cos(travel_yaw) * dy
-        k = 2 * lateral / max(dx * dx + dy * dy, 0.01**2)
         if abs(k) > p.max_curvature_per_m:
             self.phase = "BRAKING"
             self._best_angle = math.inf
-            # A heading aligned to the tangent cannot correct a lateral offset
-            # beyond curvature limits; request a verified replacement path.
-            if abs(self.heading_error) <= p.alignment_tolerance_rad:
+            # An aligned but infeasible command needs a replacement reference.
+            if abs(self.heading_error) <= alignment_tolerance:
                 self.failure = "CURVATURE_INFEASIBLE"
             return self._result()
-        remaining = max(0.0, stop_s - self.progress_m - tolerance * 0.5)
+        # Projection can reach the vertex while a small lateral distance remains.
+        # Brake to the measured target too, otherwise a tight corner band stalls.
+        remaining = max(0.0, max(stop_s-self.progress_m, distance)-tolerance*.5)
+        # Allow measured command/odometry response before braking begins.
+        # Solve v*tau + v^2/(2*a) <= remaining instead of assuming zero delay.
+        response = max(p.control_response_time_s, 3*dt)
+        braking_offset = p.max_linear_decel_mps2*response
+        braking_speed = (math.sqrt(braking_offset**2 +
+                                   2*p.max_linear_decel_mps2*remaining)-braking_offset)
         speed = min(
             p.max_linear_mps if self.direction > 0 else p.max_reverse_mps,
-            math.sqrt(2 * p.max_linear_decel_mps2 * remaining),
+            braking_speed,
         )
         if abs(k) > 1e-9:
             speed = min(
@@ -415,7 +428,22 @@ class PathExecutor:
                 p.max_angular_radps / abs(k),
                 math.sqrt(p.max_lateral_accel_mps2 / abs(k)),
             )
+        # Slow corrective travel before the estimated lateral braking excursion
+        # consumes the reserve. This is a regulation bound, not a swept-volume
+        # safety certificate. Keep v/omega coupled through tracking_speed below.
+        reserve = max(.1*p.execution_clearance_m,
+                      .5*p.execution_clearance_m-self.error)
+        lateral_fraction = max(abs(math.sin(self.heading_error)), .01)
+        correction_speed = math.sqrt(2*p.max_linear_decel_mps2*reserve /
+                                     lateral_fraction)
         current = max(0.0, self.direction * self._last_linear_command)
+        if self.rolling_updates:
+            # The regulator is a soft target throughout rolling tracking.
+            # Approach it within the braking limit without dropping tracking;
+            # stop/corner and physical speed bounds above remain hard limits.
+            correction_speed = max(correction_speed,
+                                   current-p.max_linear_decel_mps2*dt)
+        speed = min(speed, correction_speed)
         if self.rolling_updates:
             command = rolling_tracking_command(k, speed, current, self._last_angular_command, dt, p)
             if command is None:

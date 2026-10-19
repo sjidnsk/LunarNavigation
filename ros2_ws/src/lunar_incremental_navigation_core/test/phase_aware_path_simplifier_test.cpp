@@ -65,6 +65,163 @@ namespace {
   return PathPoint{.pose = {.position_m = {.x = x, .y = y}}, .phase = phase};
 }
 
+[[nodiscard]] std::shared_ptr<const FineTraversabilitySnapshot> CornerMarginFine(FineCellState hazard = FineCellState::kBlocked) {
+  std::vector<std::pair<GridIndex, FineCellState>> cells;
+  for (std::int64_t y=0; y<10; ++y)
+    for (std::int64_t x=0; x<10; ++x)
+      cells.push_back({{x,y}, x==5 && y==5 ? hazard : FineCellState::kFree});
+  return MakeFine(GridGeometry{.frame_id="map", .width=10, .height=10,
+                              .resolution_m=.2, .origin_m={-7.3,-22.9,0.}}, cells);
+}
+
+[[nodiscard]] double CornerDistance(Vec3 a, Vec3 b) {
+  const auto point_segment = [&](double x, double y) {
+    const double dx=b.x-a.x, dy=b.y-a.y, length=dx*dx+dy*dy;
+    const double t=length>0 ? std::clamp(((x-a.x)*dx+(y-a.y)*dy)/length,0.,1.) : 0.;
+    return std::hypot(x-a.x-t*dx,y-a.y-t*dy);
+  };
+  const auto point_box = [](Vec3 p) {
+    return std::hypot(std::max({-6.3-p.x,0.,p.x+6.1}),
+                      std::max({-21.9-p.y,0.,p.y+21.7}));
+  };
+  return std::min({point_box(a),point_box(b),point_segment(-6.3,-21.9),
+      point_segment(-6.3,-21.7),point_segment(-6.1,-21.9),point_segment(-6.1,-21.7)});
+}
+
+TEST(WheelSafetyMargin, RetainsFiveCentimetersAtRecorded053Corner) {
+  const auto fine=CornerMarginFine();
+  const Pose2 start{.position_m={-6.000910672459173,-21.789886775478795}};
+  const RequestLocalPlanningView view(fine,start,0.,{});
+  WheelLocalPlanner planner;
+  const auto result=planner.PlanWithClearance(view,start,{.center={-6.2,-21.6},.is_final_goal=true},
+      SteadyClock::now()+std::chrono::seconds(2),{},.05,false);
+  ASSERT_EQ(result.status,LocalPlanResult::Status::kPlanFound) << result.reason_code;
+  ASSERT_GE(result.path.size(),2U);
+  for (std::size_t i=1; i<result.path.size();++i)
+    EXPECT_GE(CornerDistance(result.path[i-1].pose.position_m,result.path[i].pose.position_m),.05-1e-9);
+}
+
+TEST(WheelSafetyMargin, DefaultPlanPreservesRawPathClearanceAtRecordedCorner) {
+  const auto fine = CornerMarginFine();
+  const Pose2 start{.position_m = {-6.000910672459173, -21.789886775478795}};
+  const RequestLocalPlanningView view(fine, start, 0., {});
+  WheelLocalPlanner planner;
+  const auto result = planner.Plan(
+      view, start, {.center = {-6.2, -21.6}, .is_final_goal = true},
+      SteadyClock::time_point::max(), {});
+  ASSERT_EQ(result.status, LocalPlanResult::Status::kPlanFound) << result.reason_code;
+  ASSERT_GE(result.path.size(), 2U);
+  double raw_clearance = std::numeric_limits<double>::infinity();
+  for (std::size_t i = 1; i < result.raw_path.size(); ++i) {
+    raw_clearance = std::min(raw_clearance,
+        CornerDistance(result.raw_path[i - 1].pose.position_m,
+                       result.raw_path[i].pose.position_m));
+  }
+  ASSERT_TRUE(std::isfinite(raw_clearance));
+  for (std::size_t i = 1; i < result.path.size(); ++i) {
+    EXPECT_GE(CornerDistance(result.path[i - 1].pose.position_m,
+                             result.path[i].pose.position_m), raw_clearance - 1e-9);
+  }
+}
+
+TEST(WheelSafetyMargin, DefaultPlanAllowsLegalFiveMillimeterStartClearance) {
+  const auto fine = CornerMarginFine();
+  const Pose2 start{.position_m = {-6.095, -21.79}};
+  const RequestLocalPlanningView view(fine, start, 0., {});
+  WheelLocalPlanner planner;
+  const auto result = planner.Plan(
+      view, start, {.center = {-6.2, -21.6}, .is_final_goal = true},
+      SteadyClock::time_point::max(), {});
+  EXPECT_EQ(result.status, LocalPlanResult::Status::kPlanFound) << result.reason_code;
+}
+
+TEST(WheelSafetyMargin, DefaultPlanAllowsSixteenMillimeterStartClearance) {
+  const auto fine = CornerMarginFine();
+  const Pose2 start{.position_m = {-6.084, -21.79}};
+  const RequestLocalPlanningView view(fine, start, 0., {});
+  WheelLocalPlanner planner;
+  const auto result = planner.Plan(
+      view, start, {.center = {-6.2, -21.6}, .is_final_goal = true},
+      SteadyClock::time_point::max(), {});
+  EXPECT_EQ(result.status, LocalPlanResult::Status::kPlanFound) << result.reason_code;
+}
+
+TEST(WheelSafetyMargin, KeepsSingleFreeCellWideCorridorTraversable) {
+  std::vector<std::pair<GridIndex,FineCellState>> cells;
+  for (std::int64_t y=0;y<8;++y)
+    for (std::int64_t x=0;x<8;++x)
+      cells.push_back({{x,y}, y==3 && x>=1 && x<=6 ? FineCellState::kFree : FineCellState::kBlocked});
+  const auto fine=MakeFine(GridGeometry{.frame_id="map",.width=8,.height=8,.resolution_m=.2},cells);
+  const Pose2 start{.position_m={.3,.7}};
+  const RequestLocalPlanningView view(fine,start,0.,{});
+  WheelLocalPlanner planner;
+  const auto result=planner.Plan(view,start,{.center={1.3,.7},.is_final_goal=true},
+      SteadyClock::now()+std::chrono::seconds(2),{});
+  EXPECT_EQ(result.status,LocalPlanResult::Status::kPlanFound) << result.reason_code;
+}
+
+TEST(WheelSafetyMargin, ClosedClearanceChecksBlockedAndUnknownAreas) {
+  for (const auto hazard : {FineCellState::kBlocked,FineCellState::kUnknown}) {
+    const auto fine=CornerMarginFine(hazard);
+    const Pose2 start{.position_m={-6.000910672459173,-21.789886775478795}};
+    const RequestLocalPlanningView view(fine,start,0.,{});
+    const Vec3 a{start.position_m.x,start.position_m.y,0.}, b{-6.2,-21.6,0.};
+    EXPECT_TRUE(view.CertifySegment(a,b,StartPhase::kNormal,StartPhase::kNormal));
+    EXPECT_FALSE(view.CertifySegmentWithClearance(a,b,StartPhase::kNormal,StartPhase::kNormal,.05));
+    EXPECT_FALSE(view.CertifySegmentWithClearance(b,a,StartPhase::kNormal,StartPhase::kNormal,.05));
+    const Vec3 via{-6.,-21.6,0.};
+    EXPECT_TRUE(view.CertifySegmentWithClearance(a,via,StartPhase::kNormal,StartPhase::kNormal,.05));
+    EXPECT_TRUE(view.CertifySegmentWithClearance(via,b,StartPhase::kNormal,StartPhase::kNormal,.05));
+    const Vec3 edge_a{-6.,-21.65,0.}, edge_b{-6.2,-21.65,0.};
+    EXPECT_TRUE(view.CertifySegmentWithClearance(edge_a,edge_b,StartPhase::kNormal,StartPhase::kNormal,.05));
+    EXPECT_TRUE(view.CertifySegmentWithClearance(edge_b,edge_b,StartPhase::kNormal,StartPhase::kNormal,.05));
+    EXPECT_FALSE(view.CertifySegmentWithClearance({-6.,-21.651,0.},{-6.2,-21.651,0.},StartPhase::kNormal,StartPhase::kNormal,.05));
+    EXPECT_FALSE(view.CertifySegmentWithClearance(a,b,StartPhase::kNormal,StartPhase::kNormal,-.05));
+    SearchControl canceled{.deadline=SteadyClock::time_point::min()};
+    EXPECT_FALSE(view.CertifySegmentWithClearance(a,via,StartPhase::kNormal,StartPhase::kNormal,.05,&canceled));
+  }
+}
+
+TEST(WheelSafetyMargin, ExplicitMarginKeepsReachabilityTradeoffMeasurable) {
+  const auto fine = CornerMarginFine();
+  const Pose2 start{.position_m={-6.08,-21.79}}; // 2 cm from the inflated obstacle.
+  const RequestLocalPlanningView view(fine,start,0.,{});
+  WheelLocalPlanner planner;
+  const LocalTarget goal{.center={-6.2,-21.6},.is_final_goal=true};
+  const auto deadline=SteadyClock::time_point::max();
+  EXPECT_EQ(planner.PlanWithClearance(view,start,goal,deadline,{},.01,false).status,
+            LocalPlanResult::Status::kPlanFound);
+  EXPECT_EQ(planner.PlanWithClearance(view,start,goal,deadline,{},.05,false).status,
+            LocalPlanResult::Status::kNoPath);
+  EXPECT_EQ(planner.PlanWithClearance(view,start,goal,deadline,{},-.01,false).status,
+            LocalPlanResult::Status::kNoPath);
+}
+
+TEST(WheelSafetyMargin, ContinuousCornerShortensRouteWithoutSpendingClearance) {
+  const auto fine=CornerMarginFine();
+  const Pose2 start{.position_m={-6.000910672459173,-21.789886775478795}};
+  const RequestLocalPlanningView view(fine,start,0.,{});
+  WheelLocalPlanner planner;
+  const LocalTarget goal{.center={-6.2,-21.6},.is_final_goal=true};
+  const auto grid=planner.PlanWithClearance(view,start,goal,SteadyClock::time_point::max(),{},.01,false);
+  const auto continuous=planner.PlanWithClearance(view,start,goal,SteadyClock::time_point::max(),{},.01,true);
+  ASSERT_EQ(grid.status,LocalPlanResult::Status::kPlanFound);
+  ASSERT_EQ(continuous.status,LocalPlanResult::Status::kPlanFound);
+  auto length=[](const auto& path) {
+    double total=0.;
+    for(std::size_t i=1;i<path.size();++i)
+      total+=std::hypot(path[i].pose.position_m.x-path[i-1].pose.position_m.x,
+                        path[i].pose.position_m.y-path[i-1].pose.position_m.y);
+    return total;
+  };
+  EXPECT_LT(length(continuous.path),length(grid.path)-.01);
+  EXPECT_EQ(continuous.path.front().pose.position_m,grid.path.front().pose.position_m);
+  EXPECT_EQ(continuous.path.back().pose.position_m,grid.path.back().pose.position_m);
+  for(std::size_t i=1;i<continuous.path.size();++i)
+    EXPECT_GE(CornerDistance(continuous.path[i-1].pose.position_m,
+                            continuous.path[i].pose.position_m),.01-1e-9);
+}
+
 TEST(PhaseAwareSearch, FindsAlternativeToPrefixDiagonalGrazingEvidence) {
   const auto fine = MakeFine({{{2, 1}, FineCellState::kFree},
                               {{3, 1}, FineCellState::kFree},

@@ -66,8 +66,20 @@ def make_transition(observation,action,next_observation,privileged,next_privileg
 
 
 class RosExplorationEnv:
-    def __init__(self,config,env_id,*,domain_base=210,wall_timeout_s=120.,training=False):
+    def __init__(self,config,env_id,*,domain_base=210,wall_timeout_s=120.,training=False,simulation_step_sync=False,
+                 controller_backend=None,mppi_nominal_response_time_s=None):
         self.config=config;self.env_id=int(env_id)
+        self._simulation_step_sync=bool(simulation_step_sync)
+        from .evaluation_navigation import validate_evaluation_navigation
+        navigation=validate_evaluation_navigation(dict(
+            controller_backend=controller_backend or ('mppi' if simulation_step_sync else 'pure_pursuit'),
+            simulation_step_sync=simulation_step_sync,
+            mppi_nominal_response_time_s=mppi_nominal_response_time_s))
+        self._controller_backend=navigation['controller_backend']
+        self._mppi_nominal_response_time_s=mppi_nominal_response_time_s
+        self._mppi_compute_ms=[];self._mppi_deadline_events=[]
+        if self._simulation_step_sync and abs(config.integration_step_s-.05)>1e-12:
+            raise ValueError("simulation step synchronization requires the 20Hz 0.05s integration step")
         self.sensor=config.sensor
         self._fixed_sensor=self.sensor
         self._initial_reference_coverage=0.
@@ -335,6 +347,17 @@ class RosExplorationEnv:
         self._tf_pub=self.node.create_publisher(TFMessage,ns+'/tf',10)
         self._map_pub=self.node.create_publisher(GridMap,ns+'/grid',qos)
         self._cmd_sub=self.node.create_subscription(Twist,ns+'/cmd_vel',self._on_command,10)
+        if self._simulation_step_sync:
+            from std_msgs.msg import String
+            self._mppi_step_condition=threading.Condition()
+            self._mppi_step_ns=None;self._mppi_step_command=None
+            ack_qos=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,
+                               durability=DurabilityPolicy.TRANSIENT_LOCAL)
+            self._mppi_step_sub=self.node.create_subscription(String,ns+'/mppi_step_ack',self._on_mppi_step,ack_qos)
+        if self._controller_backend!='pure_pursuit':
+            from std_msgs.msg import String
+            self._mppi_diagnostics_sub=self.node.create_subscription(
+                String,ns+'/mppi_diagnostics',self._on_mppi_diagnostics,100)
         self.adapter=RosNavigationAdapter(self.node,action_name=ns+'/navigate',policy_map_service=ns+'/get_map',
             odometry_topic=ns+'/odom',diagnostics_topic=ns+'/diagnostics',path_reference_topic=ns+'/reference',tf_topic=ns+'/tf')
         def spin():
@@ -355,9 +378,60 @@ class RosExplorationEnv:
             dict(common,input_mode='incremental_reference',path_reference_topic=ns+'/reference',
                 tracking_status_topic=ns+'/tracking',reference_topic=ns+'/wheeled_reference',path_topic=ns+'/path',
                 command_topic=ns+'/cmd_vel',execution_cancel_topic=ns+'/cancel',
-                max_linear_mps=.2,max_angular_radps=1.,control_rate_hz=20.),env)
+                max_linear_mps=.2,max_angular_radps=1.,control_rate_hz=20.,**self._controller_parameters()),env)
+
+    def _controller_parameters(self):
+        if self._controller_backend=='pure_pursuit':return {}
+        ns=self.namespace
+        parameters=dict(controller_backend=self._controller_backend,policy_map_service=ns+'/get_map',
+                        mppi_diagnostics_topic=ns+'/mppi_diagnostics')
+        if self._mppi_nominal_response_time_s is not None:
+            parameters['mppi_nominal_response_time_s']=self._mppi_nominal_response_time_s
+        if self._simulation_step_sync:
+            parameters.update(mppi_simulation_step_sync=True,mppi_step_ack_topic=ns+'/mppi_step_ack')
+        return parameters
+
+    def _on_mppi_diagnostics(self,message):
+        try:event=json.loads(message.data)
+        except (ValueError,TypeError):return
+        if not isinstance(event,dict) or event.get('event')!='solve_result':return
+        value=event.get('compute_ms')
+        if type(value) in (int,float) and math.isfinite(value):self._mppi_compute_ms.append(float(value))
+        if event.get('deadline_missed'):self._mppi_deadline_events.append(event)
+
+    def _on_mppi_step(self,msg):
+        import json
+        try:
+            event=json.loads(msg.data);stamp=event.get('now_ns');command=event.get('command')
+            if (event.get('event')!='control_step' or type(stamp) is not int or stamp!=self._sim_ns
+                    or not isinstance(command,list) or len(command)!=2
+                    or not all(isinstance(v,(int,float)) and math.isfinite(v) for v in command)):
+                return
+        except (ValueError,TypeError,AttributeError):return
+        with self._mppi_step_condition:
+            self._mppi_step_ns=stamp;self._mppi_step_command=tuple(command)
+            self._mppi_step_condition.notify_all()
+
+    def _wait_mppi_step(self,republish):
+        deadline=time.monotonic()+min(self.wall_timeout_s,5.)
+        while True:
+            if self._spin_error is not None:raise InfrastructureError(str(self._spin_error))
+            try:self.owned.check()
+            except RuntimeError as exc:raise InfrastructureError(str(exc)) from exc
+            with self._mppi_step_condition:
+                if self._mppi_step_ns==self._sim_ns:
+                    self._command=self._mppi_step_command
+                    self._max_command_speed=max(self._max_command_speed,abs(self._command[0]))
+                    return
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise InfrastructureError('simulation controller step synchronization timeout')
+                self._mppi_step_condition.wait(timeout=min(.02,remaining))
+            # Discovery may miss the first clock/odom/TF. Repeat this frame,
+            # never a physical integration or a sensor observation.
+            republish()
 
     def _on_command(self,msg):
+        if getattr(self,'_simulation_step_sync',False):return
         self._command=(msg.linear.x,msg.angular.z)
         self._max_command_speed=max(self._max_command_speed,abs(msg.linear.x))
         if abs(msg.linear.y)>1e-12: raise InfrastructureError('public controller issued lateral motion')
@@ -382,8 +456,9 @@ class RosExplorationEnv:
         p=self.plant.pose
         self._record_task_entry()
         x,y=self.terrain.world_to_cell(p.x,p.y)
-        self._odom_pub.publish(odometry_message(p,self.plant.linear_mps,self.plant.angular_radps,
-            self._sim_ns,self.terrain.heights[y,x]))
+        odometry=odometry_message(p,self.plant.linear_mps,self.plant.angular_radps,
+            self._sim_ns,self.terrain.heights[y,x])
+        self._odom_pub.publish(odometry)
         tf=TransformStamped();tf.header.stamp=stamp;tf.header.frame_id='map';tf.child_frame_id='odom';tf.transform.rotation.w=1.
         self._tf_pub.publish(TFMessage(transforms=[tf]))
         if self._sim_ns-self._last_sensor_ns>=round(1e9/self.config.observation_hz):
@@ -400,6 +475,12 @@ class RosExplorationEnv:
         if snap is not None:
             self.buffer.acknowledge(self.adapter.processed_stamp_ns)
             self._apply_known(snap)
+        if self._simulation_step_sync:
+            def republish():
+                self._clock_pub.publish(Clock(clock=stamp))
+                self._odom_pub.publish(odometry)
+                self._tf_pub.publish(TFMessage(transforms=[tf]))
+            self._wait_mppi_step(republish)
         self._pace()
 
     def _record_task_entry(self):

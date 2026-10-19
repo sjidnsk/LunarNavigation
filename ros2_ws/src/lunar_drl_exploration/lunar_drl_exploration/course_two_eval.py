@@ -26,10 +26,13 @@ def evaluate_case(root, request_path, output, *, slot=0, progress=None, job_id=N
     from .ros_env import RosExplorationEnv
     from .evaluation import GeometryMetrics
     from .course_two_parallel import validate_slot,EVALUATION_DOMAIN_BASE,evaluation_domain
+    from .evaluation_navigation import load_evaluation_navigation
     validate_slot(slot)
     progress=Path(progress) if progress is not None else root/'eval-progress.json'
     request=read(request_path);case=request['case'];actor=Path(request['actor'])
+    navigation=load_evaluation_navigation(root)
     proof=dict(actor_sha=sha(actor),case=case,config_sha=sha(root/'config.json'),runtime=runtime_digest())
+    if (root/'evaluation-navigation.json').exists():proof['evaluation_navigation']=navigation
     if Path(output).exists():
         cached=read(output)
         if cached.get('proof')!=proof:raise ValueError('cached evaluation identity changed')
@@ -39,12 +42,13 @@ def evaluate_case(root, request_path, output, *, slot=0, progress=None, job_id=N
     config=replace(config,environments=1,stagnation_window_steps=0,
         target_rtf=20. if case['kind']=='diagnostic' else config.target_rtf)
     policy=ActorPolicy.load(actor)
-    env=RosExplorationEnv(config,slot,domain_base=EVALUATION_DOMAIN_BASE)
+    env=RosExplorationEnv(config,slot,domain_base=EVALUATION_DOMAIN_BASE,**navigation)
     def interrupted(*_):raise KeyboardInterrupt('evaluation interrupted')
     previous={s:signal.signal(s,interrupted) for s in (signal.SIGINT,signal.SIGTERM)}
     row=dict(case_id=case['case_id'],kind=case['kind'],completed=False,collisions=0,error=None,
         decisions=0,initial_roi_visible=False,first_roi=None,trajectory=[],**case_metadata(case))
     started=time.monotonic()
+    trace=sample=visual=visual_hook=None
     try:
         if case['kind'] in ('new','visible'):
             c=case['case']
@@ -91,19 +95,36 @@ def evaluate_case(root, request_path, output, *, slot=0, progress=None, job_id=N
             initialization_simulation_s=env.episode_metadata.get('initialization_simulation_s'),
             policy_start_pose=env.episode_metadata.get('initial_pose'))
         validate_policy_start(case,initial)
+        from .exploration_metrics import attach_trace
+        trace,sample=attach_trace(env,initial)
+        protocol_path=root/'comparison-protocol.json'
+        if protocol_path.exists() and case['case_id'] in read(protocol_path)['visualization_cases']:
+            from .exploration_visuals import VisualCapture
+            visual=VisualCapture(env,root/'visualizations'/actor.stem/case['case_id']/(job_id or 'standalone'),case['case_id'],proof['actor_sha'])
+            visual_hook=policy.actor.register_forward_hook(lambda module,args,output:visual.probabilities(output[0].probs))
+            row['visualization_directory']=str(visual.directory.relative_to(root))
+        row["decision_budget"]=env.episode_budget
         geometry=GeometryMetrics((env.plant.pose.x,env.plant.pose.y),config.goal_position_tolerance_m)
         row['trajectory'].append([env.plant.pose.x,env.plant.pose.y,env.plant.pose.yaw,initial])
         write(progress,dict(case_id=row['case_id'],actor=str(actor),decisions=0,coverage=initial,
             updated_unix=time.time(),phase='policy',slot=slot,domain_id=env.domain_id,job_id=job_id))
         while not env.terminated and not env.plant.collision and env.steps<env.episode_budget:
-            transition=env.step(policy(env.observation))
+            inference_started=time.perf_counter_ns()
+            action=policy(env.observation)
+            trace.inference_ms.append((time.perf_counter_ns()-inference_started)/1e6)
+            if visual is not None:visual.action(action,env.observation)
+            transition=env.step(action)
             coverage=env.reference.coverage_ratio(transition.next_privileged.observed)
+            sample(coverage)
+            trace.decision(env.steps,coverage)
             geometry.observe((env.plant.pose.x,env.plant.pose.y),transition.parts.new_area_m2)
             row['trajectory'].append([env.plant.pose.x,env.plant.pose.y,env.plant.pose.yaw,coverage])
             row.update(decisions=env.steps,first_roi=env._first_roi,first_entry=env._first_entry)
             write(progress,dict(case_id=row['case_id'],actor=str(actor),decisions=env.steps,
                 coverage=coverage,updated_unix=time.time(),phase='policy',first_roi=row['first_roi'],
-                slot=slot,domain_id=env.domain_id,job_id=job_id))
+                slot=slot,domain_id=env.domain_id,job_id=job_id,
+                decision_budget=env.episode_budget,metric_samples=len(trace.samples),
+                policy_distance_m=trace.samples[-1][0],policy_simulation_s=trace.samples[-1][1]))
             if transition.truncated:break
         row.update(completed=env.completed,collisions=int(env.plant.collision),
             final_coverage=env.reference.coverage_ratio(env.privileged.observed),distance_m=env.plant.distance_m,
@@ -112,10 +133,22 @@ def evaluate_case(root, request_path, output, *, slot=0, progress=None, job_id=N
     except Exception as exc:
         row['error']=f'{type(exc).__name__}: {exc}'
     finally:
+        if trace is not None:
+            row["exploration_metrics"]=trace.summary(env.reference.area_m2)
+            row["coverage_curve"]=trace.samples
+            row["decision_curve"]=trace.decisions
+        if visual_hook is not None:visual_hook.remove()
+        if visual is not None:visual.close()
         env.close()
         for signum,handler in previous.items():signal.signal(signum,handler)
     result=dict(proof=proof,row=row,wall_s=time.monotonic()-started,
         execution=dict(slot=slot,domain_id=evaluation_domain(slot),job_id=job_id),
         status='finished' if row['error'] is None else 'failed')
+    import numpy as np
+    values=env._mppi_compute_ms;events=env._mppi_deadline_events
+    row['mppi_compute']=dict(observed_solves=len(values),deadline_missed=len(events),
+        percentiles_ms=dict(zip(('p50','p95','p99'),map(float,np.percentile(values,[50,95,99])))) if values else {},
+        max_ms=max(values) if values else None)
+    result['mppi_deadline_events']=events
     write(output,result)
     return result

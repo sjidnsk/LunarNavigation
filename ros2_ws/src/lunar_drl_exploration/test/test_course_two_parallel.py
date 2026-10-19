@@ -69,6 +69,16 @@ def test_cases_overlap_with_a_bound_and_resume_skips_verified_results(pool):
     assert_reaped(controller.root)
 
 
+def test_all_cached_mppi_results_still_require_explicit_navigation(pool):
+    _,controller,actor,cases,commands=pool
+    controller.screen(actor,cases,'round')
+    commands.clear()
+    ctl.write(controller.root/'comparison-protocol.json',dict(controller_backend='mppi_path_follower'))
+    with pytest.raises(ValueError,match='explicit'):
+        controller.screen(actor,cases,'round')
+    assert not commands
+
+
 def test_pause_stops_all_children_without_inventing_finished_cases(pool):
     _, controller, actor, cases, _=pool
     timer=threading.Timer(.15,controller.interrupt);timer.start()
@@ -234,4 +244,24 @@ def test_non_domain_busy_data_failures_still_raise(domain_busy_result, error):
     before = path.read_bytes()
     with pytest.raises(RuntimeError, match='evaluation infrastructure error'):
         parallel.cached_result(controller.root, path, record['proof'])
+    assert path.read_bytes() == before
+
+@pytest.mark.parametrize('policy', ['count_failure', 'stop'])
+def test_initialization_input_unavailable_preserves_raw_error_and_policy(domain_busy_result, policy):
+    parallel, controller, actor, cases, commands, path, record = domain_busy_result
+    record['row']['error'] = 'InputUnavailable: initialization EXECUTION_REJECTED_REPEATED'
+    ctl.write(path, record)
+    ctl.write(controller.root/'evaluation-settings.json', dict(workers=1, error_policy=policy))
+    before = path.read_bytes()
+    if policy == 'stop':
+        with pytest.raises(RuntimeError, match='InputUnavailable'):
+            controller.screen(actor, cases, 'round')
+    else:
+        rows = controller.screen(actor, cases, 'round')
+        assert len(rows) == len(cases)
+        assert rows[0]['completed'] is False
+        assert rows[0]['error'] == record['row']['error']
+        assert rows[0]['coverage_source'] == 'unavailable'
+        assert rows[0]['final_coverage'] is None
+        assert controller.state['evaluation_done'] == len(cases)
     assert path.read_bytes() == before

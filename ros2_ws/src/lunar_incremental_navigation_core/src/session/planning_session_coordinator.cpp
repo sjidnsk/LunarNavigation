@@ -95,6 +95,12 @@ struct PlanningSessionCoordinator::Impl final {
   CycleTrigger pending_trigger{CycleTrigger::kContinue};
   bool final_alignment{};
   unsigned final_pose_corrections{};
+  struct ExecutionRejection {
+    Pose2 pose;
+    std::uint64_t fine_revision{};
+    unsigned count{};
+  };
+  std::optional<ExecutionRejection> execution_rejection;
   void DropPending() {
     if (auto source = std::atomic_load_explicit(&current_cycle_stop, std::memory_order_acquire))
       source->request_stop();
@@ -309,6 +315,7 @@ StartSessionResult PlanningSessionCoordinator::Start(const SessionId id,
   impl_->DropPending();
   impl_->final_alignment = false;
   impl_->final_pose_corrections = 0U;
+  impl_->execution_rejection.reset();
   impl_->session_id = id;
   impl_->goal = goal;
   impl_->representation_deadline.reset();
@@ -384,17 +391,44 @@ PreparedCycle PlanningSessionCoordinator::PrepareCycle(
     return prepared;
   }
 
-  if (trigger == CycleTrigger::kDeviation && impl_->active_path) {
+  if ((trigger == CycleTrigger::kDeviation ||
+       trigger == CycleTrigger::kExecutionRejected) && impl_->active_path) {
     if (impl_->active_path->reaches_final_goal && impl_->final_pose_corrections != 0U) {
       output.terminal = impl_->Finish(SessionOutcome::kNoPath,
           "FINAL_POSE_NOT_REACHED", impl_->last_safety_evaluated_fine_revision);
       output.feedback = impl_->Feedback("FINAL_POSE_NOT_REACHED");
       return prepared;
     }
+    if (trigger == CycleTrigger::kExecutionRejected) {
+      // A stopped executor explicitly rejected the current reference. Repeating
+      // it at unchanged pose/evidence cannot become a successful execution.
+      // Unlike geometric deviation, this must have a bounded recovery budget.
+      const auto revision = snapshots.fine
+          ? snapshots.fine->fine_traversability_revision() : 0U;
+      const auto& pose = state.base_link_pose;
+      const auto& previous = impl_->execution_rejection;
+      const bool unchanged = previous && previous->fine_revision == revision &&
+          WithinArrivalTolerance(std::hypot(pose.position_m.x-previous->pose.position_m.x,
+                                           pose.position_m.y-previous->pose.position_m.y),
+                                 std::max(impl_->config.goal_position_tolerance_m, 0.001)) &&
+          WithinArrivalTolerance(std::abs(NormalizeAngle(pose.yaw_rad-previous->pose.yaw_rad)),
+                                 std::max(impl_->config.goal_yaw_tolerance_rad, 0.001));
+      if (!unchanged) {
+        impl_->execution_rejection = Impl::ExecutionRejection{pose, revision, 0U};
+      }
+      constexpr unsigned kMaximumUnchangedExecutionRejections = 3U;
+      if (++impl_->execution_rejection->count >= kMaximumUnchangedExecutionRejections) {
+        output.terminal = impl_->Finish(SessionOutcome::kNoPath,
+            "EXECUTION_REJECTED_REPEATED", impl_->last_safety_evaluated_fine_revision);
+        output.feedback = impl_->Feedback("EXECUTION_REJECTED_REPEATED");
+        return prepared;
+      }
+    }
     output.path_reference =
         impl_->Invalidate(impl_->last_safety_evaluated_fine_revision);
     impl_->state = CoordinatorState::kReplanning;
-    output.feedback = impl_->Feedback("PATH_DEVIATED");
+    output.feedback = impl_->Feedback(trigger == CycleTrigger::kExecutionRejected
+        ? "EXECUTION_REJECTED" : "PATH_DEVIATED");
     return prepared;
   }
 
