@@ -1,0 +1,5 @@
+{
+  "controller_backend": "mppi_path_follower",
+  "simulation_step_sync": true,
+  "mppi_nominal_response_time_s": 0.0
+}

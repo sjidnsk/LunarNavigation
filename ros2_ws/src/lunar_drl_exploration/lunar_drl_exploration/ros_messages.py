@@ -2,6 +2,7 @@
 
 No Scene, environment, reference calculator, learner or Critic dependency.
 """
+from array import array
 from dataclasses import dataclass
 from collections import deque
 from threading import Lock
@@ -75,7 +76,7 @@ def grid_message(planes, origin, resolution, nanoseconds, frame='odom'):
         value=Float32MultiArray()
         value.layout.dim=[MultiArrayDimension(label='column_index',size=height,stride=height*width),
                           MultiArrayDimension(label='row_index',size=width,stride=width)]
-        value.data=np.ascontiguousarray(plane[::-1,::-1],dtype=np.float32).ravel()
+        value.data=array('f',np.ascontiguousarray(plane[::-1,::-1],dtype=np.float32).ravel())
         msg.data.append(value)
     return msg
 

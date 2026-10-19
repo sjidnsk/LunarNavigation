@@ -1,0 +1,83 @@
+{
+  "version": "checkpoint_validation_512_v1",
+  "split": "validation",
+  "cases_per_checkpoint": 120,
+  "checkpoints": 24,
+  "total_episodes": 2880,
+  "episode_budget": 512,
+  "early_success_coverage": 0.99,
+  "frozen_navigation": "zero_extra_clearance_no_length_refinement_soft20cm_weight2",
+  "controller_backend": "mppi_path_follower",
+  "sensor_rule": "unchanged per-case sensor from frozen validation manifest; identical for every checkpoint",
+  "target_rtf": 30.0,
+  "workers": 8,
+  "error_policy": "count_failure",
+  "visualization_cases": [
+    "validation-moon_outside-000",
+    "validation-moon_outside-004",
+    "validation-cave_inside-000",
+    "validation-cave_inside-004"
+  ],
+  "visualization_contents": [
+    "actual physical-step poses/velocities/commands at20Hz",
+    "native unknown/observed/intrinsic/navigation state deltas",
+    "selected action/index/goal and all candidate goals/probabilities",
+    "published versioned reference paths",
+    "reference ROI and optional truth context"
+  ],
+  "metrics": [
+    "collision_free_SR99",
+    "collision_episodes",
+    "execution_infrastructure_failures",
+    "final_coverage_at512_or_terminal",
+    "L90/L95/L99",
+    "T90/T95/T99_simulation",
+    "coverage_curve_distance_time",
+    "new_area_per_actual_meter",
+    "tail_L95_to99/T95_to99",
+    "max_no_gain_distance/time",
+    "decision_AUC512_auxiliary",
+    "actor_inference_latency",
+    "MPPI_solver_latency",
+    "recorder_wall_overhead"
+  ],
+  "thresholds_sampling": "first confirmed native map application; no threshold interpolation; unachieved thresholds null, never0",
+  "common_physical_auc": {
+    "reference_checkpoint": 20,
+    "rule": "evaluate block20 first; freeze its per-case total policy distance/time as common integration budgets before evaluating other checkpoints; hold terminal coverage; failures remain in denominators"
+  },
+  "ranking": [
+    "zero-collision zero-execution-error candidates preferred; otherwise explicitly report no candidate meets safety requirement",
+    "highest macro collision-free SR99 across moon/cave",
+    "higher macro common-budget time coverage AUC",
+    "common-successful-scene L99 then T99; report intersection size, median and P90"
+  ],
+  "uncertainty": "paired same scenes; stratify task/sensor/map size; cave uncertainty grouped by mother graph; initial campaign uses same deterministic actor inference",
+  "checkpoint_order": [
+    20,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    21,
+    22,
+    23,
+    24
+  ],
+  "test_set_use": "forbidden for model selection; no test manifest copied into comparison root"
+}

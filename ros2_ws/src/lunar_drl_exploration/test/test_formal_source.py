@@ -26,7 +26,7 @@ def fixture(tmp_path):
 def test_recorded_development_package_is_complete():
     report=verifier()(ROOT/'ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration',ROOT/'docs/drl/development-source-manifest.json')
     assert report['ok'],report
-    assert report['file_count']==79
+    assert report['file_count']==83
 
 
 @pytest.mark.parametrize('change',['changed','missing','extra'])
@@ -72,10 +72,13 @@ def test_deployed_manifest_remains_immutable_and_distinct_from_development():
     assert hashlib.sha256(path.read_bytes()).hexdigest() == '00bf70663cc394768d8ba5fc262a2ce56cdb76c5a84905f911aca8c62586c5cb'
     deployed=json.loads(path.read_text())
     development=json.loads((ROOT/'docs/drl/development-source-manifest.json').read_text())
-    assert len(deployed['files']) == len(development['files']) == 79
+    assert len(deployed['files']) == 79
+    assert len(development['files']) == 83
+    assert set(development['files'])-set(deployed['files']) == {
+        'exploration_metrics.py', 'exploration_visuals.py', 'evaluation_navigation.py', 'validation_campaign.py'}
     assert development['deployment_status'] == 'not_deployed'
     assert development['based_on_deployed_runtime'] == deployed['deployed_runtime']
     assert 'deployed_runtime' not in development
     changed={name for name in deployed['files'] if deployed['files'][name]!=development['files'][name]}
-    assert changed == {'course_two_parallel.py', 'course_two_trial.py', 'plant.py'}
+    assert changed == {'course_two_eval.py', 'course_two_parallel.py', 'course_two_trial.py', 'plant.py', 'ros_messages.py', 'ros_env.py'}
     assert development['observed_active_runtime'] == 'c8a6f92a56a2613ef23deff72ea34185f3264ce4968d4e8720be1659044f4a50'
