@@ -3,7 +3,7 @@
   "study_id": "PAPER-RL-EXPLORATION-001",
   "title": "图强化学习探索策略论文：执行账本",
   "created_on": "2026-10-20",
-  "updated_on": "2026-10-20",
+  "updated_on": "2026-10-20T19:34:17.679628+08:00",
   "timezone": "Asia/Shanghai",
   "baseline": {
     "repository_head": "7e7cbf19b43e8f5e3710d2cc0f340af71f2ddee7",
@@ -76,37 +76,114 @@
       "id": "P0-01",
       "stage": "P0",
       "title": "盘点训练与当前评测身份",
-      "status": "todo",
-      "owner": "作者 / Codex",
+      "status": "done",
+      "owner": "Codex / 作者核对",
       "depends_on": [],
       "output": "04-experiments/records/baseline-inventory.md",
       "action": "收集实际训练输出、模型清单、代码/配置身份、课程与恢复历史，以及当前评测入口；不启停现有进程。",
       "acceptance": "来源路径、SHA/校验值、训练预算和待核对项可定位；用户口述与现场核验分别标注。",
-      "evidence": [],
-      "note": "",
-      "started_on": null,
-      "completed_on": null,
+      "evidence": [
+        "04-experiments/records/baseline-inventory.md",
+        "04-experiments/records/baseline-inventory-evidence.json"
+      ],
+      "note": "按用户授权完成P0-01验收：来源路径、实际冻结身份、候选模型校验值、持久训练预算、初始化及恢复链均可定位，现场核验与历史记录已区分。报告I1-I5已记录责任与后续任务；旧200场test历史转P0-02/P2处理，当前选优仍由P3继续，不认定最佳检查点。未启停或改动远程训练/评测。",
+      "started_on": "2026-10-20",
+      "completed_on": "2026-10-20",
       "due_on": null,
-      "history": []
+      "history": [
+        {
+          "at": "2026-10-20T19:02:50.421642+08:00",
+          "from": "todo",
+          "to": "doing",
+          "note": "已连接远程台式KAI，只读核对训练来源、恢复链、候选检查点和当前评测身份。",
+          "owner": "Codex / 作者核对",
+          "due_on": null,
+          "evidence": []
+        },
+        {
+          "at": "2026-10-20T19:15:37.222745+08:00",
+          "from": "doing",
+          "to": "review",
+          "note": "盘点报告与结构化证据已形成：远程KAI只读采集，24份Actor双向SHA、训练/评测runtime及607封存文件匹配，六条恢复变更回执闭合；198525条持久转移与49152次更新已交叉核对。",
+          "owner": "Codex / 作者核对",
+          "due_on": null,
+          "evidence": [
+            "04-experiments/records/baseline-inventory.md",
+            "04-experiments/records/baseline-inventory-evidence.json"
+          ]
+        },
+        {
+          "at": "2026-10-20T19:15:37.260927+08:00",
+          "from": "review",
+          "to": "done",
+          "note": "按用户授权完成P0-01验收：来源路径、实际冻结身份、候选模型校验值、持久训练预算、初始化及恢复链均可定位，现场核验与历史记录已区分。报告I1-I5已记录责任与后续任务；旧200场test历史转P0-02/P2处理，当前选优仍由P3继续，不认定最佳检查点。未启停或改动远程训练/评测。",
+          "owner": "Codex / 作者核对",
+          "due_on": null,
+          "evidence": [
+            "04-experiments/records/baseline-inventory.md",
+            "04-experiments/records/baseline-inventory-evidence.json"
+          ]
+        }
+      ]
     },
     {
       "id": "P0-02",
       "stage": "P0",
       "title": "盘点历史场景的使用情况",
-      "status": "todo",
-      "owner": "作者 / Codex",
+      "status": "done",
+      "owner": "Codex / 作者用途声明",
       "depends_on": [
         "P0-01"
       ],
       "output": "04-experiments/protocols/data-use-register.md",
       "action": "记录各批地图、母图、起点、种子是否用于训练、调参、选结构、选模型或结果查看。",
       "acceptance": "每批数据有来源和使用用途；不把已参与选择的数据重新命名为独立测试集。",
-      "evidence": [],
-      "note": "",
-      "started_on": null,
-      "completed_on": null,
+      "evidence": [
+        "04-experiments/protocols/data-use-register.md",
+        "04-experiments/protocols/data-use-evidence.json",
+        "04-experiments/protocols/data-use-cases.csv"
+      ],
+      "note": "按P0-02验收完成历史用途登记：各批来源与已知用途可定位，机器执行和作者声明分列，复用及未知历史显式保留；旧200场不改名为新独立测试。仅完成盘点，P2继续决定独立测试资格并核对起始yaw及系统条件，P3选模仍运行。未改动远程进程或启动实验。",
+      "started_on": "2026-10-20",
+      "completed_on": "2026-10-20",
       "due_on": null,
-      "history": []
+      "history": [
+        {
+          "at": "2026-10-20T19:21:53.885008+08:00",
+          "from": "todo",
+          "to": "doing",
+          "note": "开始只读盘点各批地图、母图、起点和种子的训练/验证选模/旧测试使用；核对当前512预算清单与历史场景的复用关系。",
+          "owner": "Codex / 作者补充用途历史",
+          "due_on": null,
+          "evidence": []
+        },
+        {
+          "at": "2026-10-20T19:34:17.638944+08:00",
+          "from": "doing",
+          "to": "review",
+          "note": "已形成来源用途登记、结构化证据及544行清单成员表；核对13个目录、quick子集、512复用、母图/种子交集、跨runtime起点差异；作者未查看和未调整声明已单列。缺失历史与独立测试资格留待P2。",
+          "owner": "Codex / 作者用途声明",
+          "due_on": null,
+          "evidence": [
+            "04-experiments/protocols/data-use-register.md",
+            "04-experiments/protocols/data-use-evidence.json",
+            "04-experiments/protocols/data-use-cases.csv"
+          ]
+        },
+        {
+          "at": "2026-10-20T19:34:17.679574+08:00",
+          "from": "review",
+          "to": "done",
+          "note": "按P0-02验收完成历史用途登记：各批来源与已知用途可定位，机器执行和作者声明分列，复用及未知历史显式保留；旧200场不改名为新独立测试。仅完成盘点，P2继续决定独立测试资格并核对起始yaw及系统条件，P3选模仍运行。未改动远程进程或启动实验。",
+          "owner": "Codex / 作者用途声明",
+          "due_on": null,
+          "evidence": [
+            "04-experiments/protocols/data-use-register.md",
+            "04-experiments/protocols/data-use-evidence.json",
+            "04-experiments/protocols/data-use-cases.csv"
+          ]
+        }
+      ]
     },
     {
       "id": "P0-03",
