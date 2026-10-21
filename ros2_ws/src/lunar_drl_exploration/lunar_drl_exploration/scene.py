@@ -31,11 +31,50 @@ def polygon_boundary_distance(x,y,polygon):
     return result
 
 
+def validate_safe_start_radius(radius):
+    if (type(radius) not in (int, float) or not math.isfinite(radius)
+            or radius < 0):
+        raise ValueError('safe start radius must be finite and nonnegative')
+    return float(radius)
+
+
+def safe_start_mask(terrain, radius):
+    """Offline-only certification of a navigation-center disk, never map repair.
+
+    Native M already includes the body envelope. EDT measures cell centers;
+    adding half a cell diagonal conservatively covers every intersected square.
+    Padding prevents the finite-map exterior from being treated as free.
+    """
+    radius = validate_safe_start_radius(radius)
+    free = terrain.navigation == 1
+    if radius == 0:
+        return free
+    from scipy.ndimage import distance_transform_edt
+    distance = distance_transform_edt(np.pad(free, 1, constant_values=False))[1:-1, 1:-1]
+    return distance * terrain.resolution_m > radius + terrain.resolution_m / math.sqrt(2)
+
+
+def safe_start_record(terrain, pose, radius):
+    radius = validate_safe_start_radius(radius)
+    if radius == 0:
+        return {}
+    x, y = terrain.world_to_cell(pose.x, pose.y)
+    if not (0 <= y < terrain.shape[0] and 0 <= x < terrain.shape[1]
+            and safe_start_mask(terrain, radius)[y, x]
+            and np.allclose(terrain.cell_center(x, y), (pose.x, pose.y), rtol=0, atol=1e-9)):
+        raise ValueError('pose does not satisfy the safe start region')
+    return dict(safe_start_region=dict(version='native_navigation_disk_v1',
+        navigation_radius_m=radius, center_xy_m=[pose.x, pose.y],
+        guarantee='all_intersecting_native_navigation_cells_FREE',
+        generation_mode='reserved_start_region_v1'))
+
+
 class Scene:
     GENERATOR_VERSION = 5
 
     def __init__(self, seed, family, extent_m, resolution_m=0.2, platform=None, *, context_margin_m=12.,
-                 cave_generator_version='', mother_graph_id=None, dataset_split='train'):
+                 cave_generator_version='', mother_graph_id=None, dataset_split='train',
+                 safe_start_radius_m=0.):
         if family not in ("moon", "cave"):
             raise ValueError("family must be moon or cave")
         if not math.isfinite(extent_m) or not 20 <= extent_m <= 1000:
@@ -55,6 +94,11 @@ class Scene:
         self.extent_m = float(extent_m)
         self.resolution_m = float(resolution_m)
         self.platform = platform
+        self.safe_start_radius_m=validate_safe_start_radius(safe_start_radius_m)
+        # Reserve extra raw floor for the native derivative stencil, cell-area
+        # inflation and raster phase. Acceptance still uses native M, not this bound.
+        start_room_radius=(self.safe_start_radius_m+platform.footprint_radius_m+6*resolution_m
+                           if self.safe_start_radius_m else 0.)
         self.cave_geometry = None
         self.generator_version = self.GENERATOR_VERSION
         if cave_generator_version:
@@ -62,7 +106,8 @@ class Scene:
             if family != 'cave' or cave_generator_version != VERSION:
                 raise ValueError('invalid cave generator version')
             mother = select_mother(dataset_split, self.seed, mother_graph_id=mother_graph_id)
-            self.cave_geometry = build_geometry(mother, self.seed, self.extent_m)
+            self.cave_geometry = build_geometry(mother, self.seed, self.extent_m,
+                start_room_radius_m=start_room_radius)
             self.generator_version = VERSION
         elif mother_graph_id is not None or dataset_split != 'train':
             raise ValueError('topology group requires cave_topology_v2')
@@ -80,6 +125,9 @@ class Scene:
         if self.cave_geometry is not None:
             identity.update(mother_graph_id=self.cave_geometry['mother_graph_id'],dataset_split=dataset_split)
         if margin!=12.:identity['context_margin_m']=margin
+        if self.safe_start_radius_m:
+            identity['safe_start_region']=dict(version='reserved_start_region_v1',
+                navigation_radius_m=self.safe_start_radius_m)
         self.scene_id = hashlib.sha256(
             json.dumps(identity, sort_keys=True).encode()
         ).hexdigest()
@@ -145,6 +193,10 @@ class Scene:
                 )
             self.sealed_room = (0.32 * e, 0.22 * e, max(2.0, 0.035 * e))
             self._rooms.append(self.sealed_room)
+
+        if start_room_radius and family=='cave' and self.cave_geometry is None:
+            cx,cy,r=self._rooms[0]
+            self._rooms[0]=(cx,cy,max(r,start_room_radius))
 
         # Bounds include the complete analytic support plus ordinary context.
         # Expand by whole old-lattice cells so existing world samples and RNG
@@ -248,7 +300,7 @@ class Scene:
         return np.asarray(z, np.float32)
 
     def initial_pose(self, terrain, start_mode='any', *, outside_distance_max_m=None,
-                     outside_distance_min_m=None):
+                     outside_distance_min_m=None, safe_start_radius_m=0.):
         """Uniform seeded native stance in the main component; yaw is unchanged."""
         if start_mode not in ('any', 'inside', 'outside'):
             raise ValueError('start_mode must be any, inside or outside')
@@ -304,6 +356,10 @@ class Scene:
                 component &= distance_transform_edt(~task_mask)*terrain.resolution_m<=outside_distance_max_m
             if not np.any(component):
                 raise ValueError(f'generated main terrain has no legal {start_mode} start')
+        if validate_safe_start_radius(safe_start_radius_m):
+            component = (component != 0) & safe_start_mask(terrain, safe_start_radius_m)
+            if not np.any(component):
+                raise ValueError('generated terrain has no safe start in the requested region')
         row_counts = np.count_nonzero(component, axis=1)
         cumulative = np.cumsum(row_counts, dtype=np.int64)
         if not cumulative[-1]:
@@ -435,6 +491,11 @@ class TerrainGrid:
                 anchor_node=geometry['anchor_node'],anchor_xy=geometry['anchor_xy'],
                 cave_split_manifest_hash=manifest_hash(),
                 native_wheeled_summary=qualify_native(scene,terrain)))
+        if scene.safe_start_radius_m:
+            terrain.generator_descriptor=MappingProxyType(dict(terrain.generator_descriptor,
+                start_region_generation_version='reserved_start_region_v1',
+                safe_start_navigation_radius_m=scene.safe_start_radius_m,
+                reserved_start_room_radius_m=(scene.anchor_room[2] if scene.family=='cave' else None)))
         return terrain
 
     def world_to_cell(self, x, y):
