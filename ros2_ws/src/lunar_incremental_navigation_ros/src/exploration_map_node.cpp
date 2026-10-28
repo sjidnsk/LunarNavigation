@@ -61,7 +61,10 @@ struct ExplorationMapNode::Impl {
     const auto map_qos=MakeTraversabilityInputQos(text("map_qos_reliability","reliable"),text("map_qos_durability","volatile"));
     if(!map_qos) throw std::invalid_argument("invalid map input QoS");
     map_subscription=node.create_subscription<grid_map_msgs::msg::GridMap>(text("map_topic","/Car/T3/mapping/grid_map"),*map_qos,
-        [this](grid_map_msgs::msg::GridMap::ConstSharedPtr message){inputs->UpdateLocal(std::move(message));Wake();});
+        [this](grid_map_msgs::msg::GridMap::ConstSharedPtr message){
+          RCLCPP_DEBUG(node.get_logger(),"地图接收 stamp=%d res=%.6f cells=%zu",message->header.stamp.sec,
+            message->info.resolution,message->data.empty()?0UL:message->data.front().data.size());
+          inputs->UpdateLocal(std::move(message));Wake();});
     odom_subscription=node.create_subscription<nav_msgs::msg::Odometry>(text("odometry_topic","/Car/T3/localization/odometry"),rclcpp::QoS(1).best_effort(),
         [this](nav_msgs::msg::Odometry::ConstSharedPtr message){inputs->UpdateOdometry(std::move(message));Wake();});
     auto tf_callback=[this](tf2_msgs::msg::TFMessage::ConstSharedPtr message){inputs->UpdateTf(*message);Wake();};
@@ -102,10 +105,17 @@ struct ExplorationMapNode::Impl {
             identity.header.frame_id=map_frame;identity.child_frame_id=map_frame;identity.transform.rotation.w=1.;
             map_input.map_from_odom=identity;
           }
+          const auto started=std::chrono::steady_clock::now();
           const auto evidence=AdaptExplorationElevation(map_input);
+          const auto adapted_at=std::chrono::steady_clock::now();
           if(evidence.value) {
             const auto stamp=static_cast<std::int64_t>(input.local_map->header.stamp.sec)*1000000000LL+input.local_map->header.stamp.nanosec;
-            if(map->Apply(*evidence.value,stamp)) {local_sequence=input.local_sequence;tf_sequence=input.tf_sequence;}
+            if(map->Apply(*evidence.value,stamp)) {
+              local_sequence=input.local_sequence;tf_sequence=input.tf_sequence;
+              RCLCPP_DEBUG(node.get_logger(),"地图派生 seq=%lu stamp=%ld adapt_ms=%.3f apply_ms=%.3f",local_sequence,stamp,
+                std::chrono::duration<double,std::milli>(adapted_at-started).count(),
+                std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-adapted_at).count());
+            }
             else RCLCPP_WARN_THROTTLE(node.get_logger(),*node.get_clock(),2000,"地图源几何或测量被拒绝");
           } else RCLCPP_WARN_THROTTLE(node.get_logger(),*node.get_clock(),2000,"地图适配未就绪: %s",evidence.reason_code.c_str());
         }
@@ -119,7 +129,10 @@ struct ExplorationMapNode::Impl {
             if(state.value) capture.map.anchor=state.value->base_link_pose;
           }
         }
+        const auto export_started=std::chrono::steady_clock::now();
         auto response=exporter->ExportObserved(capture,0);
+        RCLCPP_DEBUG(node.get_logger(),"地图导出 revision=%lu export_ms=%.3f",response.fine_revision,
+          std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-export_started).count());
         if(!capture.map.anchor) {response.ready=false;response.reason_code="INPUT_UNAVAILABLE";}
         std::atomic_store(&published,std::make_shared<const PolicyService::Response>(std::move(response)));
         const auto projection=map->Project();
