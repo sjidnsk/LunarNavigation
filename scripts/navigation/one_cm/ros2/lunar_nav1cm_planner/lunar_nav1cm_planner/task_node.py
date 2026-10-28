@@ -1,6 +1,7 @@
 """可选 NavigateToPose 传输入口；回调只处理不可变快照和投递请求。"""
 from queue import Empty, SimpleQueue
 import time
+import json
 
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
@@ -127,8 +128,11 @@ def main(args=None):
                 result = node.stop_runtime()
                 if result['threads_alive']:
                     raise RuntimeError(f'处理线程尚未退出: {result}')
+                node.get_logger().info('TASK_RUNTIME_STOPPED: ' + json.dumps(result, sort_keys=True))
+                # execute完成后，rclpy仍需调度GetResult的发送回调；pending为空不能提前销毁。
+                # 固定有界排空窗口也允许已发出的结果请求在关闭期间到达。
                 deadline = time.monotonic()+1.
-                while node.task_api.pending and time.monotonic()<deadline:
+                while time.monotonic()<deadline:
                     rclpy.spin_once(node, timeout_sec=.02)
                 if node.task_api.pending:
                     raise RuntimeError('任务Action回调未在关闭期限内退出')
