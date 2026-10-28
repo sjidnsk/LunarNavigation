@@ -78,7 +78,7 @@ class WheelLimits:
             self.angular_speed_rps, self.linear_accel_mps2,
             self.angular_accel_rps2, self.curvature_inv_m, self.minimum_clearance_m,
         ), dtype="<f8")
-        return hashlib.sha256(b"WheelLimits-v2" + values.tobytes()).hexdigest()
+        return hashlib.sha256(b"WheelLimits-v3-euclidean-clearance" + values.tobytes()).hexdigest()
 
 
 @dataclass(frozen=True)

@@ -70,7 +70,7 @@ class MpccPlanner:
         if type(n) is not int or n < 1 or not np.isfinite(dt) or dt <= 0:
             raise ValueError('horizon requires positive integer n and finite positive dt')
         self.N, self.dt = n, float(dt)
-        self.model_fingerprint = hashlib.sha256(f'pose-terminal-v2:{self.N}:{self.dt.hex()}:{limits.digest()}'.encode()).hexdigest()[:12]
+        self.model_fingerprint = hashlib.sha256(f'pose-terminal-clearance-v3:{self.N}:{self.dt.hex()}:{limits.digest()}'.encode()).hexdigest()[:12]
         try:
             import casadi as ca
             from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -82,10 +82,15 @@ class MpccPlanner:
         self.build_dir.mkdir(parents=True,exist_ok=True)
         self._warm=None
         self._solvers={}
-        # 三圆覆盖整个矩形：每个圆覆盖长度 L/3、宽 W 的矩形条带。
-        self.offsets=np.array([-limits.body_length_m/3,0.,limits.body_length_m/3])
-        self.radius=float(np.hypot(limits.body_length_m/6+limits.minimum_clearance_m,
-                                   limits.body_width_m/2+limits.minimum_clearance_m))
+        # 零margin保留原三圆条带；非零margin用实际body外接圆的Minkowski膨胀，
+        # 与global/follower同义，避免各条带矩形扩张在前缘重复保守。
+        # 保留固定22维参数/三个约束槽；中心圆重复不改变可行集合。
+        if limits.minimum_clearance_m > 0:
+            self.offsets=np.zeros(3)
+            self.radius=float(np.hypot(limits.body_length_m,limits.body_width_m)/2+limits.minimum_clearance_m)
+        else:
+            self.offsets=np.array([-limits.body_length_m/3,0.,limits.body_length_m/3])
+            self.radius=float(np.hypot(limits.body_length_m/6,limits.body_width_m/2))
         started=perf_counter()
         for mode in ('forward','reverse','spin'):
             ocp=AcadosOcp()

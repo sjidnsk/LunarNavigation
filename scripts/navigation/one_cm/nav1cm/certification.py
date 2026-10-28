@@ -7,6 +7,7 @@ import numpy as np
 
 from .contracts import Certification, CertificationReason, CellState, GridSnapshot, Trajectory, WheelLimits
 from .dynamics import step
+from .rectangle_distance import rectangle_distance_squared
 
 
 def _reject(reason, checked, detail=""):
@@ -44,17 +45,20 @@ class _CollisionContext:
 
 
 def _body_collision(pose, radius_margin, context, limits):
-    """矩形车体与候选格面积做分离轴检验，窗口外按阻断处理。"""
+    """实际矩形到候选格的欧氏距离检查；窗口外按阻断处理。"""
     radius_margin += limits.minimum_clearance_m
     if context.backend is not None:
         return context.backend.check_poses(np.asarray(pose[:3]).reshape(1,3),radius_margin,context,limits)[0]
     grid = context.grid
     x, y, yaw = float(pose[0]), float(pose[1]), float(pose[2])
     c, s = math.cos(yaw), math.sin(yaw)
-    half_length = limits.body_length_m / 2 + radius_margin
-    half_width = limits.body_width_m / 2 + radius_margin
-    extent_x = abs(c) * half_length + abs(s) * half_width
-    extent_y = abs(s) * half_length + abs(c) * half_width
+    # 零配置净空保持原数值扫掠矩形外包；非零配置采用实际矩形的圆盘膨胀。
+    legacy_padding=radius_margin if limits.minimum_clearance_m==0 else 0.
+    padding=radius_margin if limits.minimum_clearance_m>0 else 0.
+    half_length = limits.body_length_m / 2 + legacy_padding
+    half_width = limits.body_width_m / 2 + legacy_padding
+    extent_x = abs(c) * half_length + abs(s) * half_width + padding
+    extent_y = abs(s) * half_length + abs(c) * half_width + padding
     ox, oy = grid.origin_xy
     resolution = grid.resolution_m
     height, width = grid.cells.shape
@@ -81,11 +85,8 @@ def _body_collision(pose, radius_margin, context, limits):
     dx = ox + (cols + 0.5) * resolution - x
     dy = oy + (rows + 0.5) * resolution - y
     half_cell = resolution / 2
-    # 世界 x/y 两轴已由候选包围盒覆盖；车体两轴完成矩形 SAT。
-    projection = half_cell * (abs(c) + abs(s))
-    intersects = (np.abs(c * dx + s * dy) <= half_length + projection + 1e-12) & (
-        np.abs(-s * dx + c * dy) <= half_width + projection + 1e-12
-    )
+    distance2=rectangle_distance_squared(dx,dy,half_cell,half_cell,c,s,half_length,half_width)
+    intersects=distance2 <= (padding+1e-12)**2
     if not intersects.any():
         return None
     relevant = grid.cells[rows[intersects], cols[intersects]]
@@ -101,11 +102,13 @@ def _batch_body_collision(poses, radius_margin, context, limits):
     grid = context.grid
     x, y, yaw = poses[:,0], poses[:,1], poses[:,2]
     c, s = np.cos(yaw), np.sin(yaw)
-    half_length = limits.body_length_m/2 + radius_margin + limits.minimum_clearance_m
-    half_width = limits.body_width_m/2 + radius_margin + limits.minimum_clearance_m
+    legacy_padding=radius_margin if limits.minimum_clearance_m==0 else 0.
+    padding=radius_margin+limits.minimum_clearance_m if limits.minimum_clearance_m>0 else 0.
+    half_length = limits.body_length_m/2 + legacy_padding
+    half_width = limits.body_width_m/2 + legacy_padding
     # 粗筛包围盒额外覆盖浮点舍入；最终仍用原标量尺寸及阈值。
-    ex = np.abs(c)*half_length + np.abs(s)*half_width + 1e-12
-    ey = np.abs(s)*half_length + np.abs(c)*half_width + 1e-12
+    ex = np.abs(c)*half_length + np.abs(s)*half_width + padding + 1e-12
+    ey = np.abs(s)*half_length + np.abs(c)*half_width + padding + 1e-12
     ox, oy = grid.origin_xy; r = grid.resolution_m
     h, w = grid.cells.shape
     outside = (x-ex < ox-1e-12) | (x+ex > ox+w*r+1e-12) | (y-ey < oy-1e-12) | (y+ey > oy+h*r+1e-12)
@@ -144,8 +147,7 @@ def _sweep(start, control, dt, context, limits):
     v0, w0 = abs(float(start[3])), abs(float(start[4]))
     vmax = max(v0, abs(float(start[3] + control[0] * dt)))
     wmax = max(w0, abs(float(start[4] + control[1] * dt)))
-    body_radius = math.hypot(limits.body_length_m/2 + limits.minimum_clearance_m,
-                             limits.body_width_m/2 + limits.minimum_clearance_m)
+    body_radius = math.hypot(limits.body_length_m/2,limits.body_width_m/2) + limits.minimum_clearance_m
     # 轮心速度与角点切向速度之和是车体任一点速度上界。
     # 中点插值位置对时间求导的额外转向项上界为 vmax*dt*wmax/2。
     body_speed = vmax * (1.0 + dt * wmax / 2.0) + body_radius * wmax
