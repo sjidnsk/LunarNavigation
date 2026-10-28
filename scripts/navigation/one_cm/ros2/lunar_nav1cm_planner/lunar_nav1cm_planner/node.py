@@ -15,6 +15,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from tf2_msgs.msg import TFMessage
 
 from nav1cm.async_coordinator import AsyncNavigationCoordinator
+from rclpy.parameter import Parameter
 from nav1cm.contracts import WheelLimits
 from nav1cm.field_native import NativeDistanceField
 from nav1cm.geometry_native import NativeGeometry
@@ -79,7 +80,7 @@ class PlannerNode(Node):
         defaults = {
             'map_frame': 'map', 'build_dir': os.environ.get('NAV1CM_BUILD_DIR', ''),
             'allow_unknown': False, 'planning_period_s': .1, 'execution_period_s': .05,
-            'global_period_s': 1., 'global_budget_s': 1., 'clearance_radius_m': .9,
+            'global_period_s': 1., 'global_budget_s': 1., 'clearance_radius_m': limits.global_clearance_radius(.9),
             'horizon_steps': 20, 'horizon_dt_s': .2,
             'goal_tolerance_m': .1, 'goal_yaw_tolerance_rad': .05,
             'stopped_linear_mps': .01, 'stopped_angular_rps': .01,
@@ -91,6 +92,9 @@ class PlannerNode(Node):
             'local_path_topic': '/Car/T4/planning/local_path',
         }
         settings = {name: self.declare_parameter(name, default).value for name, default in defaults.items()}
+        settings['clearance_radius_m']=limits.global_clearance_radius(settings['clearance_radius_m'])
+        self.set_parameters([Parameter('minimum_clearance_m',value=limits.minimum_clearance_m),
+                             Parameter('clearance_radius_m',value=settings['clearance_radius_m'])])
         if not settings['build_dir']:
             raise ValueError('build_dir 必须显式指定仓库外 acados 构建/缓存目录，或设置 NAV1CM_BUILD_DIR')
         factory = create_resources if resource_factory is None else resource_factory

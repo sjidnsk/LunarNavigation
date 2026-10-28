@@ -45,6 +45,7 @@ class _CollisionContext:
 
 def _body_collision(pose, radius_margin, context, limits):
     """矩形车体与候选格面积做分离轴检验，窗口外按阻断处理。"""
+    radius_margin += limits.minimum_clearance_m
     if context.backend is not None:
         return context.backend.check_poses(np.asarray(pose[:3]).reshape(1,3),radius_margin,context,limits)[0]
     grid = context.grid
@@ -96,12 +97,12 @@ def _body_collision(pose, radius_margin, context, limits):
 def _batch_body_collision(poses, radius_margin, context, limits):
     """批量执行同一轴对齐粗筛；疑似碰撞仍交给原矩形 SAT。"""
     if context.backend is not None:
-        return context.backend.check_poses(poses,radius_margin,context,limits)
+        return context.backend.check_poses(poses,radius_margin+limits.minimum_clearance_m,context,limits)
     grid = context.grid
     x, y, yaw = poses[:,0], poses[:,1], poses[:,2]
     c, s = np.cos(yaw), np.sin(yaw)
-    half_length = limits.body_length_m/2 + radius_margin
-    half_width = limits.body_width_m/2 + radius_margin
+    half_length = limits.body_length_m/2 + radius_margin + limits.minimum_clearance_m
+    half_width = limits.body_width_m/2 + radius_margin + limits.minimum_clearance_m
     # 粗筛包围盒额外覆盖浮点舍入；最终仍用原标量尺寸及阈值。
     ex = np.abs(c)*half_length + np.abs(s)*half_width + 1e-12
     ey = np.abs(s)*half_length + np.abs(c)*half_width + 1e-12
@@ -143,7 +144,8 @@ def _sweep(start, control, dt, context, limits):
     v0, w0 = abs(float(start[3])), abs(float(start[4]))
     vmax = max(v0, abs(float(start[3] + control[0] * dt)))
     wmax = max(w0, abs(float(start[4] + control[1] * dt)))
-    body_radius = math.hypot(limits.body_length_m / 2, limits.body_width_m / 2)
+    body_radius = math.hypot(limits.body_length_m/2 + limits.minimum_clearance_m,
+                             limits.body_width_m/2 + limits.minimum_clearance_m)
     # 轮心速度与角点切向速度之和是车体任一点速度上界。
     # 中点插值位置对时间求导的额外转向项上界为 vmax*dt*wmax/2。
     body_speed = vmax * (1.0 + dt * wmax / 2.0) + body_radius * wmax

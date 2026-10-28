@@ -44,3 +44,16 @@ def test_application_profile_retains_explicit_deployment_limits():
     assert float(module.DEFAULTS['goal_yaw_tolerance_rad'])==.02
     assert float(module.DEFAULTS['mppi_nominal_response_time_s'])==.15
     assert module.DEFAULTS['tf_topic']=='/P4/input/map_to_odom'
+
+
+def test_clearance_file_and_request_are_shared_and_never_lowered():
+    import yaml
+    from ament_index_python.packages import get_package_share_directory
+    config=Path(get_package_share_directory('lunar_nav1cm_planner'))/'config/wheel.yaml'
+    configured=float(yaml.safe_load(config.read_text())['capability']['minimum_clearance_m'])
+    module=load();ctx=LaunchContext();ctx.launch_configurations.update(module.DEFAULTS)
+    ctx.launch_configurations.update(wheel_config=str(config),build_dir='/tmp/nav1cm-unused',start_controller='true')
+    for request,expected in [('',configured),('0',configured),(str(configured+.2),configured+.2)]:
+        ctx.launch_configurations['minimum_clearance_m']=request
+        planner,follower=[evaluate_parameters(ctx,n._Node__parameters)[-1] for n in module.compose(ctx)]
+        assert planner['minimum_clearance_m']==follower['minimum_clearance_m']==expected

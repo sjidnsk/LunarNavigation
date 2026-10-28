@@ -4,6 +4,7 @@ from threading import Condition, Thread
 from time import monotonic
 import numpy as np
 from nav1cm.follower_map import center_support
+from nav1cm.contracts import resolve_minimum_clearance
 from nav1cm.ros_conversion import LatestTransforms, MissingTransform, map_from_message
 from .mppi_map import GridMap
 
@@ -16,8 +17,9 @@ class MapReceipt:
 
 
 class P3MapSource:
-    def __init__(self,store,backend,body_dimensions,*,allow_unknown=False,map_frame='map'):
-        self._store=store;self._backend=backend;self._body=body_dimensions
+    def __init__(self,store,backend,body_dimensions,*,minimum_clearance_m=0.0,allow_unknown=False,map_frame='map'):
+        self._store=store;self._backend=backend;self._body=tuple(body_dimensions)
+        self._minimum_clearance=resolve_minimum_clearance(minimum_clearance_m)
         self._allow_unknown=allow_unknown;self._frame=map_frame
         self._condition=Condition();self._closed=False;self._generation=0;self._completed=0
         self._transforms=LatestTransforms();self._pending=None;self._center=None
@@ -67,10 +69,10 @@ class P3MapSource:
                     with self._condition:
                         if self._pending is pending:self._pending=None
                 if self._world is not None and center is not None:
-                    key=(self._world.epoch,center,self._body,self._allow_unknown)
+                    key=(self._world.epoch,center,self._body,self._minimum_clearance,self._allow_unknown)
                     if key!=self._key:
                         support=center_support(self._world,*center,body_length_m=self._body[0],
-                            body_width_m=self._body[1],allow_unknown=self._allow_unknown,backend=self._backend)
+                            body_width_m=self._body[1],minimum_clearance_m=self._minimum_clearance,allow_unknown=self._allow_unknown,backend=self._backend)
                         # 明确 -1/0/1 -> 0/1/2，不能直接强转 intrinsic。
                         states=np.where(support.cells==-1,0,np.where(support.cells==0,1,2)).astype(np.uint8)
                         self._revision+=1
@@ -98,7 +100,7 @@ class P3MapSource:
         if terrain is not None:terrain.close()
 
 
-def create_p3_source(capability,body_dimensions,*,allow_unknown=False,map_frame='map'):
+def create_p3_source(capability,body_dimensions,*,minimum_clearance_m=None,allow_unknown=False,map_frame='map'):
     """生产始终显式选择已安装 native ABI，不加载 planner/session。"""
     from pathlib import Path
     from ament_index_python.packages import get_package_prefix
@@ -110,7 +112,9 @@ def create_p3_source(capability,body_dimensions,*,allow_unknown=False,map_frame=
                      capability=WheelTerrainCapability.from_mapping(capability))
     try:
         backend=NativeDistanceField(prefix/'lib/libnav1cm_distance_field.so')
-        return P3MapSource(store,backend,body_dimensions,allow_unknown=allow_unknown,map_frame=map_frame)
+        return P3MapSource(store,backend,body_dimensions,
+            minimum_clearance_m=resolve_minimum_clearance(capability.get("minimum_clearance_m",0.0),minimum_clearance_m),
+            allow_unknown=allow_unknown,map_frame=map_frame)
     except Exception:
         store._terrain.close()
         raise

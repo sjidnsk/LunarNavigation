@@ -23,12 +23,12 @@ class CenterSupport:
         object.__setattr__(self,'eligible',_readonly_array(self.eligible,bool,2))
 
 
-def center_support(world,x,y,*,body_length_m,body_width_m,allow_unknown=False,backend=None):
-    values=(x,y,body_length_m,body_width_m)
-    if not all(math.isfinite(v) for v in values) or min(body_length_m,body_width_m)<=0:
+def center_support(world,x,y,*,body_length_m,body_width_m,minimum_clearance_m=0.0,allow_unknown=False,backend=None):
+    values=(x,y,body_length_m,body_width_m,minimum_clearance_m)
+    if not all(math.isfinite(v) for v in values) or min(body_length_m,body_width_m)<=0 or minimum_clearance_m<0:
         raise ValueError('车体与窗口几何必须有限且尺寸为正')
     r=.01
-    radius=math.hypot(body_length_m,body_width_m)/2
+    radius=math.hypot(body_length_m,body_width_m)/2+minimum_clearance_m
     half_diagonal=math.sqrt(2)*r/2
     halo=math.ceil((radius+half_diagonal)/r)+2
     origin=(x-2.5,y-2.5)
