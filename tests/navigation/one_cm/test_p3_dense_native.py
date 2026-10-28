@@ -6,6 +6,8 @@ import time
 from types import SimpleNamespace as NS
 import numpy as np
 import pytest
+if not os.environ.get('NAV1CM_TERRAIN_LIB'):
+    pytest.skip('requires explicitly selected installed APP native libraries',allow_module_level=True)
 from nav1cm.terrain_native import NativeTerrain,load_wheel_capability
 from nav1cm.p3_map import P3MapStore
 from nav1cm.field_native import NativeDistanceField
@@ -99,6 +101,7 @@ def test_dense_source_worker_receipts_and_inflight_close():
     started=time.monotonic();source.close();elapsed=time.monotonic()-started
     print(json.dumps({'inflight_close_s':elapsed,'error':source.error,'alive':source._worker.is_alive()}),flush=True)
     assert elapsed<2. and not source._worker.is_alive() and not t._finalizer.alive
+    assert 'cancelled for shutdown' in source.error
 
 
 def test_planner_map_worker_cancels_inflight_dense_apply():
@@ -110,10 +113,13 @@ def test_planner_map_worker_cancels_inflight_dense_apply():
             entered.set();return super().apply(*args,**kwargs)
     t=InflightTerrain(os.environ['NAV1CM_TERRAIN_LIB'],capability=load_wheel_capability(os.environ['NAV1CM_WHEEL_CONFIG']))
     session=NS(world=WorldSnapshot(0,(),()),close=lambda **kwargs:{'closed':True})
-    runtime=PlannerRuntime(session,P3MapStore(terrain=t),publish=lambda _:None,ros_now_ns=lambda:0)
+    notices=[]
+    runtime=PlannerRuntime(session,P3MapStore(terrain=t),publish=lambda _:None,ros_now_ns=lambda:0,
+                           notice=lambda kind,detail:notices.append((kind,detail)))
     runtime._threads=[threading.Thread(target=runtime._map_loop,name='nav1cm-map-test')]
     runtime._threads[0].start();runtime.offer_map(message(np.zeros((500,500),np.float32)))
     assert entered.wait(2.);time.sleep(.02)
     started=time.monotonic();result=runtime.close();elapsed=time.monotonic()-started
     print(json.dumps({'planner_inflight_close_s':elapsed,'result':result}),flush=True)
     assert result['threads_alive']==[] and elapsed<2. and not t._finalizer.alive
+    assert any('cancelled for shutdown' in detail for _,detail in notices)
