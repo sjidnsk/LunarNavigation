@@ -17,11 +17,14 @@ install(PROGRAMS
   scripts/lunar_pure_wheeled_controller_node.py
   DESTINATION lib/${PROJECT_NAME})
 
+install(FILES README.md DESTINATION share/${PROJECT_NAME})
+
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(${PROJECT_NAME}_p3_map_source_test test/test_p3_map_source.py)
   ament_add_pytest_test(${PROJECT_NAME}_shutdown_test test/test_shutdown.py)
   ament_add_pytest_test(${PROJECT_NAME}_reference_test test/test_reference.py)
   ament_add_pytest_test(${PROJECT_NAME}_incremental_path_test test/test_incremental_path.py)

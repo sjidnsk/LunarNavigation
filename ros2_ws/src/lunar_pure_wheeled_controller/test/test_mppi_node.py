@@ -346,8 +346,11 @@ def test_standard_path_receipt_liveness_and_empty_stop_preserve_history(monkeypa
         assert node._path_received_at==10.
         clock[0]=11.;path.header.stamp.sec=2;node._on_path(path)
         assert node._path_received_at==11. and len(node._executor._command_history)==1
-        node._odometry=object();node._odometry_received_at=11.
-        monkeypatch.setattr(node,'_tick_incremental_path',lambda:None)
+        from nav_msgs.msg import Odometry
+        odom=Odometry();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.
+        node._on_odometry(odom)
+        monkeypatch.setattr(node,'_standard_grid',lambda state:node._executor.map)
+        monkeypatch.setattr(node,'_standard_unavailable',lambda reason:None)
         clock[0]=11.36;node._tick()
         assert node._executor._stop_reason=='STALE_PATH'
         assert node._executor._last_command[0]==.2
