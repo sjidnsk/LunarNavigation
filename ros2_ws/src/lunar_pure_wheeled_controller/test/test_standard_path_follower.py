@@ -164,3 +164,34 @@ def test_rolling_update_retaining_executed_prefix_does_not_revisit_corner():
     e.set_standard_path(path[:-1]+((1.,2.1,math.pi/2),))
     r=tick(e,TrackingState(1.,.4,math.pi/2,.1))
     assert r.phase=='TRACKING' and r.command.linear_x_mps>0.
+
+
+def test_dense_rolling_path_preserves_cursor_beyond_initial_projection_window():
+    e=follower();path=tuple((i*.1,0.,0.) for i in range(41))
+    e.set_standard_path(path)
+    for x in np.linspace(0.,2.,41):
+        tick(e,TrackingState(float(x),0.,0.,.1))
+    assert e._local_progress==pytest.approx(2.)
+    before=e.progress_m
+    e.set_standard_path(path+((4.1,0.,0.),))
+    r=tick(e,TrackingState(2.,0.,0.,.1))
+    assert e._local_progress==pytest.approx(2.)
+    assert e.progress_m>=before
+    assert r.phase=='TRACKING' and r.command.linear_x_mps>0.
+    assert abs(r.heading_error_rad)<.05
+
+
+def test_latest_active_geometry_cancels_older_pending_reference():
+    e=follower();a=((0.,0.,0.),(2.,0.,0.));b=((0.,0.,0.),(-2.,0.,0.))
+    e.set_standard_path(a);tick(e,TrackingState(.2,0.,0.,.1))
+    e.no_progress_s=.4
+    progress=e.progress_m
+    history=[(t,u.copy()) for t,u in e._command_history]
+    e.set_standard_path(b,2);e.set_standard_path(a,3)
+    assert e.progress_m==progress and e.no_progress_s==.4
+    assert len(e._command_history)==len(history)
+    assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
+    r=tick(e,TrackingState(.2,0.,0.,.1))
+    assert e.reference.points==a
+    assert r.phase=='TRACKING' and r.command.linear_x_mps>0.
+    assert e.progress_m>=progress and e.no_progress_s>=.4

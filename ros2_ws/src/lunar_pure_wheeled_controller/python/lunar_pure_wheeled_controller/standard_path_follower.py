@@ -21,6 +21,7 @@ class StandardPathFollower(MppiPathFollower):
             self.request_stop('EMPTY_OR_INVALID_PATH');return False
         self.identity=identity
         if self.reference is not None and reference.points==self.reference.points and self._stop_reason is None:
+            self._pending=None
             return True
         self._pending=reference;self._stop_reason=None
         return True
@@ -45,6 +46,7 @@ class StandardPathFollower(MppiPathFollower):
             stages=stages[len(executed):]
         candidate=stages[0]
         compatible=self.path is None
+        matched_projection=None
         if self.path is not None:
             old=self._stages[self._stage_index]
             actual=self.path.project(state.x_m,state.y_m,reach=self._local_progress+.75).s
@@ -61,15 +63,23 @@ class StandardPathFollower(MppiPathFollower):
             new_body=candidate.body_yaw_at(projection)
             compatible=(old.direction==candidate.direction and projection.error<=.1 and
                 abs(angle(old_body-new_body))<=self.policy.goal_yaw_tolerance_rad)
+            if compatible:matched_projection=projection
             # 裁剪不得吞掉尚未完成的原地旋转或终点车体姿态。
             at_end=math.dist((state.x_m,state.y_m),self.path.points[-1])<=self.policy.goal_position_tolerance_m
             unfinished=at_end and abs(angle(self.path.final_yaw-state.yaw_rad))>self.policy.goal_yaw_tolerance_rad
             if unfinished and math.dist(candidate.path.points[0],self.path.points[-1])<=.1:
                 stages.insert(0,old);compatible=True
+                matched_projection=old_projection
         self._switch_brake=not compatible and not self._stopped(state)
         self.reference=reference;self._pending=None;self._stages=stages;self._stage_index=0
         self.path=stages[0].path;self.final=True
-        self._local_progress=self.path.project(state.x_m,state.y_m,reach=.75).s if compatible else 0.
+        if compatible and matched_projection is not None:
+            # 沿兼容匹配的游标投影实际状态，不能退回路径开头的窗口。
+            actual=self.path.project(state.x_m,state.y_m,index=matched_projection.index,
+                reach=matched_projection.s+.75)
+            self._local_progress=max(matched_projection.s,actual.s)
+        else:
+            self._local_progress=self.path.project(state.x_m,state.y_m,reach=.75).s if compatible else 0.
         if not compatible:self.discard_prediction()
 
     def _orient_progress_anchor(self, state):
