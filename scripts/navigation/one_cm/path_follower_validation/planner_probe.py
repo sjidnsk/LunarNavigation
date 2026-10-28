@@ -13,6 +13,7 @@ import nav1cm
 from ament_index_python.packages import get_package_prefix
 from lunar_nav1cm_planner.node import PlannerNode, create_resources
 import rclpy
+from rclpy.signals import SignalHandlerOptions
 from rclpy.parameter import Parameter
 
 from .evidence import Recorder
@@ -44,7 +45,7 @@ def run(args):
     production += list((prefix/'lib').glob('libnav1cm_*.so'))
     rec.emit('INSTALL', nav1cm_file=nav1cm.__file__, pythonpath=sys.path,
              production_sha256={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in production})
-    rclpy.init(args=[])
+    rclpy.init(args=[],signal_handler_options=SignalHandlerOptions.NO)
 
     def factory(limits, capability, settings):
         session, store = create_resources(limits, capability, settings)
