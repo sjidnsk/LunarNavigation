@@ -83,7 +83,8 @@ def run(args):
 
     node.runtime.notice = notice
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            rclpy.spin_once(node, timeout_sec=.1)
     except KeyboardInterrupt:
         pass
     finally:

@@ -137,7 +137,8 @@ def main(args=None):
     node = None
     try:
         node = PlannerNode()
-        rclpy.spin(node)
+        while rclpy.ok():
+            rclpy.spin_once(node, timeout_sec=.1)
     except KeyboardInterrupt:
         pass
     finally:

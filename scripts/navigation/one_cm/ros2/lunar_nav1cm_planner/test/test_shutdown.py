@@ -1,6 +1,8 @@
 """真实SIGINT必须在worker停止之后才销毁ROS context。"""
 import os
 import subprocess
+import signal
+import time
 import sys
 
 
@@ -13,7 +15,7 @@ import lunar_nav1cm_planner.node as module
 class Probe(Node):
     def __init__(self):
         super().__init__('planner_shutdown_probe')
-        self.create_timer(.1,lambda:os.kill(os.getpid(),signal.SIGINT))
+        print('READY',flush=True)
     def stop_runtime(self):
         assert rclpy.ok(), 'context closed before runtime stop'
         print('RUNTIME_CONTEXT_ALIVE',flush=True)
@@ -22,6 +24,14 @@ module.PlannerNode=Probe
 module.main()
 assert not rclpy.ok()
 """
-    result=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True,timeout=10)
-    assert result.returncode==0,result.stdout+result.stderr
-    assert 'RUNTIME_CONTEXT_ALIVE' in result.stdout
+    child=subprocess.Popen([sys.executable,'-c',code],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
+    try:
+        assert child.stdout.readline().strip()=='READY'
+        time.sleep(.3)
+        child.send_signal(signal.SIGINT)
+        output,_=child.communicate(timeout=3)
+        assert child.returncode==0,output
+        assert 'RUNTIME_CONTEXT_ALIVE' in output
+    finally:
+        if child.poll() is None:
+            child.terminate();child.wait(timeout=3)
