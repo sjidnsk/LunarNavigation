@@ -123,3 +123,22 @@ def test_planner_map_worker_cancels_inflight_dense_apply():
     print(json.dumps({'planner_inflight_close_s':elapsed,'result':result}),flush=True)
     assert result['threads_alive']==[] and elapsed<2. and not t._finalizer.alive
     assert any('cancelled for shutdown' in detail for _,detail in notices)
+
+
+@pytest.mark.parametrize('resolution',[.01,.05,.1])
+def test_sparse_dirty_union_matches_complete_reclassification(resolution):
+    def raster(update):
+        result=np.full((80,80),-1,np.int8)
+        for x0,y0,x1,y1,state in update.regions:result[max(0,y0):min(80,y1),max(0,x0):min(80,x1)]=state
+        return result
+    values=np.zeros((80,80),np.float32)
+    with terrain() as incremental:
+        observed=raster(incremental.apply(values,resolution_m=resolution,origin_xy_m=(0.,0.)))
+        for patches in ([(30,30,.4),(50,52,.3),(51,52,.3)],[(30,30,0.),(50,52,0.),(51,52,0.)]):
+            sparse=np.full_like(values,np.nan)
+            for y,x,z in patches:values[y,x]=z;sparse[y,x]=z
+            update=incremental.apply(sparse,resolution_m=resolution,origin_xy_m=(0.,0.))
+            for x0,y0,x1,y1,state in update.regions:observed[max(0,y0):min(80,y1),max(0,x0):min(80,x1)]=state
+            with terrain() as oracle:
+                expected=raster(oracle.apply(values,resolution_m=resolution,origin_xy_m=(0.,0.)))
+            np.testing.assert_array_equal(observed,expected)
