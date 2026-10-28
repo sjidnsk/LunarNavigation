@@ -59,10 +59,13 @@ def process_rows(group):
         except (OSError,ProcessLookupError,PermissionError):pass
     return rows
 
+def measured_stopped_before(rows, terminal_time):
+    return any(0.<=terminal_time-r['monotonic_s']<=.15 and abs(r['v'])<=.01 and abs(r['w'])<=.01 for r in rows)
+
 def held(rows,pose,terminal_time):
     start=None;best=None
     for row in rows:
-        if row['monotonic_s']>terminal_time+.05:break
+        if row['monotonic_s']>terminal_time:break
         xy=math.hypot(row['x']-pose[0],row['y']-pose[1]);yaw=motion.wrap(row['yaw']-pose[2])
         valid=xy<=.1+1e-9 and abs(yaw)<=.05+1e-9 and abs(row['v'])<=.01+1e-9 and abs(row['w'])<=.01+1e-9
         if valid:
@@ -265,7 +268,7 @@ def run(args):
       installed=installed,no_exceptions=no_exceptions,
       source_received=bool(applied) and any(r['ready'] for r in policy) and any(r['data'].get('map_revision',0)>0 for r in diagnostics))
     evidence=dict(case=args.case,fixture_version=args.fixture_version,common=common,sensor_timing=timing,reached=reached,distinct_goals=len(goals),observed_growth=(observations[-1]['observed_cells']-observations[0]['observed_cells']) if observations else 0,
-       waits=sum(r['message']['reason_code'] in ('WAITING_FOR_MAP','WAITING_FOR_PATH') for r in feedback),canceled_stopped=sum(r['reason']=='CANCELED_STOPPED' and r['status']==5 and any(abs(v['monotonic_s']-r['monotonic_s'])<=.15 and abs(v['v'])<=.01 and abs(v['w'])<=.01 for v in states) for r in results),
+       waits=sum(r['message']['reason_code'] in ('WAITING_FOR_MAP','WAITING_FOR_PATH') for r in feedback),canceled_stopped=sum(r['reason']=='CANCELED_STOPPED' and r['status']==5 and measured_stopped_before(states,r['monotonic_s']) for r in results),
        cancel_while_moving=cancel_moving,no_goals_after_cancel=cancel_at is not None and not any(r['monotonic_s']>cancel_at+.1 for r in goals),
        formal=formal,applied=applied,clearance=clear,goals=goals,results=results,exception=exception,returncode=proc.returncode,termination=termination,
        maxima={k:max((abs(r[k]) for r in states),default=0.) for k in ('v','w','a','alpha')},final_state=asdict(state),

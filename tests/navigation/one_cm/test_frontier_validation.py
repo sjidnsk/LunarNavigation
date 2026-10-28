@@ -84,3 +84,19 @@ def test_blocked_v2_only_translates_declared_unknown_feature():
     allowed=(((x>=.9)&(x<=1.3))|((x>=1.6)&(x<=2.0)))&(abs(y)<=1.3)
     assert np.array_equal(a[~allowed],b[~allowed])
     assert a.sum()==b.sum() and not np.array_equal(a,b)
+
+
+def test_terminal_hold_never_uses_future_state_samples():
+    import sys
+    path=FILE.with_name("run.py");spec=spec_from_file_location("frontier_strict_terminal",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    rows=[dict(monotonic_s=t,x=0.,y=0.,yaw=0.,v=0.,w=0.) for t in (0.,.1,.2,.3)]
+    assert module.held(rows,(0.,0.,0.),.26)["hold_s"]<=.26
+
+def test_cancel_stop_measurement_must_precede_terminal_receipt():
+    import sys
+    path=FILE.with_name("run.py");spec=spec_from_file_location("frontier_strict_cancel",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    assert hasattr(module,"measured_stopped_before"), "取消停稳缺少严格终态前测量门禁"
+    assert not module.measured_stopped_before([dict(monotonic_s=.3,v=0.,w=0.)],.26)
+    assert module.measured_stopped_before([dict(monotonic_s=.2,v=0.,w=0.)],.26)
