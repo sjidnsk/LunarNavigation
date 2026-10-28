@@ -417,6 +417,9 @@ def validate_showcase_environment(stage, errors):
                 n = sum(max(int(v)-2,0) for v in UsdGeom.Mesh(prim).GetFaceVertexCountsAttr().Get())
                 if not 0 < n <= 128 or not prim.HasAPI(UsdPhysics.CollisionAPI):
                     errors.append('rock proxy topology/collision: '+str(prim.GetPath()))
+                if (not prim.HasAPI(UsdPhysics.CollisionAPI) or
+                        UsdPhysics.CollisionAPI(prim).GetCollisionEnabledAttr().Get() is not True):
+                    errors.append('rock proxy collision disabled: '+str(prim.GetPath()))
         for root in ('/World/LunarRover','/World/MidtermPreparation','/Render'):
             prim = stage.GetPrimAtPath(root)
             if prim and prim.IsActive():

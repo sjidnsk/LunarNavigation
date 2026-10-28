@@ -104,7 +104,8 @@ class ActualShowcaseTests(unittest.TestCase):
     def test_metadata_old_collider_and_annotation_mutations(self):
         from pxr import Sdf, Usd, UsdGeom, UsdPhysics
         source = os.environ['VIPER_SHOWCASE_STAGE']
-        for kind, expected in (('metadata','engineering_metadata'), ('collider','old environment'), ('annotation','annotation geometry')):
+        for kind, expected in (('metadata','engineering_metadata'), ('collider','old environment'), ('annotation','annotation geometry'),
+                               ('disabled_rock','rock proxy collision disabled')):
             stage = Usd.Stage.Open(source)
             stage.SetEditTarget(stage.GetSessionLayer())
             original_data = dict(stage.GetRootLayer().customLayerData)
@@ -116,6 +117,10 @@ class ActualShowcaseTests(unittest.TestCase):
                 stage.OverridePrim('/World/Environment').SetActive(True)
                 cube = UsdGeom.Cube.Define(stage, '/World/Environment/LeakedCollider')
                 UsdPhysics.CollisionAPI.Apply(cube.GetPrim())
+            elif kind == 'disabled_rock':
+                rock = stage.GetPrimAtPath('/World/ShowcaseEnvironment/Rocks/Rock_0000')
+                self.assertTrue(rock and rock.HasAPI(UsdPhysics.CollisionAPI))
+                UsdPhysics.CollisionAPI(rock).GetCollisionEnabledAttr().Set(False)
             else:
                 UsdGeom.Cube.Define(stage, '/World/ShowcaseViews/LeakedBoundary')
             result = showcase.validate_showcase(stage, Path(__file__).parents[2]/'config/isaac_viper.yaml')
