@@ -1,5 +1,7 @@
 # NAV1CM 与标准 Path 真实跟踪器联合验证
 
+> 本文按时间保留Task3原始阶段记录；下文“未合入/未切默认”指当时。2026-10-29最终复审已通过，两条远程owner已合入，当前接口、0.2 m净空及验证边界见[集成收尾](2026-10-29-nav1cm-final-integration.md)。
+
 任务归属 integration/pure-planner-orin；专题 hk/nav-1cm-feasibility-20261026。
 初始集成基线 46f635e339fa70fdf116454bc1d287733efa395b。默认入口保持不变。
 
