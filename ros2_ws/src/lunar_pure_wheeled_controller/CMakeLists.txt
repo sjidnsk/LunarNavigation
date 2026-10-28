@@ -32,6 +32,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(${PROJECT_NAME}_mppi_test test/test_mppi.py)
   ament_add_pytest_test(${PROJECT_NAME}_mppi_node_test test/test_mppi_node.py)
   ament_add_pytest_test(${PROJECT_NAME}_mppi_reference_geometry_test test/test_mppi_reference_geometry.py)
+  ament_add_pytest_test(${PROJECT_NAME}_mppi_path_follower_swept_map_test test/test_mppi_path_follower_swept_map.py)
 endif()
 
 ament_package()

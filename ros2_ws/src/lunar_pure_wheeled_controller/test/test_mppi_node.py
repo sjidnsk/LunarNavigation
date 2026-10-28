@@ -27,7 +27,8 @@ def test_mppi_cannot_silently_run_without_a_map_contract():
 
 @pytest.mark.parametrize("stale,clock_mode",[(False,"real"),(True,"real"),("during","real"),("unsafe_after","real"),(False,"paused"),(False,"recert_slow")])
 @pytest.mark.parametrize("map_age_s",[0.,2.])
-def test_performance_overrun_does_not_stop_valid_state_or_clear_prediction(monkeypatch,stale,map_age_s,clock_mode):
+@pytest.mark.parametrize("backend",['mppi','mppi_path_follower'])
+def test_performance_overrun_does_not_stop_valid_state_or_clear_prediction(monkeypatch,stale,map_age_s,clock_mode,backend):
     import time
     from types import SimpleNamespace as S
     from nav_msgs.msg import Odometry
@@ -38,7 +39,7 @@ def test_performance_overrun_does_not_stop_valid_state_or_clear_prediction(monke
     from lunar_pure_wheeled_controller.tracking import TrackingCommand
     from lunar_pure_wheeled_controller.mppi_map import GridMap
     import numpy as np
-    rclpy.init(args=['--ros-args','-p','controller_backend:=mppi','-p','input_mode:=incremental_reference'])
+    rclpy.init(args=['--ros-args','-p','controller_backend:='+backend,'-p','input_mode:=incremental_reference'])
     node=None
     try:
         node=PureWheeledControllerNode()
@@ -296,15 +297,15 @@ def test_native_ready_map_is_valid_without_inventing_observation_age_gate(future
         rclpy.shutdown()
 
 
-def test_path_follower_backend_does_not_create_map_client():
+def test_path_follower_backend_requires_revisioned_map_client():
     from lunar_pure_wheeled_controller.mppi_path_follower import MppiPathFollower
     rclpy.init(args=['--ros-args','-p','controller_backend:=mppi_path_follower','-p','input_mode:=incremental_reference'])
     node=None
     try:
         node=PureWheeledControllerNode()
         assert isinstance(node._executor,MppiPathFollower)
-        assert node._map_client is None
-        assert not node._executor.requires_map
+        assert node._map_client is not None
+        assert node._executor.requires_map
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()
