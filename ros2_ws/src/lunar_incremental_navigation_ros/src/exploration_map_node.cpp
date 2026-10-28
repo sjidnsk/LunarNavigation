@@ -1,5 +1,6 @@
 #include "lunar_incremental_navigation_ros/exploration_map_node.hpp"
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -16,6 +17,23 @@
 namespace lunar::incremental_navigation_ros {
 namespace core=lunar::incremental_navigation;
 using PolicyService=lunar_planning_msgs::srv::GetPolicyMap;
+namespace {
+bool EquivalentTransform(const geometry_msgs::msg::Transform& a,const geometry_msgs::msg::Transform& b) {
+  if(a.translation!=b.translation) return false;
+  auto normalize=[](const auto& q) {
+    const double n=std::sqrt(q.w*q.w+q.x*q.x+q.y*q.y+q.z*q.z);
+    return std::array<double,4>{q.w/n,q.x/n,q.y/n,q.z/n};
+  };
+  const auto qa=normalize(a.rotation),qb=normalize(b.rotation);
+  double same=0.,opposite=0.;
+  for(std::size_t i=0;i<4;++i) {
+    if(!std::isfinite(qa[i])||!std::isfinite(qb[i])) return false;
+    same=std::max(same,std::abs(qa[i]-qb[i]));opposite=std::max(opposite,std::abs(qa[i]+qb[i]));
+  }
+  return std::min(same,opposite)<=1e-12;
+}
+}
+
 struct ExplorationMapNode::Impl {
   ExplorationMapNode& node;
   std::string map_frame,odom_frame,base_frame,epoch;
@@ -92,12 +110,15 @@ struct ExplorationMapNode::Impl {
   }
   void Wake() {{std::lock_guard lock(mutex);pending=true;}condition.notify_one();}
   void Run() {
-    std::uint64_t local_sequence=0,tf_sequence=0;
+    std::uint64_t local_sequence=0;
+    std::optional<geometry_msgs::msg::Transform> applied_transform;
     while(true) {
       {std::unique_lock lock(mutex);condition.wait(lock,[this]{return stop||pending;});if(stop) return;pending=false;}
       try {
         auto input=inputs->Capture();
-        if(input.local_map && (local_sequence!=input.local_sequence||tf_sequence!=input.tf_sequence)) {
+        const bool transform_changed=input.local_map && input.local_map->header.frame_id!=map_frame &&
+          input.map_from_odom && (!applied_transform || !EquivalentTransform(*applied_transform,input.map_from_odom->transform));
+        if(input.local_map && (local_sequence!=input.local_sequence||transform_changed)) {
           // 同map坐标输入不需要虚构TF；odom坐标仍使用最新/静态TF，不检查stamp。
           auto map_input=input;
           if(input.local_map->header.frame_id==map_frame) {
@@ -111,8 +132,9 @@ struct ExplorationMapNode::Impl {
           if(evidence.value) {
             const auto stamp=static_cast<std::int64_t>(input.local_map->header.stamp.sec)*1000000000LL+input.local_map->header.stamp.nanosec;
             if(map->Apply(*evidence.value,stamp)) {
-              local_sequence=input.local_sequence;tf_sequence=input.tf_sequence;
-              RCLCPP_DEBUG(node.get_logger(),"地图派生 seq=%lu stamp=%ld adapt_ms=%.3f apply_ms=%.3f",local_sequence,stamp,
+              local_sequence=input.local_sequence;
+              if(input.map_from_odom) applied_transform=input.map_from_odom->transform;
+              RCLCPP_DEBUG(node.get_logger(),"地图派生 seq=%lu stamp=%lld adapt_ms=%.3f apply_ms=%.3f",local_sequence,stamp,
                 std::chrono::duration<double,std::milli>(adapted_at-started).count(),
                 std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-adapted_at).count());
             }
@@ -129,12 +151,22 @@ struct ExplorationMapNode::Impl {
             if(state.value) capture.map.anchor=state.value->base_link_pose;
           }
         }
+        const auto previous=std::atomic_load(&published);
+        const bool same_fine=previous && previous->fine_revision==capture.map.fine->fine_traversability_revision();
+        if(same_fine) {
+          capture.map.full_snapshot=false;
+          capture.map.base_revision=previous->fine_revision;
+        }
         const auto export_started=std::chrono::steady_clock::now();
-        auto response=exporter->ExportObserved(capture,0);
+        auto response=exporter->ExportObserved(capture,same_fine?previous->fine_revision:0);
+        if(same_fine) response.tiles=previous->tiles;
+        response.full_snapshot=true;response.base_revision=0;
         RCLCPP_DEBUG(node.get_logger(),"地图导出 revision=%lu export_ms=%.3f",response.fine_revision,
           std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-export_started).count());
         if(!capture.map.anchor) {response.ready=false;response.reason_code="INPUT_UNAVAILABLE";}
         std::atomic_store(&published,std::make_shared<const PolicyService::Response>(std::move(response)));
+        // 位姿/等价TF只刷新当前anchor与支撑；源receipt仍通过Apply更新processed_stamp。
+        if(same_fine) continue;
         const auto projection=map->Project();
         const auto& g=projection.geometry;
         nav_msgs::msg::OccupancyGrid message;message.header.frame_id=g.frame_id();message.header.stamp=node.now();
