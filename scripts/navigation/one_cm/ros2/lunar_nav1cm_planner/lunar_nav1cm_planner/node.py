@@ -9,6 +9,7 @@ from geometry_msgs.msg import PoseStamped
 from grid_map_msgs.msg import GridMap
 from nav_msgs.msg import Odometry, Path as PathMessage
 import rclpy
+from rclpy.signals import SignalHandlerOptions
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from tf2_msgs.msg import TFMessage
@@ -132,7 +133,7 @@ class PlannerNode(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args)
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = None
     try:
         node = PlannerNode()
