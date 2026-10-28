@@ -48,7 +48,7 @@ class MppiPathFollower(MppiExecutor):
 
     def _score(self,state,controls,target,target_yaw,dt):
         poses,velocity=self._rollout(state,controls,dt)
-        valid=self._kinematically_valid(velocity)
+        valid=self._kinematically_valid(velocity) & self._rollout_kinematic_valid
         cost=self._tracking_cost(state,controls,target,target_yaw,poses)
         return np.where(valid,cost,np.inf),poses
 

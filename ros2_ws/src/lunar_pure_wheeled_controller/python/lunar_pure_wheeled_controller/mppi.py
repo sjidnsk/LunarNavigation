@@ -268,12 +268,15 @@ class MppiExecutor:
     def _certify_sequences(self,state,sequences,step,*,costs=None):
         p=self.policy;c=self.config
         poses,velocity=self._rollout(state,sequences,c.model_dt)
+        # 先保存整条候选的连续有效性；后续首指令停车认证会覆盖 rollout 状态。
+        continuous_valid=self._rollout_kinematic_valid.copy()
         valid=self._stationary_supported(state,poses,velocity)
         remaining=~valid
         if np.any(remaining):
             valid[remaining]=self.map.valid_motion(poses[remaining],velocity[remaining],c.model_dt,p.execution_clearance_m)
         moving=abs(velocity[:,:,0])>p.stopped_linear_mps
         valid &= np.all(~moving|((abs(velocity[:,:,1])<=abs(velocity[:,:,0])*p.max_curvature_per_m+1e-9)&(abs(velocity[:,:,0]*velocity[:,:,1])<=p.max_lateral_accel_mps2+1e-9)),axis=1)
+        valid &= continuous_valid
         indices=np.flatnonzero(valid)
         if costs is not None:
             # Fallback selection needs only the least-cost certified candidate.

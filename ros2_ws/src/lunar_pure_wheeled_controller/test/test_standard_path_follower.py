@@ -268,3 +268,31 @@ def test_accepted_targets_obey_independent_fine_actuator_with_history(delay):
             assert abs(v-old_v)<=.000500001 and abs(w-old_w)<=.000500001
             assert abs(v)<=.2 and abs(w)<=1.
             if abs(v)>1e-8:assert abs(w)<=abs(v)+1e-8
+
+
+@pytest.mark.parametrize('route',['score','weighted','fallback'])
+def test_safe_first_command_cannot_certify_later_continuous_reversal(route):
+    e=follower();e.set_standard_path(((0.,0.,0.),(1.,0.,0.)))
+    state=TrackingState(0.,0.,0.);e._accept_pending(state)
+    e.config=replace(e.config,model_dt=.05)
+    unsafe=np.array([[0.,0.],[.003384,0.],[-.0148655,-.0148655],[0.,0.]])
+    safe=np.zeros_like(unsafe)
+    sequences=np.stack((unsafe,safe))
+    # Independent actuator oracle: all 50ms endpoints obey curvature, but the
+    # third interval contains a moving violation with a safe first command.
+    v=w=0.;breach=False
+    for target in unsafe:
+        for _ in range(50):
+            v+=float(np.clip(target[0]-v,-.0005,.0005))
+            w+=float(np.clip(target[1]-w,-.0005,.0005))
+            breach |= abs(v)>.01 and abs(w)>abs(v)+1e-9
+        assert abs(v)<=.01 or abs(w)<=abs(v)+1e-9
+    assert breach
+    assert e.certify_publication(state,0.,0.,0.)
+    if route=='score':
+        cost,_=e._score(state,sequences,np.array([1.,0.]),0.,.05)
+        assert np.isinf(cost[0]) and np.isfinite(cost[1])
+    else:
+        costs=np.array([0.,1.]) if route=='fallback' else None
+        valid,_=e._certify_sequences(state,sequences,.05,costs=costs)
+        assert valid.tolist()==[False,True]
