@@ -53,20 +53,32 @@ class WheelLimits:
     linear_accel_mps2: float = 0.5
     angular_accel_rps2: float = 0.5
     curvature_inv_m: float = 1.0
+    minimum_clearance_m: float = 0.0
 
     def __post_init__(self):
         values = tuple(vars(self).values())
-        if not all(np.isfinite(values)) or any(value <= 0 for value in values):
+        if (not all(np.isfinite(values)) or self.minimum_clearance_m < 0 or
+                any(value <= 0 for name,value in vars(self).items() if name != "minimum_clearance_m")):
             raise ValueError("wheel limits must be finite and positive")
+
+    def global_clearance_radius(self, requested=None):
+        # 零净空纯原型保留显式半车宽参考；生产非零净空采用任意yaw外接圆下限。
+        base = self.body_width_m / 2
+        required = (np.hypot(self.body_length_m,self.body_width_m)/2 + self.minimum_clearance_m
+                    if self.minimum_clearance_m > 0 else base)
+        radius = required if requested is None else float(requested)
+        if not np.isfinite(radius) or radius < base:
+            raise ValueError("clearance radius must be finite and at least half vehicle width")
+        return float(max(radius,required))
 
     def digest(self) -> str:
         """认证时绑定全部车体尺寸及运动约束。"""
         values = np.asarray((
             self.body_length_m, self.body_width_m, self.linear_speed_mps,
             self.angular_speed_rps, self.linear_accel_mps2,
-            self.angular_accel_rps2, self.curvature_inv_m,
+            self.angular_accel_rps2, self.curvature_inv_m, self.minimum_clearance_m,
         ), dtype="<f8")
-        return hashlib.sha256(b"WheelLimits-v1" + values.tobytes()).hexdigest()
+        return hashlib.sha256(b"WheelLimits-v2" + values.tobytes()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -264,3 +276,12 @@ class Certification:
                     self.trajectory_digest == trajectory.digest() and
                     self.grid_digest == grid.digest() and
                     self.limits_digest == limits.digest())
+
+
+def resolve_minimum_clearance(configured, requested=None):
+    """选定能力的净空是下限；显式请求可收紧，不能静默取消配置安全量。"""
+    configured = float(configured)
+    requested = configured if requested is None else float(requested)
+    if not np.isfinite(configured) or not np.isfinite(requested) or min(configured,requested) < 0:
+        raise ValueError("minimum clearance must be finite and nonnegative")
+    return max(configured,requested)

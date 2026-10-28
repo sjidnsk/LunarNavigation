@@ -40,7 +40,8 @@ class NavigationCoordinator:
         self.backend = backend
         self.allow_unknown = allow_unknown
         self.local_period_s, self.global_period_s = local_period_s, global_period_s
-        self.global_budget_s, self.clearance_radius_m = global_budget_s, clearance_radius_m
+        self.global_budget_s = global_budget_s
+        self.clearance_radius_m = self.limits.global_clearance_radius(clearance_radius_m)
         self.stall_timeout_s = stall_timeout_s
         self.goal_tolerance_m = .1
         self.goal_yaw_tolerance_rad = .05
@@ -57,7 +58,7 @@ class NavigationCoordinator:
         self._motion_s = 0.
         self._stalled = False
         self._field_cache = DistanceFieldCache(backend=field_backend)
-        self._goal_checker = AdaptiveGlobalPlanner(self.limits, clearance_radius_m)
+        self._goal_checker = AdaptiveGlobalPlanner(self.limits, self.clearance_radius_m)
         # 原型默认严格 epoch 身份；P3 持续更新地图时显式开启当前图重验。
         self.revalidate_current_map = bool(revalidate_current_map)
         self._accepted_goal_generation = None

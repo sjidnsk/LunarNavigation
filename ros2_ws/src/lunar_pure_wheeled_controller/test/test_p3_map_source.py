@@ -22,6 +22,12 @@ def test_standard_defaults_use_direct_p3_and_wheel_capability():
         assert node._p3_source is not None
         assert node._executor.config.state_age_budget_s==.5
         assert node._body_dimensions==pytest.approx((1.182,.818))
+        import yaml
+        from pathlib import Path
+        from ament_index_python.packages import get_package_share_directory
+        configured=yaml.safe_load((Path(get_package_share_directory('lunar_nav1cm_planner'))/'config/wheel.yaml').read_text())['capability']['minimum_clearance_m']
+        assert node.get_parameter('minimum_clearance_m').value==configured
+        assert node._p3_source._minimum_clearance==configured
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()
@@ -343,3 +349,26 @@ def test_r7_fractional_p3_native_map_and_zero_history_stop():
         assert grid.states[250,250]==1
         assert certified
     finally:source.close()
+
+
+@pytest.mark.parametrize('margin',[.2,.4])
+def test_direct_p3_clearance_support_drives_continuous_command_certificate(margin):
+    from types import SimpleNamespace
+    from nav1cm.contracts import CellRect,WorldSnapshot
+    from lunar_pure_wheeled_controller.p3_map_source import P3MapSource
+    free=(CellRect(-500,-500,500,500),)
+    def grid_at(front,clearance):
+        world=WorldSnapshot(1,(CellRect(front,-10,front+1,10),),free)
+        source=P3MapSource(SimpleNamespace(apply=lambda *args:world),None,(1.182,.818),minimum_clearance_m=clearance)
+        try:
+            source.set_center(0.,0.);source.submit_map(elevation());assert source.wait_idle()
+            assert source.error is None
+            return source.snapshot().grid
+        finally:source.close()
+    front=int(round((.591+margin-.05)*100))
+    poses=np.array([[[0.,0.,0.],[.01,0.,0.]]]);velocity=np.array([[[.1,0.]]])
+    assert grid_at(front,0.).valid_motion(poses,velocity,.1,0.).all()
+    assert not grid_at(front,margin).valid_motion(poses,velocity,.1,0.).all()
+    far=int(np.ceil((np.hypot(1.182,.818)/2+margin+.05)*100))
+    # 支撑图已包含配置净空；command层只追加执行误差，不能再加一遍净空。
+    assert grid_at(far,margin).valid_motion(poses,velocity,.1,0.).all()

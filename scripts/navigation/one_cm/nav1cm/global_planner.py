@@ -77,7 +77,7 @@ class AdaptiveGlobalPlanner:
     """
     def __init__(self, limits: WheelLimits, clearance_radius_m=None,
                  domain_margin_m=2.0, domain_bounds_m=None, max_nodes=200_000):
-        radius = limits.body_width_m / 2 if clearance_radius_m is None else float(clearance_radius_m)
+        radius = limits.global_clearance_radius(clearance_radius_m)
         if not math.isfinite(radius) or radius < limits.body_width_m / 2:
             raise ValueError("clearance radius must be at least half vehicle width")
         if not math.isfinite(domain_margin_m) or domain_margin_m <= 0:

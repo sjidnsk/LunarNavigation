@@ -7,10 +7,11 @@ from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node
 from lunar_nav1cm_planner.configuration import load_configuration
+from nav1cm.contracts import resolve_minimum_clearance
 
 DEFAULTS = {
     'start_controller':'false', 'start_rviz':'false', 'use_sim_time':'false',
-    'params_file':'', 'map_frame':'map', 'map_topic':'/Car/T3/mapping/grid_map',
+    'params_file':'', 'minimum_clearance_m':'', 'map_frame':'map', 'map_topic':'/Car/T3/mapping/grid_map',
     'odometry_topic':'/Car/T3/localization/odometry', 'tf_topic':'/tf', 'tf_static_topic':'/tf_static',
     'local_path_topic':'/Car/T4/planning/local_path', 'global_route_topic':'/Car/T4/planning/global_route',
     'goal_topic':'/Car/T4/navigation/goal', 'command_topic':'/Car/T5/Car_Cmd_Vel',
@@ -20,7 +21,7 @@ DEFAULTS = {
     'stopped_linear_mps':'0.01', 'stopped_angular_rps':'0.01',
     'mppi_nominal_response_time_s':'0.15',
 }
-SHARED = ('map_frame','odometry_topic','tf_topic','tf_static_topic','allow_unknown','use_sim_time','goal_yaw_tolerance_rad','stopped_linear_mps')
+SHARED = ('minimum_clearance_m','map_frame','odometry_topic','tf_topic','tf_static_topic','allow_unknown','use_sim_time','goal_yaw_tolerance_rad','stopped_linear_mps')
 FOLLOWER_MAP = {
     'p3_map_topic':'map_topic', 'path_topic':'local_path_topic', 'platform_config':'wheel_config',
     'max_linear_mps':'linear_speed_mps', 'max_reverse_mps':'linear_speed_mps',
@@ -38,6 +39,8 @@ def compose(context):
         if text not in ('true','false'): raise ValueError(f'{name} must be true or false')
         values[name]=text=='true'
     baseline,_=load_configuration(values['wheel_config'])
+    values['minimum_clearance_m']=resolve_minimum_clearance(baseline.minimum_clearance_m,
+        None if values['minimum_clearance_m']=='' else values['minimum_clearance_m'])
     for name in ('linear_speed_mps','angular_speed_rps','linear_accel_mps2','angular_accel_rps2','curvature_inv_m',
                  'goal_tolerance_m','goal_yaw_tolerance_rad','stopped_linear_mps','stopped_angular_rps','mppi_nominal_response_time_s'):
         values[name]=float(values[name])

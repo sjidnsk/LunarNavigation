@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from nav1cm.contracts import WheelLimits
+from nav1cm.contracts import WheelLimits, resolve_minimum_clearance
 from nav1cm.terrain_native import WheelTerrainCapability
 
 
@@ -21,7 +21,10 @@ def load_configuration(path, overrides=None):
         linear_accel_mps2=min(float(capability['maximum_acceleration_mps2']),
                               float(capability['maximum_braking_deceleration_mps2'])),
         angular_accel_rps2=float(capability['maximum_yaw_acceleration_radps2']),
-        curvature_inv_m=float(capability['maximum_curvature_per_m']))
+        curvature_inv_m=float(capability['maximum_curvature_per_m']),
+        minimum_clearance_m=resolve_minimum_clearance(capability.get('minimum_clearance_m',0.0)))
     if overrides:
-        limits = replace(limits, **{key: float(value) for key, value in overrides.items()})
+        values = {key: float(value) for key,value in overrides.items()}
+        values["minimum_clearance_m"] = resolve_minimum_clearance(limits.minimum_clearance_m, values.get("minimum_clearance_m"))
+        limits = replace(limits, **values)
     return limits, WheelTerrainCapability.from_mapping(document)

@@ -84,7 +84,8 @@ class MpccPlanner:
         self._solvers={}
         # 三圆覆盖整个矩形：每个圆覆盖长度 L/3、宽 W 的矩形条带。
         self.offsets=np.array([-limits.body_length_m/3,0.,limits.body_length_m/3])
-        self.radius=float(np.hypot(limits.body_length_m/6,limits.body_width_m/2))
+        self.radius=float(np.hypot(limits.body_length_m/6+limits.minimum_clearance_m,
+                                   limits.body_width_m/2+limits.minimum_clearance_m))
         started=perf_counter()
         for mode in ('forward','reverse','spin'):
             ocp=AcadosOcp()

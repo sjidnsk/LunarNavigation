@@ -35,3 +35,16 @@ def test_navigation_only_and_shared_limits():
     from launch.utilities import perform_substitutions
     remaps=[(perform_substitutions(ctx,a),perform_substitutions(ctx,b)) for a,b in rviz._Node__remappings]
     assert ('/goal_pose','/private/goal') in remaps
+
+
+def test_clearance_file_and_request_are_shared_and_never_lowered():
+    import yaml
+    from ament_index_python.packages import get_package_share_directory
+    config=Path(get_package_share_directory('lunar_nav1cm_planner'))/'config/wheel.yaml'
+    configured=float(yaml.safe_load(config.read_text())['capability']['minimum_clearance_m'])
+    module=load();ctx=LaunchContext();ctx.launch_configurations.update(module.DEFAULTS)
+    ctx.launch_configurations.update(wheel_config=str(config),build_dir='/tmp/nav1cm-unused',start_controller='true')
+    for request,expected in [('',configured),('0',configured),(str(configured+.2),configured+.2)]:
+        ctx.launch_configurations['minimum_clearance_m']=request
+        planner,follower=[evaluate_parameters(ctx,n._Node__parameters)[-1] for n in module.compose(ctx)]
+        assert planner['minimum_clearance_m']==follower['minimum_clearance_m']==expected

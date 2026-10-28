@@ -100,6 +100,7 @@ class PureWheeledControllerNode(Node):
             "allow_unknown": False,
             "body_length_m": 0.0,
             "body_width_m": 0.0,
+            "minimum_clearance_m": 0.0,
             "mppi_compute_budget_s": 0.04,
             "mppi_nominal_response_time_s": TrackingPolicy().control_response_time_s,
             "mppi_trace_diagnostics": False,
@@ -212,6 +213,11 @@ class PureWheeledControllerNode(Node):
                     policy_values[name]=min(value,float(capability[names[name]])) if platform_path and name in names else value
         self._policy = TrackingPolicy(**policy_values)
         if self._standard_mode:
+            from nav1cm.contracts import resolve_minimum_clearance
+            from rclpy.parameter import Parameter
+            self._minimum_clearance_m=resolve_minimum_clearance(capability.get('minimum_clearance_m',0.0),
+                self.get_parameter('minimum_clearance_m').value)
+            self.set_parameters([Parameter('minimum_clearance_m',value=self._minimum_clearance_m)])
             dimensions=capability['body_extent_m'][:2]
             self._body_dimensions=tuple(float(self.get_parameter(name).value) or float(default)
                 for name,default in zip(('body_length_m','body_width_m'),dimensions))
@@ -358,7 +364,7 @@ class PureWheeledControllerNode(Node):
             from .p3_map_source import create_p3_source
             from grid_map_msgs.msg import GridMap as P3GridMap
             capability,body,topic=p3_setup
-            self._p3_source=create_p3_source(capability,body,
+            self._p3_source=create_p3_source(capability,body,minimum_clearance_m=self._minimum_clearance_m,
                 allow_unknown=self.get_parameter('allow_unknown').value,map_frame=self._map_frame)
             try:
                 self.create_subscription(P3GridMap,topic,self._p3_source.submit_map,state_input_qos())
