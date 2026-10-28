@@ -220,14 +220,14 @@ struct Terrain final {
     }
     const auto expanded=std::chrono::steady_clock::now();
     CheckCancelled();
-    auto evaluator=nav::MakeSnapshotElevationEvaluator(*snapshot,capability);
+    nav::SnapshotTerrainClassifier classifier(*snapshot,capability);
     const auto prepared=std::chrono::steady_clock::now();
     std::map<std::int64_t,std::map<std::int64_t,std::int64_t>> labels;
     for (const auto& [y,spans]:touched) for (const auto [left,right]:spans)
       for (auto x=left;x<right;++x) {
         CheckCancelled();const nav::GridIndex index{x,y};
         if (!snapshot->ElevationRangeAt(index)) continue;
-        const auto state=evaluator->Evaluate(*snapshot,index).state;
+        const auto state=classifier.Classify(index);
         labels[y][x]=state==nav::IntrinsicCellState::kBlocked?1:state==nav::IntrinsicCellState::kFree?0:-1;
       }
     const auto evaluated=std::chrono::steady_clock::now();

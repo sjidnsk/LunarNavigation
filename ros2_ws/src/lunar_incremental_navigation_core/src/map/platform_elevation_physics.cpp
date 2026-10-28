@@ -431,6 +431,7 @@ class BatchElevationView final : public ElevationRangeView, public map::UniformP
       ranges_[y*width_+x]=value;
       if (!reference_ && value && value->min_m==value->max_m) reference_=value->min_m;
     }
+    PreparePlaneCertificate();
     // 完整行/列逐值相同是重复窗口的精确证据，包含缺测与区间端点。
     repeated_rows_=true;repeated_columns_=true;
     for (std::size_t y=0;y<height_;++y) for (std::size_t x=0;x<width_;++x) {
@@ -473,7 +474,43 @@ class BatchElevationView final : public ElevationRangeView, public map::UniformP
     return map::UniformPatchKey{static_cast<int>(l-x),static_cast<int>(h-x),
         static_cast<int>(b-y),static_cast<int>(t-y),kind,identity};
   }
+  bool CertifiesFree(GridIndex i,const WheeledCapability& wheel) const {
+    if (!plane_ || !geometry().Contains(i) || source_.TerrainMeasurementsAt(i)) return false;
+    const auto x=i.x-minimum_.x,y=i.y-minimum_.y;
+    if (x<1 || y<1 || x+1>=static_cast<std::int64_t>(width_) || y+1>=static_cast<std::int64_t>(height_)) return false;
+    const double r=geometry().resolution_m(),delta=(*plane_)[2];
+    const double radius=std::floor((.30+1e-12)/r);
+    // 证明见 docs/validation/2026-10-29-app-terrain-batch-proof.md。
+    // 完整 clipped 矩形的 OLS 残差界同时保证原 IRLS weights 恒为1、
+    // 所有inlier、无jump、center支持及confidence>=2/3；不修改原阈值。
+    if ((2.+24.*radius)*delta >= .01) return false;
+    const double slope_upper=std::atan(std::hypot((*plane_)[0],(*plane_)[1])+6.*std::sqrt(2.)*delta/r);
+    return slope_upper < wheel.maximum_slope_rad &&
+        36.*delta < wheel.maximum_local_obstacle_relief_m &&
+        36.*delta < wheel.minimum_underbody_clearance_m;
+  }
  private:
+  void PreparePlaneCertificate() {
+    // 有界证明域；其他分辨率、范围、缺测及非零宽度高程区间照旧scalar。
+    const double r=geometry().resolution_m();
+    if (r<.01 || r>.1 || width_<3 || height_<3 || width_>4096 || height_>4096) return;
+    for (const auto& v:ranges_)
+      if (!v || v->min_m!=v->max_m || !std::isfinite(v->min_m) || std::abs(v->min_m)>16.) return;
+    const double z=ranges_[0]->min_m;
+    const double a=(double(ranges_[width_-1]->min_m)-z)/((width_-1)*r);
+    const double b=(double(ranges_[(height_-1)*width_]->min_m)-z)/((height_-1)*r);
+    double residual=0.,scale=1.;
+    for (std::size_t y=0;y<height_;++y) for (std::size_t x=0;x<width_;++x) {
+      const double observed=ranges_[y*width_+x]->min_m;
+      residual=std::max(residual,std::abs(observed-(z+a*(x*r)+b*(y*r))));
+      scale=std::max({scale,std::abs(observed),std::abs(z),std::abs(a*(x*r)),std::abs(b*(y*r))});
+    }
+    // 实测float32端点精确提升为double。额外1e-6*scale远大于有界
+    // <=61²矩形矩累加、去中心化、拟合/验证的舍入上界；详见证明。
+    const double delta=residual+1e-6*scale;
+    if (std::isfinite(delta) && std::isfinite(a) && std::isfinite(b)) plane_=std::array<double,3>{a,b,delta};
+  }
+  std::optional<std::array<double,3>> plane_;
   const ElevationRangeView& source_;
   std::size_t width_{},height_{}; GridIndex minimum_{};
   std::vector<std::optional<ElevationRange>> ranges_;
@@ -486,6 +523,7 @@ class SnapshotElevationEvaluator final : public PlatformElevationEvaluator {
   SnapshotElevationEvaluator(const ElevationRangeView& source,const PlatformCapability& capability)
       :source_(source),view_(source),observations_(view_),
        evaluator_(MakeEvaluatorWithObservations(capability,0.,&observations_)) {}
+  bool CertifiesFree(GridIndex i,const WheeledCapability& capability) const {return view_.CertifiesFree(i,capability);}
   IntrinsicTraversalEvaluation Evaluate(const ElevationRangeView& source,GridIndex i) const override {
     if (&source!=&source_) throw std::invalid_argument("batch evaluator snapshot identity mismatch");
     return evaluator_->Evaluate(view_,i);
@@ -501,6 +539,27 @@ std::unique_ptr<const PlatformElevationEvaluator> MakeSnapshotElevationEvaluator
     const ElevationRangeView& view,const PlatformCapability& capability) {
   return std::make_unique<SnapshotElevationEvaluator>(view,capability);
 }
+
+struct SnapshotTerrainClassifier::Impl final {
+  Impl(const ElevationRangeView& source,const PlatformCapability& capability)
+      : source(source),evaluator(source,capability) {
+    if (const auto* value=std::get_if<WheeledCapability>(&capability)) wheel=*value;
+  }
+  const ElevationRangeView& source;
+  SnapshotElevationEvaluator evaluator;
+  std::optional<WheeledCapability> wheel;
+  std::size_t certified{};
+};
+SnapshotTerrainClassifier::SnapshotTerrainClassifier(const ElevationRangeView& v,const PlatformCapability& c)
+    :impl_(std::make_unique<Impl>(v,c)) {}
+SnapshotTerrainClassifier::~SnapshotTerrainClassifier()=default;
+IntrinsicCellState SnapshotTerrainClassifier::Classify(GridIndex i) {
+  if (impl_->wheel && impl_->evaluator.CertifiesFree(i,*impl_->wheel)) {
+    ++impl_->certified;return IntrinsicCellState::kFree;
+  }
+  return impl_->evaluator.Evaluate(impl_->source,i).state;
+}
+std::size_t SnapshotTerrainClassifier::certified_free_cells() const noexcept {return impl_->certified;}
 
 struct FineCellEvaluator::Impl final {
   struct IntrinsicCacheTile final {
