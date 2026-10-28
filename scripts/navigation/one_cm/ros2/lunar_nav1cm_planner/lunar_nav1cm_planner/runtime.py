@@ -8,6 +8,7 @@ import json
 import threading
 import time
 
+from nav1cm.navigation_task import NavigationTaskCoordinator, TaskSnapshot
 from nav1cm.ros_conversion import (
     LatestTransforms, MissingTransform, goal_from_message, map_from_message,
     paths, state_from_odometry,
@@ -16,11 +17,14 @@ from nav1cm.ros_conversion import (
 
 class PlannerRuntime:
     """factory/消息回调注入只用于内部验证，不构成对外延迟或控制协议。"""
-    def __init__(self, session, map_store, *, publish, ros_now_ns, notice=None, map_frame='map'):
+    def __init__(self, session, map_store, *, publish, ros_now_ns, notice=None, map_frame='map', event_sink=None):
         self.session, self.map_store = session, map_store
         self.publish, self.ros_now_ns = publish, ros_now_ns
         self.notice = notice or (lambda *args: None)
         self.map_frame = map_frame
+        self.event_sink = event_sink or (lambda event: None)
+        self.tasks = NavigationTaskCoordinator(session, event_sink=lambda event: self.event_sink(event))
+        self._odometry_sequence = self._observed_odometry_sequence = 0
         self._condition = threading.Condition()
         self._transforms = LatestTransforms()
         self._tf_sequence = self._map_sequence = self._goal_sequence = 0
@@ -50,13 +54,25 @@ class PlannerRuntime:
     def offer_odometry(self, message):
         with self._condition:
             self._odometry = message
+            self._odometry_sequence += 1
             self._condition.notify_all()
 
     def offer_goal(self, message):
+        self._enqueue('manual', None, message)
+
+    def offer_managed_goal(self, task_id, message):
+        self._enqueue('managed', task_id, message)
+
+    def request_cancel(self, task_id):
+        self._enqueue('cancel', task_id, None)
+
+    def _enqueue(self, kind, task_id, message):
         with self._condition:
+            if self._stopping:
+                return
             self._goal_sequence += 1
-            # 不能用单一 latest raw 槽：同一 tick 前有效 A→无效 B 必须保留 A。
-            self._goals.append((self._goal_sequence, message))
+            # 保留有效A→无效B及取消的先后顺序；输入版本同时阻挡正在完成的旧发布。
+            self._goals.append((self._goal_sequence, kind, task_id, message))
             self._condition.notify_all()
 
     def offer_tf(self, message):
@@ -105,6 +121,7 @@ class PlannerRuntime:
     def _tick_once(self, now_s):
         with self._condition:
             world, odometry = self._world, self._odometry
+            input_sequence, odometry_sequence = self._goal_sequence, self._odometry_sequence
             transforms = self._transforms.copy()
             goals, self._goals = self._goals, deque()
         if world is not None:
@@ -116,25 +133,48 @@ class PlannerRuntime:
                 self.session.offer_state(None)
                 self._notice('ODOMETRY_WAITING', exc)
         unresolved = []
-        for sequence, message in goals:
+        for sequence, kind, task_id, message in goals:
+            if kind == 'cancel':
+                pending = [item for item in unresolved if item[2] == task_id]
+                unresolved = [item for item in unresolved if item[2] != task_id]
+                if not self.tasks.cancel(task_id, now_s) and pending:
+                    self.event_sink(TaskSnapshot(task_id, 0, 'FINISHED', 'CANCELED', 'CANCELED_BEFORE_ACCEPTANCE'))
+                continue
             try:
-                goal = goal_from_message(message, transforms, self.map_frame)
+                goal = ((message.target_x_m, message.target_y_m,
+                         message.target_yaw_rad if message.has_target_yaw else None) if kind == 'managed' else
+                        goal_from_message(message, transforms, self.map_frame))
             except MissingTransform as exc:
-                unresolved.append((sequence, message))
+                unresolved.append((sequence, kind, task_id, message))
                 self._notice('GOAL_WAITING_TF', exc)
                 continue
             except (ValueError, AttributeError, TypeError) as exc:
+                if task_id is not None:
+                    self.tasks.reject(task_id, 'INVALID_GOAL: ' + str(exc))
                 self._notice('GOAL_REJECTED', exc)
                 continue
-            if self.session.offer_goal(goal):
+            event = self.tasks.submit(task_id, goal, now_s)
+            if event is not None and event.reason_code == 'WAITING_FOR_POSE':
+                unresolved.append((sequence, kind, task_id, message))
+            elif event is not None and event.outcome == 'INVALID_GOAL':
+                self._notice('GOAL_REJECTED', event.reason_code)
+            else:
                 self._last_accepted_input = sequence
                 self._notice('GOAL_ACCEPTED', f'generation={self.session.accepted_generation}, pose={goal}')
-            else:
-                self._notice('GOAL_REJECTED', self.session.last_goal_rejection)
+        remaining = []
+        for item in unresolved:
+            if item[0] > self._last_accepted_input:
+                remaining.append(item)
+            elif item[2] is not None:
+                self.event_sink(TaskSnapshot(item[2], 0, 'FINISHED', 'CANCELED', 'GOAL_REPLACED'))
         with self._condition:
-            # 较早等待 TF 的目标不能在较新有效目标之后重新覆盖它。
-            self._goals.extendleft(reversed([item for item in unresolved if item[0] > self._last_accepted_input]))
+            self._goals.extendleft(reversed(remaining))
         packet = self.session.tick(now_s)
+        with self._condition:
+            observation_current = input_sequence == self._goal_sequence
+        if observation_current:
+            self.tasks.observe(packet, now_s, state_updated=odometry_sequence != self._observed_odometry_sequence)
+        self._observed_odometry_sequence = odometry_sequence
         if packet.result is not None:
             result = packet.result
             grid = result.grid
@@ -164,7 +204,8 @@ class PlannerRuntime:
         data = paths(packet.route, packet.candidate, self.ros_now_ns(), self.map_frame)
         # ROS 时间仅给本次 Path 定 t0；调度/轨迹年龄始终使用单调时钟。
         with self._condition:
-            if (not self._stopping and packet.generation == self.session.accepted_generation and
+            if (not self._stopping and input_sequence == self._goal_sequence and
+                    packet.generation == self.session.accepted_generation and
                     (packet.waiting or self.session.publication_current(packet))):
                 self.publish(data)
         return packet

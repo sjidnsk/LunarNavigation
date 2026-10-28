@@ -19,7 +19,7 @@ add_library(nav1cm_distance_field SHARED "${NAV1CM_CORE}/distance_field_native.c
 target_compile_features(nav1cm_distance_field PRIVATE cxx_std_20)
 install(TARGETS nav1cm_terrain nav1cm_geometry nav1cm_distance_field
   LIBRARY DESTINATION lib ARCHIVE DESTINATION lib RUNTIME DESTINATION bin)
-install(PROGRAMS scripts/planner_node DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/planner_node scripts/navigation_task_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../../../../config/wheel.yaml"
   DESTINATION share/${PROJECT_NAME}/config)
@@ -29,6 +29,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(nav1cm_shutdown test/test_shutdown.py TIMEOUT 20)
   ament_add_pytest_test(nav1cm_runtime test/test_runtime.py TIMEOUT 30)
+  ament_add_pytest_test(nav1cm_task_runtime test/test_navigation_task_runtime.py TIMEOUT 30)
+  ament_add_pytest_test(nav1cm_task_action test/test_navigation_task_action.py TIMEOUT 45)
   ament_add_pytest_test(nav1cm_configuration test/test_configuration.py TIMEOUT 30)
 endif()
 ament_package()

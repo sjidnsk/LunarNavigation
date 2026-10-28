@@ -69,6 +69,25 @@ class NavigationCoordinator:
     def close(self):
         if hasattr(self.runner, 'close'): self.runner.close()
 
+    def invalidate_goal(self, *, generation):
+        """退休所有在途身份；取消不提交新的规划请求。"""
+        self.goal_revision += 1
+        self._accepted_goal_generation = generation
+        self._goal = self._goal_yaw = self.route = self.progress = None
+        self._global_inflight = None
+        self._pending_reason = 'GOAL_CHANGED'
+
+    def cancel_tick(self, world, state, now_s):
+        """只认证从当前实测状态开始的受限制动，绝不续发旧目标路径。"""
+        grid = extract_window(world, state, self.allow_unknown)
+        reference = LocalReference(-1, grid.epoch, [[state.x, state.y]], [0.], 0.)
+        candidate = brake_candidate(state, grid, reference, self.limits)
+        certificate = certify(candidate, grid, self.limits, -1, backend=self.backend)
+        if not certificate.matches(candidate, grid, self.limits, -1):
+            candidate = None
+        return CycleResult('CANCEL_BRAKING' if candidate is not None else 'NO_CERTIFIED_ACTION',
+                           candidate=candidate, certificate=certificate, grid=grid, reference=reference)
+
     def replace_goal(self, goal, *, goal_yaw=None, generation):
         """会话接收事件入口；相同最终位姿也不能复活较早代际的结果。"""
         if type(generation) is not int or generation < 1:

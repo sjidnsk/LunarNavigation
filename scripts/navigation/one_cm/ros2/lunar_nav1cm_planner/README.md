@@ -64,3 +64,15 @@ bridge 与停车尾段都扣同一份有限弧长/转角预算，预留一个反
 [2026-10-27 接口验证报告](../../../../../docs/reports/2026-10-27-nav1cm-p3-interface-validation.md)。
 
 源码/纯计算、Humble x86 消息、Orin 与实车证据分别记录。安装及单元测试不能替代 Orin/实车验收。
+
+## 可选任务 Action 入口
+
+原 `planner_node` 保持原始 P3 / PoseStamped / 两条标准 Path 接口。需要任务结果时，改为启动 `navigation_task_node`；不要同时启动两个规划器。参数和能力配置与原入口一致，仍须显式设置仓库外 `build_dir`。
+
+`action_name` 默认 `/Car/T4/navigation/navigate_to_pose`，消息复用 `lunar_planning_msgs/action/NavigateToPose`。Action UUID 是任务身份，ROS stamp 不参与身份判定。`has_target_yaw=false` 时等待实测位姿，采用接受时实测 yaw。传输接受后仍可能以 `INVALID_GOAL` 和具体原因结束；无效新请求保留旧有效任务。已接受目标后来受阻保持活动并反馈 `WAITING_FOR_PATH`。
+
+有效人工目标或新 Action 替换旧请求；旧结果为 `outcome=CANCELED, reason_code=GOAL_REPLACED`，ROS 协议状态为 ABORTED，不表示车辆已经停稳。显式取消只匹配当前 UUID，立即退休旧规划身份和发布，发布通过当前图认证的受限制动；实测速度低于配置阈值后返回 `CANCELED_STOPPED`，ROS 协议状态为 CANCELED。
+
+任务到达必须满足当前目标的 xy/yaw、实测线角速度容差，并保持 0.3 秒且有后续里程计测量；局部段结束、Path 存在、Action 接受均不代表到达。反馈 segment revision 仅报告真实当前路线版本，0 表示无；没有伪造执行 ACK。Action 使用异步 Future 和独立可重入回调组，单线程 executor 也不会因等待结果阻塞取消。
+
+关闭入口会终结未完成 Action 为 `INTERNAL_ERROR/SHUTDOWN`，停止 Runtime 并有界等待 worker 退出。此入口不启动控制器、不访问真实 T5，也不启动探索或训练。

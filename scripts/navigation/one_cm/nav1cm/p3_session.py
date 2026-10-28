@@ -21,6 +21,7 @@ class NavigationSession:
         self.world = self.state = self.goal = None
         self.accepted_generation = 0
         self.last_goal_rejection = None
+        self.canceling = False
 
     def set_world(self, world):
         self.world = world
@@ -28,10 +29,10 @@ class NavigationSession:
     def offer_state(self, state):
         self.state = state
 
-    def offer_goal(self, goal):
+    def offer_goal(self, goal, *, force_new=False):
         if not isinstance(goal, PoseGoal):
             raise TypeError('goal must be PoseGoal')
-        if (self.goal is not None and (self.goal.x, self.goal.y) == (goal.x, goal.y) and
+        if (not force_new and self.goal is not None and (self.goal.x, self.goal.y) == (goal.x, goal.y) and
                 abs(angle_error(self.goal.yaw, goal.yaw)) <= 1e-12):
             # 周期重发同一有效目标不重启计算；后来受阻也仍保留该目标。
             return True
@@ -42,12 +43,22 @@ class NavigationSession:
             return False
         self.accepted_generation += 1
         self.goal, self.last_goal_rejection = goal, None
+        self.canceling = False
         # 显式代际使两次 tick 之间 A→B→A 也能使最初的 A 全部失效。
         self.coordinator.replace_goal((goal.x, goal.y), goal_yaw=goal.yaw,
                                       generation=self.accepted_generation)
         return True
 
+    def cancel_goal(self):
+        self.accepted_generation += 1
+        self.goal, self.canceling = None, True
+        self.coordinator.invalidate_goal(generation=self.accepted_generation)
+
     def tick(self, now_s):
+        if self.canceling and self.world is not None and self.state is not None:
+            result = self.coordinator.cancel_tick(self.world, self.state, now_s)
+            return SessionPacket(self.accepted_generation, result=result, candidate=result.candidate)
+
         waiting = tuple(name for name in ('world', 'state', 'goal') if getattr(self, name) is None)
         if waiting:
             return SessionPacket(self.accepted_generation, waiting=waiting)

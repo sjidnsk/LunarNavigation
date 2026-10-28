@@ -33,6 +33,11 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         self._buffer_identity=None
         self._last_tick=None
 
+    def invalidate_goal(self, *, generation):
+        super().invalidate_goal(generation=generation)
+        self.buffer.clear()
+        self._inflight = self._buffer_identity = None
+
     def replace_goal(self, goal, *, goal_yaw=None, generation):
         revision = self.goal_revision
         super().replace_goal(goal, goal_yaw=goal_yaw, generation=generation)
