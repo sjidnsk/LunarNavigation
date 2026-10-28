@@ -32,39 +32,39 @@ TEST(ExplorationMap, ResolutionHotChangeAndRollingHistory) {
     auto source=Flat(resolution,0.,0.,resolution==.07?2.1:2.);
     ASSERT_TRUE(map.Apply(source,10));
     const auto captured=map.Capture();
-    ASSERT_NE(captured.fine,nullptr);
-    EXPECT_DOUBLE_EQ(captured.fine->geometry().resolution_m(),.2);
-    EXPECT_EQ(captured.fine->State({4,4}),core::FineCellState::kFree);
+    ASSERT_NE(captured.map.fine,nullptr);
+    EXPECT_DOUBLE_EQ(captured.map.fine->geometry().resolution_m(),.2);
+    EXPECT_EQ(captured.map.fine->State({4,4}),core::FineCellState::kFree);
   }
   ASSERT_TRUE(map.Apply(Flat(.05,4.),20));
   auto captured=map.Capture();
-  EXPECT_EQ(captured.fine->State({4,4}),core::FineCellState::kFree);
-  EXPECT_EQ(captured.fine->State({24,4}),core::FineCellState::kFree);
-  EXPECT_EQ(captured.fine->State({15,4}),core::FineCellState::kUnknown);
-  const auto revision=captured.fine->fine_traversability_revision();
+  EXPECT_EQ(captured.map.fine->State({4,4}),core::FineCellState::kFree);
+  EXPECT_EQ(captured.map.fine->State({24,4}),core::FineCellState::kFree);
+  EXPECT_EQ(captured.map.fine->State({15,4}),core::FineCellState::kUnknown);
+  const auto revision=captured.map.fine->fine_traversability_revision();
   ASSERT_TRUE(map.Apply(Flat(.05,4.),30));
-  EXPECT_EQ(map.Capture().processed_stamp_ns,30);
+  EXPECT_EQ(map.Capture().map.processed_stamp_ns,30);
   const auto delta=map.Capture(revision);
-  EXPECT_FALSE(delta.full_snapshot);
-  EXPECT_TRUE(delta.dirty_tiles.empty());
-  EXPECT_TRUE(map.Capture(99999).full_snapshot);
+  EXPECT_FALSE(delta.map.full_snapshot);
+  EXPECT_TRUE(delta.map.dirty_tiles.empty());
+  EXPECT_TRUE(map.Capture(99999).map.full_snapshot);
 }
 TEST(ExplorationMap, PartialCoverageUnknownAndNanHistory) {
   ExplorationMap map(Wheel(),Profile(),.2,1.);
   auto partial=Flat(.01,0.,0.,.1);
   ASSERT_TRUE(map.Apply(partial,1));
-  EXPECT_NE(map.Capture().fine->State({0,0}),core::FineCellState::kFree);
+  EXPECT_NE(map.Capture().map.fine->State({0,0}),core::FineCellState::kFree);
   ASSERT_TRUE(map.Apply(Flat(.05),2));
-  const auto known=map.Capture().fine->State({4,4});
+  const auto known=map.Capture().map.fine->State({4,4});
   EXPECT_EQ(known,core::FineCellState::kFree);
   auto holes=Flat(.05);
   std::fill(holes.elevation_m.begin(),holes.elevation_m.end(),std::numeric_limits<float>::quiet_NaN());
   ASSERT_TRUE(map.Apply(holes,3));
-  EXPECT_EQ(map.Capture().fine->State({4,4}),known);
+  EXPECT_EQ(map.Capture().map.fine->State({4,4}),known);
   // 有限但不完整的本征证据覆盖旧 FREE；NaN 仍保留历史。
   holes.elevation_m[18*40+18]=0.F;
   ASSERT_TRUE(map.Apply(holes,4));
-  EXPECT_NE(map.Capture().fine->State({4,4}),core::FineCellState::kFree);
+  EXPECT_NE(map.Capture().map.fine->State({4,4}),core::FineCellState::kFree);
 }
 TEST(ExplorationMap, ThinSteepFeatureSurvivesConservativeProjection) {
   ExplorationMap map(Wheel(),Profile(),.2,1.);
@@ -72,7 +72,7 @@ TEST(ExplorationMap, ThinSteepFeatureSurvivesConservativeProjection) {
   source.elevation_m[100*200+100]=.04F;
   ASSERT_TRUE(map.Apply(source,1));
   const auto result=map.Capture();
-  EXPECT_EQ(result.fine->State({5,5}),core::FineCellState::kBlocked);
+  EXPECT_EQ(result.map.fine->State({5,5}),core::FineCellState::kBlocked);
   EXPECT_NE(map.Project().data[0],0);
 }
 TEST(ExplorationMap, RotatedTranslatedSourceKeepsActualWorldGeometry) {
@@ -82,10 +82,10 @@ TEST(ExplorationMap, RotatedTranslatedSourceKeepsActualWorldGeometry) {
   source.map_from_source.rotation={.w=std::cos(yaw/2),.z=std::sin(yaw/2)};
   source.map_from_source.translation_m={3.,-2.,0.};
   ASSERT_TRUE(map.Apply(source,1));
-  const auto fine=map.Capture().fine;
+  const auto fine=map.Capture().map.fine;
   const auto x=static_cast<std::int64_t>(std::floor((3.+std::cos(yaw)-std::sin(yaw))/.2));
   const auto y=static_cast<std::int64_t>(std::floor((-2.+std::sin(yaw)+std::cos(yaw))/.2));
-  EXPECT_EQ(fine->State({x,y}),core::FineCellState::kFree);
+  EXPECT_EQ(fine->State({x-static_cast<std::int64_t>(std::llround(fine->geometry().origin_m().x/.2)),y-static_cast<std::int64_t>(std::llround(fine->geometry().origin_m().y/.2))}),core::FineCellState::kFree);
   EXPECT_EQ(fine->State({4,4}),core::FineCellState::kUnknown);
 }
 }  // namespace lunar::incremental_navigation_ros

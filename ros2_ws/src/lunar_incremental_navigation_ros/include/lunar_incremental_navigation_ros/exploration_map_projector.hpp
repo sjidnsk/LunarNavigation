@@ -16,6 +16,9 @@ struct ExplorationMapProjection final {
 
 class ExplorationMapProjector final {
  public:
+  [[nodiscard]] ExplorationMapProjection ProjectConservative(
+      const lunar::incremental_navigation::FineTraversabilitySnapshot& fine,
+      const lunar::incremental_navigation::SparseGridGeometry& coarse_geometry) const;
   [[nodiscard]] ExplorationMapProjection Project(
       const lunar::incremental_navigation::FineTraversabilitySnapshot& fine,
       const lunar::incremental_navigation::SparseGridGeometry& coarse_geometry)
