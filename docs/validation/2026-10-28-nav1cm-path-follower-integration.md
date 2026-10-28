@@ -123,3 +123,30 @@ archivecccb8f631194a515f07634e0cf5d3b58269f44e8f62051ec71a5fbfe5d3c700c。
 后续UPDATE增加调用前时钟/phase/failure、真实最近12条指令history和map identity小型只读快照。
 plant真实产品禁入精确包含nav1cm、lunar_nav1cm_planner、lunar_pure_wheeled_controller及子模块，
 不把验证工具别名当作生产代码；该增强观测尚待后续实际case验证。
+
+## 最新候选结果（r7/F03）
+
+生产b6e1ad2d791a3d5fe0b496a3b14b8aaaf217e73d，安装t3f03-build-r1；
+F03独立spec/quality Approved后运行，451包检查/50安装Python身份已核对。
+Task3仍NEEDS_CONTEXT，当前矩阵没有全部通过。
+
+r7 forward45s全部门禁PASS，11次正式规划、780非空Path，
+15.957s满足连续终端hold；250.325ms真实worker延迟继续运动、
+恢复运动后planner停止/陈旧Path停车、完整车体/曲率/QoS/监督均通过。
+增强before记录直接证明一次MPPI_STOPPING_UNSAFE瞬态恢复到FINAL_ALIGN/
+非零角命令，之后完成到达；compute P95=34.218ms/max96.992ms。
+
+r7 obstacle48s仍FAIL，尽管342次LOCAL_ACCEPTED、894非空Path持续，
+实际位移仅.002338m/yaw1.66649。首次t7.33885s实测v/w0、before.failure=None，
+返回FAILED/MPPI_STOPPING_UNSAFE；后续784次FAILED且恢复0次。
+715条实际诊断明确stopping_retry=true/stop_certified=false/measured_stopped=true，
+最后真实最近12条history均0仍不恢复；这不能简单归为“没有重试”。
+完整before dt/now/state_age、command history与map origin/revision在follower.jsonl，
+需原follower-owner量化复现停车恢复认证为何不许可。
+
+两case实际独立plant生产禁入、结构化QoS、安装/native/core身份、
+完整车体SAT/约束与进程/worker清理均PASS。旧r6观察误报不改写。
+当前b6e1ad2版本reverse/empty/mapchange短矩阵尚NOT_RUN，不用历史结果补齐。
+原始ART/task3-joint-r7-result保持不变，
+archivef22a81286831bd88c2ff527bd615a399b84b35c4e2d917eb8b7e92b3e8737bc8；
+实际图ART/task3-joint-r7-recovery-and-failure.png已亲视。
