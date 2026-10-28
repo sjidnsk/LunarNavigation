@@ -58,8 +58,24 @@ def extract_window(world: WorldSnapshot, state: VehicleState, allow_unknown: boo
     resolution = world.resolution_m
     origin = (state.x - 2.5, state.y - 2.5)
     cells = np.full((500, 500), CellState.UNKNOWN, dtype=np.int8)
+    # 先在原生厘米格上合并自由区域，再要求目标格相交的每个源格均自由。
+    # 目标格可跨多个相接矩形；逐矩形 contained 会制造一格宽 UNKNOWN 接缝。
+    # 只密化局部支持范围（至多 501²），保持精确车体中心和真实未知边界。
+    scaled = np.asarray(origin) / resolution
+    lower = np.floor(scaled + 1e-10).astype(np.int64)
+    upper = np.ceil(scaled - 1e-10).astype(np.int64)
+    dx, dy = (upper - lower).tolist()
+    support = np.zeros((500 + dy, 500 + dx), dtype=bool)
     for rect in world.known_free:
-        cells[_rect_slices(rect, origin, resolution, cells.shape, contained=True)] = CellState.FREE
+        x0, x1 = max(0, rect.x0 - int(lower[0])), min(support.shape[1], rect.x1 - int(lower[0]))
+        y0, y1 = max(0, rect.y0 - int(lower[1])), min(support.shape[0], rect.y1 - int(lower[1]))
+        if x0 < x1 and y0 < y1:
+            support[y0:y1, x0:x1] = True
+    free = support[:500, :500].copy()
+    for sy in range(dy + 1):
+        for sx in range(dx + 1):
+            free &= support[sy:sy + 500, sx:sx + 500]
+    cells[free] = CellState.FREE
     for rect in world.blocked:
         cells[_rect_slices(rect, origin, resolution, cells.shape, contained=False)] = CellState.BLOCKED
     return GridSnapshot(world.epoch, origin, resolution, cells, bool(allow_unknown))
