@@ -48,3 +48,16 @@ def test_passive_action_probe_uuid_uses_python_wire_integers():
     assert hasattr(module,"uuid_values"), "UUID旁观请求缺少wire整数规范化"
     values=module.uuid_values(np.arange(16,dtype=np.uint8))
     assert values==list(range(16)) and all(type(v) is int for v in values)
+
+
+def test_queued_feedback_cannot_turn_plant_into_unbounded_odometry_publisher():
+    import sys,time
+    path=FILE.with_name("run.py");spec=spec_from_file_location("frontier_pacing",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    assert hasattr(module,"pace_cycle"), "plant缺少独立50Hz时钟约束"
+    started=time.monotonic()
+    for _ in range(5):
+        cycle=time.monotonic()
+        # 队列一直有事件，spin_once可立即返回；仍须遵守外部测量时钟。
+        module.pace_cycle(cycle)
+    assert time.monotonic()-started>=.099

@@ -28,6 +28,10 @@ clearance=importlib.util.module_from_spec(spec);spec.loader.exec_module(clearanc
 PREFIX="/nav1cm_task3"
 TOPICS={k:PREFIX+"/"+k for k in ("grid","odom","tf","tf_static","navigate","goal_disabled","global","local","exploration_map","policy","task","status","cmd","diag")}
 
+def pace_cycle(started):
+    """独立测量周期不随ROS反馈队列唤醒频率加速。"""
+    time.sleep(max(0., .02-(time.monotonic()-started)))
+
 def uuid_values(value):
     """ROS uint8数组转成生成消息setter接受的Python整数。"""
     return list(bytes(value))
@@ -212,6 +216,7 @@ def run(args):
                 process_identity=process_rows(proc.pid);emit('PROCESS_IDENTITY',rows=process_identity)
             if proc.poll() is not None:raise RuntimeError('public launch premature exit '+str(proc.returncode))
             rclpy.spin_once(node,timeout_sec=.015)
+            pace_cycle(now)
     except BaseException as exc:
         exception=repr(exc);emit('EXCEPTION',error=exception)
     finally:
