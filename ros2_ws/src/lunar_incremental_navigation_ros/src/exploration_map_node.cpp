@@ -12,6 +12,7 @@
 #include "lunar_incremental_navigation_ros/input_store.hpp"
 #include "lunar_incremental_navigation_ros/platform_config.hpp"
 #include "lunar_incremental_navigation_ros/state_adapter.hpp"
+#include "lunar_incremental_navigation_ros/traversability_qos.hpp"
 namespace lunar::incremental_navigation_ros {
 namespace core=lunar::incremental_navigation;
 using PolicyService=lunar_planning_msgs::srv::GetPolicyMap;
@@ -57,7 +58,9 @@ struct ExplorationMapNode::Impl {
     inputs=std::make_unique<InputStore>(map_frame,odom_frame);
     epoch="observed-projection-v1-"+std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
     publisher=node.create_publisher<nav_msgs::msg::OccupancyGrid>(text("exploration_map_topic","/Car/T4/mapping/exploration_map"),rclcpp::QoS(1).reliable().transient_local());
-    map_subscription=node.create_subscription<grid_map_msgs::msg::GridMap>(text("map_topic","/Car/T3/mapping/grid_map"),rclcpp::QoS(1).best_effort(),
+    const auto map_qos=MakeTraversabilityInputQos(text("map_qos_reliability","reliable"),text("map_qos_durability","volatile"));
+    if(!map_qos) throw std::invalid_argument("invalid map input QoS");
+    map_subscription=node.create_subscription<grid_map_msgs::msg::GridMap>(text("map_topic","/Car/T3/mapping/grid_map"),*map_qos,
         [this](grid_map_msgs::msg::GridMap::ConstSharedPtr message){inputs->UpdateLocal(std::move(message));Wake();});
     odom_subscription=node.create_subscription<nav_msgs::msg::Odometry>(text("odometry_topic","/Car/T3/localization/odometry"),rclcpp::QoS(1).best_effort(),
         [this](nav_msgs::msg::Odometry::ConstSharedPtr message){inputs->UpdateOdometry(std::move(message));Wake();});
