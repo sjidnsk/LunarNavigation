@@ -15,7 +15,7 @@ import time
 
 HERE=Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE))
-from fixtures import CASES,DECLARATION
+from fixtures import CASES,DECLARATION,measurement_mask,declaration
 from grade import grade
 
 def helper(name):
@@ -31,6 +31,13 @@ TOPICS={k:PREFIX+"/"+k for k in ("grid","odom","tf","tf_static","navigate","goal
 def pace_cycle(started):
     """独立测量周期不随ROS反馈队列唤醒频率加速。"""
     time.sleep(max(0., .02-(time.monotonic()-started)))
+
+def service_cycle(started, spin):
+    """同一单调20ms窗口内处理事件，测量发布周期不随事件频率加速。"""
+    deadline=started+.02
+    while time.monotonic()<deadline:
+        spin(min(.002,max(0.,deadline-time.monotonic())))
+    pace_cycle(started)
 
 def uuid_values(value):
     """ROS uint8数组转成生成消息setter接受的Python整数。"""
@@ -85,7 +92,7 @@ def run(args):
     assert os.environ.get('ROS_DOMAIN_ID')=='92' and os.environ.get('ROS_LOCALHOST_ONLY')=='1'
     assert os.environ.get('ROS_DISTRO')=='humble'
     output=Path(args.output).resolve();output.mkdir(parents=True,exist_ok=False)
-    (output/'declaration.json').write_text(json.dumps(DECLARATION,ensure_ascii=False,indent=2))
+    (output/'declaration.json').write_text(json.dumps(declaration(args.fixture_version),ensure_ascii=False,indent=2))
     (output/'harness-identity.json').write_text(json.dumps({str(f):hashlib.sha256(f.read_bytes()).hexdigest() for folder in (HERE,HERE.parent/'p3_path_validation',HERE.parent/'path_follower_validation') for f in folder.glob('*.py')},indent=2))
     stream=(output/'plant.jsonl').open('x',encoding='utf-8')
     records=[];states=[];results=[];feedback=[];goals=[];pending={};graphs=[];policy=[];observations=[];diagnostics=[]
@@ -153,9 +160,7 @@ def run(args):
     resolution=.01 if args.case=='large_source_preflight' else .1
     length=5. if args.case=='large_source_preflight' else 10.;n=round(length/resolution)
     coords=length/2-(np.arange(n)+.5)*resolution;x,y=np.meshgrid(coords,coords,indexing='ij')
-    measured=np.ones((n,n),bool) if args.case=='large_source_preflight' else ((x>=-4)&(x<=3.8)&(y>=-4)&(y<=4))
-    slit=(x>=.9)&(x<=1.3)&(y>=-1.3)&(y<=1.3) if args.case=='blocked_wait_reselect' else np.zeros((n,n),bool)
-    measured &= ~slit
+    measured=np.ones((n,n),bool) if args.case=='large_source_preflight' else measurement_mask(x,y,args.case,args.fixture_version)
     physical_boundary=[(-5.2,-5.2,-5.,5.2),(5.,-5.2,5.2,5.2),(-5.,-5.2,5.,-5.),(-5.,5.,5.,5.2)]
     exception=None;termination=[];process_identity=[]
     proc=subprocess.Popen(launch,stdout=console,stderr=subprocess.STDOUT,start_new_session=True,cwd=output)
@@ -216,8 +221,7 @@ def run(args):
                 graphs.append(emit('GRAPH',types=types,publishers=publishers,subscriptions=subscriptions,nodes=node.get_node_names()));next_graph=t+5.
                 process_identity=process_rows(proc.pid);emit('PROCESS_IDENTITY',rows=process_identity)
             if proc.poll() is not None:raise RuntimeError('public launch premature exit '+str(proc.returncode))
-            rclpy.spin_once(node,timeout_sec=.015)
-            pace_cycle(now)
+            service_cycle(now,lambda timeout:rclpy.spin_once(node,timeout_sec=timeout))
     except BaseException as exc:
         exception=repr(exc);emit('EXCEPTION',error=exception)
     finally:
@@ -260,7 +264,7 @@ def run(args):
       clearance=clear['pass'],cleanup=proc.returncode==0 and not termination and not remaining,
       installed=installed,no_exceptions=no_exceptions,
       source_received=bool(applied) and any(r['ready'] for r in policy) and any(r['data'].get('map_revision',0)>0 for r in diagnostics))
-    evidence=dict(case=args.case,common=common,sensor_timing=timing,reached=reached,distinct_goals=len(goals),observed_growth=(observations[-1]['observed_cells']-observations[0]['observed_cells']) if observations else 0,
+    evidence=dict(case=args.case,fixture_version=args.fixture_version,common=common,sensor_timing=timing,reached=reached,distinct_goals=len(goals),observed_growth=(observations[-1]['observed_cells']-observations[0]['observed_cells']) if observations else 0,
        waits=sum(r['message']['reason_code'] in ('WAITING_FOR_MAP','WAITING_FOR_PATH') for r in feedback),canceled_stopped=sum(r['reason']=='CANCELED_STOPPED' and r['status']==5 and any(abs(v['monotonic_s']-r['monotonic_s'])<=.15 and abs(v['v'])<=.01 and abs(v['w'])<=.01 for v in states) for r in results),
        cancel_while_moving=cancel_moving,no_goals_after_cancel=cancel_at is not None and not any(r['monotonic_s']>cancel_at+.1 for r in goals),
        formal=formal,applied=applied,clearance=clear,goals=goals,results=results,exception=exception,returncode=proc.returncode,termination=termination,
@@ -273,6 +277,6 @@ def run(args):
     return 0 if summary['pass_'] else 1
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--case',required=True,choices=CASES);p.add_argument('--output',required=True);p.add_argument('--build-dir',required=True)
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--case',required=True,choices=CASES);p.add_argument('--fixture-version',default="v1",choices=("v1","v2"));p.add_argument('--output',required=True);p.add_argument('--build-dir',required=True)
     return run(p.parse_args())
 if __name__=='__main__':sys.exit(main())

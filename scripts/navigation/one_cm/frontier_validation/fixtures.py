@@ -15,3 +15,20 @@ DECLARATION={
  "timing":"odom约50Hz，map2Hz，零stamp TF约10Hz；各case固定时长；清理最多8s，不延长运动验收",
  "acceptance":"共同身份/私有graph/正式规划/实际运动/运动与.2净空/无异常/有界清理；progress真实xyyawstop持续.3s后新观测与下一前沿goal；blocked真实wait->cancel-stop->distinctgoal；external运动中cancel-stop且无新goal",
  "not_run":["100m行驶","100m全源1cm地图","真实P3","生产DDS","Orin","实车","DRL推理","训练"]}
+
+
+def measurement_mask(x,y,case,version="v1"):
+    """v2仅平移独立合成未知要素；原v1原件保留。"""
+    if version not in ("v1","v2"):raise ValueError("invalid fixture version")
+    mask=(x>=-4)&(x<=3.8)&(y>=-4)&(y<=4)
+    if case=="blocked_wait_reselect":
+        lo,hi=(.9,1.3) if version=="v1" else (1.6,2.0)
+        mask &= ~((x>=lo)&(x<=hi)&(y>=-1.3)&(y<=1.3))
+    return mask
+
+def declaration(version):
+    out=dict(DECLARATION,fixture_version=version)
+    if version=="v2":
+        out["blocked"]=out["blocked"].replace("x=[.9,1.3]","x=[1.6,2.0]")
+        out["fixture_ruling"]="ROOT task3-fixture-support-ruling.md；仅未知缝平移；旧失败/sourceSHA保留"
+    return out

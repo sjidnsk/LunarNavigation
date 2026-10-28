@@ -61,3 +61,26 @@ def test_queued_feedback_cannot_turn_plant_into_unbounded_odometry_publisher():
         # 队列一直有事件，spin_once可立即返回；仍须遵守外部测量时钟。
         module.pace_cycle(cycle)
     assert time.monotonic()-started>=.099
+
+
+def test_plant_services_busy_callback_queue_within_each_sensor_deadline():
+    import sys,time
+    path=FILE.with_name("run.py");spec=spec_from_file_location("frontier_callback_cycle",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    assert hasattr(module,"service_cycle"), "plant每个测量周期只能消费一个callback"
+    consumed=[];started=time.monotonic()
+    module.service_cycle(started,lambda timeout:consumed.append(timeout))
+    assert len(consumed)>1 and time.monotonic()-started>=.019
+
+
+def test_blocked_v2_only_translates_declared_unknown_feature():
+    import sys,numpy as np
+    path=FILE.with_name("fixtures.py");spec=spec_from_file_location("frontier_fixture_version",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    assert hasattr(module,"measurement_mask"), "fixture版本平移合同尚未实现"
+    c=5-(np.arange(100)+.5)*.1;x,y=np.meshgrid(c,c,indexing='ij')
+    a=module.measurement_mask(x,y,"blocked_wait_reselect","v1")
+    b=module.measurement_mask(x,y,"blocked_wait_reselect","v2")
+    allowed=(((x>=.9)&(x<=1.3))|((x>=1.6)&(x<=2.0)))&(abs(y)<=1.3)
+    assert np.array_equal(a[~allowed],b[~allowed])
+    assert a.sum()==b.sum() and not np.array_equal(a,b)
