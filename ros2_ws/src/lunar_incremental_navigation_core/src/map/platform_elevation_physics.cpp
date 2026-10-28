@@ -15,6 +15,7 @@
 
 #include "map/grid_bounds.hpp"
 #include "lunar_incremental_navigation_core/terrain_batch.hpp"
+#include "lunar_incremental_navigation_core/terrain_dependency.hpp"
 #include "map/terrain_observation_estimator.hpp"
 
 namespace lunar::incremental_navigation {
@@ -479,8 +480,8 @@ class BatchElevationView final : public ElevationRangeView, public map::UniformP
     const auto x=i.x-minimum_.x,y=i.y-minimum_.y;
     if (x<1 || y<1 || x+1>=static_cast<std::int64_t>(width_) || y+1>=static_cast<std::int64_t>(height_)) return false;
     const double r=geometry().resolution_m(),delta=(*plane_)[2];
-    const double radius=std::floor((.30+1e-12)/r);
-    const auto halo=static_cast<std::int64_t>(radius)+2;
+    const auto halo=TerrainIntrinsicDependencyRadiusCells(r);
+    const double radius=halo-TerrainBackgroundRadiusCells(0.,r);
     const auto l=std::max<std::int64_t>(0,x-halo),b=std::max<std::int64_t>(0,y-halo);
     const auto h=std::min<std::int64_t>(width_,x+halo+1),t=std::min<std::int64_t>(height_,y+halo+1);
     const auto at=[&](std::int64_t xx,std::int64_t yy){return plane_bad_prefix_[yy*(width_+1)+xx];};
