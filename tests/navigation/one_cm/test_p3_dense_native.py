@@ -160,3 +160,21 @@ def test_full_dense_gentle_plane_native_and_worker(sx,sy,noise):
         print(json.dumps({'plane_worker':[sx,sy,noise],'age_s':age}),flush=True)
         assert age<2.5 and receipt.received_at==received and receipt.grid.eligible[250,250]
     finally:source.close()
+
+
+def test_diagonal_plane_isolated_return_is_local_and_fresh():
+    axis=(np.arange(500)+.5)*.01
+    values=(.02*axis[None,:]+.01*axis[:,None]).astype(np.float32)
+    source=P3MapSource(P3MapStore(terrain=terrain()),NativeDistanceField(os.environ['NAV1CM_FIELD_LIB']),
+                       (1.182,.818),minimum_clearance_m=.2)
+    source.set_center(2.5,2.5)
+    try:
+        for label in ('plane','isolated'):
+            if label=='isolated':values[250,250]+=.4
+            received=time.monotonic();source.submit_map(message(values),received)
+            assert source.wait_idle(3.) and source.error is None
+            receipt=source.snapshot();age=receipt.processed_at-receipt.received_at
+            print(json.dumps({'diagonal_worker':label,'age_s':age,'phases_s':source._store._terrain.phase_seconds}),flush=True)
+            assert age<2.5 and receipt.received_at==received
+            assert bool(receipt.grid.eligible[250,250])==(label=='plane')
+    finally:source.close()

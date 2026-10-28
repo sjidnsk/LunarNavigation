@@ -17,9 +17,9 @@ changed_cells 先按行合并，再按完整 core dependency 半径膨胀，裁�
 
 ## FREE 证书的数学范围
 
-仅 wheel、0.01<=resolution<=0.1、宽高3..4096、每个累计格有有限零宽度区间且 |z|<=16m。任一缺测、非零宽度区间、超出这些几何/数值界限，整个证书停用。中心还须在几何内且四方向均有一格空间；边界和有 TerrainMeasurementsAt 覆盖的中心继续 scalar。以下只是充分条件，不能反向将失败解释为 BLOCKED。
+仅 wheel、0.01<=resolution<=0.1、宽高3..4096、候选中心的完整 dependency 窗口内每个累计格有有限零宽度区间且 |z|<=16m。缺测、非零宽度区间或残差超限只否决相交依赖窗口；不会缩小halo。三个参考锚点无效及超出全局几何界限时证书停用。中心还须在几何内且四方向均有一格空间；边界和有 TerrainMeasurementsAt 覆盖的中心继续 scalar。以下只是充分条件，不能反向将失败解释为 BLOCKED。
 
-从本 snapshot 的左下、右下、左上原端点构造参考平面 p=c+a*x+b*y；再遍历全部原始端点求最大残差 e。它不是假定地图平面，也不写回地图。令 S=max(1,各观测绝对值,参考平面各分量绝对值)，delta=e+1e-6*S。float32端点提升到double无损；额外预算覆盖下面有界double算术，未放宽任何地形能力阈值。
+从本 snapshot 的左下、右下、左上原端点构造参考平面 p=c+a*x+b*y；遍历所有原始端点，在残差超过4e-6*S或端点无效时记bad，用整数前缀和证明中心完整background+observation依赖矩形中bad计数为0。它不是假定地图平面，也不写回地图。令 S=max(1,参考平面各分量绝对值)，delta=5e-6*S，其中4e-6*S为已验证的端点残差界，1e-6*S为算术余量。float32端点提升到double无损；额外预算覆盖下面有界double算术，未放宽任何地形能力阈值。
 
 ### 矩形与算术界
 
@@ -35,7 +35,7 @@ IEEE double单位舍入 u=2^-53。每个矩累加至多3721项，含乘加按gam
 
 背景median相邻导数每轴误差<=2*delta/h；半径2下median截距误差<=9*delta，各端点相对背景残差<=18*delta。因此局部 relief 和 positive rise 均<=36*delta，背景加权拟合也远离尺度地板和奇异边界。最终原wheel slope由有效ground梯度给出，上界是 atan(hypot(a,b)+6*sqrt(2)*delta/h)。只有这个上界严格小于maximum_slope，且36*delta严格小于wheel relief及underbody rise两个能力，才返回FREE。零能力和近阈值有余量不足时回退scalar，不能被数值近似清成FREE。
 
-该接口不返回参考平面的slope/confidence；调用者需要完整数值时必须使用旧Evaluate或完整batch evaluator。对孔洞/孤立高返回/台阶/不满足充分条件的微扰，仍使用原scalar的UNKNOWN/BLOCKED支持规则。旧NaN历史、source权限、P3三态合成在上层独立验证。
+该接口不返回参考平面的slope/confidence；调用者需要完整数值时必须使用旧Evaluate或完整batch evaluator。对孔洞/孤立高返回/台阶/不满足充分条件的微扰的完整halo内，仍使用原scalar的UNKNOWN/BLOCKED支持规则。旧NaN历史、source权限、P3三态合成在上层独立验证。
 
 ## 验证门槛
 

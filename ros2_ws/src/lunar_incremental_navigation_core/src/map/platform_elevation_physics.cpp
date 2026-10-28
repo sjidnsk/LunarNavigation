@@ -480,6 +480,11 @@ class BatchElevationView final : public ElevationRangeView, public map::UniformP
     if (x<1 || y<1 || x+1>=static_cast<std::int64_t>(width_) || y+1>=static_cast<std::int64_t>(height_)) return false;
     const double r=geometry().resolution_m(),delta=(*plane_)[2];
     const double radius=std::floor((.30+1e-12)/r);
+    const auto halo=static_cast<std::int64_t>(radius)+2;
+    const auto l=std::max<std::int64_t>(0,x-halo),b=std::max<std::int64_t>(0,y-halo);
+    const auto h=std::min<std::int64_t>(width_,x+halo+1),t=std::min<std::int64_t>(height_,y+halo+1);
+    const auto at=[&](std::int64_t xx,std::int64_t yy){return plane_bad_prefix_[yy*(width_+1)+xx];};
+    if (at(h,t)+at(l,b)!=at(l,t)+at(h,b)) return false;
     // 证明见 docs/validation/2026-10-29-app-terrain-batch-proof.md。
     // 完整 clipped 矩形的 OLS 残差界同时保证原 IRLS weights 恒为1、
     // 所有inlier、无jump、center支持及confidence>=2/3；不修改原阈值。
@@ -494,23 +499,31 @@ class BatchElevationView final : public ElevationRangeView, public map::UniformP
     // 有界证明域；其他分辨率、范围、缺测及非零宽度高程区间照旧scalar。
     const double r=geometry().resolution_m();
     if (r<.01 || r>.1 || width_<3 || height_<3 || width_>4096 || height_>4096) return;
-    for (const auto& v:ranges_)
-      if (!v || v->min_m!=v->max_m || !std::isfinite(v->min_m) || std::abs(v->min_m)>16.) return;
+    const auto valid=[](const auto& v){return v && v->min_m==v->max_m && std::isfinite(v->min_m) && std::abs(v->min_m)<=16.;};
+    if (!valid(ranges_[0]) || !valid(ranges_[width_-1]) || !valid(ranges_[(height_-1)*width_])) return;
     const double z=ranges_[0]->min_m;
     const double a=(double(ranges_[width_-1]->min_m)-z)/((width_-1)*r);
     const double b=(double(ranges_[(height_-1)*width_]->min_m)-z)/((height_-1)*r);
-    double residual=0.,scale=1.;
-    for (std::size_t y=0;y<height_;++y) for (std::size_t x=0;x<width_;++x) {
-      const double observed=ranges_[y*width_+x]->min_m;
-      residual=std::max(residual,std::abs(observed-(z+a*(x*r)+b*(y*r))));
-      scale=std::max({scale,std::abs(observed),std::abs(z),std::abs(a*(x*r)),std::abs(b*(y*r))});
+    const double scale=std::max({1.,std::abs(z),std::abs(a*((width_-1)*r)),std::abs(b*((height_-1)*r))});
+    // 逐端点验证本snapshot参考平面的误差包络；异常只否决依赖窗口，
+    // 不能让远处一个孔洞/高返回使整幅正常坡面重新拟合。
+    const double residual_bound=4e-6*scale;
+    plane_bad_prefix_.resize((width_+1)*(height_+1));
+    for (std::size_t y=0;y<height_;++y) {
+      std::uint32_t bad=0;
+      for (std::size_t x=0;x<width_;++x) {
+        const auto& v=ranges_[y*width_+x];
+        bad += !valid(v) || std::abs(double(v->min_m)-(z+a*(x*r)+b*(y*r)))>residual_bound;
+        plane_bad_prefix_[(y+1)*(width_+1)+x+1]=plane_bad_prefix_[y*(width_+1)+x+1]+bad;
+      }
     }
-    // 实测float32端点精确提升为double。额外1e-6*scale远大于有界
-    // <=61²矩形矩累加、去中心化、拟合/验证的舍入上界；详见证明。
-    const double delta=residual+1e-6*scale;
+    // 4e-6是已验证端点残差上界，额外1e-6覆盖有界double算术；
+    // 两者不是地形阈值，只决定能否证明原scalar必为FREE。
+    const double delta=5e-6*scale;
     if (std::isfinite(delta) && std::isfinite(a) && std::isfinite(b)) plane_=std::array<double,3>{a,b,delta};
   }
   std::optional<std::array<double,3>> plane_;
+  std::vector<std::uint32_t> plane_bad_prefix_;
   const ElevationRangeView& source_;
   std::size_t width_{},height_{}; GridIndex minimum_{};
   std::vector<std::optional<ElevationRange>> ranges_;

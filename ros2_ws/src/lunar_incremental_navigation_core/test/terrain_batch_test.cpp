@@ -21,7 +21,7 @@ TEST(TerrainBatch, MatchesScalarOnConstantsSlopeStepsHolesAndIsolatedReturns) {
         .resolution_m=r,.origin_m={0,0,0}},.elevation_m=values,
         .map_from_source={.parent_frame="map",.child_frame="map"}});
     ASSERT_EQ(result.status,nav::ElevationUpdateResult::Status::kApplied);
-    auto view=map.Snapshot();nav::WheeledCapability wheel;
+    auto view=map.Snapshot();nav::WheeledCapability wheel;wheel.maximum_slope_rad=.6;wheel.maximum_local_obstacle_relief_m=.2;wheel.minimum_underbody_clearance_m=.2;
     auto scalar=nav::MakePlatformElevationEvaluator(wheel);
     auto batch=nav::MakeSnapshotElevationEvaluator(*view,wheel);
     nav::SnapshotTerrainClassifier classifier(*view,wheel);
@@ -48,7 +48,7 @@ TEST(TerrainBatch, FreeCertificateRejectsThresholdsHolesRangesAndZeroCapabilitie
     }
   };
   for(int scene=0;scene<10;++scene) {
-    View v;v.cells.resize(23*19);nav::WheeledCapability wheel;
+    View v;v.cells.resize(23*19);nav::WheeledCapability wheel;wheel.maximum_slope_rad=.6;wheel.maximum_local_obstacle_relief_m=.2;wheel.minimum_underbody_clearance_m=.2;
     for(int y=0;y<19;++y)for(int x=0;x<23;++x) {
       const double slope=scene==2?wheel.maximum_slope_rad:scene==3?wheel.maximum_slope_rad+1e-6:scene==8?wheel.maximum_slope_rad-1e-8:.02;
       float z=float(.3+std::tan(slope)*x*.01+(scene==8?0.:.01*y*.01));
