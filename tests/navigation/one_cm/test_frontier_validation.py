@@ -55,12 +55,15 @@ def test_queued_feedback_cannot_turn_plant_into_unbounded_odometry_publisher():
     path=FILE.with_name("run.py");spec=spec_from_file_location("frontier_pacing",path)
     module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
     assert hasattr(module,"pace_cycle"), "plant缺少独立50Hz时钟约束"
-    started=time.monotonic()
+    # Windows单调时钟可有15.625ms量化；算法门禁用确定性时钟，实际Hz由ROS raw另验。
+    from types import SimpleNamespace as NS
+    clock=[0.]
+    def sleep(seconds):clock[0]+=seconds
+    module.time=NS(monotonic=lambda:clock[0],sleep=sleep)
     for _ in range(5):
-        cycle=time.monotonic()
         # 队列一直有事件，spin_once可立即返回；仍须遵守外部测量时钟。
-        module.pace_cycle(cycle)
-    assert time.monotonic()-started>=.099
+        module.pace_cycle(clock[0])
+    assert clock[0]==pytest.approx(.1)
 
 
 def test_plant_services_busy_callback_queue_within_each_sensor_deadline():
