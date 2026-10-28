@@ -24,7 +24,7 @@ def graph_valid(g,case):
         p['node_name']=='nav1cm_joint_plant' for p in g.get('subscriptions',{}).get(CMD,[]))
 def held(s,target,lo=-math.inf,hi=math.inf):
     return prior.held_terminal([dict(r,elapsed_s=r['t']) for r in s],target,lo,hi)
-def analyze(folder,case,processes,error,stop):
+def analyze(folder,case,processes,error,stop,profile=None):
     plant=rows(folder,'plant');follower=rows(folder,'follower');planner=rows(folder,'planner')
     actors=dict(plant=plant,follower=follower,planner=planner)
     graphs=[r for actor in actors.values() for r in actor if r['kind']=='GRAPH']
@@ -81,6 +81,16 @@ def analyze(folder,case,processes,error,stop):
     if case=='empty_smoke':
         segment=[r for r in states if 6.6<r['t']<7.8]
         result['checks']['empty_stopped']=bool(segment) and all(abs(r['v'])<=.01 and abs(r['w'])<=.01 for r in segment)
+    if profile:
+        from .profiles import within_bounds,held as profile_held
+        result['checks']['profile_bounds']=bool(states) and all(within_bounds(r,profile['expected']) for r in states)
+        result['checks']['profile_terminal']=profile_held(states,goal(case),profile['expected'])
+        effective=f_install[0]['parameters'] if f_install else {}
+        resources=[r for r in planner if r['kind']=='RESOURCES']
+        actual_planner=({**resources[0]['settings'],**resources[0]['limits']} if resources else {})
+        result['checks']['profile_parameters']=all(effective.get(k)==v for k,v in profile['follower'].items()) and (
+            case=='empty_smoke' or all(actual_planner.get(k)==v for k,v in profile['planner'].items()))
+        result['declared_profile']=profile
     result['pass_']=all(result['checks'].values())
     result.update(runtime_exceptions=runtime_errors,graph_snapshot_count=len(graphs),
         production_command_graph_count=production_command_graphs,

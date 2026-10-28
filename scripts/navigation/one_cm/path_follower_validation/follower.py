@@ -15,6 +15,9 @@ def run(args):
     params={'input_mode':'incremental_path','controller_backend':'mppi_path_follower',
             'standard_map_source':'direct_p3','command_topic':CMD,'mppi_diagnostics_topic':DIAG,
             'mppi_nominal_response_time_s':0.0}
+    from .profiles import load
+    profile=load(args.profile)
+    if profile:params.update(profile['follower'])
     cli=['--ros-args']
     for k,v in params.items():
         cli+=['-p',k+':='+str(v)]

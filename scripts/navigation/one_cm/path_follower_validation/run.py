@@ -49,17 +49,24 @@ def supervise(args):
     (output/'harness-sha256.json').write_text(json.dumps({str(p.relative_to(script.parent.parent)):
         hashlib.sha256(p.read_bytes()).hexdigest() for root in (script.parent,script.parent.parent/'p3_path_validation')
         for p in root.glob('*.py')},indent=2))
+    from .profiles import load
+    profile=load(args.profile)
+    durations=dict(DURATIONS)
+    if profile:
+        durations.update(profile["durations"])
+        (output/"declared-profile.json").write_text(json.dumps(profile,indent=2))
     summaries=[]
     for case in args.cases:
         folder=output/case;folder.mkdir()
-        start=time.monotonic()+2.;end=start+DURATIONS[case]
+        start=time.monotonic()+2.;end=start+durations[case]
         procs=[];streams=[];results=[];error=None;stop=None;intent={}
         try:
             for role in ('follower','planner','plant'):
                 if case=='empty_smoke' and role=='planner':continue
                 log=(folder/(role+'.console.log')).open('x');streams.append(log)
                 cmd=[sys.executable,str(script),'--role',role,'--case',case,'--start',str(start),
-                     '--duration',str(DURATIONS[case]),'--output',str(folder),'--build-dir',args.build_dir]
+                     '--duration',str(durations[case]),'--output',str(folder),'--build-dir',args.build_dir]
+                if args.profile:cmd += ["--profile",str(Path(args.profile).resolve())]
                 p=subprocess.Popen(cmd,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,cwd=folder)
                 procs.append((role,p))
             while time.monotonic()<end:
@@ -91,7 +98,7 @@ def supervise(args):
                     remaining=remaining,escalated=escalated,stop_requested_s=intent.get(role)))
                 if remaining:os.killpg(p.pid,signal.SIGTERM)
             for s in streams:s.close()
-        try:summary=analyze(folder,case,results,error,stop)
+        try:summary=analyze(folder,case,results,error,stop,profile=profile)
         except Exception as exc:summary=dict(pass_=False,analysis_error=repr(exc),processes=results,supervisor_error=error)
         (folder/'summary.json').write_text(json.dumps(summary,indent=2))
         print(json.dumps(summary),flush=True);summaries.append(summary)
@@ -104,6 +111,7 @@ def main():
     p.add_argument('--cases',nargs='+',choices=DURATIONS,default=list(DURATIONS))
     p.add_argument('--output',required=True);p.add_argument('--build-dir',required=True)
     p.add_argument('--installed-identity')
+    p.add_argument('--profile')
     p.add_argument('--start',type=float,default=0.);p.add_argument('--duration',type=float,default=0.)
     args=p.parse_args()
     if args.role=='supervisor':return supervise(args)

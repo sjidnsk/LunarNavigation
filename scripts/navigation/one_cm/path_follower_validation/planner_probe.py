@@ -66,7 +66,10 @@ def run(args):
         session.coordinator.tick = observed
         return session, store
 
+    from .profiles import load
+    profile=load(args.profile)
     params = [Parameter('build_dir', value=args.build_dir)]
+    if profile:params.extend(Parameter(name,value=value) for name,value in profile['planner'].items())
     if args.case == 'legacy_tf':
         params.append(Parameter('tf_topic', value='/P4/input/map_to_odom'))
     node = PlannerNode(resource_factory=factory, parameter_overrides=params)
