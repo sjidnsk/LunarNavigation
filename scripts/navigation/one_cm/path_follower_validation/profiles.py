@@ -6,8 +6,11 @@ def load(path):
     if not path:return None
     data=json.loads(Path(path).read_text(encoding='utf-8'))
     assert set(data)=={'planner','follower','expected','durations'}
-    assert set(data['expected'])=={'max_v','max_w','max_a','max_alpha','curvature','xy','yaw'}
-    assert all(math.isfinite(v) and v>0 for v in data['expected'].values())
+    base={'max_v','max_w','max_a','max_alpha','curvature','xy','yaw'}
+    assert set(data['expected']) in (base,base|{'minimum_clearance_m'})
+    assert all(math.isfinite(data['expected'][k]) and data['expected'][k]>0 for k in base)
+    if 'minimum_clearance_m' in data['expected']:
+        value=data['expected']['minimum_clearance_m'];assert math.isfinite(value) and value>=0
     assert all(math.isfinite(v) and 0<v<=120 for v in data['durations'].values())
     return data
 

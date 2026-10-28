@@ -327,7 +327,8 @@ def test_r7_fractional_p3_native_map_and_zero_history_stop():
         source.set_center(x,y);source.submit_map(message,1.);assert source.wait_idle()
         assert source.error is None
         grid=source.snapshot().grid;world=source._world
-        reference=center_support(world,x,y,body_length_m=1.182,body_width_m=.818)
+        reference=center_support(world,x,y,body_length_m=1.182,body_width_m=.818,
+                                 minimum_clearance_m=capability["minimum_clearance_m"])
         np.testing.assert_array_equal(grid.states,reference.cells+1)
         np.testing.assert_array_equal(grid.eligible,reference.eligible)
         follower=StandardPathFollower(replace(TrackingPolicy(),execution_clearance_m=.01))
@@ -365,7 +366,7 @@ def test_direct_p3_clearance_support_drives_continuous_command_certificate(margi
             assert source.error is None
             return source.snapshot().grid
         finally:source.close()
-    front=int(round((.591+margin-.05)*100))
+    front=int(round((.591+margin-.03)*100))
     poses=np.array([[[0.,0.,0.],[.01,0.,0.]]]);velocity=np.array([[[.1,0.]]])
     assert grid_at(front,0.).valid_motion(poses,velocity,.1,0.).all()
     assert not grid_at(front,margin).valid_motion(poses,velocity,.1,0.).all()

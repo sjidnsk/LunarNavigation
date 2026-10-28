@@ -2,7 +2,7 @@
 import json
 import math
 from pathlib import Path
-from .evidence import legacy,TOPICS,CMD,goal
+from .evidence import legacy,TOPICS,CMD,goal,obstacles
 from .grade import grade
 prior=legacy('evaluate')
 def rows(folder,role):
@@ -90,6 +90,15 @@ def analyze(folder,case,processes,error,stop,profile=None):
         actual_planner=({**resources[0]['settings'],**resources[0]['limits']} if resources else {})
         result['checks']['profile_parameters']=all(effective.get(k)==v for k,v in profile['follower'].items()) and (
             case=='empty_smoke' or all(actual_planner.get(k)==v for k,v in profile['planner'].items()))
+        if 'minimum_clearance_m' in profile['expected']:
+            from .clearance import measure
+            required=profile['expected']['minimum_clearance_m']
+            clearance=measure(states,lambda t:obstacles(case,t),required)
+            result['clearance_evidence']=clearance
+            result['checks']['profile_clearance']=clearance['pass']
+            result['checks']['profile_clearance_parameters']=(effective.get('minimum_clearance_m')==required and
+                actual_planner.get('minimum_clearance_m')==required and
+                actual_planner.get('clearance_radius_m',0.)>=math.hypot(1.182,.818)/2+required)
         result['declared_profile']=profile
     result['pass_']=all(result['checks'].values())
     result.update(runtime_exceptions=runtime_errors,graph_snapshot_count=len(graphs),
