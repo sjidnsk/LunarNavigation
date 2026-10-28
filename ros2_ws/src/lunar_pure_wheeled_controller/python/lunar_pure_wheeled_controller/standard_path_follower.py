@@ -92,7 +92,12 @@ class StandardPathFollower(MppiPathFollower):
             self._local_progress=max(matched_projection.s,actual.s)
         else:
             self._local_progress=self.path.project(state.x_m,state.y_m,reach=.75).s if compatible else 0.
-        if not compatible:self.discard_prediction()
+        if not compatible:
+            self.discard_prediction()
+            if self._stopped(state):
+                # 已实测停稳的参考切换不经过 _stop(switching=True)。
+                # 在此同样绑定新有序阶段；仅更新锚点，不刷新停滞时钟。
+                self._orient_progress_anchor(state)
 
     def _orient_progress_anchor(self, state):
         # 换向或越过有序屏障后更新方向，保留已经累积的物理停滞时间。

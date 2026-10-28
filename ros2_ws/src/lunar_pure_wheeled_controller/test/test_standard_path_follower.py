@@ -369,3 +369,46 @@ def test_recovery_certifies_measured_motion_without_fabricating_a_stop():
         v+=float(np.clip(r.command.linear_x_mps-v,-.0005,.0005))
         w+=float(np.clip(r.command.angular_z_radps-w,-.0005,.0005))
         if abs(v)>1e-8:assert abs(w)<=abs(v)+1e-8
+
+
+@pytest.mark.parametrize('curved',[False,True])
+def test_stopped_spin_replaced_by_rolling_translation_counts_physical_progress(curved):
+    e=follower(no_progress_timeout_s=.35)
+    e.set_standard_path(((0.,0.,0.),(0.,0.,.5)))
+    tick(e,TrackingState(0.,0.,.3))
+    # 新参考到达时车已静止；旧旋转端点留有零平移方向。
+    for i in range(30):
+        s=i*.01;theta=.45+s if curved else .45
+        x=math.sin(theta)-math.sin(.45) if curved else s*math.cos(theta)
+        y=math.cos(.45)-math.cos(theta) if curved else s*math.sin(theta)
+        points=tuple((x+j*.02*math.cos(theta),y+j*.02*math.sin(theta),theta) for j in range(51))
+        e.set_standard_path(points,i)
+        r=tick(e,TrackingState(x,y,theta,0. if i==0 else .2,.2 if curved and i else 0.))
+        assert e.failure is None, (i,x,y,e.no_progress_s)
+    assert math.hypot(x,y)>.28 and r.phase=='TRACKING'
+
+
+@pytest.mark.parametrize('motion',['stationary','lateral','wrongway','oscillation'])
+def test_revised_reference_cannot_manufacture_physical_progress(motion):
+    e=follower(no_progress_timeout_s=.4)
+    for i in range(40):
+        x=(-i*.01 if motion=='wrongway' else .02*(i%2) if motion=='oscillation' else 0.)
+        y=i*.01 if motion=='lateral' else 0.
+        e.set_standard_path(((0.,0.,0.),(2.+i*.001,0.,0.)),i)
+        tick(e,TrackingState(x,y,0.))
+    assert e.failure=='TRACKING_STALLED'
+
+
+def test_stopped_incompatible_rebindings_preserve_stall_clock_and_history():
+    e=follower(no_progress_timeout_s=.3)
+    for i in range(12):
+        end=1. if i%2 else -1.
+        e.set_standard_path(((0.,0.,0.),(end,0.,0.)),i)
+        before=e.no_progress_s
+        history=[(t,u.copy()) for t,u in e._command_history]
+        r=e.update(TrackingState(0.,0.,0.),.05)
+        assert e.no_progress_s>=before
+        assert len(history)==len(e._command_history)
+        assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
+        e.note_command(r.command.linear_x_mps,r.command.angular_z_radps)
+    assert e.failure=='TRACKING_STALLED'

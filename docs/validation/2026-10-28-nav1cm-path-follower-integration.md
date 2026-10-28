@@ -261,3 +261,14 @@ owner交原follower停滞/滚动进展状态维护，由root安排最小复现�
 plant nominal_response_time_s=0理想有界执行模型边界保留；Jazzy、Orin、DDS跨机、真实P3流/rosbag/RViz及实车均NOT_RUN。
 处置为已提交待owner修复/独立审查及合入；默认/应用入口未改，未合并/推送/PR/删除，资源保留待回收。
 提交后本Task交回源码写入权给root，Task3仍NEEDS_CONTEXT。
+
+
+## T3F05：已停稳参考切换的物理锚点
+
+基线e193273，产品限定修改StandardPathFollower._accept_pending：不兼容参考在实测已停稳时不经过switching制动，因此也必须像该制动完成分支一样调用既有_orient_progress_anchor。旧旋转阶段的平移方向为零；若沿用它，真实平移点积仍为零。仅重绑定新有序阶段，不刷新停滞时间，不清故障，不改共享MPPI/地图/参数/默认入口。
+
+真实Humble TDD：t3f05-red-r1准备姿态已在容差内，6通过，未复现；修正为先经历未完成旋转后，t3f05-red-r2在直线及曲线真实反馈前进约.06m时0.4s错误TRACKING_STALLED，2失败/4通过。修复后t3f05-green-r1标准Path41通过；加入静止不兼容反复切换时钟/历史保持后，t3f05-controller-r1完整controller436通过。保留静止换Path、侧移、反向、往返、旧故障锁存、有序自交、密集yaw及最新pending测试。
+
+r8受限重建以plant记录的Path接收时间与follower实际UPDATE状态合序，测试free地图/快速MPPI/age0替代原运行环境，不能恢复原callback先后、内部activepath或精确15s阈值。实际首制动状态x1.056682162/y1.337248949/v.195727125处，旧源码重建travel=[0,0]且clock14.165990324s，新源码travel=[.999176782,.040567956]且clock.049960818s。此为机制佐证，不冒称完整replay或已通过真实障碍案例。
+
+三包Release重建/CTest、50个Python安装身份及native SHA以ART/task3-product-fix5-report.md与t3f05-build-r1回执为准。独立审查和实际受影响obstacle联合运行交root后续执行，Task3仍NEEDS_CONTEXT；Jazzy、Orin/实车、真实P3流/rosbag与DDS跨机均NOT_RUN。
