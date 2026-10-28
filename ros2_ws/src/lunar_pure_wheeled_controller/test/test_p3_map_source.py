@@ -295,3 +295,51 @@ def test_nan_lateral_feedback_is_rejected_and_cannot_renew_liveness():
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()
+
+
+def test_r7_fractional_p3_native_map_and_zero_history_stop():
+    import json
+    from dataclasses import replace
+    from pathlib import Path
+    import yaml
+    from ament_index_python.packages import get_package_share_directory
+    from lunar_pure_wheeled_controller.p3_map_source import create_p3_source
+    from lunar_pure_wheeled_controller.standard_path_follower import StandardPathFollower
+    from lunar_pure_wheeled_controller.tracking import TrackingPolicy,TrackingState
+    from nav1cm.follower_map import center_support
+    from nav1cm.maps import extract_window
+    from nav1cm.contracts import VehicleState
+    capability=yaml.safe_load((Path(get_package_share_directory('lunar_nav1cm_planner'))/'config/wheel.yaml').read_text())['capability']
+    source=create_p3_source(capability,(1.182,.818))
+    x,y,yaw=-.00022610096342229037,.0023270243419165264,1.66648642142486
+    try:
+        message=elevation()
+        coords=4-(np.arange(160)+.5)*.05
+        xx,yy=np.meshgrid(coords,coords,indexing='ij');h=np.zeros((160,160),np.float32)
+        h[(xx>=1.2)&(xx<1.5)&(yy>=-2)&(yy<.2)]=2.
+        message.data[0].data=h.ravel(order='F').tolist()
+        source.set_center(x,y);source.submit_map(message,1.);assert source.wait_idle()
+        assert source.error is None
+        grid=source.snapshot().grid;world=source._world
+        reference=center_support(world,x,y,body_length_m=1.182,body_width_m=.818)
+        np.testing.assert_array_equal(grid.states,reference.cells+1)
+        np.testing.assert_array_equal(grid.eligible,reference.eligible)
+        follower=StandardPathFollower(replace(TrackingPolicy(),execution_clearance_m=.01))
+        follower.set_map(grid)
+        # r7 最后一条 UPDATE 的实际时钟与最近 12 条零指令；不是完整历史重放。
+        follower._model_time=1793180631.4765975
+        for stamp in [1793180630.7439957, 1793180630.9431612, 1793180630.977659, 1793180630.9961402, 1793180631.0438285, 1793180631.0939012, 1793180631.1440206, 1793180631.1939466, 1793180631.244358, 1793180631.3865006, 1793180631.4006023, 1793180631.4462614]:
+            follower.note_command(0.,0.,stamp_s=stamp)
+        state=TrackingState(x,y,yaw,0.,0.)
+        certified=follower.certify_publication(state,0.,0.,0.002820814)
+        planner=extract_window(world,VehicleState(x,y,yaw,0.,0.),False)
+        print('R7_RECONSTRUCTION',json.dumps(dict(origin=grid.origin,epoch=world.epoch,
+            planner_digest=planner.digest(),free_rectangles=len(world.known_free),
+            states=dict(zip(*[a.tolist() for a in np.unique(grid.states,return_counts=True)])),
+            eligible=int(grid.eligible.sum()),center_state=int(grid.states[250,250]),
+            certified_stop=bool(certified),terrain_sha=source._store._terrain.library_sha256,
+            field_sha=source._backend.library_sha256)))
+        assert grid.origin==(x-2.5,y-2.5)
+        assert grid.states[250,250]==1
+        assert certified
+    finally:source.close()

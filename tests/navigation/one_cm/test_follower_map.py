@@ -45,3 +45,13 @@ def test_native_and_reference_support_agree():
     a=support(world);b=support(world,backend=backend)
     np.testing.assert_array_equal(a.cells,b.cells)
     np.testing.assert_array_equal(a.eligible,b.eligible)
+
+
+@pytest.mark.parametrize('x,y', [(-.00022610096342229037,.0023270243419165264),(.003,-.007)])
+def test_fractional_adjacent_free_union_matches_unsplit_world(x,y):
+    split=WorldSnapshot(7,(),(CellRect(-400,-400,0,400),CellRect(0,-400,400,400)))
+    whole=WorldSnapshot(7,(),(CellRect(-400,-400,400,400),))
+    a=support(split,x,y);b=support(whole,x,y)
+    np.testing.assert_array_equal(a.cells,b.cells)
+    np.testing.assert_array_equal(a.eligible,b.eligible)
+    assert a.origin==(x-2.5,y-2.5)

@@ -53,32 +53,47 @@ def _rect_slices(rect, origin, resolution, shape, *, contained):
     return slice(iy0, iy1), slice(ix0, ix1)
 
 
-def extract_window(world: WorldSnapshot, state: VehicleState, allow_unknown: bool) -> GridSnapshot:
-    """提取以车体中心为中心的轴对齐 5 m 窗口，不改变来源 UNKNOWN。"""
+def rasterize_world(world: WorldSnapshot, origin: tuple[float, float], shape: tuple[int, int]) -> np.ndarray:
+    """在精确原点的任意厘米窗口上栅格化：FREE 并集全覆盖，BLOCKED 相交优先。
+
+    来源矩形为整数厘米格；未知未被观测，不在此处应用通行资格策略。
+    返回独立只读数组，不修改世界快照或将窗口原点吸附到源格。
+    """
+    if len(shape) != 2 or any(not isinstance(v, (int, np.integer)) or v <= 0 for v in shape):
+        raise ValueError("窗口形状须为两个正整数")
+    if len(origin) != 2 or not np.isfinite(origin).all():
+        raise ValueError("窗口原点须为两个有限数")
     resolution = world.resolution_m
-    origin = (state.x - 2.5, state.y - 2.5)
-    cells = np.full((500, 500), CellState.UNKNOWN, dtype=np.int8)
+    cells = np.full(shape, CellState.UNKNOWN, dtype=np.int8)
     # 先在原生厘米格上合并自由区域，再要求目标格相交的每个源格均自由。
     # 目标格可跨多个相接矩形；逐矩形 contained 会制造一格宽 UNKNOWN 接缝。
-    # 只密化局部支持范围（至多 501²），保持精确车体中心和真实未知边界。
+    # 只密化局部支持范围（每轴至多比目标多一格），保持精确车体中心和真实未知边界。
+    height, width = shape
     scaled = np.asarray(origin) / resolution
     lower = np.floor(scaled + 1e-10).astype(np.int64)
     upper = np.ceil(scaled - 1e-10).astype(np.int64)
     dx, dy = (upper - lower).tolist()
-    support = np.zeros((500 + dy, 500 + dx), dtype=bool)
+    support = np.zeros((height + dy, width + dx), dtype=bool)
     for rect in world.known_free:
         x0, x1 = max(0, rect.x0 - int(lower[0])), min(support.shape[1], rect.x1 - int(lower[0]))
         y0, y1 = max(0, rect.y0 - int(lower[1])), min(support.shape[0], rect.y1 - int(lower[1]))
         if x0 < x1 and y0 < y1:
             support[y0:y1, x0:x1] = True
-    free = support[:500, :500].copy()
+    free = support[:height, :width].copy()
     for sy in range(dy + 1):
         for sx in range(dx + 1):
-            free &= support[sy:sy + 500, sx:sx + 500]
+            free &= support[sy:sy + height, sx:sx + width]
     cells[free] = CellState.FREE
     for rect in world.blocked:
         cells[_rect_slices(rect, origin, resolution, cells.shape, contained=False)] = CellState.BLOCKED
-    return GridSnapshot(world.epoch, origin, resolution, cells, bool(allow_unknown))
+    return _readonly_array(cells, np.int8, 2)
+
+
+def extract_window(world: WorldSnapshot, state: VehicleState, allow_unknown: bool) -> GridSnapshot:
+    """提取以车体中心为中心的轴对齐 5 m 窗口，不改变来源 UNKNOWN。"""
+    origin = (state.x - 2.5, state.y - 2.5)
+    cells = rasterize_world(world, origin, (500, 500))
+    return GridSnapshot(world.epoch, origin, world.resolution_m, cells, bool(allow_unknown))
 
 
 def build_distance_field(grid: GridSnapshot, *, backend=None) -> DistanceField:

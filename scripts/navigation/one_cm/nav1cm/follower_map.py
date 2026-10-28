@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import math
 import numpy as np
 from .contracts import CellState, GridSnapshot, _readonly_array
-from .maps import _rect_slices, build_distance_field
+from .maps import rasterize_world, build_distance_field
 
 
 @dataclass(frozen=True)
@@ -34,11 +34,7 @@ def center_support(world,x,y,*,body_length_m,body_width_m,allow_unknown=False,ba
     origin=(x-2.5,y-2.5)
     extended=(origin[0]-halo*r,origin[1]-halo*r)
     shape=(500+2*halo,)*2
-    cells=np.full(shape,CellState.UNKNOWN,np.int8)
-    for rect in world.known_free:
-        cells[_rect_slices(rect,extended,r,shape,contained=True)]=CellState.FREE
-    for rect in world.blocked:
-        cells[_rect_slices(rect,extended,r,shape,contained=False)]=CellState.BLOCKED
+    cells=rasterize_world(world,extended,shape)
     # 两个距离场分别表达真实障碍和已知支撑，UNKNOWN 不会被改写为 FREE。
     obstacle=build_distance_field(GridSnapshot(world.epoch,extended,r,cells,True),backend=backend)
     known=build_distance_field(GridSnapshot(world.epoch,extended,r,cells,False),backend=backend)

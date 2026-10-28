@@ -150,3 +150,26 @@ r7 obstacle48s仍FAIL，尽管342次LOCAL_ACCEPTED、894非空Path持续，
 原始ART/task3-joint-r7-result保持不变，
 archivef22a81286831bd88c2ff527bd615a399b84b35c4e2d917eb8b7e92b3e8737bc8；
 实际图ART/task3-joint-r7-recovery-and-failure.png已亲视。
+
+
+## T3F04 共享 intrinsic 栅格修复
+
+F02 只修复 extract_window，center_support 仍逐 FREE 矩形 contained 裁剪，
+分数原点导致接缝再经完整车体支撑膨胀。现两消费者统一使用 maps.rasterize_world，
+保持精确原点/厘米格/500²及650² halo，FREE 并集全覆盖、BLOCKED 相交优先。
+真实 UNKNOWN 孔洞、1cm缝隙、场边界、不可变快照、allow_unknown资格及native距离下界不变。
+
+r7最终实际位姿(-.00022610096342229037,.0023270243419165264,1.66648642142486)，
+8m P3/.05m源/elevation及原障碍经实际 NativeTerrain/生产create_p3_source构建。
+epoch1及planner digest 7b7c8d05f3d1e8f2b976002128d05aeeca905c4f981c7cb7bf674965f25bf3e4
+与原r7请求353等匹配；origin精确匹配revision7的记录。
+中心支持 UNKNOWN 86066→37691，FREE101666→150041，BLOCKED62268不变，
+实际末12条零命令时钟与state_age .002820814下完整certify_publication false→true。
+此为具有地图身份匹配的受限历史重建，不是完整事件历史重放；原始r7证据未修改。
+
+TDD最小RED2失败/4通过、P3/native RED1失败；GREEN31通过，独立面积oracle及
+500²/650²/650×713边界22通过，P3/扫掠26通过；完整core609通过/1跳过，64.61s。
+测试末尾有SQP_RTI错误状态3输出，pytest退出0且无失败，不将求解器日志抹除。
+实际三包重建/CTest/Python与native身份完整回执见外部ART/task3-product-fix4-report.md。
+本次没有改C++/ABI、停止证书或参数、harness、默认及应用入口。
+新候选联合闭环、Jazzy、Orin、真实P3流/rosbag/实车NOT_RUN；独立复审和短联合验收交root。
