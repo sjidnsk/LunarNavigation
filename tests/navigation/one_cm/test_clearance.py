@@ -233,3 +233,9 @@ def test_positive_margin_real_solver_motion_is_nondegenerate(tmp_path,mode,point
     assert candidate is not None and candidate.mode==mode and candidate.source.startswith('mpcc:')
     assert candidate.states[-1,2 if mode=='spin' else 0]>.05
     assert certify(candidate,grid,limits,1).valid
+
+
+def test_deployed_wheel_files_use_user_requested_unified_clearance():
+    for name in ('wheel.yaml','wheel_orin.yaml'):
+        limits,_=load_configuration(ROOT/'config'/name)
+        assert limits.minimum_clearance_m==.2
