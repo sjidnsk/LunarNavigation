@@ -63,3 +63,32 @@ tf_static双方要求RELIABLE/TRANSIENT_LOCAL。所有记录绑定实际话题�
 DDS发现可能不披露history/depth，此时保留UNKNOWN/null，用对应运行实体的真实profile补证；
 缺实体证据或已知QoS冲突均否决结果。此检查只在外部验收器，不改变产品准入、同步或控制逻辑。
 旧r1-r4只有QoS文本，不能追认已通过新增结构化QoS门禁。
+
+## 当前实际验证结果（r5）
+
+当前生产提交052aa55497fde3a9217ae11e1f4125199c876c7e，
+Humble安装t3f01-fix1-build-r1。Task3状态NEEDS_CONTEXT，不能切换默认入口。
+
+r5正向45s通过全部门禁：12次正式规划、780条非空local Path，
+实际原目标于17.025s满足连续.3s终端hold；恢复运动后planner退出和陈旧Path停车通过，
+250ms真实worker延迟继续运动、连续曲率、完整车体SAT、真实结构化QoS均通过。
+实际最大线速.198853m/s、角速.525927rad/s，a/alpha最大.5；
+follower compute P95=42.238ms、max105.880ms。
+
+r5障碍48s仍失败：初始旋转从旧版本.079rad推进到1.652rad，
+实际位移只有.003302m。非空Path在7.18s后停止，planner持续
+NO_FEASIBLE_MPCC_CANDIDATE/FIXED_INITIAL_CIRCLE_INFEASIBLE，
+制动拒绝UNKNOWN；独立车体SAT、数值约束、监督和QoS均通过。
+该失败归planner局部地图/认证及MPCC owner进一步复现，不以正式规划成功或停稳代替绕障通过。
+
+两个case实际core.so均来自ROOT/install/core-humble-r1/
+lunar_incremental_navigation_core/lib/liblunar_incremental_navigation_core.so，
+SHA256为0092ca1863b642f9bc0cbc7bb443b22446c26d1b29f153a3e217ce376e9bb4ec。
+DDS发现不披露Path history/depth（UNKNOWN/null），运行实体直接证实
+planner发布者与follower订阅者均RELIABLE/VOLATILE/KEEP_LAST/depth1。
+两case所有进程和worker正常退出、无残留。新版本reverse/empty/mapchange最终matrix尚NOT_RUN。
+
+完整原始证据保存在外部ART/task3-joint-r5-result，
+archive SHA256为79cdd40198e2a87e2b82eb9651146a6db0cf8b8a89bb4d894dadbcbfa7850052。
+实际图ART/task3-joint-r5-actual-motion-comparison.png已亲视。
+旧r1-r4失败与历史通过均完整保留，不归入当前生产版本通过数量。
