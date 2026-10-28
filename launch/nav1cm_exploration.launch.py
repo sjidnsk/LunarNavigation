@@ -20,6 +20,9 @@ DEFAULTS = {
     "exploration_map_topic": "/Car/T4/mapping/exploration_map",
     "policy_map_service": "/Car/T4/mapping/get_policy_map",
     "task_topic": "/Car/T4/exploration/task", "status_topic": "/Car/T4/exploration/status",
+    "current_goal_topic": "/Car/T4/exploration/current_goal", "frontiers_topic": "/Car/T4/exploration/frontiers",
+    "task_boundary_topic": "/Car/T4/exploration/task_boundary", "task_map_markers_topic": "/Car/T4/exploration/task_map_markers",
+    "exploration_diagnostics_topic": "/Car/T4/exploration/diagnostics",
     "command_topic": "/Car/T5/Car_Cmd_Vel", "diagnostics_topic": "/Car/T4/control/mppi_diagnostics",
     "map_qos_reliability": "reliable", "map_qos_durability": "volatile",
     "coarse_resolution_m": "1.0", "navigation_map_wait_timeout_s": "30.0",
@@ -59,7 +62,8 @@ def _compose(context):
                      **frames, "platform_config": config}
     if strategy == "frontier":
         actions.append(node("lunar_pure_exploration_ros", "incremental_exploration_node", {
-            **shared_policy, "platform_selector": "wheel", "navigation_action": values["action_name"],
+            **shared_policy, **{k: values[k] for k in ("current_goal_topic","frontiers_topic","task_boundary_topic","task_map_markers_topic")},
+            "diagnostics_topic": values["exploration_diagnostics_topic"], "platform_selector": "wheel", "navigation_action": values["action_name"],
             "exploration_map_topic": values["exploration_map_topic"],
             "navigation_map_wait_timeout_s": float(values["navigation_map_wait_timeout_s"])}))
     elif strategy == "drl":
