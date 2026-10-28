@@ -72,3 +72,14 @@ Ubuntu 22.04/Humble x86_64、domain92/localhost1，实际 native 与已安装独
 本地证据根 `D:/CodexDownloads/lunar_navigation/nav-1cm-feasibility-20261026/artifacts/exploration-integration-20261029/task2`；远端根 `/mnt/data/WS/lunar-navigation/analysis-artifacts/nav1cm-p3-interface-20261027/exploration-integration-20261029/task2`。`receipts-final.tgz` 和 `remote-receipts` 保存日志/JSON/CDR/测试 XML；构建与安装留远端，不提交 Git。
 
 NOT_RUN：Jazzy、Orin、实车、真实 P3/生产 DDS、跨机 DDS、rosbag/RViz、前沿/DRL接线、独立 plant 运动闭环、长期滚动资源上界、正式训练。本 Task 无训练/硬件/真实 T5，无 owner merge/push/PR/upstream/删除。处置为已提交待 root 独立审查/待合入，资源保留待授权回收；源码/operator/ROS 槽交回 root。
+
+
+### Task2 scoped 修复 round1：I1 共用投影几何遍历
+
+基线20d196a0；先行测试635aa42c，产品修复6280ba206e278665cb28ad81fd7b02e19fe4df6b。仅提取匿名命名空间 `ProjectImpl<Aggregation>`，统一几何校验、输出分配、坐标换算、索引裁剪和两层交叠遍历；`AnyFreeAggregation` 保留旧 any-FREE 内外层提前退出，`ConservativeAggregation` 保留全面积遍历、BLOCKED面积大于容差优先及完整FREE覆盖规则。两公开API、1e-9面积容差、原生物理阈值和全部原断言不变；没有改core/Task1/前沿/DRL。
+
+这是结构重复修复，没有功能RED：先在未重构实现上运行行为对照，projector6例与地图8例（CTest2/2）通过。新增3例覆盖混合FREE/BLOCKED/UNKNOWN及FREE先后次序、非对齐原点/负索引/部分覆盖、两接口不兼容frame拒绝。重构后独立Humble Release构建通过，受影响ROS包串行CTest15/15、131用例全通过（5.99s）。core和Task1未变，本轮不重复其完整suite，旧资格仍绑定旧执行记录。
+
+实际新安装节点再运行一轮原8阶段/stable20Hz/真实TF变化/服务与退出harness，唯一脚本变化为可执行文件指向round1安装，输入和断言未变。全部通过：dense .01首帧238.571ms；20Hz1.029465s/CPU.01s/额外Apply0，当前anchor吻合；真实TF使fine5→6；未知起点无假支撑。PID800790 SIGINT exit0且消失，私有图无Action/真实T5。新ROS库实际加载 `task2/fix-round1/install`，SHA256 `617d4d71d4d21e72c983a05497e17766f5380e949fe729d33a3bd2cc3c846861`；core仍从task2/install加载SHA `b63079f301e2f1b1d6a0fc126d86eda152d98b6d30baa0b530b7da28260a9ce4`，旧ROS安装SHA64115eb0...未覆盖。两处产物均位于原Task2根的fix-round1子目录，含独立build/install/log、focused-run.sh/final-run.sh、focused-before.txt/ctest-final.txt、actual-map/ros-map-smoke.json及maps、installed-identity.json与receipts.tgz。
+
+状态：I1实现者修复及验证完成，待原reviewer scoped复审，不自行宣称独立质量门槛已通过。M1仍deferred；原NOT_RUN/长期资源与P3边界不变。显式提交，无owner合入/推送/删除，资源保留；源码/operator/ROS槽交回root。
