@@ -167,3 +167,69 @@ def test_pose_goal_clearance_rejection_keeps_session_generation(tmp_path,margin)
     assert any(e['kind']=='GOAL_REJECTED' for e in packet.result.events)
     assert packet.route is None
     session.close()
+
+
+@pytest.mark.parametrize('native',[False,True])
+def test_euclidean_margin_accepts_full_rotation_and_braking(tmp_path,native):
+    import os
+    from nav1cm.geometry_native import NativeGeometry
+    from nav1cm.maps import rasterize_world
+    from nav1cm.pose_goal import check_pose_goal
+    backend=NativeGeometry(os.environ['NAV1CM_GEOMETRY_LIB']) if native else None
+    limits=selected(tmp_path,.4)
+    # 独立解析真值：任意yaw车体到x=1.2障碍的距离至少1.2-body外接半径>.4。
+    assert 1.2-math.hypot(1.182,.818)/2>.4
+    world=WorldSnapshot(1,(CellRect(120,-200,150,20),),(CellRect(-500,-500,500,500),))
+    grid=GridSnapshot(1,(-2.5,-2.5),.01,rasterize_world(world,(-2.5,-2.5),(500,500)))
+    angle=math.atan2(.409+.4,.591+.4)
+    assert check_pose_goal(world,(0.,0.),angle,limits).accepted
+    for yaw in (0.,angle,math.pi/2,math.pi,1.5*math.pi):
+        braking=Trajectory(1,1,[0.],[[0.,0.,yaw,0.,.1,0.]],np.empty((0,3)),'spin')
+        assert certify(braking,grid,limits,1,backend=backend).valid
+    times=np.arange(65,dtype=float)
+    states=np.column_stack((np.zeros((65,2)),.1*times,np.zeros(65),np.full(65,.1),np.zeros(65)))
+    rotation=Trajectory(1,1,times,states,np.zeros((64,3)),'spin')
+    assert certify(rotation,grid,limits,1,backend=backend).valid
+    for unknown in (False,True):
+        cells=np.zeros((500,500),np.int8);cells[50:270,360:400]=-1 if unknown else 1
+        near=GridSnapshot(1,(-2.5,-2.5),.01,cells)
+        result=certify(rotation,near,limits,1,backend=backend)
+        assert result.reason==(CertificationReason.UNKNOWN if unknown else CertificationReason.COLLISION)
+
+
+@pytest.mark.parametrize('native',[False,True])
+@pytest.mark.parametrize('margin',[.2,.4])
+def test_corner_distance_checks_both_sides_of_euclidean_margin(tmp_path,margin,native):
+    import os
+    from nav1cm.geometry_native import NativeGeometry
+    from nav1cm.maps import rasterize_world
+    from nav1cm.pose_goal import check_pose_goal
+    backend=NativeGeometry(os.environ['NAV1CM_GEOMETRY_LIB']) if native else None
+    limits=selected(tmp_path,margin)
+    for gap,accepted in ((margin*.75,True),(margin*.7,False)):
+        x,y=int(round((.591+gap)*100)),int(round((.409+gap)*100))
+        independent_distance=math.hypot(x/100-.591,y/100-.409)
+        assert (independent_distance>margin)==accepted
+        world=WorldSnapshot(1,(CellRect(x,y,x+1,y+1),),(CellRect(-500,-500,500,500),))
+        grid=GridSnapshot(1,(-2.5,-2.5),.01,rasterize_world(world,(-2.5,-2.5),(500,500)))
+        assert certify(stationary(),grid,limits,1,backend=backend).valid==accepted
+        assert check_pose_goal(world,(0.,0.),0.,limits).accepted==accepted
+
+
+@pytest.mark.parametrize('mode,points',[('forward',((0.,0.),(2.,0.))),('spin',((0.,0.),(0.,2.)))])
+def test_positive_margin_real_solver_motion_is_nondegenerate(tmp_path,mode,points):
+    import os
+    if os.environ.get('NAV1CM_REAL_SOLVER')!='1':pytest.skip('real acados required')
+    from nav1cm.local_mpcc import MpccPlanner
+    from nav1cm.contracts import VehicleState,Route
+    from nav1cm.reference import extract_reference
+    limits=selected(tmp_path,.4)
+    planner=MpccPlanner(limits,os.environ['NAV1CM_BUILD_DIR'])
+    state=VehicleState(0.,0.,0.,0.,0.)
+    grid=GridSnapshot(1,(-2.5,-2.5),.01,np.zeros((500,500),np.int8))
+    reference,_=extract_reference(Route(1,1,points,points[-1]),state,grid)
+    result=planner.plan(state,grid,reference)
+    candidate=result.candidate
+    assert candidate is not None and candidate.mode==mode and candidate.source.startswith('mpcc:')
+    assert candidate.states[-1,2 if mode=='spin' else 0]>.05
+    assert certify(candidate,grid,limits,1).valid

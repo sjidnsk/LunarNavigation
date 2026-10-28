@@ -6,6 +6,7 @@ import numpy as np
 from .contracts import Trajectory
 from .dynamics import step
 from .global_planner import GoalCheck
+from .rectangle_distance import rectangle_distance_squared
 from .seeds import brake_candidate
 
 
@@ -29,16 +30,13 @@ def check_pose_goal(world, goal_xy, goal_yaw, limits):
         raise ValueError('goal must contain finite x,y')
     yaw = normalize_yaw(goal_yaw)
     c, s = math.cos(yaw), math.sin(yaw)
-    hl, hw = limits.body_length_m / 2 + limits.minimum_clearance_m, limits.body_width_m / 2 + limits.minimum_clearance_m
-    ex, ey = abs(c) * hl + abs(s) * hw, abs(s) * hl + abs(c) * hw
+    hl, hw = limits.body_length_m / 2, limits.body_width_m / 2
     for rect in world.blocked:
         x0, y0, x1, y1 = np.asarray((rect.x0, rect.y0, rect.x1, rect.y1)) / 100.
         dx, dy = (x0 + x1) / 2 - xy[0], (y0 + y1) / 2 - xy[1]
         rx, ry = (x1 - x0) / 2, (y1 - y0) / 2
-        # 世界两轴与车体两轴的精确矩形分离轴检查；接触亦视为冲突。
-        intersects = (abs(dx) <= ex + rx + 1e-12 and abs(dy) <= ey + ry + 1e-12 and
-                      abs(c * dx + s * dy) <= hl + abs(c) * rx + abs(s) * ry + 1e-12 and
-                      abs(-s * dx + c * dy) <= hw + abs(s) * rx + abs(c) * ry + 1e-12)
+        distance2=rectangle_distance_squared(dx,dy,rx,ry,c,s,hl,hw)
+        intersects=distance2 <= (limits.minimum_clearance_m+1e-12)**2
         if intersects:
             return GoalCheck(False, 'GOAL_IN_OBSTACLE', world.epoch)
     return GoalCheck(True, 'GOAL_ACCEPTED', world.epoch)
