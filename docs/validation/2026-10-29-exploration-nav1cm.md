@@ -83,3 +83,46 @@ NOT_RUN：Jazzy、Orin、实车、真实 P3/生产 DDS、跨机 DDS、rosbag/RVi
 实际新安装节点再运行一轮原8阶段/stable20Hz/真实TF变化/服务与退出harness，唯一脚本变化为可执行文件指向round1安装，输入和断言未变。全部通过：dense .01首帧238.571ms；20Hz1.029465s/CPU.01s/额外Apply0，当前anchor吻合；真实TF使fine5→6；未知起点无假支撑。PID800790 SIGINT exit0且消失，私有图无Action/真实T5。新ROS库实际加载 `task2/fix-round1/install`，SHA256 `617d4d71d4d21e72c983a05497e17766f5380e949fe729d33a3bd2cc3c846861`；core仍从task2/install加载SHA `b63079f301e2f1b1d6a0fc126d86eda152d98b6d30baa0b530b7da28260a9ce4`，旧ROS安装SHA64115eb0...未覆盖。两处产物均位于原Task2根的fix-round1子目录，含独立build/install/log、focused-run.sh/final-run.sh、focused-before.txt/ctest-final.txt、actual-map/ros-map-smoke.json及maps、installed-identity.json与receipts.tgz。
 
 状态：I1实现者修复及验证完成，待原reviewer scoped复审，不自行宣称独立质量门槛已通过。M1仍deferred；原NOT_RUN/长期资源与P3边界不变。显式提交，无owner合入/推送/删除，资源保留；源码/operator/ROS槽交回root。
+
+
+## Task3：显式前沿与新导航真实短闭环
+
+BASE451aced7b60267a4011a6d6aea4e816a6c747f9a；产品03f5ff6347660dcb7ef7a71388dd6440dec565c3。
+新增nav1cm_exploration.launch.py默认none/controllerfalse，保持旧入口/训练默认；frontier只选目标，共用真实NavigateToPose、标准Path、已安装MPPI与独立Twist植物执行。DRL仅可选hook，未实现/运行推理或训练。
+WAITING_FOR_PATH复用原map wait取消/重选策略；BUFFER_UNAVAILABLE（可携带制动candidate）反馈连续path wait，NOT_DUE保留上一真实周期语义，缺world/state/route仍优先等待；实际到达/取消停稳与generation规则保留。新组合map/task/controller共享可选reliable/volatile地图QoS，普通planner/controller旧best_effort/volatile默认及odom/TF保持。
+
+冻结合成短窗最终结果：
+
+| 场景 | 固定窗 / 实测odomHz | 正式global0/PLAN_FOUND/has_reference | GOAL_REACHED / 不同(x,y,yaw) / CANCELED_STOPPED | 新观测源格 | 独立净空下界m |
+|---|---|---|---|---|---|
+| 原前沿progress | 75s / 49.468 | 45 | 6 / 7 / 1 | 316 | 1.491926 |
+| ROOT支撑修正v2未知等待重选 | 60s / 49.524 | 5 | 2 / 5 / 3 | 0 | 3.852103 |
+| 原外部任务取消 | 30s / 49.528 | 7 | 0 / 1 / 1 | 0 | 4.044363 |
+| 大帧无目标接收 | 15s / 49.596 | 无目标 | 0 / 0 / 0 | 0 | 仅接收资格 |
+
+物理运行harness7b33d9d9；终态自审收紧后以grader15eba300严格离线重算全部仍通过。保持只使用<=探针收到ACTION_RESULT的实际样本，8次到达均xy<=.1m、yaw<=.05rad、v/w<=.01，保持约.321s；不声称获得server内部终态时间。外部CANCEL在实测运动中发起且后续无新goal。progress7个不同pose含3个xy位置，v2五个候选为同xy不同yaw，不能等同五次位移到达。
+
+三运动轮源10m/.1/10000格，真实local计算5m×5m/.01/500²；大帧源5m/.01/250000格实际进入三消费者，0目标/0运动，不能称运动成功。车体1.182×.818、.2净空、.15响应和原速度/加速度/曲率不变。私有domain92/localhost1/cmd，所有最终图无T5 publisher、一个Action/Path源，过程正常退出、无升级信号/残留worker；不是Orin/实车验收。
+
+v2仅按ROOT裁定将未知缝x[.9,1.3]移为[1.6,2.0]，其它几何/60s/物理不变；原v1因初始硬包络支撑无效而失败保留。v2无运动真实native和observed-only policy中心均FREE/eligible、assumed0；源SHA372a222cb0eafa41821dddfeb758068d03229cf1314d146ef7159431a2e85fc0与最终raw一致。该轮动态障碍条件未触发，global线段与未知缝交集0；没有验证动态障碍响应、未知捷径冲突或已知绕行优先，保留待验，不扩场景。
+
+验证：Windows Task3最终focused45passed；Humble纯Task13、Runtime12通过，planner CTest6/6（20用例）、controller14/14（442用例）。前沿首轮11/12 target，其中旧PlanMotion合成OutsideToInside用例5s超时；单例及完整16例target定向复验通过，当前XML247用例0fail。原超时未稳定复现、根因未确定，不能称首次整包全绿；legacy代码/test/库归属对BASE无diff，未做干净BASE重建对照。Linux最终静态/launch/grade41passed；Windows两项旧launch测试rsplit('/')路径假设失败分列，不倒写Windows全绿。Python编译、bash语法、UTF8读回、diffcheck通过；没有执行hardware wrapper。M1/M2环境噪声deferred。
+
+失败账全部保留：缺依赖/缺bundle prerequisite/安装RPATH身份比较；UUID旁观wire类型；高频反馈驱动odom；单spin节流积压；原v1初始UNKNOWN支撑；Windows计时纯测试量化；旧合成超时。首次QoS RED还遗漏私有cmd：两个controller仅构造不spin/无goal/plant，但destroy_node发起默认T5零Twist发布尝试；当时domain92/localhost1，未记录订阅者/送达，不能称无消息或无订阅者。该轮不作合格图，后续私有RED/GREEN和最终图独立验证。
+
+安装：60项source/install Python/launch SHA或ELF BuildID匹配，8项native实际/proc maps与ldd归档；shared wheel.yaml SHA23b93ebaf83466eb51991881cab045f14a80e871811b08f6dd39a5a768d91fe6。qualified core仍b63079f3、map ROS617d4d71，Task3独立install，旧frozen runtime未覆盖。原始/失败约528.8MB、压缩39.7MB回收D盘，174项SHA核对；固定窗405s及提前失败/构建/清理成本如实保留，无训练账本变化。
+
+本地ART D:/CodexDownloads/lunar_navigation/nav-1cm-feasibility-20261026/artifacts/exploration-integration-20261029/task3；远端同任务根exploration-integration-20261029/task3。完整命令、UUID/实测xyyawstop、各轮身份、声明/失败及ROOT rulings在ignored SDD task-3-report.md。公开操作与可选DRL参数见操作指令新增段。
+
+NOT_RUN：Jazzy、Orin/实车目标环境（Ubuntu22.04/Humble）、真实P3/生产/跨机DDS、rosbag/RViz、100m行驶/100m全源1cm、DRL推理/权重/训练。当前处置已提交待ROOT独立审查/owner合入，资源待授权回收；无merge/push/PR/upstream/delete/reset/stash。自审由作者执行，ROOT独立审查未被替代。
+
+
+### Task3最后补证：一次真实障碍地图更新
+
+ROOT在实跑前依据既有raw将新增case初始测量选为已合格progress源（无额外未知缝），不用无法达到>=1.6m触发条件的近目标v2；原四窗不动。冻结harness dee06601，前沿仍自然选点，sourceSHA启动前匹配70d26980e9c32fd604f8578f5bac3895f79860c49a08be2c9625e8b1f707889f；只运行一次固定60s，没有改产品/安全距离/0.2净空/0.15响应/运动约束。
+
+obstacle-update-once通过：当前UUID10eafaff2e8851ff410061999435b73c逻辑接受后14.25ms，t3.046878s、body-goal1.883933395m时加入同0.6m/2m实际障碍；下一源测量高度数据实际变化，随后探索导航occupied0→193，匹配UUID WAITING_FOR_PATH→CANCELED_STOPPED→新逻辑接受UUID67ea0bdcb2228d551164a97b3d49e3a9，XY从(-.1,-1.8813)到(-.1,+1.8813)，相距3.762555m。source/map/UUID顺序均有不可变raw；平顶内部intrinsicFREE不等于整车通行。
+
+该窗0GOAL_REACHED、2不同XY、2CANCELED_STOPPED；不将新goal接受写为到达。实际odom49.278849Hz，最大v.199809/w.871312、a/alpha<=.5，独立净空下界.859790m，全部正式规划/实际运动/私有graph/安装/无异常/cleanup及严格事件门禁通过，owned remaining=[]。未知捷径/绕行优先仍未覆盖。
+
+补证grader10项RED→GREEN，最后Windows focused55passed、Linux合同51passed；未重建/重复未变产品包或原四窗。追加固定60s使总固定窗465s，补充原始12.18MB/压缩2.07MB已回收D盘并核对14文件SHA；之前所有失败和174项原始回执保留。完整次序/UUID/源SHA/成本见task-3-report.md与obstacle-update-once。
