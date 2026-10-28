@@ -115,3 +115,55 @@ def test_native_and_python_clearance_and_braking_agree(tmp_path,margin):
         reference=certify(trajectory,grid,limits,1)
         accelerated=certify(trajectory,grid,limits,1,backend=native)
         assert (accelerated.valid,accelerated.reason)==(reference.valid,reference.reason)
+
+
+def test_configured_clearance_optimizer_accepts_actual_obstacle_start(tmp_path):
+    import os
+    if os.environ.get('NAV1CM_REAL_SOLVER')!='1':pytest.skip('real acados required')
+    from nav1cm.local_mpcc import MpccPlanner
+    from nav1cm.maps import build_distance_field,rasterize_world
+    limits=selected(tmp_path,.4)
+    # 原实际APP障碍场景，不移动障碍/车体/预算：初态净空为 .609m。
+    world=WorldSnapshot(1,(CellRect(120,-200,150,20),),(CellRect(-500,-500,500,500),))
+    grid=GridSnapshot(1,(-2.5,-2.5),.01,rasterize_world(world,(-2.5,-2.5),(500,500)))
+    assert certify(stationary(),grid,limits,1).valid
+    planner=MpccPlanner(limits,os.environ['NAV1CM_BUILD_DIR'])
+    field=build_distance_field(grid)
+    assert all(field.sample(offset,0.)[0]>=planner.radius+.003 for offset in planner.offsets)
+    # 优化包络仍须覆盖实际矩形与半径margin圆的Minkowski和；不能靠缩车过关。
+    for x in (-limits.body_length_m/2,limits.body_length_m/2):
+        for y in (-limits.body_width_m/2,limits.body_width_m/2):
+            for angle in np.linspace(0.,2*np.pi,129):
+                px=x+limits.minimum_clearance_m*np.cos(angle);py=y+limits.minimum_clearance_m*np.sin(angle)
+                assert min(np.hypot(px-offset,py) for offset in planner.offsets)<=planner.radius+1e-12
+
+
+@pytest.mark.parametrize('margin',[.2,.4])
+def test_pose_goal_clearance_rejection_keeps_session_generation(tmp_path,margin):
+    from nav1cm.async_coordinator import AsyncNavigationCoordinator
+    from nav1cm.p3_session import NavigationSession
+    from nav1cm.ros_conversion import PoseGoal
+    from nav1cm.contracts import VehicleState
+    class Pending:
+        busy=True
+        def poll(self):return None
+        def close(self):pass
+    limits=selected(tmp_path,margin)
+    coordinator=AsyncNavigationCoordinator(limits=limits,local_worker=Pending(),global_runner=Pending(),revalidate_current_map=True)
+    session=NavigationSession(coordinator)
+    front=int(round((.591+margin-.05)*100))
+    session.set_world(WorldSnapshot(1,(CellRect(front,-10,front+1,10),),(CellRect(-500,-500,500,500),)))
+    session.offer_state(VehicleState(-1.,0.,0.,0.,0.))
+    old=PoseGoal(-1.,0.,0.);assert session.offer_goal(old)
+    generation,revision=session.accepted_generation,coordinator.goal_revision
+    assert not session.offer_goal(PoseGoal(0.,0.,0.))
+    assert session.goal==old and session.accepted_generation==generation and coordinator.goal_revision==revision
+    sufficient=PoseGoal(-.2,0.,0.);assert session.offer_goal(sufficient)
+    generation=session.accepted_generation;assert generation==2
+    session.set_world(WorldSnapshot(2,(CellRect(-25,-5,-15,5),),()))
+    assert session.offer_goal(sufficient)  # 同目标重发与后来变堵均不自动回退旧目标。
+    packet=session.tick(0.)
+    assert session.goal==sufficient and session.accepted_generation==generation
+    assert any(e['kind']=='GOAL_REJECTED' for e in packet.result.events)
+    assert packet.route is None
+    session.close()

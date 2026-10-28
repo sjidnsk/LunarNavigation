@@ -23,13 +23,13 @@ def angle_error(target, current):
 
 
 def check_pose_goal(world, goal_xy, goal_yaw, limits):
-    """只因最终矩形车体与已知障碍接触而拒绝，未知/图外均可接收。"""
+    """最终车体与配置净空包络接触已知障碍则拒绝，未知/图外可接收。"""
     xy = tuple(float(value) for value in goal_xy)
     if len(xy) != 2 or not all(math.isfinite(value) for value in xy):
         raise ValueError('goal must contain finite x,y')
     yaw = normalize_yaw(goal_yaw)
     c, s = math.cos(yaw), math.sin(yaw)
-    hl, hw = limits.body_length_m / 2, limits.body_width_m / 2
+    hl, hw = limits.body_length_m / 2 + limits.minimum_clearance_m, limits.body_width_m / 2 + limits.minimum_clearance_m
     ex, ey = abs(c) * hl + abs(s) * hw, abs(s) * hl + abs(c) * hw
     for rect in world.blocked:
         x0, y0, x1, y1 = np.asarray((rect.x0, rect.y0, rect.x1, rect.y1)) / 100.
