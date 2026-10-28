@@ -62,3 +62,43 @@ def test_wrong_ros_type_and_production_command_graph_veto():
     graph["types"][CMD]=["geometry_msgs/msg/Twist"]
     graph["publishers"]["/Car/T5/Car_Cmd_Vel"]=[dict(node_name="unexpected")]
     assert not graph_valid(graph,"empty_smoke")
+
+def qos_evidence():
+    from evidence import TOPICS
+    profile=dict(reliability="RELIABLE",durability="VOLATILE",history="KEEP_LAST",depth=1)
+    static=dict(reliability="RELIABLE",durability="TRANSIENT_LOCAL",history="KEEP_LAST",depth=100)
+    rows=[dict(node_name="lunar_pure_wheeled_controller",direction="subscriptions",topic=TOPICS["local"],qos=profile.copy()),
+          dict(node_name="nav1cm_joint_plant",direction="publishers",topic=TOPICS["local"],qos=profile.copy()),
+          dict(node_name="nav1cm_joint_plant",direction="publishers",topic="/tf_static",qos=static.copy()),
+          dict(node_name="lunar_pure_wheeled_controller",direction="subscriptions",topic="/tf_static",qos=static.copy())]
+    graph=dict(publishers={},subscriptions={})
+    for row in rows:
+        graph[row["direction"]].setdefault(row["topic"],[]).append(dict(node_name=row["node_name"],qos=row["qos"].copy()))
+    return graph,rows
+
+@pytest.mark.parametrize("field,value",[("reliability","BEST_EFFORT"),("durability","TRANSIENT_LOCAL"),("depth",2)])
+def test_qos_wrong_actual_path_entity_veto(field,value):
+    from evaluate import qos_valid
+    graph,entities=qos_evidence()
+    entities[0]["qos"][field]=value
+    assert not qos_valid(graph,entities,"empty_smoke")
+
+def test_qos_unknown_graph_depth_requires_real_entity_depth():
+    from evaluate import qos_valid
+    from evidence import TOPICS
+    graph,entities=qos_evidence()
+    for direction in graph.values():
+        for rows in direction.values():
+            for r in rows:r["qos"].update(history="UNKNOWN",depth=None)
+    assert qos_valid(graph,entities,"empty_smoke")
+    entities[0]["qos"]["depth"]=None
+    assert not qos_valid(graph,entities,"empty_smoke")
+
+def test_tf_static_actual_durability_and_graph_reliability_veto():
+    from evaluate import qos_valid
+    graph,entities=qos_evidence()
+    entities[-1]["qos"]["durability"]="VOLATILE"
+    assert not qos_valid(graph,entities,"empty_smoke")
+    graph,entities=qos_evidence()
+    graph["publishers"]["/tf_static"][0]["qos"]["reliability"]="BEST_EFFORT"
+    assert not qos_valid(graph,entities,"empty_smoke")

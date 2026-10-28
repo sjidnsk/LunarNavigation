@@ -1,3 +1,4 @@
+from qos import profile_data,entity_rows
 """只读观测真实安装控制器，不改优化、决策或命令。"""
 import hashlib
 import sys
@@ -19,6 +20,7 @@ def run(args):
         cli+=['-p',k+':='+str(v)]
     rclpy.init(args=cli,signal_handler_options=SignalHandlerOptions.NO)
     node=PureWheeledControllerNode()
+    rec.emit('ENTITY_QOS',entities=entity_rows(node))
     paths=list(Path(lunar_pure_wheeled_controller.__file__).parent.glob('*.py'))
     rec.emit('INSTALL',executor=type(node._executor).__name__,module=lunar_pure_wheeled_controller.__file__,
              pythonpath=sys.path,production_sha256={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},

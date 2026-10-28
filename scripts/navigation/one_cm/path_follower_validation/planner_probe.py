@@ -1,3 +1,4 @@
+from qos import profile_data,entity_rows
 """真实已安装 PlannerNode；内部 factory 仅增加观测和单请求 250 ms 延迟。"""
 from dataclasses import asdict
 import hashlib
@@ -69,6 +70,7 @@ def run(args):
     if args.case == 'legacy_tf':
         params.append(Parameter('tf_topic', value='/P4/input/map_to_odom'))
     node = PlannerNode(resource_factory=factory, parameter_overrides=params)
+    rec.emit('ENTITY_QOS',entities=entity_rows(node))
     previous_notice = node.runtime.notice
 
     def notice(kind, detail):

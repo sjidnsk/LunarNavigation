@@ -1,3 +1,4 @@
+from qos import profile_data,entity_rows
 """独立真实Twist植物：有界速度跟随，完整时钟细分积分；不读取Path控制。"""
 import math
 import sys
@@ -35,9 +36,10 @@ def run(args):
     odom_pub=node.create_publisher(Odometry,TOPICS['odom'],1)
     map_pub=node.create_publisher(GridMap,TOPICS['grid'],1)
     goal_pub=node.create_publisher(PoseStamped,TOPICS['goal'],10)
-    path_pub=node.create_publisher(PathMessage,TOPICS['local'],10) if args.case=='empty_smoke' else None
+    path_pub=node.create_publisher(PathMessage,TOPICS['local'],1) if args.case=='empty_smoke' else None
     tf_pub=node.create_publisher(TFMessage,'/tf_static',QoSProfile(depth=1,
         reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    rec.emit('ENTITY_QOS',entities=entity_rows(node))
     sent=False
     resumed=False
     next_map=next_tf=next_graph=next_path=0.
@@ -112,9 +114,9 @@ def run(args):
                 path_pub.publish(msg);rec.emit('INJECTED_PATH',empty=not msg.poses);next_path=t+.05
             if t>=5. and t>=next_graph:
                 types=dict(node.get_topic_names_and_types())
-                rec.emit('GRAPH',types=types,publishers={topic:[dict(node_name=p.node_name,topic_type=p.topic_type,qos=str(p.qos_profile))
+                rec.emit('GRAPH',types=types,publishers={topic:[dict(node_name=p.node_name,topic_type=p.topic_type,qos=profile_data(p.qos_profile),qos_text=str(p.qos_profile))
                     for p in node.get_publishers_info_by_topic(topic)] for topic in types},
-                    subscriptions={topic:[dict(node_name=p.node_name,topic_type=p.topic_type,qos=str(p.qos_profile))
+                    subscriptions={topic:[dict(node_name=p.node_name,topic_type=p.topic_type,qos=profile_data(p.qos_profile),qos_text=str(p.qos_profile))
                     for p in node.get_subscriptions_info_by_topic(topic)] for topic in types})
                 next_graph=t+5.
             rclpy.spin_once(node,timeout_sec=.005)

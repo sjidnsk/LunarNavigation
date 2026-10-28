@@ -54,3 +54,12 @@ run.py支持 forward_spin、reverse、obstacle、mapchange、empty_smoke。
 具体原始标签、失败归因和当前验收结果见同任务 task-3-report.md。
 本文件不宣称所有场景通过。Jazzy、Orin、实车、真实rosbag与RViz均NOT_RUN。
 源码、测试及本文可提交；运行日志、native库、地图、导出结果保留在工作树外。
+
+## 实际 QoS 证据
+
+验证器同时记录真实运行节点的publisher/subscription对象qos_profile，以及DDS发现端点的结构化QoS。
+Path生产发布者、标准follower订阅者要求RELIABLE/VOLATILE/KEEP_LAST/depth1；
+tf_static双方要求RELIABLE/TRANSIENT_LOCAL。所有记录绑定实际话题、node_name与方向。
+DDS发现可能不披露history/depth，此时保留UNKNOWN/null，用对应运行实体的真实profile补证；
+缺实体证据或已知QoS冲突均否决结果。此检查只在外部验收器，不改变产品准入、同步或控制逻辑。
+旧r1-r4只有QoS文本，不能追认已通过新增结构化QoS门禁。

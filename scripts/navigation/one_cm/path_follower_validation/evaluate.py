@@ -42,6 +42,8 @@ def analyze(folder,case,processes,error,stop):
              all(not w['surviving_pids'] and not w['terminated_pids'] for w in close[-1]['result']['workers'].values() if w)),
         paths=len(full),terminal=held(states,goal(case)),processes=processes,supervisor_error=error)
     result=grade(e)
+    entities=[entry for actor in (plant,follower,planner) for r in actor if r['kind']=='ENTITY_QOS' for entry in r['entities']]
+    result['checks']['dds_qos']=any(qos_valid(r,entities,case) for r in plant if r['kind']=='GRAPH')
     result['checks']['path_contract']=bool(full) and all(prior.path_valid(r['message'],local=True) for r in local)
     result['checks']['independent_plant']=any(r['kind']=='EXIT' and not r['forbidden'] for r in plant)
     result['checks']['zero_stamp_tf']=any(r['kind']=='TF' and r['stamp']==0 for r in plant)
@@ -76,3 +78,28 @@ def analyze(folder,case,processes,error,stop):
         maxima={k:max((abs(r[k]) for r in states),default=None) for k in ('v','w','a','alpha')},
         displacement=max((math.hypot(r['x'],r['y']) for r in states),default=0.))
     return prior.apply_supervision_gate(result,folder,error)
+
+def qos_valid(graph,entities,case):
+    # 历史与depth在DDS发现端点可能未知；深度必须由同一真实运行实体补证。
+    pairs=[(TOPICS['local'],'publishers','nav1cm_joint_plant' if case=='empty_smoke' else 'lunar_nav1cm_planner','VOLATILE',1),
+           (TOPICS['local'],'subscriptions','lunar_pure_wheeled_controller','VOLATILE',1),
+           ('/tf_static','publishers','nav1cm_joint_plant','TRANSIENT_LOCAL',None),
+           ('/tf_static','subscriptions','lunar_pure_wheeled_controller','TRANSIENT_LOCAL',None)]
+    if case!='empty_smoke':
+        pairs.extend([(TOPICS['global_route'],'publishers','lunar_nav1cm_planner','VOLATILE',1),
+                      ('/tf_static','subscriptions','lunar_nav1cm_planner','TRANSIENT_LOCAL',None)])
+    for topic,direction,node,durability,depth in pairs:
+        own=[r for r in entities if r['topic']==topic and r['direction']==direction and r['node_name']==node]
+        discovered=[r for r in graph.get(direction,{}).get(topic,[]) if r['node_name']==node]
+        if not own or not discovered:return False
+        for row in own:
+            q=row.get('qos',{})
+            if q.get('reliability')!='RELIABLE' or q.get('durability')!=durability:return False
+            if depth is not None and (q.get('depth')!=depth or q.get('history')!='KEEP_LAST'):return False
+        for row in discovered:
+            q=row.get('qos',{})
+            if q.get('reliability')!='RELIABLE' or q.get('durability')!=durability:return False
+            if depth is not None:
+                if q.get('history') not in ('KEEP_LAST','UNKNOWN'):return False
+                if q.get('depth') is not None and q['depth']!=depth:return False
+    return True
