@@ -173,3 +173,91 @@ TDD最小RED2失败/4通过、P3/native RED1失败；GREEN31通过，独立面�
 实际三包重建/CTest/Python与native身份完整回执见外部ART/task3-product-fix4-report.md。
 本次没有改C++/ABI、停止证书或参数、harness、默认及应用入口。
 新候选联合闭环、Jazzy、Orin、真实P3流/rosbag/实车NOT_RUN；独立复审和短联合验收交root。
+
+
+## 当前完整矩阵 r8 / F04（覆盖旧结果为当前验收状态）
+
+当前结论 **NEEDS_CONTEXT**：五例同次完整运行，4 PASS / obstacle FAIL；不具备默认切换条件。
+生产与harness冻结提交均86115024bc4073fe9ea767ee0b0a8fc6af8fd290，
+实际安装t3f04-build-r1；F04独立spec/quality PASS由root交接，452项包检查/50项Python身份由root复核。
+本次helper入口再逐文件核对安装Python及三个native SHA，实际各进程INSTALL/NATIVE_LOADED记录保留；
+产品从install加载，无source fallback。harness archive SHA256
+`e56476d74e3178c44762a66b4f271908918537d877b2db4702f1fd313298e1b1`。
+
+只执行一次：`task3_joint_humble.py task3-joint-r8 --cases forward_spin reverse obstacle mapchange empty_smoke --installed-label t3f04-build-r1`。
+保持45/20/48/34/12秒原场景、原障碍/goal/plant/容差/门禁；本轮未改任何harness或产品。
+Windows本机无ROS；实际运行环境KAI Ubuntu22.04/Humble/x86_64。完整raw已取回
+`ART/task3-joint-r8-result`，远端同label保留；helper进程session61658自然exit1。
+所有14角色exit0、无提前退出/升级信号/进程组残留，worker/map线程清理门禁均true。
+原r1..r7、F03恢复与历史失败原样保留。
+
+| 场景 | 结果 | 正式规划 / 非空local Path | 首次连续.3s终端hold(s) | 实际最终(x,y,yaw) | compute ms 中位 / P95 / max |
+| --- | --- | --- | --- | --- | --- |
+| forward_spin | PASS | 12 / 780 | 16.719487 | (1.910900311, 0.384290965, 0.572432970) | 0.558987 / 35.867488 / 100.288419 |
+| reverse | PASS | 1 / 340 | 8.598105 | (-0.702315255, 0.000000000, -0.000000000) | 0.563198 / 34.893200 / 77.194830 |
+| obstacle | FAIL | 16 / 886 | 未到达 | (1.096187999, 1.338832056, 0.040051461) | 1.023985 / 42.665533 / 106.431382 |
+| mapchange | PASS | 2 / 609 | 24.076510 | (2.504812339, 0.000000000, 0.000000000) | 6.212226 / 42.068312 / 108.937647 |
+| empty_smoke | PASS | 0 / 133 | 10.468737 | (0.704817684, 0.000000000, 0.000000000) | 5.575165 / 28.722916 / 71.577318 |
+
+compute统计来自各case实际solve_result diagnostics（n依次875/378/932/655/218），独立于到达/协议/安全门禁，不承诺50ms实时期限。
+forward原goal在16.719487s满足hold，38s恢复目标后42s停止planner，最终停在恢复运动途中，不能拿最终位姿计算原goal误差作为到达否决。
+真实worker延迟250.296542ms期间继续运动/滚动参考，停发陈旧Path停车门禁PASS。
+reverse负向速度门禁PASS；mapchange单goal、7..13s临时墙及17s .05→.03源分辨率均按原fixture执行且通过。
+empty_smoke为fixture注入Path/真实follower，正式planner计数0；summary formal=true是此smoke明确豁免，不能声称正式规划成功。
+前四场正式成功仍需0/PLAN_FOUND/has_reference=true及真实请求/接受身份匹配。
+
+所有case实际完整矩形SAT/角向连续扫掠、速度/加速度/行进曲率、结构化QoS、生产禁入独立plant、
+零stamp TF和私有命令/ROS图均PASS。DDS发现history/depth仍UNKNOWN/null，实体实际profile补证KEEP_LAST1/RELIABLE/VOLATILE，
+tf_static为TRANSIENT_LOCAL；无T5 publisher。
+各场最大|v|依次.199973702/.195432584/.198882692/.196092858/.194749526，
+最大|w|依次.531527150/近0/.907384938/0/0；最大a/alpha均不超.5。
+实际core.so仍为ROOT/install/core-humble-r1/lunar_incremental_navigation_core/lib/liblunar_incremental_navigation_core.so，
+SHA256 `0092ca1863b642f9bc0cbc7bb443b22446c26d1b29f153a3e217ce376e9bb4ec`。
+三个native依次terrain `ff300175aff7d80aba6d5b995ef21e39612a85fbeabde92ec5e5fd5f7033c3ef`、
+geometry `f8a2366727dad8775a5f2528d93cf5ad5ea18886e782f84f5e18f27cbfeefaa2`、
+distance_field `e79c02bc87ce67c70d1f788650fed7794d5efe68442897044aae38c6cbf45c4e`。
+
+### obstacle失败时间线与owner
+
+本轮故障是TRACKING_STALLED，MPPI_STOPPING_UNSAFE实际UPDATE计数0；不能混称旧r7停车证明失败。
+实际位移从旧r7约.00234m推进至1.730347m，但未越过x1.5，最终距goal1.505055498m。
+20..24.5s实际沿轨迹运动.758790984m、vmax.198882692，89非空/0空Path、33次LOCAL_ACCEPTED。
+t24.508362147957087首次从TRACKING变BRAKING：实测(1.0566821624098728,1.3372489491163821,yaw.040044254924018426)，
+v=.1957271252615095/w=.0008326115191740618，before.failure=None，dt=.049960818，
+now_s1793184823.4288917/state_age_s=.004807973；map origin[-1.4530346938214613,-1.1631401821319909]/res.01/revision409/epoch1。
+此时diagnostic distance_m=.7440259081226951、valid_samples/weighted_updates均0，compute_ms=.997006893；
+下一次before.failure明确TRACKING_STALLED。之后受限制动，最后非零运动t24.895861299941316。
+
+t24.90801115287468首次返回FAILED/TRACKING_STALLED，实测已停在
+(1.0961879990869865,1.3388320555347317,.040051461443987364)，v/w0；
+before.phase=BRAKING/failure=TRACKING_STALLED，dt=.050067737，now_s1793184823.8332012/state_age_s=.000544554，
+map origin[-1.403985671926278,-1.161174903964848]/res.01/revision422/epoch1。
+真实末12条history先有(.19331205,.00043358)、(.19335950,.00042089)、(.19387240,.00041786)、(.19572713,.00083261)，
+随后8条(0,0)；完整精确时钟/值见原follower.jsonl及派生audit first_failed，未清空history。
+此后463条UPDATE返回FAILED/TRACKING_STALLED，最后before.map revision424，origin[-1.4038120009130135,-1.1611679444652683]，
+now_s1793184846.921651/state_age_s=.01212123，最近12条真实history全0。
+
+| 连续时段(s) | 实际路程(m) | 最大|v| | 非空 / 空Path | LOCAL_ACCEPTED | UPDATE phase |
+| --- | --- | --- | --- | --- | --- |
+| 25..38 | 0 | 0 | 259 / 0 | 99 | FAILED 260条 |
+| 38..48 | 0 | 0 | 193 / 0 | 77 | FAILED 200条 |
+
+因此是持续非空参考/已接受局部候选下的锁停，不能解释为48s截止时仍合法前进但尚未到达。
+首次制动前最近收到local Path为t24.474408449s附近（monotonic1291150.382302832），94 poses，
+首(1.046965306,1.336859818)、末(1.800090551,1.367556034)，xy整体方向.040735900rad；
+这是最近收到的Path，不能等同内部activepath/anchor。
+最后收到local Path仍从实际停点伸向(1.831193115,1.368722240)，94点；
+最后正式GLOBAL_RESULT仍0/PLAN_FOUND/true、requested_goal[2.6,1.4]/goal_revision1/accepted_generation1，
+requested_epoch1/version45，最后局部sequence350/route_version23持续被接受。
+
+owner交原follower停滞/滚动进展状态维护，由root安排最小复现。
+源码线索为mppi.py:358–372固定anchor/travel点积超时，以及StandardPathFollower切段/接收参考时的anchor更新；
+此为定位假设。原raw没有no_progress_s、_last_pose或内部activepath方向，不能宣称已证实其根因，
+也没有新的停车cert拒绝原因可归因。本Task不跨owner修、不加时、不调fixture或阈值、不重新执行。
+
+派生审计保存在ART/task3-joint-r8-derived-audit.json，原始逐文件哈希为ART/task3-joint-r8-raw-sha256.json；
+分析脚本ART/task3-r8-audit.py，不覆盖summary/raw。由于非全PASS，本轮不交付到达图替代验收。
+未变源码无需重复core/QoS单测；历史609pass/1skip属于F04既有回执，本轮新增证据只有上述真实五场与文档diff检查。
+plant nominal_response_time_s=0理想有界执行模型边界保留；Jazzy、Orin、DDS跨机、真实P3流/rosbag/RViz及实车均NOT_RUN。
+处置为已提交待owner修复/独立审查及合入；默认/应用入口未改，未合并/推送/PR/删除，资源保留待回收。
+提交后本Task交回源码写入权给root，Task3仍NEEDS_CONTEXT。
