@@ -46,3 +46,10 @@
 - [ ] 主集成线HEAD/脏路径/索引核对；只提交本任务文件与来源清楚的晋级差量。
 - [ ] 只在无重叠时合入，前后核用户原有修改/未跟踪项；中央脏登记不覆盖，采用专题登记与台式共享入口。
 - [ ] 源码/台式登记记录已合入commit/RTF/验证层级；保留原worktrees、场景和全部新旧产物待回收。
+### Task 3: 按用户反馈恢复地形与岩石细节
+**Files:** Modify build_showcase.py、config/isaac_viper_showcase.yaml、tests/isaac_viper/test_showcase.py；README/本专题登记按实际验证更新。
+- 默认light改0.5m（8Mtri）、320tri岩石（cap512），新增uniform0p5m-rock320-v2；兼容旧1m/80和original冻结资产的门。
+- 地形单位顶点法线 + matte非金属regolith视觉材质；独立physics purpose不变，visual/collision同mesh。
+- 有意义的RED/GREEN：平面法线、岩石320拓扑/包络、版本与实际拓扑不符拒绝、旧版兼容；旧sensor/control/phase接口不改。
+- 实际PXR/旧新门/修改源前后SHA、新版有界传感运动与实图/RTF由root执行；新旧runtime快照分离，不覆盖现存GUI源码。
+- Task3独立task review + final whole-branch review后实际合入；不推送/删除，中央dirty登记保护不变。
