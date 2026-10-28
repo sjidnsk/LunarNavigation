@@ -41,3 +41,5 @@
 实际v1截图还显示平面三角分面和地面高光，故在新版地形补单位顶点平滑法线，并绑定高粗糙度非金属灰色regolith视觉材质。物理仍使用同一新三角mesh，GroundContact与Tire的physics purpose绑定及系数不变，VIPER精细外观/纹理不变。此修订不加新的传感档位、不接算法、不调控制/clock/dt。
 
 light API/CLI可沿用，默认质量由config选新版；validate_showcase必须按受支持且一致的version/spacing/rock实际拓扑验证新版，同时继续接受已冻结的uniform1m-rock80-v1和original-source-v1。不能凭任意metadata放松网格检查。新版实际构建/单位法线/视觉材质与碰撞门PXR验证，再检查实图与实际RTF；旧1m的6sim运动与制动已通过，但新版几何必须单独实际验证，不复用该动态通过声明。
+
+补充显示取舍：root 实际查看时旧 960×540 viewport texture 被 4K 最大化窗口放大，故新版默认展示纹理提高为 1280×720；现有 runner 从 quality_settings.viewport_size 读取。双目传感器仍为 640×480@15Hz，此 UI 调整不改变传感器配置。新版 0.5m/320tri、平滑哑光材质与 1280×720 组合须独立测量 RTF，不能从旧版倍率外推。

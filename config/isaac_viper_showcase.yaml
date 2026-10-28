@@ -1,10 +1,11 @@
 # 仅场景几何和显示设置；传感器/车辆始终从 isaac_viper.yaml 读取。
 schema: lunar.viper-showcase-quality.v1
 quality: light
-geometry_version: uniform1m-rock80-v1
-terrain_spacing_m: 1.0
-rock_max_triangles: 128
-viewport_size: [960, 540]
+geometry_version: uniform0p5m-rock320-v2
+terrain_spacing_m: 0.5
+rock_max_triangles: 512
+rock_triangles_each: 320
+viewport_size: [1280, 720]
 initial_view: vehicle
 lighting_note: Inspection artificial fill lighting
 annotation_policy: viewport_ui_only_no_sensor_geometry
