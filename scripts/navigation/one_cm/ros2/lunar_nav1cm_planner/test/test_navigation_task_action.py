@@ -117,3 +117,51 @@ def test_action_client_goal_feedback_cancel_replace_and_shutdown():
         assert not result['threads_alive']
         client.destroy(); node.destroy_node(); client_node.destroy_node()
         executor.shutdown(); rclpy.shutdown()
+
+
+def test_action_main_sigint_delivers_result_before_destroy():
+    """pending清空不代表GetResult发送回调已执行，关闭必须保留传输排空窗口。"""
+    rclpy = pytest.importorskip('rclpy')
+    import subprocess
+    import signal
+    from rclpy.action import ActionClient
+    from rclpy.node import Node
+    from lunar_planning_msgs.action import NavigateToPose
+    code = f'''
+import sys
+sys.path.insert(0, {str(Path(__file__).parent)!r})
+from test_runtime import build_runtime
+from rclpy.parameter import Parameter
+import lunar_nav1cm_planner.task_node as module
+Real = module.NavigationTaskNode
+def factory(*args):
+    _, session, _, _ = build_runtime()
+    return session, None
+module.NavigationTaskNode = lambda: Real(resource_factory=factory, parameter_overrides=[
+    Parameter('build_dir', value='/tmp/nav1cm-unused-test'),
+    Parameter('action_name', value='/nav1cm_task1_sigint_test/navigate'),
+    Parameter('local_path_topic', value='/nav1cm_task1_sigint_test/local'),
+    Parameter('global_route_topic', value='/nav1cm_task1_sigint_test/global')])
+module.main()
+'''
+    child = subprocess.Popen([sys.executable, '-c', code], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    rclpy.init()
+    node = Node('task1_sigint_regression_client')
+    client = ActionClient(node, NavigateToPose, '/nav1cm_task1_sigint_test/navigate')
+    try:
+        assert client.wait_for_server(timeout_sec=5.)
+        sent = client.send_goal_async(NavigateToPose.Goal(target_y_m=3., has_target_yaw=True))
+        rclpy.spin_until_future_complete(node, sent, timeout_sec=3.)
+        handle = sent.result()
+        assert handle.accepted
+        result = handle.get_result_async()
+        child.send_signal(signal.SIGINT)
+        rclpy.spin_until_future_complete(node, result, timeout_sec=5.)
+        assert result.done(), 'SIGINT退出前必须发送活动Action结果'
+        assert result.result().result.reason_code == 'SHUTDOWN'
+        output, _ = child.communicate(timeout=3.)
+        assert child.returncode == 0, output
+    finally:
+        client.destroy(); node.destroy_node(); rclpy.shutdown()
+        if child.poll() is None:
+            child.terminate(); child.wait(timeout=3.)
