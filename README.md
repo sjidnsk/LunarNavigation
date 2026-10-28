@@ -678,9 +678,9 @@ CycloneDDS 与外部 P4 runtime 配置，本文未把测试台式结果当作硬
 
 应用 planner/follower 共用 app `wheel_orin.yaml`，保留 `.2 m/s`、`.1 rad/s`、
 位置 `.1 m`、航向 `.02 rad` 和 nominal response `.15 s`；通用 wheel 配置仍保留
-minimum_clearance `.4 m`。显式旧模式：硬件脚本附加 `incremental_v2`；普通脚本第五参数
+minimum_clearance 按用户最新要求统一为 `.2 m`。显式旧模式：硬件脚本附加 `incremental_v2`；普通脚本第五参数
 `incremental_v2`，足式仍使用旧入口。
 
-应用自己的 Humble core/native 已重建，受影响六包1244检查和配置14检查通过；私有命令的
-forward45s/obstacle75s 严格 profile 通过，均正常退出。细分辨率超补全预算时仅关闭推断，
-保留实测物理判定与真缺测 UNKNOWN。Jetson Orin、真实车辆、生产DDS、真实硬件脚本运行均 NOT_RUN。
+应用自己的 Humble core/native 已重建，最终受影响三包923检查通过；统一0.2 m净空的原45/75秒短例与最终完整1 cm缓坡20秒短程闭环通过。
+细源图保留实测物理判定、真实UNKNOWN和未证区域scalar回退。两项最终Important均经独立复审关闭，已合入app owner；
+Jetson Orin、真实车辆、生产DDS、真实硬件脚本运行均NOT_RUN。详见[集成收尾](docs/validation/2026-10-29-nav1cm-final-integration.md)。
