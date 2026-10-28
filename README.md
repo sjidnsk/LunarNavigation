@@ -666,3 +666,21 @@ ros2 run lunar_incremental_controller_demo run_case --case rolling_straight \
 | `jetson_agx` | `NOT_RUN` | 未执行 Jetson AGX Orin 原生构建、性能、功耗或稳定性验收。 |
 | `historical_missing_global_bag` | `HISTORICAL_SUBSET_ONLY` | 历史记录中的 bag 缺少 `/Car/T3/mapping/global_overview`，仅可作为 `LAVA_TUBE` 局部输入子集；本轮未找到其 metadata，未实际回放。 |
 | `synthetic_global` | `FORBIDDEN` | 禁止生成或使用假全局图；不得用合成、零填充或局部图替代真实 `/Car/T3/mapping/global_overview`；月表验收仍需实机在线全局总览，或重新录制并核验包含该 Topic 的 rosbag。 |
+
+
+### 轮式导航入口（NAV-1CM Task4）
+
+`bash scripts/orin/start_navigation.sh wheel false` 与硬件源码入口
+`bash scripts/orin/start_hardware_navigation.sh` 默认选择 `nav1cm_wheel.launch.py`，
+只启动导航，不自动启用控制器或探索。新模式直接接收 P3 GridMap 并发布标准 Path；
+P3 和 `/P4/input/map_to_odom` TF 输入仍需独立启动。硬件入口保留 domain 59、
+CycloneDDS 与外部 P4 runtime 配置，本文未把测试台式结果当作硬件验收。
+
+应用 planner/follower 共用 app `wheel_orin.yaml`，保留 `.2 m/s`、`.1 rad/s`、
+位置 `.1 m`、航向 `.02 rad` 和 nominal response `.15 s`；通用 wheel 配置仍保留
+minimum_clearance `.4 m`。显式旧模式：硬件脚本附加 `incremental_v2`；普通脚本第五参数
+`incremental_v2`，足式仍使用旧入口。
+
+应用自己的 Humble core/native 已重建，受影响六包1244检查和配置14检查通过；私有命令的
+forward45s/obstacle75s 严格 profile 通过，均正常退出。细分辨率超补全预算时仅关闭推断，
+保留实测物理判定与真缺测 UNKNOWN。Jetson Orin、真实车辆、生产DDS、真实硬件脚本运行均 NOT_RUN。

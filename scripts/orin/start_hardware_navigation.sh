@@ -14,6 +14,14 @@ export ROS_LOG_DIR="$runtime_dir/log" TMPDIR="$runtime_dir/tmp" PYTHONDONTWRITEB
 if [[ -z "${CYCLONEDDS_URI:-}" ]]; then
   export CYCLONEDDS_URI="$(sed "s@/tmp/cdds_@$runtime_dir/cdds_@g" /home/yanfa/program/cyclonedds.xml)"
 fi
-exec ros2 launch lunar_pure_exploration_ros exploration_navigation.launch.py \
-  config_file:="$repository_root/config/orin_hardware.yaml" \
-  stack_mode:=incremental_v2 start_navigation:=true start_exploration:=false start_rviz:=false
+mode="${1:-${LUNAR_NAVIGATION_MODE:-nav1cm}}"
+case "$mode" in
+  nav1cm)
+    exec ros2 launch lunar_pure_wheeled_controller nav1cm_wheel.launch.py \
+      start_controller:=false start_rviz:=false tf_topic:=/P4/input/map_to_odom ;;
+  incremental_v2)
+    exec ros2 launch lunar_pure_exploration_ros exploration_navigation.launch.py \
+      config_file:="$repository_root/config/orin_hardware.yaml" \
+      stack_mode:=incremental_v2 start_navigation:=true start_exploration:=false start_rviz:=false ;;
+  *) echo '未知导航模式：仅支持 nav1cm 或 incremental_v2' >&2; exit 2 ;;
+esac

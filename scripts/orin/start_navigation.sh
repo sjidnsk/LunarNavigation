@@ -4,7 +4,7 @@ platform_type="${1:-wheel}"
 use_sim_time="${2:-false}"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # 保留四个历史位置参数；第五个参数显式选择旧栈。
-stack_mode="${5:-${LUNAR_NAVIGATION_MODE:-incremental_v2}}"
+stack_mode="${5:-${LUNAR_NAVIGATION_MODE:-nav1cm}}"
 if [[ "$platform_type" == legged && $# -lt 5 ]]; then stack_mode=incremental_v2; fi
 source "${ROS_SETUP:-/opt/ros/humble/setup.bash}"
 source "${LUNAR_INSTALL_ROOT:-$repository_root/ros2_ws/install}/setup.bash"
