@@ -39,7 +39,8 @@ def run(args):
         return result
     node._executor.update=observe
     try:
-        rclpy.spin(node)
+        from nav1cm.ros_lifecycle import spin_until_sigint
+        spin_until_sigint(node)
     except KeyboardInterrupt:
         pass
     finally:

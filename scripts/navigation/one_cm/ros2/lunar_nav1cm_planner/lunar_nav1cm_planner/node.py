@@ -137,8 +137,8 @@ def main(args=None):
     node = None
     try:
         node = PlannerNode()
-        while rclpy.ok():
-            rclpy.spin_once(node, timeout_sec=.1)
+        from nav1cm.ros_lifecycle import spin_until_sigint
+        spin_until_sigint(node)
     except KeyboardInterrupt:
         pass
     finally:

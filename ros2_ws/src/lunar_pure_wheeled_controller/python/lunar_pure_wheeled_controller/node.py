@@ -896,7 +896,8 @@ def main() -> None:
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = PureWheeledControllerNode()
     try:
-        rclpy.spin(node)
+        from nav1cm.ros_lifecycle import spin_until_sigint
+        spin_until_sigint(node)
     except KeyboardInterrupt:
         pass
     finally:
