@@ -82,5 +82,8 @@
 - 先将已运行的脚本固化到 `scripts/isaac_midterm/`，保留原有几何和预览实现，仅增加明确的输入/输出参数；验证器不再改写 USD 或生成器源码。
 - 本地三项 `--help` 和三份 Python AST 检查通过；台式六项检查全部通过，重建 USD 与已预览版本哈希一致。
 - 验证回执：`/mnt/data/WS/lunar-navigation/analysis-artifacts/isaac-polar-midterm-merge-20261029-051233/merge-validation.json`。
-- 主工作区索引为空，14 个已修改路径中仅共享任务登记涉及本任务。先仅合并七个新文件，再将本任务登记段作为独立收尾提交，保留原有未提交内容。
+- 主工作区索引为空，14 个已修改路径中仅共享任务登记涉及本任务。先仅合并本任务的场景文件与保护回归测试，再将本任务登记段作为独立收尾提交，保留原有未提交内容。
 - 该工作树由应用管理且含继承改动，合并后保留，不执行分支、工作树或产物删除；最终落地提交记录在统一任务登记。
+- 合并前独立审阅的唯一 Important：旧预览图片目录缺少状态文件时可被复用。新增 `tests/test_isaac_midterm_preview_cli.py`，先实际得到 1 失败 / 1 通过，再改为拒绝已有目录并排他创建，最终 2 项通过。
+- 修复版台式七项静态检查与五个产物哈希通过；回执位于 `/mnt/data/WS/lunar-navigation/analysis-artifacts/isaac-polar-midterm-merge-20261029-052207/merge-validation.json`。
+- 文档中的 Isaac 启动命令使用绝对脚本路径；新参数化版本没有在本轮重新启动 GUI，保留这项验证边界。

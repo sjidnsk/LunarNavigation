@@ -11,12 +11,12 @@ VIEW=args.output_dir.resolve()
 STATUS=VIEW/'stage-status.json'
 if not Path(SCENE).is_file():
     parser.error('指定的标注场景不存在')
-if STATUS.exists():
-    parser.error('预览回执已经存在，请使用新的 output-dir')
+if VIEW.exists():
+    parser.error('预览目录已经存在，请使用新的 output-dir')
 if args.dry_run:
     print(json.dumps({'scene':SCENE,'output_dir':str(VIEW),'preview_only':True,'will_start_simulation':False},ensure_ascii=False))
     raise SystemExit(0)
-VIEW.mkdir(parents=True,exist_ok=True)
+VIEW.mkdir(parents=True,exist_ok=False)
 import omni.usd,omni.kit.app
 def report(**data):
     STATUS.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')

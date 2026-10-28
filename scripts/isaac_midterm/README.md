@@ -18,9 +18,10 @@
 在仓库根目录执行，`OUT` 必须指向本次任务自己的新目录：
 
 ```bash
+REPO_ROOT="$PWD"
 OUT=/mnt/data/WS/lunar-navigation/analysis-artifacts/isaac-polar-midterm-20261029
-/usr/bin/python3 -s scripts/isaac_midterm/prepare_regions.py \
-  --regions docs/simulation/isaac-polar-v02-midterm-regions.json \
+/usr/bin/python3 -s "$REPO_ROOT/scripts/isaac_midterm/prepare_regions.py" \
+  --regions "$REPO_ROOT/docs/simulation/isaac-polar-v02-midterm-regions.json" \
   --output-dir "$OUT"
 ```
 
@@ -37,7 +38,7 @@ USD_EXT="$ISAAC_ROOT/extscache/omni.usd.libs-1.0.3+f9bf0dda.lx64.r.cp312"
 PYTHONNOUSERSITE=1 \
 PYTHONPATH="$USD_EXT${PYTHONPATH:+:$PYTHONPATH}" \
 LD_LIBRARY_PATH="$USD_EXT/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-  "$ISAAC_ROOT/python.sh" scripts/isaac_midterm/verify_regions.py --output-dir "$OUT"
+  "$ISAAC_ROOT/python.sh" "$REPO_ROOT/scripts/isaac_midterm/verify_regions.py" --output-dir "$OUT"
 ```
 
 解析通过只证明标注结构、坐标和身份。资源组合、感知、车辆运动与闭环仍需分别验证。
@@ -48,7 +49,7 @@ LD_LIBRARY_PATH="$USD_EXT/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 先检查参数；这一步不创建目录或打开 GUI：
 
 ```bash
-/usr/bin/python3 -s scripts/isaac_midterm/preview_regions.py \
+/usr/bin/python3 -s "$REPO_ROOT/scripts/isaac_midterm/preview_regions.py" \
   --scene "$OUT/Midterm_Polar_V02_Regions.usda" \
   --output-dir "$OUT/view-01" --dry-run
 ```
@@ -56,13 +57,13 @@ LD_LIBRARY_PATH="$USD_EXT/bin${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 然后从台式桌面终端启动新的窗口：
 
 ```bash
-"$ISAAC_ROOT/isaac-sim.sh" --exec scripts/isaac_midterm/preview_regions.py \
+"$ISAAC_ROOT/isaac-sim.sh" --exec "$REPO_ROOT/scripts/isaac_midterm/preview_regions.py" \
   --scene "$OUT/Midterm_Polar_V02_Regions.usda" --output-dir "$OUT/view-01"
 ```
 
 该命令启动新进程；不要在持有他人未保存场景的现有进程中手工执行脚本。
 左侧按钮切换总览、A 岩石绕障、B 陨坑坡地、C 自主探索视角。状态保存在指定 `view-01/stage-status.json`，
-纯场景缓冲图保存为 `regions-viewport.png`；这不是桌面截图。已有回执目录会拒绝再次使用。
+纯场景缓冲图保存为 `regions-viewport.png`；这不是桌面截图。已有预览目录会被拒绝，包含只有旧图片而没有状态文件的部分恢复目录。
 
 标注和出生点是选区预览内容，边界本身不执行区域限制。无碰撞或 `guide` 不单独证明 RTX 雷达已排除标注。
 正式感知采集使用干净月球车入口，视频中的区域边界从区域 JSON 后期叠加。
