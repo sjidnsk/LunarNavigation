@@ -131,6 +131,40 @@ def prepare_runtime_stage(source_path, runtime_path):
     return legacy_products, comparison
 
 
+def publish_sensor_frame(sensors, bridge, stage, output, saved_samples, status):
+    """只拆分既有render后管线，首份NPZ与传感器读回/发布分别计时。"""
+    import numpy as np
+    from tools.isaac_viper.ros_bridge import PhaseTimings
+    from tools.isaac_viper.sensors import active_render_products
+    timing = PhaseTimings(('active_products', 'camera_readback', 'lidar_readback',
+                           'npz_first_only', 'camera_pack_publish', 'lidar_pack_publish'))
+    with timing.measure('active_products'):
+        status['active_render_products'] = active_render_products(stage)
+        status['render_products_after_final_camera_setup'] = True
+    with timing.measure('camera_readback'):
+        camera_samples = sensors.camera_samples()
+    with timing.measure('lidar_readback'):
+        lidar_sample = sensors.lidar_sample()
+    for side, (capture_time, rgb, depth, sample_timing) in camera_samples.items():
+        if side not in saved_samples:
+            with timing.measure('npz_first_only'):
+                np.savez_compressed(output/f'first-{side}-camera.npz',
+                    rgb=rgb, depth=depth, simulation_time=capture_time,
+                    camera_k=bridge.k)
+                saved_samples.add(side)
+    if lidar_sample is not None and 'lidar' not in saved_samples:
+        with timing.measure('npz_first_only'):
+            capture_time, xyz, flags = lidar_sample
+            np.savez_compressed(output/'first-lidar.npz', xyz=xyz,
+                flags=flags, simulation_time=capture_time)
+            saved_samples.add('lidar')
+    with timing.measure('camera_pack_publish'):
+        camera_timing = bridge.cameras(camera_samples)
+    with timing.measure('lidar_pack_publish'):
+        lidar_timing = bridge.lidar(lidar_sample)
+    return {'phase_ms':timing.ms, 'camera_phase_ms':camera_timing, 'lidar_phase_ms':lidar_timing}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stage', required=True)
@@ -390,27 +424,12 @@ def main():
                 render_done_wall = time.monotonic()
                 if lifecycle.stop_latched:
                     continue
-                status['active_render_products'] = active_render_products(stage)
-                status['render_products_after_final_camera_setup'] = True
-                camera_samples = sensors.camera_samples()
-                lidar_sample = sensors.lidar_sample()
-                for side, (capture_time, rgb, depth, timing) in camera_samples.items():
-                    if side not in saved_samples:
-                        np.savez_compressed(output/f'first-{side}-camera.npz',
-                            rgb=rgb, depth=depth, simulation_time=capture_time,
-                            camera_k=bridge.k)
-                        saved_samples.add(side)
-                if lidar_sample is not None and 'lidar' not in saved_samples:
-                    capture_time, xyz, flags = lidar_sample
-                    np.savez_compressed(output/'first-lidar.npz', xyz=xyz,
-                        flags=flags, simulation_time=capture_time)
-                    saved_samples.add('lidar')
-                bridge.cameras(camera_samples)
-                bridge.lidar(lidar_sample)
+                sensor_timing = publish_sensor_frame(sensors, bridge, stage, output, saved_samples, status)
                 record({'event':'render_timing', 'time':stamp,
                     'render_start_wall':render_start_wall, 'render_done_wall':render_done_wall,
                     'sensor_publish_done_wall':time.monotonic(), 'last_rx_wall':bridge.last_rx_wall,
-                    'rx_sequence_before':render_rx_sequence_before, 'rx_sequence_after':bridge.rx_count})
+                    'rx_sequence_before':render_rx_sequence_before, 'rx_sequence_after':bridge.rx_count,
+                    **sensor_timing})
                 next_render += 1/15
             if stamp-last_status >= 1:
                 status.update(sim_time=stamp, wall_elapsed_s=time.monotonic()-wall_start,
