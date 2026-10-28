@@ -242,4 +242,3 @@ def test_native_swept_wall_rotation_braking_and_unknown_truth():
     check([0,0,0,.2,0,0],[],.2,cells,'forward','VALID',True)
     cells=np.zeros((500,500),dtype=np.int8)
     check([1.87,0,0,.2,0,0],[],.2,cells,'forward','BRAKING_OUT_OF_BOUNDS')
-

@@ -1,0 +1,4 @@
+
+# Keep portable navigation source and executable entrypoints in LF.
+scripts/navigation/one_cm/** text=auto eol=lf
+tests/navigation/one_cm/** text=auto eol=lf
