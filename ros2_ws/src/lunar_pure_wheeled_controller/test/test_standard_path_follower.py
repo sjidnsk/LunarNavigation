@@ -296,3 +296,76 @@ def test_safe_first_command_cannot_certify_later_continuous_reversal(route):
         costs=np.array([0.,1.]) if route=='fallback' else None
         valid,_=e._certify_sequences(state,sequences,.05,costs=costs)
         assert valid.tolist()==[False,True]
+
+
+@pytest.mark.parametrize('cause',['unknown_map','pending_history'])
+def test_transient_stopping_failure_recovers_only_after_real_conditions_change(cause):
+    e=follower()
+    e.policy=replace(e.policy,control_response_time_s=.15)
+    path=((0.,0.,0.),(0.,0.,.6));e.set_standard_path(path)
+    state=TrackingState(0.,0.,0.)
+    if cause=='unknown_map':e.set_map(GridMap(np.zeros((100,100),np.uint8),.1,(-5.,-5.)))
+    else:e.note_command(.02,.2,0.)  # real queued target, not safe merely because feedback is stopped
+    r=e.update(state,.05,now_s=.05)
+    assert e.failure=='MPPI_STOPPING_UNSAFE'
+    history=[(t,u.copy()) for t,u in e._command_history]
+    for i in range(2):
+        e.set_standard_path(path,identity=i)
+        r=e.update(state,.05,now_s=.06+i*.01)
+        assert e.failure=='MPPI_STOPPING_UNSAFE'
+        assert e.diagnostics['stop_certified'] is False
+        assert e.diagnostics['measured_stopped'] is True
+        assert r.command.linear_x_mps==r.command.angular_z_radps==0.
+    assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
+    before=e.no_progress_s
+    e.set_map(GridMap(np.ones((100,100),np.uint8),.1,(-5.,-5.)))
+    # A published zero and elapsed delay drain the queue; retain every historical record.
+    e.note_command(0.,0.,.1)
+    r=e.update(state,.05,now_s=.5)
+    assert e.failure is None and r.command.angular_z_radps>0.
+    assert e.no_progress_s>=before
+    assert len(e._command_history)>=len(history)+1
+    for i in range(100):
+        e.note_command(r.command.linear_x_mps,r.command.angular_z_radps,.5+i*.05)
+        w=state.angular_radps+float(np.clip(r.command.angular_z_radps-state.angular_radps,-.025,.025))
+        assert r.command.linear_x_mps==0.
+        state=TrackingState(0.,0.,state.yaw_rad+w*.05,0.,w)
+        r=e.update(state,.05,now_s=.55+i*.05)
+    assert abs(state.yaw_rad-.6)<.05 and abs(state.angular_radps)<=.01
+
+
+@pytest.mark.parametrize('fault',['INVALID_STATE','TRACKING_STALLED'])
+def test_fresh_standard_path_does_not_clear_hard_fault(fault):
+    e=follower(no_progress_timeout_s=.1);path=((0.,0.,0.),(1.,0.,0.));e.set_standard_path(path)
+    if fault=='INVALID_STATE':e.update(TrackingState(float('nan'),0.,0.),.05)
+    else:
+        for _ in range(5):tick(e,TrackingState(0.,0.,0.))
+    assert e.failure==fault
+    elapsed=e.no_progress_s
+    e.set_standard_path(path,identity=99)
+    r=e.update(TrackingState(0.,0.,0.),.05)
+    assert e.failure==fault and r.command.linear_x_mps==r.command.angular_z_radps==0.
+    assert e.no_progress_s>=elapsed
+
+
+def test_recovery_certifies_measured_motion_without_fabricating_a_stop():
+    e=follower();e.set_standard_path(((0.,0.,0.),(2.,0.,0.)))
+    e.set_map(GridMap(np.zeros((100,100),np.uint8),.1,(-5.,-5.)))
+    state=TrackingState(0.,0.,0.,.1,.05)
+    e.note_command(.1,.05,0.)
+    r=e.update(state,.05,now_s=.05)
+    assert e.failure=='MPPI_STOPPING_UNSAFE' and r.phase=='BRAKING'
+    history=[(t,u.copy()) for t,u in e._command_history]
+    e.set_map(GridMap(np.ones((100,100),np.uint8),.1,(-5.,-5.)))
+    r=e.update(state,.05,now_s=.1)
+    assert e.failure is None
+    assert e.diagnostics['stop_certified'] is True
+    assert e.diagnostics['measured_stopped'] is False
+    assert len(e._command_history)==len(history)
+    assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
+    assert state.linear_mps==.1 and state.angular_radps==.05
+    v,w=state.linear_mps,state.angular_radps
+    for _ in range(50):
+        v+=float(np.clip(r.command.linear_x_mps-v,-.0005,.0005))
+        w+=float(np.clip(r.command.angular_z_radps-w,-.0005,.0005))
+        if abs(v)>1e-8:assert abs(w)<=abs(v)+1e-8

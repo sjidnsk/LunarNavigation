@@ -313,6 +313,10 @@ class MppiExecutor:
         p=self.policy
         return -1 if p.allow_reverse and abs(angle(desired-state.yaw_rad))>math.pi*.5 else 1
 
+    def _recover_failure(self,state):
+        # 旧接口保留锁存故障语义；有恢复策略的执行模式显式覆盖。
+        pass
+
     def update(self,state,dt,now_s=None,state_age_s=0.):
         started=time.perf_counter();p=self.policy;c=self.config
         self.diagnostics={'valid_samples':0,'weighted_updates':0}
@@ -324,6 +328,7 @@ class MppiExecutor:
         # knots retain the fixed model interval. Publication uses the same cap.
         self._first_target_step=min(dt,c.model_dt)
         if self.path is None:return self._result()
+        if self.failure:self._recover_failure(state)
         if self.failure:
             self.phase='FAILED' if self._stopped(state) else 'BRAKING';return self._result()
         if self.requires_map and self.map is None:self.phase='WAITING';return self._result()
@@ -427,6 +432,7 @@ class MppiExecutor:
             if not self.requires_map or self._brake_safe(state,np.zeros((1,2)),c.model_dt)[0]:
                 self.phase='BRAKING'
                 return self._result()
+            self.diagnostics.update(stop_certified=False,measured_stopped=self._stopped(state))
             self.failure='MPPI_STOPPING_UNSAFE';self.phase='FAILED' if self._stopped(state) else 'BRAKING';return self._result()
         # _certify_sequences already certified this exact projected first target
         # with the same state, map, history and interval. No mutation of those

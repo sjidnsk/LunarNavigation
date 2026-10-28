@@ -31,6 +31,18 @@ class StandardPathFollower(MppiPathFollower):
         self._stop_reason=str(reason);self._pending=None
         self.discard_prediction()
 
+    def _recover_failure(self,state):
+        if self.failure!='MPPI_STOPPING_UNSAFE':return
+        # 调用点已验证最新反馈与时间；实测静止不能代替延迟队列/完整尾部证书。
+        certified=(self.map is not None and
+            bool(self._brake_safe(state,np.zeros((1,2)),self.config.model_dt)[0]))
+        self.diagnostics.update(stop_certified=certified,measured_stopped=self._stopped(state),
+            stopping_retry=True)
+        if certified:
+            self.failure=None
+            self.diagnostics['recovered_failure']='MPPI_STOPPING_UNSAFE'
+        # 不修改真实速度、已发布指令历史、游标、物理进度锚点或停滞时钟。
+
     def _travel_direction(self, state, desired):
         return self._stages[self._stage_index].direction or 1
 
