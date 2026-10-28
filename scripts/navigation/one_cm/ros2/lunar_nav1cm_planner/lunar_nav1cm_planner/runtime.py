@@ -23,7 +23,9 @@ class PlannerRuntime:
         self.notice = notice or (lambda *args: None)
         self.map_frame = map_frame
         self.event_sink = event_sink or (lambda event: None)
-        self.tasks = NavigationTaskCoordinator(session, event_sink=lambda event: self.event_sink(event))
+        # task事件先由唯一tick线程入内部队列；外部sink不得在输入锁内重入。
+        self._task_events = deque()
+        self.tasks = NavigationTaskCoordinator(session, event_sink=self._task_events.append)
         self._odometry_sequence = self._observed_odometry_sequence = 0
         self._condition = threading.Condition()
         self._transforms = LatestTransforms()
@@ -118,6 +120,11 @@ class PlannerRuntime:
             self._notice('MAP_APPLIED', json.dumps({'epoch': snapshot.epoch,
                          'source_resolution_m': getattr(self.map_store, 'source_resolution_m', None)}, sort_keys=True))
 
+    def _deliver_task_events(self):
+        # 事件已提交；外部回调引入的新输入严格排在该提交之后。
+        while self._task_events:
+            self.event_sink(self._task_events.popleft())
+
     def _tick_once(self, now_s):
         with self._condition:
             world, odometry = self._world, self._odometry
@@ -138,7 +145,7 @@ class PlannerRuntime:
                 pending = [item for item in unresolved if item[2] == task_id]
                 unresolved = [item for item in unresolved if item[2] != task_id]
                 if not self.tasks.cancel(task_id, now_s) and pending:
-                    self.event_sink(TaskSnapshot(task_id, 0, 'FINISHED', 'CANCELED', 'CANCELED_BEFORE_ACCEPTANCE'))
+                    self._task_events.append(TaskSnapshot(task_id, 0, 'FINISHED', 'CANCELED', 'CANCELED_BEFORE_ACCEPTANCE'))
                 continue
             try:
                 goal = ((message.target_x_m, message.target_y_m,
@@ -166,15 +173,21 @@ class PlannerRuntime:
             if item[0] > self._last_accepted_input:
                 remaining.append(item)
             elif item[2] is not None:
-                self.event_sink(TaskSnapshot(item[2], 0, 'FINISHED', 'CANCELED', 'GOAL_REPLACED'))
+                self._task_events.append(TaskSnapshot(item[2], 0, 'FINISHED', 'CANCELED', 'GOAL_REPLACED'))
         with self._condition:
             self._goals.extendleft(reversed(remaining))
+        self._deliver_task_events()
         packet = self.session.tick(now_s)
+        proposal = self.tasks.observe(packet, now_s,
+                                      state_updated=odometry_sequence != self._observed_odometry_sequence,
+                                      defer_commit=True)
         with self._condition:
-            observation_current = input_sequence == self._goal_sequence
-        if observation_current:
-            self.tasks.observe(packet, now_s, state_updated=odometry_sequence != self._observed_odometry_sequence)
+            # 校验、状态转换和内部事件提交是同一个线性化点；先入队的输入否决旧提案。
+            # 此处仅赋值/内部deque.append，不执行可重入的用户回调。
+            if not self._stopping and input_sequence == self._goal_sequence:
+                self.tasks.commit_observation(proposal)
         self._observed_odometry_sequence = odometry_sequence
+        self._deliver_task_events()
         if packet.result is not None:
             result = packet.result
             grid = result.grid

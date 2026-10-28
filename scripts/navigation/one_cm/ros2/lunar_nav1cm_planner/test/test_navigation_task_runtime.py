@@ -60,3 +60,115 @@ def test_cancel_queued_during_tick_blocks_old_publication():
     session.tick = tick
     runtime._tick_once(.1)
     assert session.goal is None and published[-1].global_route.poses == ()
+
+
+def odometry_at_goal(speed=0.):
+    return NS(header=NS(frame_id='map'), pose=NS(pose=pose().pose),
+              twist=NS(twist=NS(linear=NS(x=speed), angular=NS(z=0.))))
+
+
+def arriving_runtime():
+    runtime, session, published, logs = build_runtime()
+    events = []
+    runtime.event_sink = events.append
+    runtime.offer_managed_goal('a', managed(0., 0.))
+    runtime.offer_odometry(odometry_at_goal())
+    runtime._tick_once(0.)
+    return runtime, session, events
+
+
+def assert_cancel_brakes_then_finishes(runtime, session, events):
+    # 排队取消之后实测又在运动，不能把旧停止观测当取消完成。
+    runtime.offer_odometry(odometry_at_goal(.2))
+    packet = runtime._tick_once(.45)
+    assert session.goal is None and session.canceling
+    assert packet.candidate.source == 'brake'
+    assert runtime.tasks.active.phase == 'CANCELING'
+    assert runtime.tasks.active.outcome is None
+    runtime.offer_odometry(odometry_at_goal())
+    runtime._tick_once(.5)
+    assert runtime.tasks.active.outcome == 'CANCELED'
+    assert not any(event.outcome == 'GOAL_REACHED' for event in events)
+
+
+def test_cancel_after_observation_entry_cannot_commit_old_arrival():
+    """审查I1的确定性交错：guard以后、observe内部执行以前重入cancel。"""
+    runtime, session, events = arriving_runtime()
+    original = runtime.tasks.observe
+    def cancel_after_guard(packet, now_s, **kwargs):
+        runtime.request_cancel('a')
+        assert runtime.tasks.active.outcome is None
+        return original(packet, now_s, **kwargs)
+    runtime.tasks.observe = cancel_after_guard
+    runtime.offer_odometry(odometry_at_goal())
+    runtime._tick_once(.4)
+    runtime.tasks.observe = original
+    assert not any(event.outcome == 'GOAL_REACHED' for event in events)
+    assert_cancel_brakes_then_finishes(runtime, session, events)
+
+
+def test_input_thread_enqueues_cancel_before_observation_commit():
+    """实际输入线程在确定性的计算交接点入队，不用压力循环猜测调度。"""
+    import threading
+    runtime, session, events = arriving_runtime()
+    entered, continue_observe, enqueued = threading.Event(), threading.Event(), threading.Event()
+    errors = []
+    original = runtime.tasks.observe
+    def observe_paused(packet, now_s, **kwargs):
+        entered.set()
+        assert continue_observe.wait(2.)
+        return original(packet, now_s, **kwargs)
+    def tick():
+        try:
+            runtime._tick_once(.4)
+        except BaseException as exc:
+            errors.append(exc)
+    def cancel():
+        runtime.request_cancel('a')
+        enqueued.set()
+    runtime.tasks.observe = observe_paused
+    runtime.offer_odometry(odometry_at_goal())
+    tick_thread = threading.Thread(target=tick, daemon=True)
+    input_thread = threading.Thread(target=cancel, daemon=True)
+    tick_thread.start()
+    try:
+        assert entered.wait(2.)
+        input_thread.start()
+        assert enqueued.wait(2.), '任务观测计算不应占用输入入队锁'
+    finally:
+        continue_observe.set()
+        tick_thread.join(2.)
+        if input_thread.ident is not None:
+            input_thread.join(2.)
+        runtime.tasks.observe = original
+    assert not tick_thread.is_alive() and not input_thread.is_alive() and not errors
+    assert not any(event.outcome == 'GOAL_REACHED' for event in events)
+    assert_cancel_brakes_then_finishes(runtime, session, events)
+
+
+def test_terminal_event_delivery_allows_reentrant_and_other_thread_input():
+    """终态先提交，外部sink再运行；sink可重入也可等待另一个输入线程。"""
+    import threading
+    runtime, session, events = arriving_runtime()
+    enqueue_completed = threading.Event()
+    worker = None
+    def sink(event):
+        nonlocal worker
+        events.append(event)
+        if event.outcome == 'GOAL_REACHED':
+            assert runtime.tasks.active is event
+            runtime.request_cancel('a')  # 同线程重入必须排在该终态之后。
+            worker = threading.Thread(target=lambda: (runtime.request_cancel('a'), enqueue_completed.set()), daemon=True)
+            worker.start()
+            assert enqueue_completed.wait(2.), '外部sink不能在输入锁内执行'
+    runtime.event_sink = sink
+    runtime.offer_odometry(odometry_at_goal())
+    try:
+        runtime._tick_once(.4)
+    finally:
+        if worker is not None:
+            worker.join(2.)
+    assert enqueue_completed.is_set()
+    runtime._tick_once(.45)
+    assert runtime.tasks.active.outcome == 'GOAL_REACHED'
+    assert not session.canceling  # 终态提交以后的旧取消不撤销已提交结果。
