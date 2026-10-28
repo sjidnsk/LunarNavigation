@@ -11,7 +11,7 @@ from lunar_nav1cm_planner.configuration import load_configuration
 DEFAULTS = {
     'start_controller':'false', 'start_rviz':'false', 'use_sim_time':'false',
     'params_file':'', 'map_frame':'map', 'map_topic':'/Car/T3/mapping/grid_map',
-    'odometry_topic':'/Car/T3/localization/odometry', 'tf_topic':'/tf', 'tf_static_topic':'/tf_static',
+    'odometry_topic':'/Car/T3/localization/odometry', 'tf_topic':'/P4/input/map_to_odom', 'tf_static_topic':'/tf_static',
     'local_path_topic':'/Car/T4/planning/local_path', 'global_route_topic':'/Car/T4/planning/global_route',
     'goal_topic':'/Car/T4/navigation/goal', 'command_topic':'/Car/T5/Car_Cmd_Vel',
     'allow_unknown':'false', 'linear_speed_mps':'0.2', 'angular_speed_rps':'0.1',
@@ -61,10 +61,10 @@ def compose(context):
 
 
 def generate_launch_description():
-    share=Path(get_package_share_directory('lunar_nav1cm_planner'))
+    share=Path(get_package_share_directory('lunar_pure_wheeled_controller'))
     return LaunchDescription([
         *(DeclareLaunchArgument(name,default_value=value) for name,value in DEFAULTS.items()),
-        DeclareLaunchArgument('wheel_config',default_value=str(share/'config/wheel.yaml')),
+        DeclareLaunchArgument('wheel_config',default_value=str(share/'config/wheel_orin.yaml')),
         DeclareLaunchArgument('build_dir',default_value=EnvironmentVariable('NAV1CM_BUILD_DIR',default_value='')),
         OpaqueFunction(function=compose),
     ])

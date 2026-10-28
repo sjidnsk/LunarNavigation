@@ -292,10 +292,6 @@
       "sha256": "88638859e278152ae7e3fa2cd33ce37f79fa005854d58d3b6efb660c7aab6266"
     },
     {
-      "path": "config/wheel.yaml",
-      "sha256": "23b93ebaf83466eb51991881cab045f14a80e871811b08f6dd39a5a768d91fe6"
-    },
-    {
       "path": "ros2_ws/src/lunar_incremental_navigation_ros/test/policy_map_exporter_test.cpp",
       "sha256": "53e9dbcd4efb1b30c107cc836c617943ea2ac23dbcc8749c1ee8bbb2f647f275"
     }
@@ -312,5 +308,6 @@
     "106e7dec5be76d41176e1fb5604ca4b5a0459a1f",
     "83d6d10a",
     "4ea7f8c-controller-execution-tracking-only"
-  ]
+  ],
+  "preserved_app_config": "config/wheel.yaml minimum_clearance_m=0.4 and unchanged wheel_orin.yaml; composite defaults to installed app wheel_orin and /P4/input/map_to_odom"
 }
