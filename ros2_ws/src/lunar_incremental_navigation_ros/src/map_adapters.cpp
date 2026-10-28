@@ -317,7 +317,7 @@ AdapterResult<OwnedElevationEvidence> AdaptExplorationElevation(const InputSnaps
   const auto& pose=input.local_map->info.pose;
   if(!Finite(pose.position.x)||!Finite(pose.position.y)||!Finite(pose.position.z)) return Invalid<OwnedElevationEvidence>();
   auto message=*input.local_map;
-  message.info.pose={};message.info.pose.orientation.w=1.;
+  message.info.pose=geometry_msgs::msg::Pose{};message.info.pose.orientation.w=1.;
   auto adapted=AdaptElevationMessage(message,{.parent_frame=message.header.frame_id,.child_frame=message.header.frame_id});
   if(!adapted.value) return adapted;
   const auto a=outer.value->rotation,b=*pose_rotation;

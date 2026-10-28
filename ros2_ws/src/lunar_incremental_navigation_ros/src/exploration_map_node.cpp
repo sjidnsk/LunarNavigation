@@ -103,7 +103,8 @@ struct ExplorationMapNode::Impl {
           if(evidence.value) {
             const auto stamp=static_cast<std::int64_t>(input.local_map->header.stamp.sec)*1000000000LL+input.local_map->header.stamp.nanosec;
             if(map->Apply(*evidence.value,stamp)) {local_sequence=input.local_sequence;tf_sequence=input.tf_sequence;}
-          }
+            else RCLCPP_WARN_THROTTLE(node.get_logger(),*node.get_clock(),2000,"地图源几何或测量被拒绝");
+          } else RCLCPP_WARN_THROTTLE(node.get_logger(),*node.get_clock(),2000,"地图适配未就绪: %s",evidence.reason_code.c_str());
         }
         auto capture=map->Capture();
         if(!capture.map.fine) continue;
