@@ -83,6 +83,24 @@ TEST(PolicyMapExporter, UsesFullSnapshotForBootstrapAndMapRevisionChanges) {
   }
   EXPECT_TRUE(found);
   EXPECT_TRUE(with_patch.stationary_support_ready);
+  // 新出口必须拒绝 UNKNOWN 起点，不借用旧接口的盲区补丁。
+  const auto observed = exporter.ExportObserved({.fine=blind,
+      .anchor=Pose2{.position_m={.7,.7}}, .local_window_size_m=32., .epoch="e", .processed_stamp_ns=12}, 0);
+  EXPECT_TRUE(observed.assumed_start_x.empty());
+  EXPECT_FALSE(observed.stationary_support_ready);
+  EXPECT_TRUE(observed.start_connection_x.empty());
+  EXPECT_EQ(observed.reason_code, "INPUT_UNAVAILABLE");
+  const auto direct = exporter.ExportObserved({.fine=fine,
+      .anchor=Pose2{.position_m={.7,.7}}, .local_window_size_m=32., .epoch="e", .processed_stamp_ns=12}, 0);
+  EXPECT_TRUE(direct.ready);
+  EXPECT_TRUE(direct.stationary_support_ready);
+  EXPECT_FALSE(direct.start_connection_x.empty());
+  EXPECT_TRUE(direct.assumed_start_x.empty());
+  const auto bad_delta = exporter.ExportObserved({.fine=fine, .epoch="e",
+      .base_revision=999, .full_snapshot=false}, 999);
+  EXPECT_TRUE(bad_delta.full_snapshot);
+  EXPECT_EQ(bad_delta.base_revision, 0U);
+
   // Flat measured support permits stationary yaw even with no FREE exit.
   auto unknown_states = fine->FindTile({})->states();
   std::fill(unknown_states.begin(), unknown_states.end(), FineCellState::kUnknown);
