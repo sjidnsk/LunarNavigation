@@ -142,3 +142,92 @@ def test_executor_context_copies_real_observation_without_mutating_history():
     assert snapshot["last_command"]==[.1,.02] and snapshot["command_history"]==[(2.,[.1,.02])]
     snapshot["command_history"][0][1][0]=9.
     assert history[0][1][0]==.1
+
+
+def complete_joint_analysis_evidence(tmp_path):
+    """构造其他门禁全通过的离线证据，单独验证异常和禁入话题否决。"""
+    import json
+    from scripts.navigation.one_cm.path_follower_validation.evidence import TOPICS, CMD
+    _, entities = qos_evidence()
+    entities[1]["node_name"] = "lunar_nav1cm_planner"
+    entities.extend([
+        dict(entities[1], topic=TOPICS["global_route"]),
+        dict(entities[-1], node_name="lunar_nav1cm_planner"),
+    ])
+    entries = {
+        TOPICS["grid"]: ("grid_map_msgs/msg/GridMap", "nav1cm_joint_plant"),
+        TOPICS["odom"]: ("nav_msgs/msg/Odometry", "nav1cm_joint_plant"),
+        TOPICS["goal"]: ("geometry_msgs/msg/PoseStamped", "nav1cm_joint_plant"),
+        TOPICS["local"]: ("nav_msgs/msg/Path", "lunar_nav1cm_planner"),
+        TOPICS["global_route"]: ("nav_msgs/msg/Path", "lunar_nav1cm_planner"),
+        CMD: ("geometry_msgs/msg/Twist", "lunar_pure_wheeled_controller"),
+        "/tf_static": ("tf2_msgs/msg/TFMessage", "nav1cm_joint_plant"),
+    }
+    graph = dict(kind="GRAPH", types={t: [k] for t, (k, _) in entries.items()},
+                 publishers={t: [dict(node_name=n, topic_type=k)] for t, (k, n) in entries.items()},
+                 subscriptions={TOPICS["local"]: [dict(node_name="lunar_pure_wheeled_controller")],
+                                CMD: [dict(node_name="nav1cm_joint_plant")]})
+    for entity in entities:
+        endpoint = graph[entity["direction"]].setdefault(entity["topic"], [])
+        row = next((r for r in endpoint if r["node_name"] == entity["node_name"]), None)
+        if row is None:
+            row = dict(node_name=entity["node_name"])
+            endpoint.append(row)
+        row["qos"] = entity["qos"].copy()
+    path = dict(frame="map", stamp_ns=100,
+                poses=[dict(x=2.6, y=1.4, z=0., q=[0., 0., 0., 1.], stamp_ns=100, frame="map")])
+    plant = [graph, dict(kind="ENTITY_QOS", entities=entities), dict(kind="TF", stamp=0),
+             dict(kind="EXIT", forbidden=[])]
+    plant += [dict(kind="STATE", t=t, x=x, y=y, yaw=0., v=0., w=0., a=0., alpha=0., clear=True)
+              for t, x, y in [(0., 0., 0.), (1., 2.6, 1.4), (1.4, 2.6, 1.4)]]
+    plant += [dict(kind="PATH", stream="local", message=path) for _ in range(35)]
+    follower = [dict(kind="INSTALL", executor="StandardPathFollower", module="/validated/install/follower.py"),
+                dict(kind="CLOSE", map_worker_alive=False)]
+    planner = [dict(kind="INSTALL"), dict(kind="CLOSE", remaining_children=[],
+                    result=dict(threads_alive=[], workers={})),
+               dict(kind="TICK", goal=[2.6, 1.4], generation=2, goal_revision=3,
+                    global_result=dict(planning_outcome=0, reason_code="PLAN_FOUND", has_reference=True,
+                                       requested_goal=[2.6, 1.4], requested_epoch=8, requested_version=4),
+                    events=[dict(kind="GLOBAL_RESULT_RECEIVED", accepted_generation_at_submit=2, goal_revision_at_submit=3),
+                            dict(kind="ROUTE_ACCEPTED", version=4, map_epoch=8, points=[[0., 0.], [2.6, 1.4]])])]
+    actors = dict(plant=plant, follower=follower, planner=planner)
+    def write():
+        for role, rows in actors.items():
+            (tmp_path / (role + ".jsonl")).write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    write()
+    return actors, write, [dict(returncode=0, premature=False, remaining=[], escalated=False)]
+
+
+def test_complete_analysis_allows_normal_infeasible_candidate(tmp_path):
+    from scripts.navigation.one_cm.path_follower_validation.evaluate import analyze
+    actors, write, processes = complete_joint_analysis_evidence(tmp_path)
+    baseline = analyze(tmp_path, "obstacle", processes, None, None)
+    assert baseline["pass_"] and all(baseline["checks"].values())
+    actors["planner"].extend([
+        dict(kind="NOTICE", notice="LOCAL_FAILED", detail="NO_FEASIBLE_MPCC_CANDIDATE"),
+        dict(kind="TICK", global_result=None, events=[dict(kind="LOCAL_FAILED", reason="NO_FEASIBLE_MPCC_CANDIDATE")]),
+    ])
+    write()
+    scored = analyze(tmp_path, "obstacle", processes, None, None)
+    assert scored["pass_"] and all(scored["checks"].values())
+
+
+@pytest.mark.parametrize("anomaly, veto", [("tick_error", "runtime_exceptions_absent"),
+                                          ("later_t5", "production_command_absent")])
+def test_analysis_independent_veto_with_otherwise_all_pass(tmp_path, anomaly, veto):
+    from copy import deepcopy
+    from scripts.navigation.one_cm.path_follower_validation.evaluate import analyze
+    actors, write, processes = complete_joint_analysis_evidence(tmp_path)
+    baseline = analyze(tmp_path, "obstacle", processes, None, None)
+    assert baseline["pass_"] and all(baseline["checks"].values())
+    if anomaly == "tick_error":
+        actors["planner"].append(dict(kind="NOTICE", notice="TICK_ERROR", detail="RuntimeError: injected"))
+    else:
+        late = deepcopy(actors["plant"][0])
+        late["publishers"]["/Car/T5/Car_Cmd_Vel"] = [dict(node_name="unexpected")]
+        actors["plant"].append(late)
+    write()
+    scored = analyze(tmp_path, "obstacle", processes, None, None)
+    assert not scored["pass_"], scored
+    assert scored["checks"][veto] is False
+    assert all(value for name, value in scored["checks"].items() if name != veto)

@@ -26,6 +26,12 @@ def held(s,target,lo=-math.inf,hi=math.inf):
     return prior.held_terminal([dict(r,elapsed_s=r['t']) for r in s],target,lo,hi)
 def analyze(folder,case,processes,error,stop):
     plant=rows(folder,'plant');follower=rows(folder,'follower');planner=rows(folder,'planner')
+    actors=dict(plant=plant,follower=follower,planner=planner)
+    graphs=[r for actor in actors.values() for r in actor if r['kind']=='GRAPH']
+    runtime_errors=[dict(role=role,notice=r['notice'],detail=r.get('detail'))
+        for role,actor in actors.items() for r in actor
+        if r['kind']=='NOTICE' and r.get('notice')=='TICK_ERROR']
+    production_command_graphs=sum(bool(r.get('publishers',{}).get('/Car/T5/Car_Cmd_Vel')) for r in graphs)
     states=[r for r in plant if r['kind']=='STATE']
     local=[r for r in plant if r['kind']=='PATH' and r['stream']=='local']
     full=[r for r in local if r['message']['poses']]
@@ -42,6 +48,9 @@ def analyze(folder,case,processes,error,stop):
              all(not w['surviving_pids'] and not w['terminated_pids'] for w in close[-1]['result']['workers'].values() if w)),
         paths=len(full),terminal=held(states,goal(case)),processes=processes,supervisor_error=error)
     result=grade(e)
+    # 任一次捕获异常或任一已观测图出现实车命令发布者，均独立否决。
+    result['checks']['runtime_exceptions_absent']=not runtime_errors
+    result['checks']['production_command_absent']=bool(graphs) and production_command_graphs==0
     entities=[entry for actor in (plant,follower,planner) for r in actor if r['kind']=='ENTITY_QOS' for entry in r['entities']]
     result['checks']['dds_qos']=any(qos_valid(r,entities,case) for r in plant if r['kind']=='GRAPH')
     result['checks']['path_contract']=bool(full) and all(prior.path_valid(r['message'],local=True) for r in local)
@@ -73,7 +82,9 @@ def analyze(folder,case,processes,error,stop):
         segment=[r for r in states if 6.6<r['t']<7.8]
         result['checks']['empty_stopped']=bool(segment) and all(abs(r['v'])<=.01 and abs(r['w'])<=.01 for r in segment)
     result['pass_']=all(result['checks'].values())
-    result.update(case=case,processes=processes,formal_count=len(formal),local_paths=len(local),nonempty_paths=len(full),
+    result.update(runtime_exceptions=runtime_errors,graph_snapshot_count=len(graphs),
+        production_command_graph_count=production_command_graphs,
+        case=case,processes=processes,formal_count=len(formal),local_paths=len(local),nonempty_paths=len(full),
         state_rows=len(states),final_state=states[-1] if states else None,
         maxima={k:max((abs(r[k]) for r in states),default=None) for k in ('v','w','a','alpha')},
         displacement=max((math.hypot(r['x'],r['y']) for r in states),default=0.))

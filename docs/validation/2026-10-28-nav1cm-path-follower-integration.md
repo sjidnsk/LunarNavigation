@@ -3,7 +3,7 @@
 任务归属 integration/pure-planner-orin；专题 hk/nav-1cm-feasibility-20261026。
 初始集成基线 46f635e339fa70fdf116454bc1d287733efa395b。默认入口保持不变。
 
-当前验收：F05提交3a8f2157/t3f05-build-r1的r9+r10五例全PASS，详见末节。前文r1..r8失败/NOT_RUN结论为各自历史身份，原证据保留。Task3执行完成，待root独立规格/质量审查与合入；未切默认。
+当前验收：F05提交3a8f2157/t3f05-build-r1的r9+r10物理五例全PASS。首轮独立审查发现验收器I1/I2缺口，round1修复聚焦48项通过，原raw只读重评五场仍PASS，详见末节；待原reviewer scoped复审关闭后再完成Task3独立验收。前文r1..r8与旧审查状态各自保留，未切默认。
 
 ## 链路与隔离
 
@@ -352,3 +352,68 @@ Windows本机无ROS；实际运行是KAI Ubuntu22.04/Humble/x86_64、同机DDS�
 理想有界独立plant及nominal_response_time_s=0边界保留，不代表真实执行器延迟或车辆动力学。
 Jazzy、Humble/Orin目标硬件、DDS跨机、真实P3流、rosbag、RViz、真实车辆均NOT_RUN；本轮不触发T5或DRL。
 处置为已提交待root独立Task3规格/质量审查与合入；源码写入权交回root。默认/应用入口未切，无合并/推送/PR/删除，资源保留待后续处置/回收。
+
+
+## Task3 独立审查修复 round 1：异常与全部已观测图的独立否决
+
+当前状态：**已提交待原reviewer针对I1/I2复审**，未经复审关闭前不把Task3独立验收标为完成。
+物理r9/r10原五场PASS、14角色正常退出事实保留；首轮独立审查为Spec FAIL / Quality CHANGES_REQUESTED（0C/2I/0M），
+两项为验收器覆盖缺口，不能用原场景恰好没有异常代替补门禁。
+基线10fc5b495516c50cb4a2b6eae765f385cfa24871；本Task仅修改evaluate.py、聚焦测试与本文/登记，
+不改产品、plant、fixture、threshold、默认或应用，不重跑真实运动或产品整套回归。
+
+- I1：生产runtime捕获异常后发NOTICE/TICK_ERROR仍可能继续到达。现在扫描已加载plant/follower/planner全部记录，
+  仅对NOTICE且notice==TICK_ERROR新增独立`runtime_exceptions_absent`；同时保留role/notice/detail派生诊断。
+  普通NOTICE、LOCAL_FAILED/NO_FEASIBLE_MPCC_CANDIDATE不被扩大成异常否决。
+- I2：any(graph_valid)只需一帧合格，原图内T5检查可被先前合格帧掩盖。保留原非空/角色/类型/QoS门禁，
+  另对所有已观测GRAPH新增`production_command_absent`：至少有图，且任一图均不得出现/Car/T5/Car_Cmd_Vel publisher。
+  新输出保留graph_snapshot_count与production_command_graph_count；不能从有限快照推断未观测时刻。
+
+### 两个otherwise-allPASS反例与聚焦Humble TDD
+
+新测试通过真实analyze读取独立临时JSONL，formal/路径/图类型/QoS/终端/运动/独立plant/worker/监督均有全通过证据，
+先断言baseline所有checks为true，再分别只加入一条TICK_ERROR或仅追加后续含T5的图。
+两项最终都要求新增对应flag单独false，其余flag全部保持true。
+正例另加入普通NOTICE与LOCAL_FAILED/NO_FEASIBLE_MPCC_CANDIDATE，仍须全部通过。
+测试临时合成证据只用于单元反例，不写入实际r9/r10或运动fixture。
+
+命令路径均为ART/snapshot_humble.py，mode=core，显式测试路径完全相同：
+`tests/navigation/one_cm/test_path_follower_joint.py tests/navigation/one_cm/test_path_supervision.py tests/navigation/one_cm/test_path_validation.py`。
+
+| 标签 | 命令阶段 | 结果 | archive SHA256 |
+| --- | --- | --- | --- |
+| task3-review-fix1-red-r1 | 仅新增反例，未改evaluate | 2 failed / 46 passed，.40s，exit1 | 532e6db0babf14f4f8bc7c94d75396f04a8e28c73cef3ebb6af45e0a8e479ddf |
+| task3-review-fix1-green-r1 | 新增两个独立veto后相同三文件 | 48 passed，.27s，exit0 | 9062d0cbcfb26906587c7d15ee0b415d302ccd83b2a3fdea235b5196dbefde95 |
+
+RED两个失败都为原analyze错误返回pass_=true，非构造不完整或环境失败；既有45项及新增普通失败正例通过。
+GREEN覆盖同三文件全部48项，含监督否决、实际实体QoS、Path合同、正式身份、连续到达保持、独立SAT和生产包禁入。
+命令、snapshot逐文件SHA、完整tests.log和receipt保存在ART对应标签。
+这是KAI隔离Humble/core测试通道的聚焦验证，不启动ROS运动节点；不冒称本轮重跑core609/controller436/package459。
+
+### 对原始r9/r10只读重评
+
+新派生结果保存ART/task3-review-fix1-regrade-r2/，包含每场summary.json、汇总summary.json与binding.json。
+脚本ART/task3-review-fix1-regrade-r2.py。
+原始执行身份仍3a8f2157ac52c9b3bb4f71fb0026b2c06318d5bd / t3f05-build-r1，
+原运行harness仍为原r9/r10 manifest；不是用新grader实际运行过运动。
+新verifier在10fc5b4基线上修改，binding逐文件SHA与GREEN快照逐项一致；evaluate.py SHA256为
+`47737980acd03f2558cd32eff94252dcd0b91e7ea7befbf546012f5201af7a65`，完整两组verifier源码SHA保留binding。
+
+| 原case / 标签 | 重评结果 | 已观测图数 | NOTICE/TICK_ERROR | 含T5 publisher图 | 新独立flags |
+| --- | --- | --- | --- | --- | --- |
+| obstacle / r9 | PASS | 9 | 0 | 0 | 均true |
+| forward_spin / r10 | PASS | 8 | 0 | 0 | 均true |
+| reverse / r10 | PASS | 3 | 0 | 0 | 均true |
+| mapchange / r10 | PASS | 6 | 0 | 0 | 均true |
+| empty_smoke / r10 | PASS | 2 | 0 | 0 | 均true |
+
+所有原checks逐项与旧summary相等，其余原summary字段也逐项相等；新增flags之外，原formal/物理/安装/图/QoS/清理/监督门禁仍实际执行。
+forward停planner时刻复用原process记录stop_requested_s，未新增或推测运行时刻。
+r9十文件及r10三十文件全部SHA在重评前后与原raw-sha256一致，旧summary、raw、manifest无覆盖。
+binding记录全量原rawSHA、原manifestSHA、新verifierSHA与GREEN archiveSHA，派生输出身份可独立复核。
+首次重评脚本因Windows反斜杠与snapshot键分隔符不符在绑定阶段KeyError退出，尚未评分；原脚本与空输出目录保留。
+r2仅统一as_posix键并使用新目录，未重跑运动，也没有把任何历史失败改判PASS。
+
+本轮没有新图或新运动；前节真实图仍绑定原r9/r10。原r1..r8失败、F03恢复与F04/F05产品回执保留。
+当前处置已提交待原reviewer scoped复审I1/I2及后续合入，源码写入权交回root。
+理想plant nominal_response_time_s=0边界、Orin/实车/真实P3流/rosbag/RViz/DDS跨机NOT_RUN不变；未切默认、未合并/推送/PR/删除。
