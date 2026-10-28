@@ -99,7 +99,7 @@ struct ExplorationMapNode::Impl {
             identity.header.frame_id=map_frame;identity.child_frame_id=map_frame;identity.transform.rotation.w=1.;
             map_input.map_from_odom=identity;
           }
-          const auto evidence=AdaptLocalElevation(map_input);
+          const auto evidence=AdaptExplorationElevation(map_input);
           if(evidence.value) {
             const auto stamp=static_cast<std::int64_t>(input.local_map->header.stamp.sec)*1000000000LL+input.local_map->header.stamp.nanosec;
             if(map->Apply(*evidence.value,stamp)) {local_sequence=input.local_sequence;tf_sequence=input.tf_sequence;}

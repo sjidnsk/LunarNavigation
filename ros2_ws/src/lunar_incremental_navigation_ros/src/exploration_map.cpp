@@ -17,10 +17,9 @@ double Cross(core::Point2 a,core::Point2 b,core::Point2 p) {
   return (b.x-a.x)*(p.y-a.y)-(b.y-a.y)*(p.x-a.x);
 }
 double Area(const Polygon& p) {
+  if(p.size()<3) return 0.;
   double sum=0.;
-  for(std::size_t i=0;i<p.size();++i) {
-    const auto a=p[i], b=p[(i+1)%p.size()]; sum+=a.x*b.y-a.y*b.x;
-  }
+  for(std::size_t i=1;i+1<p.size();++i) sum+=Cross(p[0],p[i],p[i+1]);
   return std::abs(sum)*.5;
 }
 Polygon Clip(const Polygon& p,core::Point2 a,core::Point2 b,bool inside=true) {
@@ -126,7 +125,15 @@ bool ExplorationMap::Apply(const OwnedElevationEvidence& source,std::int64_t sta
   const auto& g=source.geometry;
   // 原生 Apply 仅用于输入验证及非水平变换的保守物理辅助，绝不复用其源分辨率锁。
   core::PersistentElevationMap validation;
-  if(validation.Apply(source.View()).status==core::ElevationUpdateResult::Status::kRejected) return false;
+  auto geometry_validation=source;
+  geometry_validation.terrain_measurements.clear();
+  if(validation.Apply(geometry_validation.View()).status==core::ElevationUpdateResult::Status::kRejected) return false;
+  if(!source.terrain_measurements.empty()) {
+    core::PersistentElevationMap measurements;
+    auto native=source;
+    native.map_from_source={.parent_frame=g.frame_id,.child_frame=g.frame_id};
+    if(measurements.Apply(native.View()).status==core::ElevationUpdateResult::Status::kRejected) return false;
+  }
   if(m.fine && source.map_from_source.parent_frame!=m.fine->geometry().frame_id()) return false;
   SourceView view(source);
   const auto evaluator=core::MakePlatformElevationEvaluator(m.capability);
@@ -208,7 +215,9 @@ bool ExplorationMap::Apply(const OwnedElevationEvidence& source,std::int64_t sta
   auto next=core::FineTraversabilityBuilder{}.DeriveProjected(m.elevation.Snapshot(),m.capability,m.profile,
       std::make_unique<const ProjectedEvaluator>(m.values),m.fine);
   // 全量派生的脏tile并集可安全重放；不假设原始高程revision等同分类revision。
+  dirty.clear();
   for(auto tile:next->tile_indices()) dirty.insert(tile);
+  for(auto tile:next->elevation()->tile_indices()) dirty.insert(tile);
   if(m.fine) for(auto tile:m.fine->tile_indices()) dirty.insert(tile);
   m.fine=std::move(next);
   m.journal.push_back({m.fine->fine_traversability_revision(),{dirty.begin(),dirty.end()}});

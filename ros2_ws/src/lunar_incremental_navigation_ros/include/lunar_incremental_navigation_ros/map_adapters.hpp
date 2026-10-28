@@ -25,4 +25,8 @@ struct OwnedElevationEvidence final {
 [[nodiscard]] AdapterResult<OwnedElevationEvidence> AdaptLocalElevation(
     const InputSnapshot& input);
 
+// map-only源格保留自己的坐标轴；支持GridMap pose与TF组合，不投射terrain标量到粗格。
+[[nodiscard]] AdapterResult<OwnedElevationEvidence> AdaptExplorationElevation(
+    const InputSnapshot& input);
+
 }  // namespace lunar::incremental_navigation_ros

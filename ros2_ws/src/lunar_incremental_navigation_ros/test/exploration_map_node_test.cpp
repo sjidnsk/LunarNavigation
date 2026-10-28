@@ -86,6 +86,68 @@ TEST(ExplorationMap, RotatedTranslatedSourceKeepsActualWorldGeometry) {
   const auto x=static_cast<std::int64_t>(std::floor((3.+std::cos(yaw)-std::sin(yaw))/.2));
   const auto y=static_cast<std::int64_t>(std::floor((-2.+std::sin(yaw)+std::cos(yaw))/.2));
   EXPECT_EQ(fine->State({x-static_cast<std::int64_t>(std::llround(fine->geometry().origin_m().x/.2)),y-static_cast<std::int64_t>(std::llround(fine->geometry().origin_m().y/.2))}),core::FineCellState::kFree);
-  EXPECT_EQ(fine->State({4,4}),core::FineCellState::kUnknown);
+  EXPECT_EQ(fine->State({4-static_cast<std::int64_t>(std::llround(fine->geometry().origin_m().x/.2)),
+      4-static_cast<std::int64_t>(std::llround(fine->geometry().origin_m().y/.2))}),core::FineCellState::kUnknown);
+}
+
+TEST(ExplorationMap, FiniteUnknownChangesFineAtUnchangedRawAndDeltaEqualsFull) {
+  ExplorationMap map(Wheel(),Profile(),.2,1.);
+  ASSERT_TRUE(map.Apply(Flat(.2),1));
+  const auto before=map.Capture();
+  auto source=Flat(.2);
+  source.terrain_measurements.resize(source.elevation_m.size(),{true,true,0.,0.,0.});
+  source.terrain_measurements[4*10+4]={true,false,0.,0.,0.};
+  ASSERT_TRUE(map.Apply(source,2));
+  const auto after=map.Capture();
+  EXPECT_EQ(after.map.fine->raw_elevation_revision(),before.map.fine->raw_elevation_revision());
+  EXPECT_GT(after.map.fine->fine_traversability_revision(),before.map.fine->fine_traversability_revision());
+  EXPECT_EQ(before.map.fine->State({4,4}),core::FineCellState::kFree);
+  EXPECT_EQ(after.map.fine->State({4,4}),core::FineCellState::kUnknown);
+  PolicyMapExporter exporter(Wheel(),Profile());
+  const auto full=exporter.ExportObserved(after,0);
+  const auto delta=exporter.ExportObserved(map.Capture(before.map.fine->fine_traversability_revision()),before.map.fine->fine_traversability_revision());
+  ASSERT_FALSE(delta.full_snapshot);
+  ASSERT_EQ(full.tiles.size(),delta.tiles.size());
+  for(std::size_t i=0;i<full.tiles.size();++i) {
+    EXPECT_EQ(full.tiles[i].states,delta.tiles[i].states);
+    EXPECT_EQ(full.tiles[i].intrinsic_states,delta.tiles[i].intrinsic_states);
+    EXPECT_EQ(full.tiles[i].observed,delta.tiles[i].observed);
+    EXPECT_EQ(full.tiles[i].costs,delta.tiles[i].costs);
+    const auto index=core::TileCellOffset({4,4});
+    EXPECT_EQ(full.tiles[i].observed[index],kPolicyMapUnknown);
+  }
+}
+TEST(ExplorationMap, OptionalStatisticsRemainSourceLocalUnderYawAndCoarsening) {
+  ExplorationMap map(Wheel(),Profile(),.2,1.);
+  auto source=Flat(.05);
+  source.terrain_measurements.resize(source.elevation_m.size(),{true,true,0.,0.,0.});
+  source.terrain_measurements[20*40+20]={true,true,.8,.03,.03};
+  source.map_from_source.rotation={.w=std::cos(.185),.z=std::sin(.185)};
+  ASSERT_TRUE(map.Apply(source,1));
+  const auto snapshot=map.Capture();
+  bool blocked=false;
+  for(const auto tile:snapshot.map.fine->tile_indices()) {
+    const auto t=snapshot.map.fine->FindTile(tile);
+    blocked|=std::find(t->states().begin(),t->states().end(),core::FineCellState::kBlocked)!=t->states().end();
+  }
+  EXPECT_TRUE(blocked);
+  for(const auto tile:snapshot.map.fine->elevation()->tile_indices())
+    for(std::int64_t y=0;y<256;++y) for(std::int64_t x=0;x<256;++x)
+      EXPECT_FALSE(snapshot.map.fine->elevation()->TerrainMeasurementsAt({tile.x*256+x,tile.y*256+y}));
+}
+TEST(ExplorationMap, TiltAndDegenerateFootprintsDoNotFabricateFreeSupport) {
+  ExplorationMap map(Wheel(),Profile(),.2,1.);
+  auto source=Flat(.05);
+  source.map_from_source.rotation={.w=std::cos(.2),.x=std::sin(.2)};
+  ASSERT_TRUE(map.Apply(source,1));
+  const auto capture=map.Capture();
+  ASSERT_TRUE(capture.map.fine);
+  for(const auto tile:capture.map.fine->tile_indices()) {
+    const auto states=capture.map.fine->FindTile(tile)->states();
+    EXPECT_EQ(std::count(states.begin(),states.end(),core::FineCellState::kFree),0);
+  }
+  source.map_from_source.rotation={.w=std::sqrt(.5),.x=std::sqrt(.5)};
+  ASSERT_TRUE(map.Apply(source,2));
+  EXPECT_EQ(map.Capture().map.processed_stamp_ns,2);
 }
 }  // namespace lunar::incremental_navigation_ros
