@@ -121,21 +121,26 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
       double maximum_residual=0.;
       for(const auto& p:points)maximum_residual=std::max(maximum_residual,std::abs(p.z-c-a*p.x-b*p.y));
       if(maximum_residual<1e-10)break;
+      bool weights_changed=false;
       for(std::size_t i=0;i<points.size();++i) {
         const auto& p=points[i];
-        weights[i]=std::min(1.,.5*parameters_.maximum_plane_residual_m/
+        const double weight=std::min(1.,.5*parameters_.maximum_plane_residual_m/
             std::max(1e-12,std::abs(p.z-c-a*p.x-b*p.y)));
+        weights_changed |= weight!=weights[i];weights[i]=weight;
       }
+      // 完全相同的权重、样本和累加顺序已是固定点，无需重复四轮。
+      if (!weights_changed) break;
       valid=fit();
     }
     if(!valid)continue;
-    std::size_t inliers=0;
+    std::size_t inliers=0;bool inlier_weights_changed=false;
     for(std::size_t i=0;i<points.size();++i) {
       const auto& p=points[i];
-      weights[i]=std::abs(p.z-c-a*p.x-b*p.y)<=parameters_.maximum_plane_residual_m?1.:0.;
+      const double weight=std::abs(p.z-c-a*p.x-b*p.y)<=parameters_.maximum_plane_residual_m?1.:0.;
+      inlier_weights_changed |= weight!=weights[i];weights[i]=weight;
       inliers+=weights[i]>0.;
     }
-    if(inliers<4 || double(inliers)/points.size()<.7 || !fit())continue;
+    if(inliers<4 || double(inliers)/points.size()<.7 || (inlier_weights_changed && !fit()))continue;
     // 批处理只省去可由四个实测方向严格证明的角覆盖计算。
     // all-inlier + 实测中心使 nearest 恰为0；±x/±y使最大角间隙≤pi/2。
     // 缺任一方向或含拒绝样本时继续原逐角排序，不改变拟合与置信度。
