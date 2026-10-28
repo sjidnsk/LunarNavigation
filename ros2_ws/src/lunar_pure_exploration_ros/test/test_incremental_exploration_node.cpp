@@ -1410,3 +1410,27 @@ TEST_F(IncrementalExplorationNodeTest, OnlyInternalNavigationErrorEntersError) {
 
 }  // namespace
 }  // namespace lunar::pure_exploration_ros
+
+namespace lunar::pure_exploration_ros {
+namespace {
+TEST_F(IncrementalExplorationMapWaitTest,
+       PathWaitingUsesSameBoundedCancellationAndCurrentTerminalPolicy) {
+  Start(false);
+  const auto first = server_->goal(0U);
+  server_->PublishFeedback(Action::Feedback::PLANNING, "WAITING_FOR_PATH");
+  ASSERT_TRUE(WaitFor([this] {
+    return LastStatus()->reason_code == "NAVIGATION_WAITING_FOR_PATH";
+  }));
+  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
+  SetClock(145);
+  ASSERT_TRUE(WaitFor([this] { return server_->cancel_count() == 1U; }));
+  EXPECT_EQ(server_->goal_count(), 1U);
+  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
+  server_->Finish(Action::Result::CANCELED, "CANCELED_STOPPED");
+  ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 2U; }));
+  EXPECT_FALSE(SameNavigationPose(first, server_->goal(1U)));
+  EXPECT_EQ(LastStatus()->failed_candidate_count, 1U);
+  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
+}
+}  // namespace
+}  // namespace lunar::pure_exploration_ros
