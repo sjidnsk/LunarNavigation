@@ -132,3 +132,50 @@ def test_obstacle_update_false_positive_evidence_is_rejected(fault):
     elif fault=='not_logically_accepted':s['next']['logical_accepted']=False
     elif fault=='wrong_order':s['terminal']['monotonic_s']=1.15
     assert not load().grade(e)['pass_']
+
+
+def runner_for_fix():
+    import sys
+    spec=spec_from_file_location("frontier_fix_runner",FILE.with_name("run.py"))
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module);return module
+
+def test_latest_invalid_measurement_revokes_historical_goal_hold():
+    m=runner_for_fix()
+    rows=[dict(monotonic_s=t,x=0.,y=0.,yaw=0.,v=0.,w=0.) for t in (0.,.1,.2,.31)]
+    rows.append(dict(monotonic_s=.4,x=.2,y=0.,yaw=0.,v=.1,w=0.))
+    assert m.held(rows,(0.,0.,0.),.41)['hold_s']==0.
+    assert not m.measured_stopped_before([dict(monotonic_s=.3,v=0.,w=0.),dict(monotonic_s=.4,v=.1,w=0.)],.41)
+
+def test_hold_is_latest_continuous_suffix_and_freshness_is_required():
+    m=runner_for_fix()
+    rows=[dict(monotonic_s=t,x=0.,y=0.,yaw=0.,v=0.,w=0.) for t in (0.,.1,.2,.31)]
+    assert m.held(rows,(0.,0.,0.),.6)['hold_s']==0.
+    assert not m.measured_stopped_before([dict(monotonic_s=.1,v=0.,w=0.)],.3)
+    rows.append(dict(monotonic_s=.4,x=.2,y=0.,yaw=0.,v=.1,w=0.))
+    rows.extend(dict(monotonic_s=t,x=0.,y=0.,yaw=0.,v=0.,w=0.) for t in (.5,.6))
+    assert m.held(rows,(0.,0.,0.),.61)['hold_s']==pytest.approx(.1)
+
+def acceptance_module():
+    path=FILE.with_name('acceptance.py')
+    assert path.exists(), '缺少权威任务接受身份账'
+    spec=spec_from_file_location('frontier_acceptance',path);m=module_from_spec(spec);spec.loader.exec_module(m);return m
+
+def test_status_current_goal_and_feedback_order_cannot_create_pose_binding():
+    m=acceptance_module();ledger=m.AcceptanceLedger()
+    a,b='a'*32,'b'*32
+    assert ledger.get(a) is None and ledger.current is None
+    # status/feedback/current_goal无权绑定；只有exact TASK_ACCEPTED可给坐标。
+    ledger.record(dict(task_id=b,accepted_generation=2,goal=[2.,3.,.4]),2.)
+    ledger.record(dict(task_id=a,accepted_generation=1,goal=[-1.,0.,.1]),3.)
+    assert ledger.current.task_id==b and ledger.get(a).goal==(-1.,0.,.1)
+    assert ledger.get(b).goal==(2.,3.,.4)
+    ledger.finish(b)
+    ledger.record(dict(task_id=b,accepted_generation=2,goal=[2.,3.,.4]),4.)
+    assert ledger.current is None
+
+def test_acceptance_conflicts_and_missing_binding_fail_closed():
+    m=acceptance_module();ledger=m.AcceptanceLedger();a='a'*32
+    assert ledger.get(a) is None
+    ledger.record(dict(task_id=a,accepted_generation=1,goal=[0.,0.,0.]),1.)
+    ledger.record(dict(task_id=a,accepted_generation=1,goal=[1.,0.,0.]),2.)
+    assert not ledger.ok and ledger.current is None and ledger.get(a) is None

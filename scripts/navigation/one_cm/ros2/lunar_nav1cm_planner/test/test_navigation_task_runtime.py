@@ -172,3 +172,35 @@ def test_terminal_event_delivery_allows_reentrant_and_other_thread_input():
     runtime._tick_once(.45)
     assert runtime.tasks.active.outcome == 'GOAL_REACHED'
     assert not session.canceling  # 终态提交以后的旧取消不撤销已提交结果。
+
+
+def test_task_accepted_notice_has_exact_id_generation_and_adapted_goal():
+    import json
+    runtime,session,_,logs=build_runtime();seen=[]
+    runtime.notice=lambda kind,detail:seen.append((kind,detail))
+    runtime.offer_managed_goal('a',managed(has_yaw=False));runtime._tick_once(0.)
+    runtime.offer_managed_goal('bad',managed(2.6,0));runtime._tick_once(.1)
+    runtime.offer_managed_goal('b',managed(0,-3));runtime._tick_once(.2)
+    accepted=[json.loads(d) for k,d in seen if k=='TASK_ACCEPTED']
+    assert [r['task_id'] for r in accepted]==['a','b']
+    assert [r['accepted_generation'] for r in accepted]==[1,2]
+    assert accepted[0]['goal']==[0.,3.,0.] and accepted[1]['goal']==[0.,-3.,0.]
+    runtime.offer_goal(pose(0,3));runtime._tick_once(.3)
+    assert len([1 for k,_ in seen if k=='TASK_ACCEPTED'])==2
+
+def test_task_acceptance_notice_can_reenter_input_queue_and_wait_for_other_thread():
+    import json,threading
+    runtime,session,_,_=build_runtime();seen=[];done=threading.Event();worker=None
+    def notice(kind,detail):
+        nonlocal worker
+        if kind!='TASK_ACCEPTED':return
+        seen.append(json.loads(detail))
+        if len(seen)==1:
+            worker=threading.Thread(target=lambda:(runtime.offer_managed_goal('b',managed(0,-3)),done.set()),daemon=True)
+            worker.start();assert done.wait(1.), 'notice不能占用输入锁'
+    runtime.notice=notice;runtime.offer_managed_goal('a',managed());runtime._tick_once(0.)
+    if worker:worker.join(1.)
+    assert done.is_set()
+    runtime._tick_once(.1)
+    assert [r['task_id'] for r in seen]==['a','b']
+    assert seen[0]['goal']==[0.,3.,0.] and seen[1]['goal']==[0.,-3.,0.]

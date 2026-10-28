@@ -57,3 +57,8 @@ def test_drl_optional_hook_requires_actor_and_is_singular(monkeypatch):
 @pytest.mark.parametrize("values",[{"exploration_strategy":"invalid"},{"enable_controller":"perhaps"},{"build_dir":""}])
 def test_invalid_composition_explains_input(monkeypatch,values):
     with pytest.raises(RuntimeError): graph(monkeypatch,**values)
+
+
+def test_frontier_uses_shared_static_tf_topic(monkeypatch):
+    g=nodes(graph(monkeypatch,exploration_strategy="frontier",tf_static_topic="/private/latched_static"))
+    assert all(n["parameters"][0]["tf_static_topic"]=="/private/latched_static" for n in g)
