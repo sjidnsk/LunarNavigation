@@ -103,3 +103,32 @@ def test_cancel_stop_measurement_must_precede_terminal_receipt():
     assert hasattr(module,"measured_stopped_before"), "取消停稳缺少严格终态前测量门禁"
     assert not module.measured_stopped_before([dict(monotonic_s=.3,v=0.,w=0.)],.26)
     assert module.measured_stopped_before([dict(monotonic_s=.2,v=0.,w=0.)],.26)
+
+
+def obstacle_evidence():
+    e=evidence();e['case']='blocked_obstacle_update'
+    e['obstacle_sequence']={
+      'event':dict(uuid='a',monotonic_s=1.,pose=[2.,0.,0.],distance_m=2.,accepted_at=.9,active=True),
+      'source':dict(monotonic_s=1.1,changed=True),
+      'map':dict(monotonic_s=1.2,changed=True),
+      'wait':dict(uuid='a',monotonic_s=1.3,reason='WAITING_FOR_PATH'),
+      'terminal':dict(uuid='a',monotonic_s=3.3,status=5,outcome=5,reason='CANCELED_STOPPED',stopped_before=True),
+      'next':dict(uuid='b',monotonic_s=3.4,pose=[2.,1.,0.],logical_accepted=True)}
+    return e
+
+def test_obstacle_update_requires_real_event_source_map_current_uuid_stop_and_new_xy():
+    e=obstacle_evidence();assert load().grade(e)['pass_']
+
+@pytest.mark.parametrize('fault',['no_event','no_source_change','no_map_change','wrong_wait_uuid','wrong_terminal_uuid','no_stop','only_yaw','not_logically_accepted','wrong_order'])
+def test_obstacle_update_false_positive_evidence_is_rejected(fault):
+    e=obstacle_evidence();s=e['obstacle_sequence']
+    if fault=='no_event':s['event']=None
+    elif fault=='no_source_change':s['source']['changed']=False
+    elif fault=='no_map_change':s['map']['changed']=False
+    elif fault=='wrong_wait_uuid':s['wait']['uuid']='stale'
+    elif fault=='wrong_terminal_uuid':s['terminal']['uuid']='stale'
+    elif fault=='no_stop':s['terminal']['stopped_before']=False
+    elif fault=='only_yaw':s['next']['pose']=[2.,0.,1.]
+    elif fault=='not_logically_accepted':s['next']['logical_accepted']=False
+    elif fault=='wrong_order':s['terminal']['monotonic_s']=1.15
+    assert not load().grade(e)['pass_']

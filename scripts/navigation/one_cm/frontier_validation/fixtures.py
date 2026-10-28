@@ -1,5 +1,5 @@
 """首次实跑前冻结的合成测量/物理合同；失败后不延长场景。"""
-CASES={"large_source_preflight":15.,"frontier_progress":75.,"blocked_wait_reselect":60.,"task_cancel_stop":30.}
+CASES={"large_source_preflight":15.,"frontier_progress":75.,"blocked_wait_reselect":60.,"task_cancel_stop":30.,"blocked_obstacle_update":60.}
 DECLARATION={
  "domain_m":[-5.,-5.,5.,5.],"source_extent_m":10.,"source_resolution_m":.1,
  "preflight_source_extent_m":5.,"preflight_source_resolution_m":.01,
@@ -32,3 +32,10 @@ def declaration(version):
         out["blocked"]=out["blocked"].replace("x=[.9,1.3]","x=[1.6,2.0]")
         out["fixture_ruling"]="ROOT task3-fixture-support-ruling.md；仅未知缝平移；旧失败/sourceSHA保留"
     return out
+
+OBSTACLE_UPDATE_DECLARATION={
+ "case":"blocked_obstacle_update","duration_s":60.,"geometry":"qualified progress initial source without extra unknown slit; SHA70d26980e9c32fd604f8578f5bac3895f79860c49a08be2c9625e8b1f707889f; identical body/.2 clearance/.15 response/limits/50Hz",
+ "trigger":"first logically GOAL_ACCEPTED CURRENT UUID with active status and measured body-goal>=1.6m; immediate safe event, no t>=5 restriction; otherwise wait next accepted qualified target",
+ "obstacle":"same .6m square centered accepted goal, elevation2m; actual source and independent physical truth both change",
+ "acceptance":"event->changed source->changed actual map->matching UUID WAIT->CANCELED_STOPPED measured before result->new logically accepted UUID with XY>.1m; all existing motion/formal/physics/identity/graph/cleanup gates retained",
+ "no_event":"FAIL; single fixed run only; do not manipulate frontend or tune scene to pass"}

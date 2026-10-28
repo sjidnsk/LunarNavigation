@@ -1,6 +1,18 @@
 """只读原始证据门禁；实际到达与策略完成分开。"""
 import math
 
+
+def obstacle_sequence_valid(sequence):
+    if not sequence or any(not sequence.get(k) for k in ("event","source","map","wait","terminal","next")):return False
+    event,source,map_update,wait,terminal,nxt=(sequence[k] for k in ("event","source","map","wait","terminal","next"))
+    times=[r['monotonic_s'] for r in (event,source,map_update,wait,terminal,nxt)]
+    return (all(math.isfinite(t) for t in times) and times==sorted(times) and
+      event['accepted_at']<=times[0] and event['active'] and event['distance_m']>=1.6 and
+      source['changed'] and map_update['changed'] and wait['uuid']==event['uuid']==terminal['uuid'] and
+      wait['reason'] in ('WAITING_FOR_PATH','WAITING_FOR_MAP') and terminal['status']==5 and terminal['outcome']==5 and
+      terminal['reason']=='CANCELED_STOPPED' and terminal['stopped_before'] and nxt['logical_accepted'] and
+      nxt['uuid']!=event['uuid'] and math.hypot(nxt['pose'][0]-event['pose'][0],nxt['pose'][1]-event['pose'][1])>.1)
+
 def grade(e):
     required=("graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received","sensor_timing")
     checks={k:bool(e["common"].get(k)) for k in required}
@@ -15,6 +27,9 @@ def grade(e):
         checks.pop("actual_goal_reached")
         checks.update(path_or_map_wait=e.get("waits",0)>0,actual_cancel_stop=e.get("canceled_stopped",0)>0,
                       reselected=e.get("distinct_goals",0)>=2)
+    elif e["case"]=="blocked_obstacle_update":
+        checks.pop("actual_goal_reached")
+        checks["actual_obstacle_update_sequence"]=obstacle_sequence_valid(e.get("obstacle_sequence"))
     elif e["case"]=="task_cancel_stop":
         checks.pop("actual_goal_reached")
         checks.update(cancel_while_moving=bool(e.get("cancel_while_moving")),

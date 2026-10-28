@@ -15,7 +15,7 @@ import time
 
 HERE=Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE))
-from fixtures import CASES,DECLARATION,measurement_mask,declaration
+from fixtures import CASES,DECLARATION,measurement_mask,declaration,OBSTACLE_UPDATE_DECLARATION
 from grade import grade
 
 def helper(name):
@@ -95,7 +95,14 @@ def run(args):
     assert os.environ.get('ROS_DOMAIN_ID')=='92' and os.environ.get('ROS_LOCALHOST_ONLY')=='1'
     assert os.environ.get('ROS_DISTRO')=='humble'
     output=Path(args.output).resolve();output.mkdir(parents=True,exist_ok=False)
-    (output/'declaration.json').write_text(json.dumps(declaration(args.fixture_version),ensure_ascii=False,indent=2))
+    declared=declaration(args.fixture_version)
+    if args.case=='blocked_obstacle_update':
+        if args.fixture_version!='v1':raise ValueError('blocked_obstacle_update uses qualified progress v1 initial source')
+        declared.pop('blocked',None)
+        declared['progress_scan']='disabled; only actual obstacle event changes source'
+        declared['case_baseline']='qualified progress initial source without unknown slit'
+        declared.update(obstacle_update=OBSTACLE_UPDATE_DECLARATION)
+    (output/'declaration.json').write_text(json.dumps(declared,ensure_ascii=False,indent=2))
     (output/'harness-identity.json').write_text(json.dumps({str(f):hashlib.sha256(f.read_bytes()).hexdigest() for folder in (HERE,HERE.parent/'p3_path_validation',HERE.parent/'path_follower_validation') for f in folder.glob('*.py')},indent=2))
     stream=(output/'plant.jsonl').open('x',encoding='utf-8')
     records=[];states=[];results=[];feedback=[];goals=[];pending={};graphs=[];policy=[];observations=[];diagnostics=[]
@@ -105,7 +112,7 @@ def run(args):
     strategy='none' if args.case=='large_source_preflight' else 'frontier'
     launch=['ros2','launch','lunar_pure_exploration_ros','nav1cm_exploration.launch.py',
         'exploration_strategy:='+strategy,'enable_controller:=true','build_dir:='+str(Path(args.build_dir).resolve()),'coarse_resolution_m:=0.2',
-        'navigation_map_wait_timeout_s:='+('2.0' if args.case=='blocked_wait_reselect' else '30.0')]
+        'navigation_map_wait_timeout_s:='+('2.0' if args.case in ('blocked_wait_reselect','blocked_obstacle_update') else '30.0')]
     names={'map_topic':'grid','odometry_topic':'odom','tf_topic':'tf','tf_static_topic':'tf_static','action_name':'navigate','goal_topic':'goal_disabled',
            'global_route_topic':'global','local_path_topic':'local','exploration_map_topic':'exploration_map','policy_map_service':'policy',
            'task_topic':'task','status_topic':'status','command_topic':'cmd','diagnostics_topic':'diag'}
@@ -117,6 +124,7 @@ def run(args):
     reliable=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.VOLATILE)
     transient=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
     command=[0.,0.];state=motion.State();start=time.monotonic();last=start;cancel_at=None;cancel_moving=False;sent=False;scan=False;obstacle=None
+    accepted_goals=[];accepted_by_uuid={};active_status={};logical_active=None
     last_status=None;next_map=next_tf=next_graph=next_policy=0.;observed_count=0
     def receive_cmd(m):
         command[:]=[m.linear.x,m.angular.z];emit('COMMAND',v=command[0],w=command[1])
@@ -129,11 +137,17 @@ def run(args):
         request=NavigateToPose.Impl.GetResultService.Request();request.goal_id=UUID(uuid=uuid_values(uuid))
         pending[uid]=result_client.call_async(request);emit('UUID',uuid=uid,pose=(list(goals[-1]['pose']) if goals else None))
     def action_feedback(m):
+        nonlocal logical_active
         row=emit('ACTION_FEEDBACK',uuid=bytes(m.goal_id.uuid).hex(),message=message_to_ordereddict(m.feedback));feedback.append(row)
         get_result(m.goal_id.uuid)
+        uid=bytes(m.goal_id.uuid).hex()
+        if m.feedback.reason_code=='GOAL_ACCEPTED' and uid not in accepted_by_uuid:
+            accepted=emit('ACTION_LOGICAL_ACCEPTED',uuid=uid,pose=(list(goals[-1]['pose']) if goals else None),logical_accepted=True)
+            accepted_by_uuid[uid]=accepted;accepted_goals.append(accepted);logical_active=uid
     def action_status(m):
-        for s in m.status_list:get_result(s.goal_info.goal_id.uuid)
-    def exploration(m):emit('EXPLORATION_MAP',resolution=m.info.resolution,counts={str(i):m.data.count(i) for i in (-1,0,100)})
+        for item in m.status_list:
+            uid=bytes(item.goal_info.goal_id.uuid).hex();active_status[uid]=int(item.status);get_result(item.goal_info.goal_id.uuid)
+    def exploration(m):emit('EXPLORATION_MAP',stamp=message_to_ordereddict(m.header.stamp),resolution=m.info.resolution,counts={str(i):m.data.count(i) for i in (-1,0,100)})
     def diag(m):
         row=emit('DIAGNOSTIC',data=json.loads(m.data));diagnostics.append(row)
     def goal(m):
@@ -164,6 +178,11 @@ def run(args):
     length=5. if args.case=='large_source_preflight' else 10.;n=round(length/resolution)
     coords=length/2-(np.arange(n)+.5)*resolution;x,y=np.meshgrid(coords,coords,indexing='ij')
     measured=np.ones((n,n),bool) if args.case=='large_source_preflight' else measurement_mask(x,y,args.case,args.fixture_version)
+    if args.case=='blocked_obstacle_update':
+        import io
+        initial=np.where(measured,0.,np.nan).astype(np.float32);wire=io.BytesIO();np.save(wire,initial)
+        assert hashlib.sha256(wire.getvalue()).hexdigest()=='70d26980e9c32fd604f8578f5bac3895f79860c49a08be2c9625e8b1f707889f'
+        emit('INITIAL_SUPPORT_BINDING',source_sha256='70d26980e9c32fd604f8578f5bac3895f79860c49a08be2c9625e8b1f707889f',baseline='qualified progress initial source')
     physical_boundary=[(-5.2,-5.2,-5.,5.2),(5.,-5.2,5.2,5.2),(-5.,-5.2,5.,-5.),(-5.,5.,5.,5.2)]
     exception=None;termination=[];process_identity=[]
     proc=subprocess.Popen(launch,stdout=console,stderr=subprocess.STDOUT,start_new_session=True,cwd=output)
@@ -189,6 +208,7 @@ def run(args):
                 result=future.result();pose=next((r['pose'] for r in records if r['kind']=='UUID' and r['uuid']==uid),None)
                 row=emit('ACTION_RESULT',uuid=uid,status=result.status,outcome=result.result.outcome,reason=result.result.reason_code,pose=pose)
                 results.append(row);pending[uid]=None
+                if logical_active==uid:logical_active=None
             if args.case=='frontier_progress' and not scan and any(r['outcome']==0 and r['status']==4 for r in results):
                 measured |= (x-state.x)**2+(y-state.y)**2<=3.2**2;scan=True
                 emit('SCAN_NEW',pose=asdict(state),observed_cells=int(measured.sum()))
@@ -196,6 +216,14 @@ def run(args):
                 gx,gy,_=goals[0]['pose']
                 if math.hypot(gx-state.x,gy-state.y)>=1.6:
                     obstacle=(gx-.3,gy-.3,gx+.3,gy+.3);emit('OBSTACLE_ADDED',t=t,box=obstacle,state=asdict(state))
+            if args.case=='blocked_obstacle_update' and obstacle is None and logical_active in accepted_by_uuid and active_status.get(logical_active) in (1,2):
+                accepted=accepted_by_uuid[logical_active];pose=accepted['pose']
+                if pose is not None:
+                    distance=math.hypot(pose[0]-state.x,pose[1]-state.y)
+                    if distance>=1.6:
+                        gx,gy,_=pose;obstacle=(gx-.3,gy-.3,gx+.3,gy+.3)
+                        emit('OBSTACLE_ADDED',t=t,box=obstacle,state=asdict(state),uuid=logical_active,pose=pose,
+                             distance_m=distance,accepted_at=accepted['monotonic_s'],active=True)
             if t>=next_map:
                 height=np.where(measured,0.,np.nan).astype(np.float32)
                 if obstacle is not None:
@@ -204,7 +232,7 @@ def run(args):
                 msg.info.length_x=msg.info.length_y=length;msg.info.pose.orientation.w=1.;msg.layers=['elevation']
                 layer=Float32MultiArray();layer.layout.dim=[MultiArrayDimension(label='column_index',size=n,stride=n*n),MultiArrayDimension(label='row_index',size=n,stride=n)]
                 layer.data=height.ravel(order='F').tolist();msg.data=[layer];map_pub.publish(msg)
-                count=int(np.isfinite(height).sum());observations.append(emit('MAP',t=t,resolution=resolution,extent=length,cells=n*n,observed_cells=count,obstacle=obstacle))
+                count=int(np.isfinite(height).sum());observations.append(emit('MAP',t=t,resolution=resolution,extent=length,cells=n*n,observed_cells=count,obstacle=obstacle,stamp=message_to_ordereddict(msg.header.stamp),source_sha256=hashlib.sha256(height.tobytes()).hexdigest()))
                 if not (output/'source-initial.npy').exists():np.save(output/'source-initial.npy',height)
                 np.save(output/'source-final.npy',height);next_map=t+.5
             if strategy=='frontier' and t>=3. and not sent and task_pub.get_subscription_count()>0:
@@ -273,6 +301,22 @@ def run(args):
        formal=formal,applied=applied,clearance=clear,goals=goals,results=results,exception=exception,returncode=proc.returncode,termination=termination,
        maxima={k:max((abs(r[k]) for r in states),default=0.) for k in ('v','w','a','alpha')},final_state=asdict(state),
        source_resolution_m=resolution,source_extent_m=length,source_cells=n*n,process_identity=process_identity)
+    if args.case=='blocked_obstacle_update':
+        event=next((r for r in records if r['kind']=='OBSTACLE_ADDED'),None);sequence=None
+        if event:
+            initial=observations[0]['source_sha256']
+            source=next((r for r in observations if r['monotonic_s']>=event['monotonic_s'] and r['source_sha256']!=initial),None)
+            before=[r for r in records if r['kind']=='EXPLORATION_MAP' and r['monotonic_s']<event['monotonic_s']]
+            occupied=max((r['counts']['100'] for r in before),default=0)
+            changed=next((r for r in records if source and r['kind']=='EXPLORATION_MAP' and r['monotonic_s']>=source['monotonic_s'] and r['counts']['100']>occupied),None)
+            wait=next((r for r in feedback if changed and r['monotonic_s']>=changed['monotonic_s'] and r['uuid']==event['uuid'] and r['message']['reason_code'] in ('WAITING_FOR_PATH','WAITING_FOR_MAP')),None)
+            terminal=next((r for r in results if wait and r['monotonic_s']>=wait['monotonic_s'] and r['uuid']==event['uuid'] and r['reason']=='CANCELED_STOPPED'),None)
+            nxt=next((r for r in accepted_goals if terminal and r['monotonic_s']>terminal['monotonic_s'] and r['uuid']!=event['uuid'] and r['pose'] and math.hypot(r['pose'][0]-event['pose'][0],r['pose'][1]-event['pose'][1])>.1),None)
+            sequence=dict(event=event,source=None if source is None else dict(source,changed=True),map=None if changed is None else dict(changed,changed=True),
+                          wait=None if wait is None else dict(wait,reason=wait['message']['reason_code']),terminal=None if terminal is None else dict(terminal,stopped_before=measured_stopped_before(states,terminal['monotonic_s'])),next=nxt)
+        evidence['obstacle_sequence']=sequence
+        evidence['obstacle_event_count']=sum(r['kind']=='OBSTACLE_ADDED' for r in records)
+        evidence['logical_accepted_goals']=accepted_goals
     evidence['independent_plant_modules']=[n for n in sys.modules if n=='nav1cm' or n.startswith(('nav1cm.','lunar_nav1cm_planner.','lunar_pure_wheeled_controller.'))]
     evidence['common']['installed'] &= not evidence['independent_plant_modules']
     summary={**grade(evidence),**evidence};(output/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2,allow_nan=True))
