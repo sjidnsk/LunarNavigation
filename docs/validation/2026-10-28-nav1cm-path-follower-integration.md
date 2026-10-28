@@ -237,7 +237,7 @@ map origin[-1.403985671926278,-1.161174903964848]/res.01/revision422/epoch1。
 此后463条UPDATE返回FAILED/TRACKING_STALLED，最后before.map revision424，origin[-1.4038120009130135,-1.1611679444652683]，
 now_s1793184846.921651/state_age_s=.01212123，最近12条真实history全0。
 
-| 连续时段(s) | 实际路程(m) | 最大|v| | 非空 / 空Path | LOCAL_ACCEPTED | UPDATE phase |
+| 连续时段(s) | 实际路程(m) | 最大速度绝对值 | 非空 / 空Path | LOCAL_ACCEPTED | UPDATE phase |
 | --- | --- | --- | --- | --- | --- |
 | 25..38 | 0 | 0 | 259 / 0 | 99 | FAILED 260条 |
 | 38..48 | 0 | 0 | 193 / 0 | 77 | FAILED 200条 |
@@ -246,7 +246,7 @@ now_s1793184846.921651/state_age_s=.01212123，最近12条真实history全0。
 首次制动前最近收到local Path为t24.474408449s附近（monotonic1291150.382302832），94 poses，
 首(1.046965306,1.336859818)、末(1.800090551,1.367556034)，xy整体方向.040735900rad；
 这是最近收到的Path，不能等同内部activepath/anchor。
-最后收到local Path仍从实际停点伸向(1.831193115,1.368722240)，94点；
+最后收到local Path仍从实际停点伸向(1.831193115,1.368722240)，96点；
 最后正式GLOBAL_RESULT仍0/PLAN_FOUND/true、requested_goal[2.6,1.4]/goal_revision1/accepted_generation1，
 requested_epoch1/version45，最后局部sequence350/route_version23持续被接受。
 
