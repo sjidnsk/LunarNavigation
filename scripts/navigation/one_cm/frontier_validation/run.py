@@ -172,9 +172,10 @@ def run(args):
             odom=Odometry();odom.header.frame_id='odom';odom.child_frame_id='base_link';odom.header.stamp=node.get_clock().now().to_msg()
             odom.pose.pose.position.x=state.x;odom.pose.pose.position.y=state.y;odom.pose.pose.orientation.z=math.sin(state.yaw/2);odom.pose.pose.orientation.w=math.cos(state.yaw/2)
             odom.twist.twist.linear.x=state.v;odom.twist.twist.angular.z=state.w;odom_pub.publish(odom)
+            emit("ODOMETRY",t=t,stamp=message_to_ordereddict(odom.header.stamp))
             if t>=next_tf:
                 tf=TransformStamped();tf.header.frame_id='map';tf.child_frame_id='odom';tf.transform.rotation.w=1.
-                msg=TFMessage(transforms=[tf]);tf_pub.publish(msg);static_pub.publish(msg);next_tf=t+.1
+                msg=TFMessage(transforms=[tf]);tf_pub.publish(msg);static_pub.publish(msg);next_tf=t+.1;emit("TF",t=t,zero_stamp=True)
             for uid,future in list(pending.items()):
                 if future is None or not future.done():continue
                 result=future.result();pose=next((r['pose'] for r in records if r['kind']=='UUID' and r['uuid']==uid),None)
@@ -249,13 +250,17 @@ def run(args):
     # 安装身份由本次进程原始cmdline/native映射及外部逐文件receipt补证。
     installed=bool(process_identity) and any('/install/lunar_nav1cm_planner/' in r['cmdline'] for r in process_identity) and any('/install/lunar_pure_wheeled_controller/' in r['cmdline'] for r in process_identity)
     no_exceptions=exception is None and not any(s in text for s in ('Traceback (most recent call last)','TICK_ERROR','process has died'))
-    common=dict(graph=graph_ok,formal=any(r.get('planning_outcome')==0 and r.get('reason_code')=='PLAN_FOUND' and r.get('has_reference') is True for r in formal),
+    odom_times=[r["t"] for r in records if r["kind"]=="ODOMETRY"]
+    span=odom_times[-1]-odom_times[0] if len(odom_times)>1 else 0.
+    timing=dict(duration_s=span,odometry_count=len(odom_times),odometry_hz=(len(odom_times)-1)/span if span>0 else 0.,map_count=len(observations),tf_count=sum(r["kind"]=="TF" for r in records),state_count=len(states),max_integration_dt_s=.01)
+    timing_ok=(abs(span-CASES[args.case])<.5 and 35.<=timing["odometry_hz"]<=55.)
+    common=dict(sensor_timing=timing_ok,graph=graph_ok,formal=any(r.get('planning_outcome')==0 and r.get('reason_code')=='PLAN_FOUND' and r.get('has_reference') is True for r in formal),
       motion=bool(states) and max(math.hypot(r['x'],r['y']) for r in states)>.3,
       bounds=bool(states) and all(all(math.isfinite(r[k]) for k in ('x','y','yaw','v','w','a','alpha')) and abs(r['v'])<=.200001 and abs(r['w'])<=1.000001 and abs(r['a'])<=.500001 and abs(r['alpha'])<=.500001 and (abs(r['v'])<1e-8 or abs(r['w'])<=abs(r['v'])+1e-7) for r in states),
       clearance=clear['pass'],cleanup=proc.returncode==0 and not termination and not remaining,
       installed=installed,no_exceptions=no_exceptions,
       source_received=bool(applied) and any(r['ready'] for r in policy) and any(r['data'].get('map_revision',0)>0 for r in diagnostics))
-    evidence=dict(case=args.case,common=common,reached=reached,distinct_goals=len(goals),observed_growth=(observations[-1]['observed_cells']-observations[0]['observed_cells']) if observations else 0,
+    evidence=dict(case=args.case,common=common,sensor_timing=timing,reached=reached,distinct_goals=len(goals),observed_growth=(observations[-1]['observed_cells']-observations[0]['observed_cells']) if observations else 0,
        waits=sum(r['message']['reason_code'] in ('WAITING_FOR_MAP','WAITING_FOR_PATH') for r in feedback),canceled_stopped=sum(r['reason']=='CANCELED_STOPPED' and r['status']==5 and any(abs(v['monotonic_s']-r['monotonic_s'])<=.15 and abs(v['v'])<=.01 and abs(v['w'])<=.01 for v in states) for r in results),
        cancel_while_moving=cancel_moving,no_goals_after_cancel=cancel_at is not None and not any(r['monotonic_s']>cancel_at+.1 for r in goals),
        formal=formal,applied=applied,clearance=clear,goals=goals,results=results,exception=exception,returncode=proc.returncode,termination=termination,

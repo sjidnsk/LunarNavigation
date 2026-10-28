@@ -2,7 +2,8 @@
 import math
 
 def grade(e):
-    checks={k:bool(v) for k,v in e["common"].items()}
+    required=("graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received","sensor_timing")
+    checks={k:bool(e["common"].get(k)) for k in required}
     reached=e.get("reached",[])
     checks["actual_goal_reached"]=bool(reached) and all(
         r.get("uuid") and all(math.isfinite(r[k]) for k in ("xy_error","yaw_error","v","w","hold_s")) and

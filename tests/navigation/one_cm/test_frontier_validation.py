@@ -9,7 +9,7 @@ def load():
     spec=spec_from_file_location("frontier_grade",FILE);m=module_from_spec(spec);spec.loader.exec_module(m);return m
 
 def evidence():
-    return dict(case="frontier_progress",common={k:True for k in ("graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received")},
+    return dict(case="frontier_progress",common={k:True for k in ("graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received","sensor_timing")},
                 reached=[dict(uuid="current",xy_error=.05,yaw_error=.02,v=0.,w=0.,hold_s=.3,status=4,outcome=0)],
                 distinct_goals=2,observed_growth=20,waits=0,canceled_stopped=0,cancel_while_moving=False,no_goals_after_cancel=True)
 
@@ -23,7 +23,7 @@ def test_path_or_no_map_cannot_count_as_frontier_completion():
     e=evidence();e["reached"]=[];e["nonempty_paths"]=100
     assert not load().grade(e)["pass_"]
 
-@pytest.mark.parametrize("key",["graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received"])
+@pytest.mark.parametrize("key",["graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received","sensor_timing"])
 def test_every_common_safety_and_identity_gate_is_independent(key):
     e=evidence();e["common"][key]=False;assert not load().grade(e)["pass_"]
 

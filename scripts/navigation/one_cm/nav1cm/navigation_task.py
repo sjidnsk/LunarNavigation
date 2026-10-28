@@ -101,11 +101,16 @@ class NavigationTaskCoordinator:
                 elif now_s-arrived_since >= self.arrived_hold_s-1e-9:
                     current = replace(current, phase='FINISHED', outcome='GOAL_REACHED', reason_code='GOAL_REACHED')
             if current.outcome is None:
-                reason = ('WAITING_FOR_MAP' if 'world' in packet.waiting else
-                          'WAITING_FOR_POSE' if 'state' in packet.waiting else
-                          'WAITING_FOR_PATH' if packet.route is None else packet.result.status)
-                phase = 'EXECUTING' if packet.candidate is not None and packet.route is not None else 'PLANNING'
-                current = replace(current, phase=phase, reason_code=reason)
+                status = None if packet.result is None else packet.result.status
+                # NOT_DUE只表示本周期没有重新计算；保留上一真实周期的执行/等待反馈。
+                # BUFFER_UNAVAILABLE可能携带受认证的制动候选，不能当可执行导航buffer。
+                if status != 'NOT_DUE' or packet.waiting or packet.route is None:
+                    reason = ('WAITING_FOR_MAP' if 'world' in packet.waiting else
+                              'WAITING_FOR_POSE' if 'state' in packet.waiting else
+                              'WAITING_FOR_PATH' if packet.route is None or status == 'BUFFER_UNAVAILABLE' else status)
+                    phase = ('EXECUTING' if packet.candidate is not None and packet.route is not None and
+                             reason != 'WAITING_FOR_PATH' else 'PLANNING')
+                    current = replace(current, phase=phase, reason_code=reason)
         revision = 0 if packet.route is None else max(0, packet.route.version)
         proposal = TaskObservation(before, replace(current, planning_cycle=self._cycle+1,
                                                     segment_revision=revision), arrived_since)

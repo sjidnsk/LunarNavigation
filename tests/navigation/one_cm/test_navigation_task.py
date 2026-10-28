@@ -156,3 +156,49 @@ def test_yaw_and_configured_tolerance_and_new_measurements_gate_success():
     assert task.active.outcome is None
     task.observe(session.tick(1.5), 1.5)
     assert task.active.outcome == 'GOAL_REACHED'
+
+
+def test_unavailable_local_buffer_with_global_route_waits_across_not_due():
+    from types import SimpleNamespace as NS
+    from scripts.navigation.one_cm.nav1cm.p3_session import SessionPacket
+    session,Goal=make_session();task=task_api(session);task.submit('a',Goal(0,3,0),0.)
+    route=NS(version=7)
+    packet=SessionPacket(session.accepted_generation,route,NS(status='BUFFER_UNAVAILABLE'))
+    packet=replace(packet,candidate=NS(source="brake"))
+    task.observe(packet,.1)
+    assert task.active.reason_code=='WAITING_FOR_PATH' and task.active.phase=='PLANNING'
+    task.observe(replace(packet,result=NS(status='NOT_DUE')),.11)
+    assert task.active.reason_code=='WAITING_FOR_PATH' and task.active.outcome is None
+    assert packet.route is route
+
+
+def test_not_due_retains_valid_executing_feedback_and_never_inherits_old_goal_wait():
+    from types import SimpleNamespace as NS
+    from scripts.navigation.one_cm.nav1cm.p3_session import SessionPacket
+    session,Goal=make_session();task=task_api(session);task.submit('a',Goal(0,3,0),0.)
+    route=NS(version=7)
+    packet=SessionPacket(session.accepted_generation,route,NS(status='BUFFER_EXECUTING'),candidate=NS())
+    task.observe(packet,.1)
+    task.observe(replace(packet,result=NS(status='NOT_DUE'),candidate=None),.11)
+    assert task.active.phase=='EXECUTING' and task.active.reason_code=='BUFFER_EXECUTING'
+    task.observe(replace(packet,result=NS(status='BUFFER_UNAVAILABLE'),candidate=None),.2)
+    assert task.active.reason_code=='WAITING_FOR_PATH'
+    task.submit('b',Goal(0,-3,0),.3)
+    new=replace(packet,generation=session.accepted_generation,result=NS(status='NOT_DUE'),candidate=None)
+    task.observe(new,.31)
+    assert task.active.task_id=='b' and task.active.phase=='PLANNING' and task.active.reason_code=='GOAL_ACCEPTED'
+
+
+def test_missing_input_and_retired_route_take_priority_over_not_due_history():
+    from types import SimpleNamespace as NS
+    from scripts.navigation.one_cm.nav1cm.p3_session import SessionPacket
+    session,Goal=make_session();task=task_api(session);task.submit('a',Goal(0,3,0),0.)
+    packet=SessionPacket(session.accepted_generation,NS(version=1),NS(status='BUFFER_EXECUTING'),candidate=NS())
+    task.observe(packet,.1)
+    absent=replace(packet,result=NS(status='NOT_DUE'),candidate=None,route=None)
+    task.observe(absent,.11)
+    assert task.active.phase=='PLANNING' and task.active.reason_code=='WAITING_FOR_PATH'
+    task.observe(replace(absent,waiting=('world','state')),.12)
+    assert task.active.reason_code=='WAITING_FOR_MAP'
+    task.observe(replace(absent,waiting=('state',)),.13)
+    assert task.active.reason_code=='WAITING_FOR_POSE' and task.active.outcome is None
