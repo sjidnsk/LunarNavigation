@@ -92,3 +92,34 @@ planner发布者与follower订阅者均RELIABLE/VOLATILE/KEEP_LAST/depth1。
 archive SHA256为79cdd40198e2a87e2b82eb9651146a6db0cf8b8a89bb4d894dadbcbfa7850052。
 实际图ART/task3-joint-r5-actual-motion-comparison.png已亲视。
 旧r1-r4失败与历史通过均完整保留，不归入当前生产版本通过数量。
+
+## 当前后续结果（r6，覆盖r5为最新验收状态）
+
+F02生产963cba45811ab2947a6d13aff67c7e6c16e1de23，
+真实安装t3f02-build-r1；harness导入隔离提交ad26ae64。
+原完整core两项全局evaluate污染失败已修：focused43项通过，最终完整core
+583passed/1skipped（57.15s），原SQP_RTI诊断与历史失败均保留。
+
+r6正向45s与障碍48s仍FAIL；安全、正式来源、结构化QoS和清理通过，
+但运动/终端未通过，Task3继续NEEDS_CONTEXT。
+正向首次在13.122s报告MPPI_STOPPING_UNSAFE，
+实际yaw=.05212而收到单调纯spin参考终点.6，随后FAILED585次。
+障碍地图修复后非空Path持续、333次LOCAL_ACCEPTED，
+但在9.411s首次报告同一停车失败，随后FAILED773次，实际总位移.003218m。
+两项TRACKING_STALLED均为0。不能以旧r5正向PASS代替当前版本，也不把新失败归因旧UNKNOWN。
+
+r5/r6生产50Python仅maps.py有变化，controller全部SHA、实际policy/参数一致。
+实际core.so路径与SHA仍如前节，Path/tf_static QoS均有真实实体补证。
+r6独立plant禁入检查误伤nav1cm_joint_validation等验证包名；
+现已精确排除实际生产nav1cm及controller包及其子模块，focused44项通过，
+原r6 raw/summary不改写，观察修复尚未实跑。
+新963版本reverse/empty/mapchange仍NOT_RUN。须follower-owner复现停车认证失败后重新全matrix。
+
+当前不可变原始结果ART/task3-joint-r6-result，
+archivecccb8f631194a515f07634e0cf5d3b58269f44e8f62051ec71a5fbfe5d3c700c。
+实际图ART/task3-joint-r6-stopping-failure.png已亲视，所有进程/worker均正常回收。
+
+重复FAILED输出可能来自锁存，不证明每轮重新认证；需follower-owner区分首次停车认证失败和后续状态。
+后续UPDATE增加调用前时钟/phase/failure、真实最近12条指令history和map identity小型只读快照。
+plant真实产品禁入精确包含nav1cm、lunar_nav1cm_planner、lunar_pure_wheeled_controller及子模块，
+不把验证工具别名当作生产代码；该增强观测尚待后续实际case验证。

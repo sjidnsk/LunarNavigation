@@ -8,7 +8,7 @@ import rclpy
 from rclpy.signals import SignalHandlerOptions
 from lunar_pure_wheeled_controller.node import PureWheeledControllerNode
 import lunar_pure_wheeled_controller
-from .evidence import Recorder,CMD,DIAG
+from .evidence import Recorder,CMD,DIAG,executor_context
 
 def run(args):
     rec=Recorder(args.output,'follower')
@@ -30,8 +30,9 @@ def run(args):
     assert '/install/' in lunar_pure_wheeled_controller.__file__
     original=node._executor.update
     def observe(*a,**kw):
+        before=executor_context(node._executor,a[1],kw)
         result=original(*a,**kw)
-        rec.emit('UPDATE',state=asdict(a[0]),result=asdict(result))
+        rec.emit('UPDATE',state=asdict(a[0]),before=before,result=asdict(result))
         return result
     node._executor.update=observe
     try:

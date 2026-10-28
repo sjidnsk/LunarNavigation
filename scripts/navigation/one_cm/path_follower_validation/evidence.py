@@ -30,3 +30,15 @@ def obstacles(case,t):
 def goal(case):
     return {'forward_spin':(1.4,0.,.6),'reverse':(-.8,0.,0.),
             'obstacle':(2.6,1.4,0.),'mapchange':(2.6,0.,0.),'empty_smoke':(.8,0.,0.)}[case]
+
+def production_modules(names):
+    return [n for n in names if n in ('nav1cm','lunar_pure_wheeled_controller','lunar_nav1cm_planner') or
+            n.startswith(('nav1cm.','lunar_pure_wheeled_controller.','lunar_nav1cm_planner.'))]
+
+def executor_context(executor,dt,kwargs):
+    grid=executor.map
+    return dict(dt=dt,now_s=kwargs.get('now_s'),state_age_s=kwargs.get('state_age_s',0.),
+        phase=executor.phase,failure=executor.failure,last_command=executor._last_command.tolist(),
+        command_history=[(t,u.tolist()) for t,u in executor._command_history[-12:]],
+        map=None if grid is None else dict(origin=grid.origin,resolution=grid.resolution,
+            revision=grid.revision,epoch=grid.epoch))

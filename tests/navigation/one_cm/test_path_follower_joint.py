@@ -120,3 +120,25 @@ def test_legacy_loader_and_joint_package_keep_separate_evaluators():
     import inspect
     assert "start" in inspect.signature(old.analyze).parameters
     assert "error" in inspect.signature(new.analyze).parameters
+
+def test_independent_plant_rejects_real_production_packages_without_rejecting_harness_names():
+    from scripts.navigation.one_cm.path_follower_validation.evidence import production_modules
+    names=["nav1cm_joint_validation","nav1cm_joint_validation.plant",
+           "nav1cm_p3_path_validation.motion","nav1cm","nav1cm.maps",
+           "lunar_pure_wheeled_controller.node","lunar_nav1cm_planner.node"]
+    assert production_modules(names)==["nav1cm","nav1cm.maps","lunar_pure_wheeled_controller.node","lunar_nav1cm_planner.node"]
+
+def test_executor_context_copies_real_observation_without_mutating_history():
+    from types import SimpleNamespace
+    import numpy as np
+    from scripts.navigation.one_cm.path_follower_validation.evidence import executor_context
+    history=[(2.,np.array([.1,.02]))]
+    executor=SimpleNamespace(phase="BRAKING",failure=None,_last_command=np.array([.1,.02]),
+        _command_history=history,map=SimpleNamespace(origin=(-2.5,-2.5),resolution=.01,revision=7,epoch="measured"))
+    snapshot=executor_context(executor,.05,dict(now_s=2.1,state_age_s=.02))
+    assert snapshot["dt"]==.05 and snapshot["now_s"]==2.1 and snapshot["state_age_s"]==.02
+    assert snapshot["phase"]=="BRAKING" and snapshot["failure"] is None
+    assert snapshot["map"]==dict(origin=(-2.5,-2.5),resolution=.01,revision=7,epoch="measured")
+    assert snapshot["last_command"]==[.1,.02] and snapshot["command_history"]==[(2.,[.1,.02])]
+    snapshot["command_history"][0][1][0]=9.
+    assert history[0][1][0]==.1

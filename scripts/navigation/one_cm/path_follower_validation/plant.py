@@ -14,7 +14,7 @@ import rclpy
 from rclpy.signals import SignalHandlerOptions
 from rclpy.node import Node
 from rclpy.qos import QoSProfile,DurabilityPolicy,ReliabilityPolicy
-from .evidence import Recorder,TOPICS,CMD,DIAG,path_data,legacy,obstacles,goal
+from .evidence import Recorder,TOPICS,CMD,DIAG,path_data,legacy,obstacles,goal,production_modules
 # 仅复用解析SAT和运动积分函数，绝不构造旧PathFollower。
 geometry=legacy('motion')
 State,integrate,swept_clear=geometry.State,geometry.integrate,geometry.swept_clear
@@ -122,7 +122,7 @@ def run(args):
             rclpy.spin_once(node,timeout_sec=.005)
     except KeyboardInterrupt:pass
     finally:
-        rec.emit('EXIT',state=asdict(state),forbidden=[n for n in sys.modules if n.startswith(('nav1cm','lunar_pure_wheeled_controller'))])
+        rec.emit('EXIT',state=asdict(state),forbidden=production_modules(sys.modules))
         node.destroy_node()
         if rclpy.ok():rclpy.shutdown()
         rec.close()
