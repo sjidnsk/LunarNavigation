@@ -27,13 +27,14 @@ def test_default_no_goal_source_and_no_controller(monkeypatch):
 
 def test_frontier_singular_common_action_and_shared_source(monkeypatch):
     g=nodes(graph(monkeypatch,exploration_strategy="frontier",enable_controller="true"))
-    assert [n["executable"] for n in g]==["lunar_exploration_map_node","navigation_task_node","incremental_exploration_node","pure_wheeled_controller_node"]
+    assert [n["executable"] for n in g]==["lunar_exploration_map_node","navigation_task_node","incremental_exploration_node","lunar_pure_wheeled_controller_node.py"]
     maps,planner,frontier,follower=[n["parameters"][0] for n in g]
     assert planner["action_name"]==frontier["navigation_action"]
     assert planner["map_topic"]==maps["map_topic"]==follower["p3_map_topic"]
     assert planner["wheel_config"]==maps["platform_config"]==follower["platform_config"]
     assert maps["map_qos_reliability"]==planner["map_qos_reliability"]=="reliable"
-    assert maps["map_qos_durability"]==planner["map_qos_durability"]=="volatile"
+    assert maps["map_qos_durability"]==planner["map_qos_durability"]==follower["map_qos_durability"]=="volatile"
+    assert follower["map_qos_reliability"]=="reliable"
     assert planner["allow_unknown"] is False
     assert follower["mppi_nominal_response_time_s"]==.15
     assert follower["input_mode"]=="incremental_path"

@@ -107,6 +107,7 @@ install(
   DESTINATION share/${PROJECT_NAME}/launch)
 install(
   FILES "${LUNAR_PURE_EXPLORATION_LAUNCH_SOURCE_DIR}/exploration_navigation.launch.py"
+    "${LUNAR_PURE_EXPLORATION_LAUNCH_SOURCE_DIR}/nav1cm_exploration.launch.py"
   DESTINATION share/${PROJECT_NAME}/launch
   OPTIONAL)
 

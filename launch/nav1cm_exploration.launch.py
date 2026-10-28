@@ -1,0 +1,80 @@
+"""显式新导航组合；默认仅规划，策略与控制均由操作者选择。"""
+import os
+from pathlib import Path
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+# 这些值只属于新入口；既有 exploration_navigation 和训练默认保持原样。
+DEFAULTS = {
+    "exploration_strategy": "none", "enable_controller": "false", "drl_actor": "",
+    "build_dir": "", "platform_config": "", "use_sim_time": "false",
+    "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
+    "map_topic": "/Car/T3/mapping/grid_map", "odometry_topic": "/Car/T3/localization/odometry",
+    "tf_topic": "/tf", "tf_static_topic": "/tf_static",
+    "action_name": "/Car/T4/navigation/navigate_to_pose",
+    "goal_topic": "/Car/T4/navigation/goal",
+    "global_route_topic": "/Car/T4/planning/global_route", "local_path_topic": "/Car/T4/planning/local_path",
+    "exploration_map_topic": "/Car/T4/mapping/exploration_map",
+    "policy_map_service": "/Car/T4/mapping/get_policy_map",
+    "task_topic": "/Car/T4/exploration/task", "status_topic": "/Car/T4/exploration/status",
+    "command_topic": "/Car/T5/Car_Cmd_Vel", "diagnostics_topic": "/Car/T4/control/mppi_diagnostics",
+    "map_qos_reliability": "reliable", "map_qos_durability": "volatile",
+    "coarse_resolution_m": "1.0", "navigation_map_wait_timeout_s": "30.0",
+}
+
+def _compose(context):
+    values = {k: LaunchConfiguration(k).perform(context).strip() or v for k,v in DEFAULTS.items()}
+    strategy = values["exploration_strategy"]
+    if strategy not in {"none", "frontier", "drl"}:
+        raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
+    for key in ("enable_controller", "use_sim_time"):
+        if values[key] not in {"true", "false"}: raise RuntimeError(key+" 必须为 true/false")
+    if strategy == "drl" and not values["drl_actor"]:
+        raise RuntimeError("drl 策略需要显式 drl_actor；权重加载与校验由可选 DRL 包负责")
+    values["build_dir"] = values["build_dir"] or os.environ.get("NAV1CM_BUILD_DIR", "")
+    if not values["build_dir"]: raise RuntimeError("build_dir 必须指定仓库外缓存，或设置 NAV1CM_BUILD_DIR")
+    config = values["platform_config"] or str(Path(get_package_share_directory("lunar_nav1cm_planner"))/"config/wheel.yaml")
+    frames = {k: values[k] for k in ("map_frame","odom_frame","base_frame")}
+    inputs = {k: values[k] for k in ("map_topic","odometry_topic","tf_topic","tf_static_topic")}
+    qos = {k: values[k] for k in ("map_qos_reliability","map_qos_durability")}
+    if qos["map_qos_reliability"] not in {"reliable","best_effort"} or qos["map_qos_durability"] not in {"volatile","transient_local"}:
+        raise RuntimeError("无效地图输入 QoS")
+    clock = {"use_sim_time": values["use_sim_time"] == "true"}
+    def node(package, executable, params):
+        return Node(package=package, executable=executable, output="screen", parameters=[{**params,**clock}])
+    actions = [
+        node("lunar_incremental_navigation_ros", "lunar_exploration_map_node", {
+            **frames, **inputs, **qos, "platform_config": config,
+            "exploration_map_topic": values["exploration_map_topic"], "policy_map_service": values["policy_map_service"],
+            "coarse_resolution_m": float(values["coarse_resolution_m"])}),
+        node("lunar_nav1cm_planner", "navigation_task_node", {
+            **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
+            **{k: values[k] for k in ("action_name","goal_topic","global_route_topic","local_path_topic","build_dir")},
+            "allow_unknown": False}),
+    ]
+    shared_policy = {**{k: values[k] for k in ("task_topic","status_topic","odometry_topic","tf_topic")},
+                     **frames, "platform_config": config}
+    if strategy == "frontier":
+        actions.append(node("lunar_pure_exploration_ros", "incremental_exploration_node", {
+            **shared_policy, "platform_selector": "wheel", "navigation_action": values["action_name"],
+            "exploration_map_topic": values["exploration_map_topic"],
+            "navigation_map_wait_timeout_s": float(values["navigation_map_wait_timeout_s"])}))
+    elif strategy == "drl":
+        actions.append(node("lunar_drl_exploration", "lunar_drl_inference_node", {
+            **shared_policy, "navigation_backend": "nav1cm", "actor_path": values["drl_actor"],
+            **{k: values[k] for k in ("action_name","policy_map_service","tf_static_topic","global_route_topic")}}))
+    if values["enable_controller"] == "true":
+        actions.append(node("lunar_pure_wheeled_controller", "lunar_pure_wheeled_controller_node.py", {
+            **frames, **qos, **{k: values[k] for k in ("odometry_topic","tf_topic","tf_static_topic","command_topic")},
+            "platform_config": config, "input_mode": "incremental_path", "controller_backend": "mppi_path_follower",
+            "standard_map_source": "direct_p3", "p3_map_topic": values["map_topic"],
+            "path_topic": values["local_path_topic"], "mppi_diagnostics_topic": values["diagnostics_topic"],
+            "mppi_nominal_response_time_s": .15, "allow_unknown": False}))
+    return actions
+
+def generate_launch_description():
+    return LaunchDescription([*[DeclareLaunchArgument(k, default_value=v) for k,v in DEFAULTS.items()],
+                              OpaqueFunction(function=_compose)])
