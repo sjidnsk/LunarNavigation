@@ -112,6 +112,7 @@ class PureWheeledControllerNode(Node):
             "control_rate_hz": 20.0,
             "odometry_timeout_s": 0.5,
             "tf_timeout_s": 0.5,
+            "path_timeout_s": 0.35,
             "lookahead_m": 0.5,
             "max_linear_mps": 0.2,
             "max_angular_radps": 0.5,
@@ -144,7 +145,8 @@ class PureWheeledControllerNode(Node):
         self._mppi_published_command = [0.,0.]
         if self._backend not in {"pure_pursuit", "mppi", "mppi_path_follower"}:
             raise ValueError("controller_backend must be pure_pursuit, mppi or mppi_path_follower")
-        if self._is_mppi and input_mode != "incremental_reference":
+        self._standard_mode = self._backend == "mppi_path_follower" and input_mode == "incremental_path"
+        if self._is_mppi and input_mode != "incremental_reference" and not self._standard_mode:
             raise ValueError("mppi requires incremental_reference")
         self._map_frame = self.get_parameter("map_frame").value
         self._odom_frame = self.get_parameter("odom_frame").value
@@ -188,6 +190,10 @@ class PureWheeledControllerNode(Node):
                 policy_values[key] = min(
                     float(policy_values[key]), float(capability[source])
                 )
+        if self._standard_mode:
+            for name,value in dict(max_angular_radps=1.,goal_position_tolerance_m=.1,goal_yaw_tolerance_rad=.05,stopped_angular_radps=.01).items():
+                if name not in self._parameter_overrides:
+                    policy_values[name]=min(value,float(capability[names[name]])) if platform_path and name in names else value
         self._policy = TrackingPolicy(**policy_values)
         if self._is_mppi:
             self._mppi_trace_enabled = self.get_parameter("mppi_trace_diagnostics").value
@@ -196,6 +202,9 @@ class PureWheeledControllerNode(Node):
             from lunar_planning_msgs.srv import GetPolicyMap
             from .mppi_path_follower import MppiPathFollower
             executor_type=MppiPathFollower if self._backend=="mppi_path_follower" else MppiExecutor
+            if self._standard_mode:
+                from .standard_path_follower import StandardPathFollower
+                executor_type=StandardPathFollower
             self._executor = executor_type(self._policy,MppiPolicy(
                 batch_size=self.get_parameter("mppi_batch_size").value,
                 time_steps=self.get_parameter("mppi_time_steps").value,
@@ -246,6 +255,10 @@ class PureWheeledControllerNode(Node):
             raise ValueError("odometry_timeout_s must be finite and greater than zero")
         if not isfinite(self._tf_timeout_s) or self._tf_timeout_s <= 0.0:
             raise ValueError("tf_timeout_s must be finite and greater than zero")
+        self._path_timeout_s=float(self.get_parameter("path_timeout_s").value)
+        if not isfinite(self._path_timeout_s) or self._path_timeout_s<=0:
+            raise ValueError("path_timeout_s must be finite and positive")
+        self._path_received_at=None
         self._active: ParsedReference | ParsedIncrementalPath | None = None
         self._trajectory_cursor = 0
         self._odometry: Odometry | None = None
@@ -284,7 +297,8 @@ class PureWheeledControllerNode(Node):
                 )
             else:
                 self.create_subscription(
-                    Path, topics["path_topic"], self._on_path, incremental_path_qos()
+                    Path, topics["path_topic"], self._on_path,
+                    QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.VOLATILE) if self._standard_mode else incremental_path_qos()
                 )
             self.create_subscription(
                 TFMessage,
@@ -340,6 +354,15 @@ class PureWheeledControllerNode(Node):
 
     def _on_path(self, path: Path) -> None:
         parsed = parse_incremental_path(path, self._map_frame)
+        if self._standard_mode:
+            if parsed.clear or parsed.reason is not None:
+                self.request_controlled_stop(parsed.reason or "EMPTY_PATH")
+                return
+            self._path_received_at=monotonic()
+            self._active=parsed
+            self._path_sequence+=1
+            self._executor.set_standard_path(parsed.path_xy_yaw,identity=self._path_sequence)
+            return
         if parsed.clear or parsed.reason is not None:
             self._clear_active_and_stop()
             return
@@ -348,6 +371,12 @@ class PureWheeledControllerNode(Node):
         self._executor.set_path(
             parsed.path_xy_yaw, identity=("plain", self._path_sequence)
         )
+
+    def request_controlled_stop(self, reason="STOP_REQUESTED") -> None:
+        if self._standard_mode:
+            self._executor.request_stop(reason)
+        else:
+            self._clear_active_and_stop()
 
     def _on_path_reference(self, reference: PathReference) -> None:
         identity = (bytes(reference.session_id.uuid), int(reference.segment_revision))
@@ -497,6 +526,8 @@ class PureWheeledControllerNode(Node):
                 self._mppi_observe("stop", reason="missing_or_stale_input")
             self._publish_twist()
             return
+        if self._standard_mode and self._input_is_stale(self._path_received_at,self._path_timeout_s):
+            self._executor.request_stop("STALE_PATH")
         if self._input_mode in {"incremental_path", "incremental_reference"}:
             self._tick_incremental_path()
             return

@@ -301,6 +301,10 @@ class MppiExecutor:
         noise=self.rng.normal(size=(c.batch_size,blocks,2))*[c.linear_std,c.angular_std]
         return np.repeat(noise,8,axis=1)[:,:c.time_steps]
 
+    def _travel_direction(self,state,desired):
+        p=self.policy
+        return -1 if p.allow_reverse and abs(angle(desired-state.yaw_rad))>math.pi*.5 else 1
+
     def update(self,state,dt,now_s=None,state_age_s=0.):
         started=time.perf_counter();p=self.policy;c=self.config
         self.diagnostics={'valid_samples':0,'weighted_updates':0}
@@ -355,7 +359,7 @@ class MppiExecutor:
             self.failure='TRACKING_STALLED';self.phase='FAILED' if self._stopped(state) else 'BRAKING';return self._result()
         target=np.array(self.path.point_at(min(self.path.length,self.progress_m+.35)))
         desired=math.atan2(target[1]-state.y_m,target[0]-state.x_m)
-        self.direction=-1 if p.allow_reverse and abs(angle(desired-state.yaw_rad))>math.pi*.5 else 1
+        self.direction=self._travel_direction(state,desired)
         travel_yaw=desired-(math.pi if self.direction<0 else 0.)
         self.heading_error=angle(travel_yaw-state.yaw_rad)
         near=distance<=p.goal_position_tolerance_m*.5 or position_retained
