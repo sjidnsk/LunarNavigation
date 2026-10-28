@@ -1,0 +1,316 @@
+{
+  "main_source": "c35749bdaf6dfda625ec3374a0b49a298757e3fb",
+  "app_base": "81ed242c496d1d6b40aba17ccc69c46ef9b451e5",
+  "unchanged_core_tree": "b81dea40b288b3510e8ece11f2d7560bf35bd635",
+  "exact_imports": [
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/__init__.py",
+      "sha256": "9776e3310558cff943a64d3067781870d2a67b7fe702a4eea6f0de1571b9ed87"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/async_coordinator.py",
+      "sha256": "e69c5cef50cd2074d4478d41b4fa88be823ed180566ee7bf17420b3683c56ba9"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/certification.py",
+      "sha256": "9b4153f2e52893bdb7411466bc369f91c172bd0c82bd0671cf3ba3bd62739ff3"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/contracts.py",
+      "sha256": "450d03717bea6ed8d2677c01acbd676d207d8be7d8dd0ace6ae18ed3f3c181c4"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/coordinator.py",
+      "sha256": "2c77f42dccfb1a7bd8e23daf0c355fa674a9239f35e581a5264448afc614c972"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/distance_field_native.cpp",
+      "sha256": "09c1d8052bf7454ef4ac859c56a4ead90aaec396d40b91602a802ca39e14227d"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/dynamics.py",
+      "sha256": "90179be69769f6a23a2e066cd939b7c6797b2f2536572bef40ebddc6e76843ea"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/execution.py",
+      "sha256": "a2641a45282d08662ce52e3e163df80e7a4e8a3abf9c00d5e2522bf74f668cec"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/field_native.py",
+      "sha256": "bf9739144939977c647972f47fcfbdd6ff87f471ad7c44c1111c4feac6734562"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/fixtures.py",
+      "sha256": "0ba46dbf707a9fb1d363b5e04b6a49173af9f7ae75d0edcfc4c1f3b4a7be7ebc"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/follower_map.py",
+      "sha256": "5fed53ed1e21f6d7098088f1b362e1ceeff43706c09a1d74968111cfa638d60f"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/geometry_native.py",
+      "sha256": "8245fd63a408333144b94db9a1e2b986dcdcf16088b9b36b31a71018cbb7301f"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/global_fixtures.py",
+      "sha256": "96c53ad11ca6fd2205ea8cef856b2858790f401bfbee9814d73b30cfc7e7329d"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/global_planner.py",
+      "sha256": "b9d6a5cdcce26cba025bde5468adac1462880cfb465a408931bb5c1b19bd75df"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/global_worker.py",
+      "sha256": "10fedc2bb5c7555c3f95b9d770132aa69e61bdede5d9c338b89b0d5c9556b24a"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/local_mpcc.py",
+      "sha256": "1639cb386a1a1cd4f953c26d950955bdd49063a60c1532f973f41b9ad9ba0fbc"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/local_worker.py",
+      "sha256": "69306c6d4e439d76e32673090db2271c56939dd3056884abc272c0bd46051d41"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/maps.py",
+      "sha256": "a771034685c3e8462912e1b80757645d39ca0513d22f73230a6ec35873345630"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/native_geometry.cpp",
+      "sha256": "bbe8c6da1802233b68afaf03cdf560c5d694e9bfa45e7efe39541d516717df1e"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/p3_geometry.py",
+      "sha256": "7271709aebbd75400870cbea378a7803ef96390c51e76f1afb66bb9bb8a303bf"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/p3_map.py",
+      "sha256": "c1cd9ab30cf55aa81734c7a9038df789525154d0c2a0dcfadb1ecdd833c9a617"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/p3_session.py",
+      "sha256": "80e9b7dcb3ee485f255f88a9eaab3823eec244856c795201720df257b3a4f4d8"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/p3_sources.py",
+      "sha256": "5f8cb25d1e1c6e404bec3362dacc89defd4ca385e819e4c323c1a48b5ffdfb10"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/pose_goal.py",
+      "sha256": "a02c800a4608826d8a72743470c27e928196724d15e922e1d339e086d9a69bd5"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/reference.py",
+      "sha256": "ed888356d25acbb78f76299e8407b9aaf654084b61239a3cbe7bb138fd795d5f"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/reference_buffer.py",
+      "sha256": "0b6611677a0e3a053fb44ef7a23672bc26c9136eefba0df41feaf781e3364fda"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/ros_conversion.py",
+      "sha256": "483e336f1ea5a87677cb9404320e03a37b9e9d64e36a314c043931c448913736"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/ros_lifecycle.py",
+      "sha256": "504b21dc3afe8e249827ba5b181f15766cf2062de4e203553f04c74ce4054cde"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/seeds.py",
+      "sha256": "6dad21150b9730887a46a4a87be20be5c7b555051e23ab59641e9cf919614570"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/terrain_bridge.cpp",
+      "sha256": "86e1f2d18d173fdf18c61d551ff26d80e433173120e89d5b110421602d796c1a"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/terrain_bridge.h",
+      "sha256": "9174d110c803294504ef245ee6406bf62e25644ecab3341629677f27a0bdc28d"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/terrain_native.py",
+      "sha256": "663dd281f0989726b02c1ada2faca2652bb39f41fd3457bda18eb3fb8f8a87f3"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/trajectory_buffer.py",
+      "sha256": "0eb052873b872c655b229f8e179b446e8112644462ec3937adf9afd593f0b19c"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/verification_evidence.py",
+      "sha256": "48f777a4bcedb0a34010fdd74f899db24686620d20ddbba069f8c699ac6458d4"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/verification_plant.py",
+      "sha256": "07cd1f3b3e5bd3b63084c9ca530644e83a0427cd65b70f9006780693b06045fd"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/CMakeLists.txt",
+      "sha256": "b7382c005870c474644309564276ca30674cdcc2d7fa067087f69de5406a365b"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/README.md",
+      "sha256": "e80571e9600f5e9b70d390fd100b8c6857aca9b8b43d9c38be1fadae4dadaedf"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/config/planner.yaml",
+      "sha256": "0c9c97f9105700e644e2b6ba2014af39c148cdb597fee03e6ad66c5f6d38e69b"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/launch/planner.launch.py",
+      "sha256": "c438c2e974323023afd55cdd885994fdf2a9fe2820236f2657ece93a6a46e93e"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/__init__.py",
+      "sha256": "aa8db1a257fac816162855c336c5f8dea4b1975b9e7f4b9273f659f70e85556e"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/configuration.py",
+      "sha256": "2f24dd1d04452b3bc2b78d28fba59bbe69f33e0f3e7229e2ca86a1c101473431"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/node.py",
+      "sha256": "8c16db9efe8b91936f7d2fe09157cabf9b041e376dc45f48df6266a561103324"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/runtime.py",
+      "sha256": "d6ff47298f043fbe5f6ba54e985b8eb9c621743c1e5ecd62b696eff6c7e15fed"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/package.xml",
+      "sha256": "50a207bc291c8f4a1598d650f81c76342168b55590699357b363485e626a07c1"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/scripts/planner_node",
+      "sha256": "2b58fddb5340d2de8a1511b2357ce08f1a0c37454ed5b0c6d9ec3a1e52d1c9fa"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/test/test_configuration.py",
+      "sha256": "72713b9b4d0f07c4de02645745be49e72c6c4e7b0d5253db3c5ab460ce9545ad"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/test/test_runtime.py",
+      "sha256": "25ecc16503bdbc4eec1f77ad06ccb5adb797e67f068749f79b57b261a5e0c6bd"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/test/test_shutdown.py",
+      "sha256": "faffce735002a5fbf2bb9683286e0eab25bf208cbf0db8a4c9cc064a2819579c"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/README.md",
+      "sha256": "5ff4137cf89ec5bc7a60054b767c0ef3387496a3916a8ffa050d2d8cc009d26d"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/launch/nav1cm_wheel.launch.py",
+      "sha256": "b65d53ab5baec927961592c0f2619b97710a6fb17767936b8c045de6e423faa5"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/mppi.py",
+      "sha256": "f19625545053251184dc7fa3dd66bcf65ef066b048309c6cc096c253f0bc728f"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/mppi_map.py",
+      "sha256": "319d9cea4ad4ee64ffffd534f8ffbbbd36cee338ebe590111f53ffabce862f80"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/mppi_path_follower.py",
+      "sha256": "f267467fec0563093689a8828c97e01ffb549b52174d4cf383c492d6e4dc989a"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/p3_map_source.py",
+      "sha256": "9667b90751864de6f9a98cf2da3f03a0a13ef2fa2f842a5c091e0c65e2c588da"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/standard_path_follower.py",
+      "sha256": "9605b1b9d1d687e247da16c6d1efa2fbaa841706a489bb9ac1b99e09fb703859"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/standard_path_reference.py",
+      "sha256": "13c536b33613c361f167f1e210824b6338d9cea82b9a347f9a19a9444fc94206"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_mppi.py",
+      "sha256": "2344930f41660b7139f2f76e2a12972aef3a6593a2d96b11443262c765dc0c35"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_mppi_node.py",
+      "sha256": "2a5961c964d6267dc4fdf0794b3e988320644360fd30d983c74e7392c0afc99b"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_mppi_path_follower_swept_map.py",
+      "sha256": "64863cd3bf4093ba7b24d940b62497ed7ce211340c0c68cfb4e755e7aa71e522"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_mppi_reference_geometry.py",
+      "sha256": "2536bd26942ef2b580141b633136444b8b40fcd89088a3a8349b2d7b9bb86309"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_nav1cm_launch.py",
+      "sha256": "cc5cf977f07c3f182605aee0edc6b163f38a92a33c8dc3a7ecf43009fbe2b070"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_p3_map_source.py",
+      "sha256": "676ac3d21f29984a1d1f1124c36df73b4f3d46c0d4bf63144d9b8521b4befa95"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_short_terminal_execution.py",
+      "sha256": "ff71e62e30cfd7a360cb67bb4aafa7d8b742dda7de99bb5bb2a41cdadc6f5b55"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_standard_path_follower.py",
+      "sha256": "7d9dbeb5f8c5508a8dd78e2f89c8dff94f7d5b050178dd4277382c99dc5e9fd4"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/execution.py",
+      "sha256": "f13b4024b02af4c3fad5ee2afb95f07153f099f6289a2bffbd29b54fc38faba3"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/tracking.py",
+      "sha256": "038e0d47622aac27f409cb1c5f5e99da1f0b403e8bf9feac54abc5e1860027db"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_execution.py",
+      "sha256": "e3f7d49d04a22337dc32a5d5ffc88a071664a8c5f812356e8020d40d868589ff"
+    },
+    {
+      "path": "ros2_ws/src/lunar_planning_msgs/srv/GetPolicyMap.srv",
+      "sha256": "a0631410e7d873852df23657e109ab5e47bc8b8353399581ee6c413911e338d8"
+    },
+    {
+      "path": "scripts/orin/build.sh",
+      "sha256": "272b85758cb595774ffbcea5422ecb55c029cf1183fdd3d9b4a9cd1f39af8e42"
+    },
+    {
+      "path": "scripts/orin/start_navigation.sh",
+      "sha256": "c1e362191e121c0dba5c0902752378fef7f15bb070eb09e5137bd39219b3a647"
+    },
+    {
+      "path": "scripts/orin/navigation_goal.py",
+      "sha256": "984f10b2e797a752b338e77fb7924864eb3ddb3b1b7bf30ef544cd7a99f872d9"
+    },
+    {
+      "path": "scripts/orin/publish_navigation_goal.sh",
+      "sha256": "88638859e278152ae7e3fa2cd33ce37f79fa005854d58d3b6efb660c7aab6266"
+    },
+    {
+      "path": "config/wheel.yaml",
+      "sha256": "23b93ebaf83466eb51991881cab045f14a80e871811b08f6dd39a5a768d91fe6"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/test/policy_map_exporter_test.cpp",
+      "sha256": "53e9dbcd4efb1b30c107cc836c617943ea2ac23dbcc8749c1ee8bbb2f647f275"
+    }
+  ],
+  "adapted": [
+    "node.py",
+    "CMakeLists.txt",
+    "package.xml",
+    "policy_map_exporter.cpp",
+    "nav1cm_wheel.launch.py",
+    "test_nav1cm_launch.py"
+  ],
+  "prerequisites": [
+    "106e7dec5be76d41176e1fb5604ca4b5a0459a1f",
+    "83d6d10a",
+    "4ea7f8c-controller-execution-tracking-only"
+  ]
+}

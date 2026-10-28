@@ -89,12 +89,24 @@ lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::Export(
     response.anchor_pose.position.y = input.anchor->position_m.y;
     response.anchor_pose.orientation.w = std::cos(input.anchor->yaw_rad / 2.0);
     response.anchor_pose.orientation.z = std::sin(input.anchor->yaw_rad / 2.0);
+    const auto stationary = core::RequestLocalStartPatchBuilder{}.BuildStationary(
+        input.fine, *input.anchor, capability_, profile_);
+    response.stationary_support_ready =
+        stationary.view && stationary.status == core::StartPatchResult::Status::kReady;
     const auto local = core::BuildLocalPlanningWindow(
         fine, input.anchor->position_m, input.local_window_size_m);
     if (local.geometry) {
       const auto connections = core::RequestLocalStartPatchBuilder{}.BuildStartConnections(
           input.fine, *local.geometry, *input.anchor, capability_, profile_);
       response.start_connection_status = static_cast<std::uint8_t>(connections.status);
+      const auto patch = core::RequestLocalStartPatchBuilder{}.Build(
+          input.fine, *local.geometry, *input.anchor, capability_, profile_);
+      if (patch.view && patch.status == core::StartPatchResult::Status::kReady) {
+        for (const auto& cell : patch.view->overrides()) {
+          response.assumed_start_x.push_back(cell.index.x);
+          response.assumed_start_y.push_back(cell.index.y);
+        }
+      }
       for (const auto& connection : connections.connections) {
         response.start_connection_x.push_back(connection.index.x);
         response.start_connection_y.push_back(connection.index.y);
