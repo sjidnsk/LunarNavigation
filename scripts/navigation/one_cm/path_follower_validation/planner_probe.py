@@ -45,59 +45,61 @@ def run(args):
     production += list((prefix/'lib').glob('libnav1cm_*.so'))
     rec.emit('INSTALL', nav1cm_file=nav1cm.__file__, pythonpath=sys.path,
              production_sha256={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in production})
-    rclpy.init(args=[],signal_handler_options=SignalHandlerOptions.NO)
+    from nav1cm.ros_lifecycle import sigint_guard
+    with sigint_guard() as stopped:
+        rclpy.init(args=[],signal_handler_options=SignalHandlerOptions.NO)
 
-    def factory(limits, capability, settings):
-        session, store = create_resources(limits, capability, settings)
-        rec.emit('RESOURCES', limits=asdict(limits), settings=settings)
-        if args.case == 'forward_spin':
-            session.coordinator.local_worker._request_wrapper = DelayOneRequest(args.output)
-        tick = session.coordinator.tick
+        def factory(limits, capability, settings):
+            session, store = create_resources(limits, capability, settings)
+            rec.emit('RESOURCES', limits=asdict(limits), settings=settings)
+            if args.case == 'forward_spin':
+                session.coordinator.local_worker._request_wrapper = DelayOneRequest(args.output)
+            tick = session.coordinator.tick
 
-        def observed(*values, **kwargs):
-            result = tick(*values, **kwargs)
-            rec.emit('TICK', status=result.status, events=result.events,
-                     global_result=None if result.global_result is None else {
-                         k: result.global_result.get(k) for k in ('planning_outcome', 'reason_code', 'has_reference',
-                                                                  'requested_epoch', 'requested_goal', 'requested_version')},
-                     state=asdict(values[1]), goal=values[2], generation=session.accepted_generation,
-                     goal_revision=session.coordinator.goal_revision)
-            return result
+            def observed(*values, **kwargs):
+                result = tick(*values, **kwargs)
+                rec.emit('TICK', status=result.status, events=result.events,
+                         global_result=None if result.global_result is None else {
+                             k: result.global_result.get(k) for k in ('planning_outcome', 'reason_code', 'has_reference',
+                                                                      'requested_epoch', 'requested_goal', 'requested_version')},
+                         state=asdict(values[1]), goal=values[2], generation=session.accepted_generation,
+                         goal_revision=session.coordinator.goal_revision)
+                return result
 
-        session.coordinator.tick = observed
-        return session, store
+            session.coordinator.tick = observed
+            return session, store
 
-    from .profiles import load
-    profile=load(args.profile)
-    params = [Parameter('build_dir', value=args.build_dir)]
-    if profile:params.extend(Parameter(name,value=value) for name,value in profile['planner'].items())
-    if args.case == 'legacy_tf':
-        params.append(Parameter('tf_topic', value='/P4/input/map_to_odom'))
-    node = PlannerNode(resource_factory=factory, parameter_overrides=params)
-    rec.emit('ENTITY_QOS',entities=entity_rows(node))
-    previous_notice = node.runtime.notice
+        from .profiles import load
+        profile=load(args.profile)
+        params = [Parameter('build_dir', value=args.build_dir)]
+        if profile:params.extend(Parameter(name,value=value) for name,value in profile['planner'].items())
+        if args.case == 'legacy_tf':
+            params.append(Parameter('tf_topic', value='/P4/input/map_to_odom'))
+        node = PlannerNode(resource_factory=factory, parameter_overrides=params)
+        rec.emit('ENTITY_QOS',entities=entity_rows(node))
+        previous_notice = node.runtime.notice
 
-    def notice(kind, detail):
-        rec.emit('NOTICE', notice=kind, detail=detail)
-        previous_notice(kind, detail)
+        def notice(kind, detail):
+            rec.emit('NOTICE', notice=kind, detail=detail)
+            previous_notice(kind, detail)
 
-    node.runtime.notice = notice
-    try:
-        from nav1cm.ros_lifecycle import spin_until_sigint
-        spin_until_sigint(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        rec.emit('NATIVE_LOADED', production_sha256={
-            str(Path(line.split()[-1])):hashlib.sha256(Path(line.split()[-1]).read_bytes()).hexdigest()
-            for line in Path('/proc/self/maps').read_text().splitlines()
-            if ('libnav1cm_' in line or 'liblunar_incremental_navigation_core.so' in line)
-            and Path(line.split()[-1]).is_file()})
-        result = node.stop_runtime()
-        rec.emit('CLOSE', result=result, remaining_children=[p.pid for p in multiprocessing.active_children()],
-                 forbidden_modules=[n for n in sys.modules if 'verification_plant' in n])
-        node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
-        rec.close()
-        assert not result['threads_alive'], result
+        node.runtime.notice = notice
+        try:
+            from nav1cm.ros_lifecycle import spin_until_sigint
+            spin_until_sigint(node,stopped)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            rec.emit('NATIVE_LOADED', production_sha256={
+                str(Path(line.split()[-1])):hashlib.sha256(Path(line.split()[-1]).read_bytes()).hexdigest()
+                for line in Path('/proc/self/maps').read_text().splitlines()
+                if ('libnav1cm_' in line or 'liblunar_incremental_navigation_core.so' in line)
+                and Path(line.split()[-1]).is_file()})
+            result = node.stop_runtime()
+            rec.emit('CLOSE', result=result, remaining_children=[p.pid for p in multiprocessing.active_children()],
+                     forbidden_modules=[n for n in sys.modules if 'verification_plant' in n])
+            node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
+            rec.close()
+            assert not result['threads_alive'], result

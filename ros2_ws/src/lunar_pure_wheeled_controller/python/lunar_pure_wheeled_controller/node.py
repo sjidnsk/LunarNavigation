@@ -893,13 +893,15 @@ def main() -> None:
     from rclpy.signals import SignalHandlerOptions
 
     # Keep the ROS context alive until destroy_node publishes the final stop.
-    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
-    node = PureWheeledControllerNode()
-    try:
-        from nav1cm.ros_lifecycle import spin_until_sigint
-        spin_until_sigint(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
+    from nav1cm.ros_lifecycle import sigint_guard
+    with sigint_guard() as stopped:
+        rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+        node = PureWheeledControllerNode()
+        try:
+            from nav1cm.ros_lifecycle import spin_until_sigint
+            spin_until_sigint(node,stopped)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            node.destroy_node()
+            rclpy.shutdown()

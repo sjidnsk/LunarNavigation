@@ -133,20 +133,22 @@ class PlannerNode(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
-    node = None
-    try:
-        node = PlannerNode()
-        from nav1cm.ros_lifecycle import spin_until_sigint
-        spin_until_sigint(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if node is not None:
-            # 先停止并唤醒输入线程，退出后再释放 terrain、worker 和 ROS 对象。
-            result = node.stop_runtime()
-            if result['threads_alive']:
-                raise RuntimeError(f'处理线程尚未退出: {result["threads_alive"]}')
-            node.destroy_node()
-        if rclpy.ok():
-            rclpy.shutdown()
+    from nav1cm.ros_lifecycle import sigint_guard
+    with sigint_guard() as stopped:
+        rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+        node = None
+        try:
+            node = PlannerNode()
+            from nav1cm.ros_lifecycle import spin_until_sigint
+            spin_until_sigint(node,stopped)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if node is not None:
+                # 先停止并唤醒输入线程，退出后再释放 terrain、worker 和 ROS 对象。
+                result = node.stop_runtime()
+                if result['threads_alive']:
+                    raise RuntimeError(f'处理线程尚未退出: {result["threads_alive"]}')
+                node.destroy_node()
+            if rclpy.ok():
+                rclpy.shutdown()
