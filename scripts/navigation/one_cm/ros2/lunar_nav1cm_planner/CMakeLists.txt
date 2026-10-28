@@ -27,6 +27,7 @@ install(FILES README.md DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(nav1cm_app_terrain_dependency test/test_app_terrain_dependency.py TIMEOUT 30)
   ament_add_pytest_test(nav1cm_shutdown test/test_shutdown.py TIMEOUT 20)
   ament_add_pytest_test(nav1cm_runtime test/test_runtime.py TIMEOUT 30)
   ament_add_pytest_test(nav1cm_configuration test/test_configuration.py TIMEOUT 30)

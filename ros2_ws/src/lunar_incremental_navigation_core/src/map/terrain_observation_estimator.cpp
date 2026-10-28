@@ -1,4 +1,5 @@
 #include "map/terrain_observation_estimator.hpp"
+#include "lunar_incremental_navigation_core/terrain_dependency.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -7,6 +8,13 @@
 #include "map/grid_bounds.hpp"
 
 namespace lunar::incremental_navigation::map {
+namespace {
+int ObservationRadiusCells(double support_axis_distance_m, double resolution_m) {
+  const double cells = std::floor((1.5 * support_axis_distance_m + 1e-12) / resolution_m);
+  // 超出固定计算预算时不补全地面；直接实测物理判定仍由测量窗口负责。
+  return cells > 32. ? 0 : static_cast<int>(cells);
+}
+}  // namespace
 int ObservationBackgroundRadiusCells(double half_width_m, double resolution_m) {
   if (!std::isfinite(half_width_m) || half_width_m < 0.0 ||
       !std::isfinite(resolution_m) || resolution_m <= 0.0)
@@ -29,9 +37,7 @@ TerrainObservationEstimator::TerrainObservationEstimator(
       parameters.minimum_confidence <= 0. || parameters.minimum_confidence > 1. ||
       !std::isfinite(resolution) || resolution <= 0.)
     throw std::invalid_argument("invalid terrain observation parameters");
-  const double cells = std::floor((1.5 * parameters.support_axis_distance_m + 1e-12) / resolution);
-  if (cells > 32.) throw std::invalid_argument("terrain observation radius exceeds 32 cells");
-  radius_ = static_cast<int>(cells);
+  radius_ = ObservationRadiusCells(parameters.support_axis_distance_m, resolution);
 }
 const std::optional<GroundEstimate>& TerrainObservationEstimator::Estimate(GridIndex index) {
   static const std::optional<GroundEstimate> empty;
@@ -406,3 +412,12 @@ std::optional<TerrainPatchObservation> MeasureTerrainPatch(
       confidence, central_complete, ground.has_value(), center_available};
 }
 }  // namespace lunar::incremental_navigation::map
+
+namespace lunar::incremental_navigation {
+int TerrainIntrinsicDependencyRadiusCells(double resolution_m, double background_half_width_m) {
+  // 背景函数统一验证几何；推断半径与 estimator 共用计算及默认参数。
+  const int background = map::ObservationBackgroundRadiusCells(background_half_width_m, resolution_m);
+  const map::TerrainObservationParameters parameters;
+  return background + map::ObservationRadiusCells(parameters.support_axis_distance_m, resolution_m);
+}
+}  // namespace lunar::incremental_navigation

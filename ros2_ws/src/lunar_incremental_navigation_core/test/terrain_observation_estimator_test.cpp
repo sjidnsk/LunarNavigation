@@ -1,3 +1,4 @@
+#include "lunar_incremental_navigation_core/terrain_dependency.hpp"
 #include <gtest/gtest.h>
 #include <cmath>
 #include <limits>
@@ -244,4 +245,42 @@ TEST(TerrainObservationEstimator, SameSideRemoteReturnsDoNotEraseSupportedGround
   auto raw=f.Snapshot();TerrainObservationEstimator obs(*raw);
   auto e=obs.Estimate({20,20});ASSERT_TRUE(e);EXPECT_NEAR(e->surface_height_m,0.,.005);
   EXPECT_FALSE(obs.Estimate({23,19}));EXPECT_FALSE(obs.Estimate({23,21}));
+}
+
+
+TEST(TerrainObservationEstimator, SubcentimeterRetainsMeasuredPhysicsWithoutInference) {
+  for(double resolution : {.005,.01,.05}) {
+    GroundFixture flat;flat.geometry.resolution_m=resolution;flat.Plane(1,0.);
+    auto raw=flat.Snapshot();
+    WheeledCapability wheel;wheel.maximum_slope_rad=.35;
+    wheel.maximum_local_obstacle_relief_m=.2;wheel.minimum_underbody_clearance_m=.21;
+    auto evaluator=MakePlatformElevationEvaluator(wheel);
+    EXPECT_EQ(evaluator->Evaluate(*raw,{20,20}).state,IntrinsicCellState::kFree);
+    GroundFixture obstacle;obstacle.geometry.resolution_m=resolution;obstacle.Plane(1,0.);
+    for(int y=20;y<23;++y)for(int x=20;x<23;++x)obstacle.heights[y*41+x]=.4f;
+    EXPECT_EQ(evaluator->Evaluate(*obstacle.Snapshot(),{20,20}).state,IntrinsicCellState::kBlocked);
+    if(resolution==.005) {
+      GroundFixture hole;hole.geometry.resolution_m=resolution;hole.Plane(1,0.);
+      hole.heights[20*41+20]=std::numeric_limits<float>::quiet_NaN();auto sparse=hole.Snapshot();
+      TerrainObservationEstimator observations(*sparse);
+      EXPECT_EQ(observations.dependency_radius_cells(),0);
+      EXPECT_FALSE(observations.Estimate({20,20}));
+      EXPECT_EQ(evaluator->Evaluate(*sparse,{20,20}).state,IntrinsicCellState::kUnknown);
+    }
+  }
+}
+
+TEST(TerrainObservationEstimator, PublicDependencyRadiusUsesTheSamePolicy) {
+  for(double resolution : {.005,.01,.025,.05,.1}) {
+    GroundFixture fixture;fixture.geometry.resolution_m=resolution;fixture.Plane(1,0.);
+    auto raw=fixture.Snapshot();TerrainObservationEstimator observations(*raw);
+    EXPECT_EQ(TerrainIntrinsicDependencyRadiusCells(resolution),
+              2 + observations.dependency_radius_cells());
+  }
+  EXPECT_EQ(TerrainIntrinsicDependencyRadiusCells(.005),2);
+  EXPECT_EQ(TerrainIntrinsicDependencyRadiusCells(.01),32);
+  EXPECT_EQ(TerrainIntrinsicDependencyRadiusCells(.05),8);
+  EXPECT_EQ(TerrainIntrinsicDependencyRadiusCells(.05,.2),10);
+  EXPECT_THROW(TerrainIntrinsicDependencyRadiusCells(0.),std::invalid_argument);
+  EXPECT_THROW(TerrainIntrinsicDependencyRadiusCells(.05,-1.),std::invalid_argument);
 }

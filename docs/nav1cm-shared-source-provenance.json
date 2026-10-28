@@ -1,7 +1,6 @@
 {
   "main_source": "c35749bdaf6dfda625ec3374a0b49a298757e3fb",
   "app_base": "81ed242c496d1d6b40aba17ccc69c46ef9b451e5",
-  "unchanged_core_tree": "b81dea40b288b3510e8ece11f2d7560bf35bd635",
   "exact_imports": [
     {
       "path": "scripts/navigation/one_cm/nav1cm/__init__.py",
@@ -309,5 +308,19 @@
     "83d6d10a",
     "4ea7f8c-controller-execution-tracking-only"
   ],
-  "preserved_app_config": "config/wheel.yaml minimum_clearance_m=0.4 and unchanged wheel_orin.yaml; composite defaults to installed app wheel_orin and /P4/input/map_to_odom"
+  "preserved_app_config": "config/wheel.yaml minimum_clearance_m=0.4 and unchanged wheel_orin.yaml; composite defaults to installed app wheel_orin and /P4/input/map_to_odom",
+  "initial_core_tree": "b81dea40b288b3510e8ece11f2d7560bf35bd635",
+  "app_core_compatibility": {
+    "ruling": "task4-app-map-compatibility-ruling.md",
+    "changes": [
+      "observation support radius beyond 32 conservatively disables inference, preserving measured physics and missing UNKNOWN",
+      "new additive terrain_dependency.hpp query shares existing background and estimator radius policy",
+      "native bridge invalidates complete app intrinsic dependency halo"
+    ],
+    "abi": "new header and function only; existing public types/layout unchanged",
+    "qualification": "pending fresh app own core build and affected tests; r1 1987-check failure retained"
+  },
+  "adapted_files": [
+    "scripts/navigation/one_cm/nav1cm/terrain_bridge.cpp"
+  ]
 }

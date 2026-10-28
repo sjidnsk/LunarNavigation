@@ -20,6 +20,7 @@
 
 #include "lunar_incremental_navigation_core/elevation_map.hpp"
 #include "lunar_incremental_navigation_core/fine_traversability_builder.hpp"
+#include "lunar_incremental_navigation_core/terrain_dependency.hpp"
 
 namespace nav = lunar::incremental_navigation;
 
@@ -180,10 +181,11 @@ struct Terrain final {
       }
     }
     if (applied.status == nav::ElevationUpdateResult::Status::kApplied) {
-      // 原生 3x3 判定会使旧窗口边缘或相邻旧格改变，不能只发布新格。
+      // app 的背景与缺测推断均依赖相邻高程，采用 core 同源依赖半径。
+      const auto dependency_radius = nav::TerrainIntrinsicDependencyRadiusCells(resolution);
       for (const auto changed : snapshot->changed_cells()) {
-        for (std::int64_t dy = -1; dy <= 1; ++dy) {
-          for (std::int64_t dx = -1; dx <= 1; ++dx) {
+        for (std::int64_t dy = -dependency_radius; dy <= dependency_radius; ++dy) {
+          for (std::int64_t dx = -dependency_radius; dx <= dependency_radius; ++dx) {
             touched.insert({changed.x + dx, changed.y + dy});
           }
         }
