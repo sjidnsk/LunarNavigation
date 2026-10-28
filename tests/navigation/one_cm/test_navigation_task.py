@@ -116,3 +116,43 @@ def test_future_worker_result_invalid_after_cancel():
     packet = session.tick(.2)
     assert packet.route is None
     assert any(e['kind'] == 'STALE_GLOBAL_RESULT' for e in packet.result.events)
+
+def test_late_local_worker_result_after_cancel_cannot_reenter_buffer():
+    from scripts.navigation.one_cm.nav1cm.contracts import Route
+    session, Goal = make_session()
+    task = task_api(session)
+    task.submit('a', Goal(0, 3, 0), 0.)
+    session.coordinator.route = Route(1, 1, [[0, 0], [0, 3]], (0, 3))
+    session.tick(0.)
+    assert session.coordinator.local_worker.busy
+    task.cancel('a', .1)
+    assert session.coordinator.buffer.candidate is None
+    task.submit('b', Goal(0, 3, 0), .2)
+    session.coordinator.route = Route(2, 1, [[0, 0], [0, 3]], (0, 3))
+    session.coordinator.local_worker.ready = True
+    packet = session.tick(.2)
+    assert any(e['kind'] == 'STALE_LOCAL_RESULT' for e in packet.result.events)
+    assert not any(e['kind'] == 'LOCAL_ACCEPTED' for e in packet.result.events)
+    assert packet.candidate.source == 'brake'
+
+
+def test_yaw_and_configured_tolerance_and_new_measurements_gate_success():
+    session, Goal = make_session()
+    task = task_api(session)
+    session.coordinator.goal_tolerance_m = .04
+    session.coordinator.goal_yaw_tolerance_rad = .02
+    task.submit('a', Goal(0, 0, 1.), 0.)
+    session.offer_state(VehicleState(.05, 0, 1., 0, 0))
+    task.observe(session.tick(0.), 0.)
+    task.observe(session.tick(.4), .4)
+    assert task.active.outcome is None
+    session.offer_state(VehicleState(0, 0, .97, 0, 0))
+    task.observe(session.tick(.5), .5)
+    task.observe(session.tick(.9), .9)
+    assert task.active.outcome is None
+    session.offer_state(VehicleState(0, 0, 1., 0, 0))
+    task.observe(session.tick(1.), 1.)
+    task.observe(session.tick(1.4), 1.4, state_updated=False)
+    assert task.active.outcome is None
+    task.observe(session.tick(1.5), 1.5)
+    assert task.active.outcome == 'GOAL_REACHED'

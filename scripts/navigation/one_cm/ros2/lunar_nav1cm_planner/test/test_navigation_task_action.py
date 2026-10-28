@@ -70,10 +70,12 @@ def test_action_client_goal_feedback_cancel_replace_and_shutdown():
         bad, bad_result = send(2.6, 0)
         until(bad_result.done)
         assert bad_result.result().result.outcome == NavigateToPose.Result.INVALID_GOAL
+        assert bad_result.result().status == 6
         assert not result.done()
         replacement, replacement_result = send(0, 3)
         until(result.done)
         assert result.result().result.reason_code == 'GOAL_REPLACED'
+        assert result.result().status == 6
         late = active.cancel_goal_async(); until(late.done)
         assert not replacement_result.done()
         measured[3] = .2
@@ -85,6 +87,7 @@ def test_action_client_goal_feedback_cancel_replace_and_shutdown():
         measured[3] = 0.
         until(replacement_result.done)
         assert replacement_result.result().result.reason_code == 'CANCELED_STOPPED'
+        assert replacement_result.result().status == 5
         turning, turning_result = send(0, 0, 1.)
         for _ in range(20): executor.spin_once(timeout_sec=.02)
         assert not turning_result.done()
@@ -94,6 +97,7 @@ def test_action_client_goal_feedback_cancel_replace_and_shutdown():
         measured[3] = 0.
         until(turning_result.done)
         assert turning_result.result().result.outcome == NavigateToPose.Result.GOAL_REACHED
+        assert turning_result.result().status == 4
         missing, missing_result = send(0, 0, has_yaw=False)
         until(missing_result.done)
         assert missing_result.result().result.outcome == NavigateToPose.Result.GOAL_REACHED
