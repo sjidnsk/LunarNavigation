@@ -562,6 +562,9 @@ class PureWheeledControllerNode(Node):
         from nav1cm.ros_conversion import state_from_odometry, MissingTransform
         odometry,received,receipt_ns=self._standard_pending_odometry
         try:
+            # Odometry twist 位于 child_frame；保留同帧横向反馈，不随地图 TF 旋转。
+            lateral_mps=float(odometry.twist.twist.linear.y)
+            if not isfinite(lateral_mps):raise ValueError('lateral feedback must be finite')
             value=state_from_odometry(odometry,self._latest_transforms,self._map_frame)
         except MissingTransform:
             return
@@ -569,7 +572,7 @@ class PureWheeledControllerNode(Node):
             self._odometry=None;self._odometry_received_at=None
             self._standard_pending_odometry=None
             return
-        self._standard_state=TrackingState(value.x,value.y,value.yaw,value.v,value.w)
+        self._standard_state=TrackingState(value.x,value.y,value.yaw,value.v,value.w,lateral_mps)
         self._odometry=odometry;self._odometry_received_at=received
         stamp=odometry.header.stamp
         source_ns=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
@@ -631,8 +634,7 @@ class PureWheeledControllerNode(Node):
             certified_grid=latest
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(self._executor.diagnostics,
             event='solve_result',phase=result.phase,compute_ms=(monotonic()-started)*1000,
-            map_revision=latest.revision,measured_stopped=(abs(state.linear_mps)<=self._policy.stopped_linear_mps
-                and abs(state.angular_radps)<=self._policy.stopped_angular_radps)))))
+            map_revision=latest.revision,measured_stopped=self._executor._stopped(state)))))
         self._publish_twist(result.command.linear_x_mps,result.command.angular_z_radps)
 
     def _publish_mppi_step(self, stamp_ns):

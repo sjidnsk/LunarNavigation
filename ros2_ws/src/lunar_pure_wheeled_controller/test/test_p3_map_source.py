@@ -239,3 +239,59 @@ def test_invalid_standard_startup_does_not_start_a_map_worker(monkeypatch):
     finally:
         for source in sources:source.close()
         rclpy.shutdown()
+
+
+def test_lateral_feedback_is_preserved_in_body_frame_and_is_not_stopped(monkeypatch):
+    import json
+    from types import SimpleNamespace as S
+    from nav_msgs.msg import Odometry
+    from tf2_msgs.msg import TFMessage
+    rclpy.init(args=['--ros-args','-p','controller_backend:=mppi_path_follower',
+        '-p','input_mode:=incremental_path','-p','command_topic:=/lunar_test/task2_fix_cmd'])
+    node=None
+    try:
+        node=PureWheeledControllerNode()
+        tf=transform('map','sensor_odom')
+        tf.transform.rotation.z=np.sin(np.pi/4)
+        tf.transform.rotation.w=np.cos(np.pi/4)
+        node._on_tf(TFMessage(transforms=[tf]))
+        odom=Odometry();odom.header.frame_id='sensor_odom';odom.child_frame_id='wheel_body'
+        odom.pose.pose.orientation.w=1.;odom.twist.twist.linear.y=.1
+        node._on_odometry(odom)
+        assert node._standard_state.yaw_rad==pytest.approx(np.pi/2)
+        grid=GridMap(np.ones((500,500),np.uint8),.01,(-2.5,-2.5))
+        monkeypatch.setattr(node,'_standard_grid',lambda state:grid)
+        diagnostics=[];node._mppi_diagnostics=S(publish=lambda msg:diagnostics.append(json.loads(msg.data)))
+        node._tick()
+        assert (node._standard_state.linear_mps,node._standard_state.lateral_mps,
+                diagnostics[-1]['measured_stopped'])==(0.,.1,False)
+    finally:
+        if node is not None:node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_nan_lateral_feedback_is_rejected_and_cannot_renew_liveness():
+    import json
+    from types import SimpleNamespace as S
+    from nav_msgs.msg import Odometry
+    rclpy.init(args=['--ros-args','-p','controller_backend:=mppi_path_follower',
+        '-p','input_mode:=incremental_path','-p','command_topic:=/lunar_test/task2_fix_cmd'])
+    node=None
+    try:
+        node=PureWheeledControllerNode()
+        good=Odometry();good.header.frame_id='map';good.pose.pose.orientation.w=1.
+        node._on_odometry(good)
+        assert node._odometry is good and node._odometry_received_at is not None
+        bad=Odometry();bad.header.frame_id='map';bad.pose.pose.orientation.w=1.
+        bad.twist.twist.linear.y=float('nan')
+        node._on_odometry(bad)
+        assert node._odometry is None and node._odometry_received_at is None
+        assert node._standard_pending_odometry is None
+        diagnostics=[];node._mppi_diagnostics=S(publish=lambda msg:diagnostics.append(json.loads(msg.data)))
+        node._tick()
+        assert diagnostics[-1]['event']=='certificate_unavailable'
+        assert diagnostics[-1]['measured_stopped'] is None
+        assert not diagnostics[-1]['certified_stop']
+    finally:
+        if node is not None:node.destroy_node()
+        rclpy.shutdown()

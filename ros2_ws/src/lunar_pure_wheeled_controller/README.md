@@ -31,7 +31,8 @@ nav1cm UNKNOWN/FREE/BLOCKED=-1/0/1 显式映射为控制器 0/1/2。
 Path 输入为 reliable/volatile/depth1。TF 使用最新图，订阅 `/tf` 与
 `tf_static_topic=/tf_static`（reliable/transient_local），接受零/相同 stamp
 及链式变换；不要求与 Odometry stamp 配对。Odometry 保留有符号车体速度；
-尚无 TF 的输入保留待重试，不更新有效接收活性。只做必要结构/有限数检查。
+尚无 TF 的输入保留待重试，不更新有效接收活性。适配层保留同一 Odometry 的车体横向速度，
+拒收非有限值；停稳按纵向/横向速度合量与角速率共同判断。只做必要结构/有限数检查。
 
 活性用 monotonic：`path_timeout_s=.35`、`odometry_timeout_s=.5`、
 `p3_map_timeout_s=3.0`。成功处理的同 epoch 新观测也刷新有效地图接收时间；
@@ -46,5 +47,7 @@ Path 输入为 reliable/volatile/depth1。TF 使用最新图，订阅 `/tf` 与
 已认证停车。正常结果单独记录实测停稳；有限局部参考到头只 WAITING，不报告整次导航完成。
 销毁节点先发布停车目标，再 join worker，最后释放 native 地形资源。
 
-本任务只在隔离 Humble 测试域92、ROS_LOCALHOST_ONLY=1、验证命令话题验证。
+本任务单元测试在隔离 Humble 测试域92、ROS_LOCALHOST_ONLY=1执行；部分单元测试仍使用
+默认命令话题名称。横向反馈新增回归显式使用验证话题，但不能据此声称全部测试已重映射。
+实际命令话题重映射及跨进程ROS图检查由Task3联合验证，当前待验。
 Jazzy、Orin、实际 DDS 端到端、真实 rosbag、RViz 与实车均需分别验收，未执行为 NOT_RUN。
