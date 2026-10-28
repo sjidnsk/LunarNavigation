@@ -322,5 +322,7 @@
   },
   "adapted_files": [
     "scripts/navigation/one_cm/nav1cm/terrain_bridge.cpp"
-  ]
+  ],
+  "common_fixture_source": "eebb78b3c8f2742559f44d64fb4aca3c0a7896eb",
+  "common_fixture_scope": "two RunningSystem test-only spin startup barriers; timeout cleanup shuts global test context and throws failure; production remains c357 shared source"
 }

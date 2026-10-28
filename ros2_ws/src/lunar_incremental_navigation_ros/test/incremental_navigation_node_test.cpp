@@ -604,8 +604,12 @@ class RunningSystem final {
     executor_.add_node(server_);
     executor_.add_node(client_node_);
     spinner_ = std::jthread([this] { executor_.spin(); });
-    if (!client_->wait_for_action_server(3s)) {
-      throw std::runtime_error("action server not ready");
+    // 发现 action 不能作为执行线程就绪屏障；避免快速 graph case 丢失 cancel。
+    if (!WaitFor([this] { return executor_.is_spinning(); }) ||
+        !client_->wait_for_action_server(3s)) {
+      rclcpp::shutdown();
+      spinner_.join();
+      throw std::runtime_error("test executor or action server not ready");
     }
   }
 
