@@ -28,6 +28,10 @@ clearance=importlib.util.module_from_spec(spec);spec.loader.exec_module(clearanc
 PREFIX="/nav1cm_task3"
 TOPICS={k:PREFIX+"/"+k for k in ("grid","odom","tf","tf_static","navigate","goal_disabled","global","local","exploration_map","policy","task","status","cmd","diag")}
 
+def uuid_values(value):
+    """ROS uint8数组转成生成消息setter接受的Python整数。"""
+    return list(bytes(value))
+
 def process_rows(group):
     rows=[]
     for path in Path('/proc').iterdir():
@@ -108,7 +112,7 @@ def run(args):
     def get_result(uuid):
         uid=bytes(uuid).hex()
         if uid in pending:return
-        request=NavigateToPose.Impl.GetResultService.Request();request.goal_id=UUID(uuid=list(uuid))
+        request=NavigateToPose.Impl.GetResultService.Request();request.goal_id=UUID(uuid=uuid_values(uuid))
         pending[uid]=result_client.call_async(request);emit('UUID',uuid=uid,pose=(list(goals[-1]['pose']) if goals else None))
     def action_feedback(m):
         row=emit('ACTION_FEEDBACK',uuid=bytes(m.goal_id.uuid).hex(),message=message_to_ordereddict(m.feedback));feedback.append(row)

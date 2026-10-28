@@ -37,3 +37,14 @@ def test_external_cancel_requires_measured_motion_stop_and_no_reselection():
     e=evidence();e.update(case="task_cancel_stop",canceled_stopped=1,cancel_while_moving=True)
     assert load().grade(e)["pass_"]
     e["no_goals_after_cancel"]=False;assert not load().grade(e)["pass_"]
+
+
+def test_passive_action_probe_uuid_uses_python_wire_integers():
+    import sys
+    import numpy as np
+    path=FILE.with_name("run.py")
+    spec=spec_from_file_location("frontier_runner",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    assert hasattr(module,"uuid_values"), "UUID旁观请求缺少wire整数规范化"
+    values=module.uuid_values(np.arange(16,dtype=np.uint8))
+    assert values==list(range(16)) and all(type(v) is int for v in values)
