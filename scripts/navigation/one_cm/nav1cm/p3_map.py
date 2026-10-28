@@ -474,13 +474,13 @@ class P3MapStore:
                 affected = _world_coverage(update.regions, update)
                 mask = _world_coverage_in_source(affected, key)
                 local = _clip_row_maps(cached, mask)
-                regions = [region for region in _rectangles(local) if region[4] != CellState.UNKNOWN]
+                regions = _rectangles(local)
                 # native 只发布本次观测及变化邻域。厘米格可能由多个更细源格
                 # 跨帧覆盖，所以用缓存补齐受影响厘米范围的最新 intrinsic
                 # 分类，再以冲突后新鲜覆盖作准入，不引入旧覆盖清新障碍。
                 eligible = _clip_row_maps(local, fresh)
-                fresh_classified = [region for region in _rectangles(eligible) if region[4] != CellState.UNKNOWN]
-                for selected in (CellState.FREE, CellState.BLOCKED):
+                fresh_classified = _rectangles(eligible)
+                for selected in (CellState.FREE, CellState.BLOCKED, CellState.UNKNOWN):
                     for packet, historical in ((regions, True), (fresh_classified, False)):
                         candidates = (_free_rows(packet, update) if selected == CellState.FREE else
                                       (cell for region in packet if region[4] == selected
@@ -489,7 +489,22 @@ class P3MapStore:
                             intervals = (_owned_intervals(owners, y, left, right, source)
                                          if historical else ((left, right),))
                             for lo, hi in intervals:
-                                rows[y] = _paint(rows.get(y, ()), lo, hi, state)
+                                if selected == CellState.UNKNOWN:
+                                    # 新有限 UNKNOWN 及仍有来源权限的 halo 撤销
+                                    # 相交 FREE；只移除自由支持，已证 BLOCKED 保留。
+                                    # 亚厘米部分未知也不能留下整厘米 FREE 证书。
+                                    row = rows.get(y, ())
+                                    remaining = []
+                                    for x0, x1, old_state in row:
+                                        if old_state != CellState.FREE or x1 <= lo or x0 >= hi:
+                                            remaining.append((x0, x1, old_state))
+                                        else:
+                                            if x0 < lo: remaining.append((x0, lo, old_state))
+                                            if x1 > hi: remaining.append((hi, x1, old_state))
+                                    if remaining: rows[y] = tuple(remaining)
+                                    else: rows.pop(y, None)
+                                else:
+                                    rows[y] = _paint(rows.get(y, ()), lo, hi, state)
                 fresh_regions = _rectangles(_clip_row_maps(fresh, mask))
                 owners = _record_observation_owners(owners, source,
                                                     observation_regions, fresh_regions, update)
