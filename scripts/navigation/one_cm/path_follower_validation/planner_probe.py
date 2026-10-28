@@ -1,4 +1,4 @@
-from qos import profile_data,entity_rows
+from .qos import profile_data,entity_rows
 """真实已安装 PlannerNode；内部 factory 仅增加观测和单请求 250 ms 延迟。"""
 from dataclasses import asdict
 import hashlib
@@ -15,7 +15,7 @@ from lunar_nav1cm_planner.node import PlannerNode, create_resources
 import rclpy
 from rclpy.parameter import Parameter
 
-from evidence import Recorder
+from .evidence import Recorder
 
 
 class DelayOneRequest:

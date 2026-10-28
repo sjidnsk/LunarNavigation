@@ -2,13 +2,17 @@
 import importlib.util
 from pathlib import Path
 def legacy(name):
-    path=Path(__file__).resolve().parent.parent/'p3_path_validation'/(name+'.py')
-    spec=importlib.util.spec_from_file_location('task3_legacy_'+name,path)
-    module=importlib.util.module_from_spec(spec)
+    import importlib
     import sys
-    sys.modules[spec.name]=module
-    spec.loader.exec_module(module)
-    return module
+    package = 'nav1cm_p3_path_validation'
+    folder = Path(__file__).resolve().parent.parent/'p3_path_validation'
+    if package not in sys.modules:
+        spec=importlib.util.spec_from_file_location(package,folder/'__init__.py',
+            submodule_search_locations=[str(folder)])
+        module=importlib.util.module_from_spec(spec)
+        sys.modules[package]=module
+        spec.loader.exec_module(module)
+    return importlib.import_module(package+'.'+name)
 common=legacy('common')
 Recorder=common.Recorder
 TOPICS=common.TOPICS

@@ -29,15 +29,13 @@ def test_raw_motion_violation_vetoes(field,value):
     assert not M.grade(e)["pass_"]
 
 def test_independent_sat_catches_rotating_front_corner():
-    import sys
-    sys.path.insert(0,str(Path(__file__).resolve().parents[3]/"scripts/navigation/one_cm/path_follower_validation"))
-    from evidence import legacy
+    from scripts.navigation.one_cm.path_follower_validation.evidence import legacy
     geometry=legacy("motion")
     assert not geometry.swept_clear(geometry.State(),geometry.State(yaw=1.57),[(.45,.45,.5,.5)])
     assert geometry.swept_clear(geometry.State(),geometry.State(yaw=.2),[(2.,2.,2.1,2.1)])
 
 def test_terminal_requires_contiguous_stopped_hold():
-    from evidence import legacy
+    from scripts.navigation.one_cm.path_follower_validation.evidence import legacy
     evaluator=legacy("evaluate")
     states=[dict(elapsed_s=i*.1,x=.8,y=0.,yaw=0.,v=.011,w=0.) for i in range(8)]
     assert not evaluator.held_terminal(states,(.8,0.,0.),0.,1.)
@@ -45,8 +43,8 @@ def test_terminal_requires_contiguous_stopped_hold():
     assert evaluator.held_terminal(states,(.8,0.,0.),0.,1.)
 
 def test_wrong_ros_type_and_production_command_graph_veto():
-    from evaluate import graph_valid
-    from evidence import TOPICS,CMD
+    from scripts.navigation.one_cm.path_follower_validation.evaluate import graph_valid
+    from scripts.navigation.one_cm.path_follower_validation.evidence import TOPICS,CMD
     entries={TOPICS["grid"]:("grid_map_msgs/msg/GridMap","nav1cm_joint_plant"),
         TOPICS["odom"]:("nav_msgs/msg/Odometry","nav1cm_joint_plant"),
         TOPICS["local"]:("nav_msgs/msg/Path","nav1cm_joint_plant"),
@@ -64,7 +62,7 @@ def test_wrong_ros_type_and_production_command_graph_veto():
     assert not graph_valid(graph,"empty_smoke")
 
 def qos_evidence():
-    from evidence import TOPICS
+    from scripts.navigation.one_cm.path_follower_validation.evidence import TOPICS
     profile=dict(reliability="RELIABLE",durability="VOLATILE",history="KEEP_LAST",depth=1)
     static=dict(reliability="RELIABLE",durability="TRANSIENT_LOCAL",history="KEEP_LAST",depth=100)
     rows=[dict(node_name="lunar_pure_wheeled_controller",direction="subscriptions",topic=TOPICS["local"],qos=profile.copy()),
@@ -78,14 +76,14 @@ def qos_evidence():
 
 @pytest.mark.parametrize("field,value",[("reliability","BEST_EFFORT"),("durability","TRANSIENT_LOCAL"),("depth",2)])
 def test_qos_wrong_actual_path_entity_veto(field,value):
-    from evaluate import qos_valid
+    from scripts.navigation.one_cm.path_follower_validation.evaluate import qos_valid
     graph,entities=qos_evidence()
     entities[0]["qos"][field]=value
     assert not qos_valid(graph,entities,"empty_smoke")
 
 def test_qos_unknown_graph_depth_requires_real_entity_depth():
-    from evaluate import qos_valid
-    from evidence import TOPICS
+    from scripts.navigation.one_cm.path_follower_validation.evaluate import qos_valid
+    from scripts.navigation.one_cm.path_follower_validation.evidence import TOPICS
     graph,entities=qos_evidence()
     for direction in graph.values():
         for rows in direction.values():
@@ -95,10 +93,30 @@ def test_qos_unknown_graph_depth_requires_real_entity_depth():
     assert not qos_valid(graph,entities,"empty_smoke")
 
 def test_tf_static_actual_durability_and_graph_reliability_veto():
-    from evaluate import qos_valid
+    from scripts.navigation.one_cm.path_follower_validation.evaluate import qos_valid
     graph,entities=qos_evidence()
     entities[-1]["qos"]["durability"]="VOLATILE"
     assert not qos_valid(graph,entities,"empty_smoke")
     graph,entities=qos_evidence()
     graph["publishers"]["/tf_static"][0]["qos"]["reliability"]="BEST_EFFORT"
     assert not qos_valid(graph,entities,"empty_smoke")
+
+@pytest.mark.parametrize("folder",["p3_path_validation","path_follower_validation"])
+def test_direct_script_help_uses_isolated_package(folder):
+    import subprocess
+    import sys
+    script=Path(__file__).resolve().parents[3]/"scripts/navigation/one_cm"/folder/"run.py"
+    result=subprocess.run([sys.executable,str(script),"--help"],capture_output=True,text=True,timeout=10)
+    assert result.returncode==0,result.stderr
+    assert "--role" in result.stdout and "--output" in result.stdout
+
+def test_legacy_loader_and_joint_package_keep_separate_evaluators():
+    import importlib
+    from scripts.navigation.one_cm.path_follower_validation.evidence import legacy
+    old=legacy("evaluate")
+    new=importlib.import_module("scripts.navigation.one_cm.path_follower_validation.evaluate")
+    assert old is not new
+    assert hasattr(old,"apply_supervision_gate")
+    import inspect
+    assert "start" in inspect.signature(old.analyze).parameters
+    assert "error" in inspect.signature(new.analyze).parameters

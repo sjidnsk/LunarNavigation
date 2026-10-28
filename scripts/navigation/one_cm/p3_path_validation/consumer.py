@@ -8,8 +8,8 @@ from nav_msgs.msg import Odometry, Path as PathMessage
 import rclpy
 from rclpy.node import Node
 
-from common import TOPICS, Recorder, obstacles, path_data, transform, yaw_of
-from motion import PathFollower, State, swept_clear
+from .common import TOPICS, Recorder, obstacles, path_data, transform, yaw_of
+from .motion import PathFollower, State, swept_clear
 
 
 def run(args):

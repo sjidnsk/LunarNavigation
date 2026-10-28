@@ -1,4 +1,4 @@
-from qos import profile_data,entity_rows
+from .qos import profile_data,entity_rows
 """只读观测真实安装控制器，不改优化、决策或命令。"""
 import hashlib
 import sys
@@ -8,7 +8,7 @@ import rclpy
 from rclpy.signals import SignalHandlerOptions
 from lunar_pure_wheeled_controller.node import PureWheeledControllerNode
 import lunar_pure_wheeled_controller
-from evidence import Recorder,CMD,DIAG
+from .evidence import Recorder,CMD,DIAG
 
 def run(args):
     rec=Recorder(args.output,'follower')

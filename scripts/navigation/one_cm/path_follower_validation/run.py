@@ -9,10 +9,23 @@ import signal
 import subprocess
 import sys
 import time
-from evidence import DURATIONS,legacy
+# 直接脚本与spawn重执行都建立明确包命名空间；不把源码父目录加入PYTHONPATH。
+if not __package__:
+    import importlib.util
+    _package_name = 'nav1cm_joint_validation'
+    if _package_name not in sys.modules:
+        _package_spec = importlib.util.spec_from_file_location(
+            _package_name, Path(__file__).with_name('__init__.py'),
+            submodule_search_locations=[str(Path(__file__).resolve().parent)])
+        _package_module = importlib.util.module_from_spec(_package_spec)
+        sys.modules[_package_name] = _package_module
+        _package_spec.loader.exec_module(_package_module)
+    __package__ = _package_name
+
+from .evidence import DURATIONS,legacy
 
 def supervise(args):
-    from evaluate import analyze
+    from .evaluate import analyze
     def members(group):
         found=[]
         for p in Path('/proc').iterdir():
@@ -94,8 +107,8 @@ def main():
     p.add_argument('--start',type=float,default=0.);p.add_argument('--duration',type=float,default=0.)
     args=p.parse_args()
     if args.role=='supervisor':return supervise(args)
-    if args.role=='planner':from planner_probe import run
-    elif args.role=='plant':from plant import run
-    else:from follower import run
+    if args.role=='planner':from .planner_probe import run
+    elif args.role=='plant':from .plant import run
+    else:from .follower import run
     run(args);return 0
 if __name__=='__main__':sys.exit(main())

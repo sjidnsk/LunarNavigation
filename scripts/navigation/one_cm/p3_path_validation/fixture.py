@@ -12,7 +12,7 @@ from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
 from tf2_msgs.msg import TFMessage
 
-from common import TOPICS, Recorder, obstacles, transform
+from .common import TOPICS, Recorder, obstacles, transform
 
 
 def grid_message(case, elapsed, resolution, folder, label):

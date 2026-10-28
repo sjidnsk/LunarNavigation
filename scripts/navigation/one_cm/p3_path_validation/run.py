@@ -10,7 +10,20 @@ import subprocess
 import sys
 import time
 
-from common import CASES, DURATIONS
+# 直接脚本与spawn重执行都建立明确包命名空间；不把源码父目录加入PYTHONPATH。
+if not __package__:
+    import importlib.util
+    _package_name = 'nav1cm_p3_path_validation'
+    if _package_name not in sys.modules:
+        _package_spec = importlib.util.spec_from_file_location(
+            _package_name, Path(__file__).with_name('__init__.py'),
+            submodule_search_locations=[str(Path(__file__).resolve().parent)])
+        _package_module = importlib.util.module_from_spec(_package_spec)
+        sys.modules[_package_name] = _package_module
+        _package_spec.loader.exec_module(_package_module)
+    __package__ = _package_name
+
+from .common import CASES, DURATIONS
 
 
 def group_pids(group):
@@ -26,7 +39,7 @@ def group_pids(group):
 
 
 def supervise(args):
-    from evaluate import analyze, apply_supervision_gate
+    from .evaluate import analyze, apply_supervision_gate
     output = Path(args.output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     assert os.environ.get('ROS_LOCALHOST_ONLY')=='1'
@@ -127,11 +140,11 @@ def main():
     if args.role=='supervisor':
         return supervise(args)
     if args.role=='planner':
-        from planner_probe import run
+        from .planner_probe import run
     elif args.role=='fixture':
-        from fixture import run
+        from .fixture import run
     else:
-        from consumer import run
+        from .consumer import run
     run(args)
     return 0
 

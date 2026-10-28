@@ -14,7 +14,7 @@ from lunar_nav1cm_planner.node import PlannerNode, create_resources
 import rclpy
 from rclpy.parameter import Parameter
 
-from common import Recorder
+from .common import Recorder
 
 
 class DelayOneRequest:

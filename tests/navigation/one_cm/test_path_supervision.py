@@ -13,7 +13,7 @@ def test_supervisor_error_dominates_analysis_while_normal_finish_stays_pass(tmp_
     harness = Path(__file__).resolve().parents[3] / 'scripts/navigation/one_cm/p3_path_validation'
     monkeypatch.syspath_prepend(str(harness))
     runner = import_module('scripts.navigation.one_cm.p3_path_validation.run')
-    evaluator = import_module('evaluate')
+    evaluator = import_module('scripts.navigation.one_cm.p3_path_validation.evaluate')
 
     class Clock:
         milliseconds = 0
@@ -52,6 +52,10 @@ def test_supervisor_error_dominates_analysis_while_normal_finish_stays_pass(tmp_
         assert len(results) == 2 and all(p['returncode'] == 0 for p in results)
         return dict(case=case, pass_=True, checks=dict(process_exit=True), diagnostic='preserved')
 
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules,'evaluate',SimpleNamespace(
+        analyze=lambda *a: (_ for _ in ()).throw(AssertionError('wrong generic evaluator'))))
     monkeypatch.setattr(runner, 'time', clock)
     monkeypatch.setattr(runner.subprocess, 'Popen', Process)
     monkeypatch.setattr(runner, 'group_pids', lambda group: [])

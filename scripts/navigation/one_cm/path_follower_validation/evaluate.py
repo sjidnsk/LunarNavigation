@@ -2,8 +2,8 @@
 import json
 import math
 from pathlib import Path
-from evidence import legacy,TOPICS,CMD,goal
-from grade import grade
+from .evidence import legacy,TOPICS,CMD,goal
+from .grade import grade
 prior=legacy('evaluate')
 def rows(folder,role):
     return prior.load_rows(folder,role)

@@ -1,4 +1,4 @@
-from qos import profile_data,entity_rows
+from .qos import profile_data,entity_rows
 """独立真实Twist植物：有界速度跟随，完整时钟细分积分；不读取Path控制。"""
 import math
 import sys
@@ -14,7 +14,7 @@ import rclpy
 from rclpy.signals import SignalHandlerOptions
 from rclpy.node import Node
 from rclpy.qos import QoSProfile,DurabilityPolicy,ReliabilityPolicy
-from evidence import Recorder,TOPICS,CMD,DIAG,path_data,legacy,obstacles,goal
+from .evidence import Recorder,TOPICS,CMD,DIAG,path_data,legacy,obstacles,goal
 # 仅复用解析SAT和运动积分函数，绝不构造旧PathFollower。
 geometry=legacy('motion')
 State,integrate,swept_clear=geometry.State,geometry.integrate,geometry.swept_clear
