@@ -119,12 +119,56 @@ def _collision_mass(boxes, mass):
     return com, inertia
 
 
-def _placement(source, profile):
+def _triangle_placement(source, profile, terrain_mesh_path, spawn_xy_m, spawn_yaw_deg):
+    """在组合后实际三角面上重新取支撑；不使用高精源或最近顶点近似。"""
+    import numpy as np
+    from tools.isaac_viper.build_showcase import triangle_support
+    mesh = UsdGeom.Mesh(source.GetPrimAtPath(terrain_mesh_path))
+    if not mesh:
+        raise ValueError('missing placement triangle mesh: '+terrain_mesh_path)
+    counts = np.asarray(mesh.GetFaceVertexCountsAttr().Get(), int)
+    if np.any(counts != 3):
+        raise ValueError('placement mesh must have explicit triangular faces')
+    points = np.asarray(mesh.GetPointsAttr().Get(), float)
+    matrix = np.asarray(UsdGeom.XformCache().GetLocalToWorldTransform(mesh.GetPrim()), float)
+    points = points@matrix[:3,:3]+matrix[3,:3]
+    faces = np.asarray(mesh.GetFaceVertexIndicesAttr().Get(), np.int32).reshape(-1,3)
+    cx,cy = map(float, spawn_xy_m)
+    if not all(math.isfinite(v) for v in (cx,cy,spawn_yaw_deg)):
+        raise ValueError('nonfinite spawn pose')
+    tri_xy = points[faces, :2]
+    keep = (tri_xy[:,:,0].max(axis=1) >= cx-2)&(tri_xy[:,:,0].min(axis=1) <= cx+2)&(tri_xy[:,:,1].max(axis=1) >= cy-2)&(tri_xy[:,:,1].min(axis=1) <= cy+2)
+    faces = faces[keep]
+    x,y = np.meshgrid(np.linspace(cx-1.25,cx+1.25,7), np.linspace(cy-1.25,cy+1.25,7))
+    xy = np.column_stack((x.ravel(), y.ravel()))
+    z = triangle_support(points, faces, xy)
+    fit = np.linalg.lstsq(np.column_stack((xy[:,0]-cx,xy[:,1]-cy,np.ones(len(xy)))),z,rcond=None)[0]
+    normal = Gf.Vec3d(-float(fit[0]),-float(fit[1]),1).GetNormalized()
+    tilt = Gf.Matrix4d().SetRotate(Gf.Rotation(Gf.Vec3d(0,0,1),normal))
+    yaw = Gf.Matrix4d().SetRotate(Gf.Rotation(Gf.Vec3d(0,0,1),float(spawn_yaw_deg)))
+    rotation = (yaw*tilt).ExtractRotation()
+    offsets = [rotation.TransformDir(Gf.Vec3d(x,y,0)) for x,y,_ in profile['simulation']['wheel_centers_m']]
+    contact_xy = [[cx+v[0],cy+v[1]] for v in offsets]
+    heights = triangle_support(points,faces,contact_xy)
+    base_z = max(float(z)-v[2] for z,v in zip(heights,offsets))+.012
+    return [cx,cy,base_z], rotation.GetQuat(), {
+        'terrain_plane':fit.tolist(), 'fresh_yaw_deg':spawn_yaw_deg,
+        'terrain_mesh_path':terrain_mesh_path, 'surface_query':'actual_triangle_barycentric',
+        'contact_xy_m':contact_xy, 'contact_height_m':heights.tolist(),
+        'sampled_contact_clearances_m':[base_z+v[2]-float(z) for z,v in zip(heights,offsets)],
+        'dynamic_settle':'NOT_RUN'}
+
+
+def _placement(source, profile, terrain_mesh_path=None, spawn_xy_m=None, spawn_yaw_deg=90):
     """只读取源地形和静态 XY 位置；不继承已运行角度、关节或速度。"""
     import numpy as np
+    if terrain_mesh_path is not None:
+        if spawn_xy_m is None:
+            raise ValueError('explicit triangle placement requires spawn_xy_m')
+        return _triangle_placement(source, profile, terrain_mesh_path, spawn_xy_m, spawn_yaw_deg)
     old = source.GetPrimAtPath("/World/LunarRover")
     xy = UsdGeom.XformCache().GetLocalToWorldTransform(old).ExtractTranslation()
-    cx, cy = float(xy[0]), float(xy[1])
+    cx, cy = map(float, spawn_xy_m) if spawn_xy_m is not None else (float(xy[0]), float(xy[1]))
     terrain = source.GetPrimAtPath("/World/Environment/DetailTerrain_Rover_plain/DetailMesh_Rover_plain")
     points = np.asarray(list(_mesh_points(terrain)), dtype=float)
     near = points[(abs(points[:, 0] - cx) < 1.5) & (abs(points[:, 1] - cy) < 1.5)]
@@ -133,7 +177,7 @@ def _placement(source, profile):
     fit = np.linalg.lstsq(np.c_[near[:, 0] - cx, near[:, 1] - cy, np.ones(len(near))], near[:, 2], rcond=None)[0]
     normal = Gf.Vec3d(-float(fit[0]), -float(fit[1]), 1).GetNormalized()
     tilt = Gf.Matrix4d().SetRotate(Gf.Rotation(Gf.Vec3d(0, 0, 1), normal))
-    yaw = Gf.Matrix4d().SetRotate(Gf.Rotation(Gf.Vec3d(0, 0, 1), 90))
+    yaw = Gf.Matrix4d().SetRotate(Gf.Rotation(Gf.Vec3d(0, 0, 1), float(spawn_yaw_deg)))
     rotation = (yaw * tilt).ExtractRotation()
     contacts = []
     for x, y, _ in profile["simulation"]["wheel_centers_m"]:
@@ -142,12 +186,12 @@ def _placement(source, profile):
         contacts.append((float(row[2]), float(offset[2])))
     base_z = max(z - dz for z, dz in contacts) + .012
     return [cx, cy, base_z], rotation.GetQuat(), {
-        "terrain_plane": fit.tolist(), "fresh_yaw_deg": 90,
+        "terrain_plane": fit.tolist(), "fresh_yaw_deg": spawn_yaw_deg,
         "sampled_contact_clearances_m": [base_z + dz - z for z, dz in contacts],
         "dynamic_settle": "NOT_RUN"}
 
 
-def build_stage(profile, assets_dir, source_scene, output_path) -> dict:
+def build_stage(profile, assets_dir, source_scene, output_path, *, terrain_mesh_path=None, spawn_xy_m=None, spawn_yaw_deg=90) -> dict:
     """生成新文件；拒绝覆盖。profile 可为 load_profile 返回值或 YAML 路径。"""
     p = load_profile(profile) if not isinstance(profile, dict) else profile
     assets, source_path, output = map(lambda x: Path(x).resolve(), (assets_dir, source_scene, output_path))
@@ -163,7 +207,7 @@ def build_stage(profile, assets_dir, source_scene, output_path) -> dict:
     session = Sdf.Layer.CreateAnonymous()
     Sdf.CreatePrimInLayer(session, "/World/LunarRover/chassis/Sensors").active = False
     pose_source = Usd.Stage.Open(Sdf.Layer.FindOrOpen(str(source_path)), session)
-    position, orientation, placement = _placement(pose_source, p)
+    position, orientation, placement = _placement(pose_source, p, terrain_mesh_path, spawn_xy_m, spawn_yaw_deg)
     output.parent.mkdir(parents=True, exist_ok=True)
     stage = Usd.Stage.CreateNew(str(output))
     stage.OverridePrim("/World/LunarRover").SetActive(False)
@@ -311,8 +355,13 @@ def main():
     parser.add_argument("--assets-dir", required=True)
     parser.add_argument("--source-scene", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument('--terrain-mesh-path')
+    parser.add_argument('--spawn-xy-m', nargs=2, type=float)
+    parser.add_argument('--spawn-yaw-deg', type=float, default=90)
     args = parser.parse_args()
-    print(json.dumps(build_stage(args.profile, args.assets_dir, args.source_scene, args.output), ensure_ascii=False))
+    print(json.dumps(build_stage(args.profile, args.assets_dir, args.source_scene, args.output,
+                                terrain_mesh_path=args.terrain_mesh_path, spawn_xy_m=args.spawn_xy_m,
+                                spawn_yaw_deg=args.spawn_yaw_deg), ensure_ascii=False))
 
 
 if __name__ == "__main__":

@@ -171,3 +171,61 @@ r1修复版当前源码SHA256为`fd45ff464993c88c568f77d84ee10699859acdef02f83e7
 原几何、质量、关节、外参与基线检查继续生效；新增检查双目实际焦距、水平/垂直孔径、perspective和零孔径偏移，IMU/LiDAR与车体对齐的朝向、千克单位以及实际chassis COM与运行端消费的metadata。分辨率由CameraSensor显式设置，支持的RTX频率由tick_rate设置；IMU当前固定100Hz物理采样，RTX频率不得超过15Hz渲染调度，未知sensor implementation拒绝。有效观测范围仍由ROS桥过滤原始数据；配置范围不代表底层传感器超范围能力保证。
 
 本机172passed/11SDKskip；冻结v5真实CPU/PXR已完成：原profile通过，轮径/轴距/轮距/外参/基线/焦距/双孔径8个合法profile变更全部拒绝；实际光学与frame/metadata/unit共10个session/匿名层故障全部拒绝。源码493f206在`E/final-contract-source`隔离快照运行，11测试组0fail/0error/0skip，回执`E/final-contract-cpu-receipt.json`和RED/GREEN日志、`E/final-fix-cpu-{red,green}`逐案JSON保留；冻结SHA前后均c4354150...。新版runtime的Kit/ROS集成仍NOT_RUN；现存GUI继续运行旧750bc3bf/task3-source，不能把新源码CPU检查写成该实例已升级；主恢复命令已切到含新门的final-contract-source，只有本实例明确关闭后才新建会话。最终波限定复审尚待，不预记通过。
+
+
+### 2026-10-29 三区轻量展示构建入口
+
+续作基线 `9db7ed3`；独立分支 `hk/isaac-viper-showcase-20261029`。新 API 为
+`tools.isaac_viper.build_showcase.build_showcase(profile, region_config, source_scene, assets_dir, output_dir, quality='light') -> dict`。
+质量配置 `config/isaac_viper_showcase.yaml` 只记录几何/显示，不复制传感器能力。
+
+```bash
+# REPO 为本任务新 showcase-source；OUT 必须尚不存在。原始资产不改写。
+cd "$REPO"
+"$ISAAC_ROOT/python.sh" -m tools.isaac_viper.build_showcase \
+  --profile config/isaac_viper.yaml \
+  --regions docs/simulation/isaac-polar-v02-midterm-regions.json \
+  --source-scene /mnt/data/WS/ZDYF-lunar-navigation/local_assets/lunar_polar_1km_v02/rover/Lunar_Polar_V02_Rover.usda \
+  --assets-dir /mnt/data/WS/lunar-navigation/analysis-artifacts/isaac-viper-midterm-20261028/source-assets \
+  --output-dir "$OUT" --quality light
+# 原精度对照使用同一命令、不同新目录和 --quality original。
+```
+
+输出 `viper-showcase.usda`、`showcase-environment.usdc`、区域 JSON 副本、
+`showcase-receipt.json` 和原工程 `.validation.json`。默认 light 的统一 1 m 网格有
+1,002,001 顶点、2,000,000 三角面；每个生效 Rock_ 实例聚合其实际世界顶点包络，生成
+80 面凸岩石代理。旧 Environment 整树 inactive，移除其显示/碰撞及无碰撞碎屑；
+新网格共用显示/碰撞且没有地形纹理绑定。岩石代理保留世界 AABB（误差按 float32 实际写入值测量），
+不承诺原占据、坑坡阈值、通道或通行等价。源高程/细区每个源格点与新三角面比较，
+回执记录 n、mean、RMSE、max、p50/p90/p95/p99；格点之间误差上界未建立。
+这些数据只用于几何核对，不进入 Actor。
+
+`build_stage` 增加 keyword-only `terrain_mesh_path`、`spawn_xy_m`、`spawn_yaw_deg`，
+CLI 对应 `--terrain-mesh-path`、`--spawn-xy-m X Y`、`--spawn-yaw-deg DEG`。
+缺省保留旧落位；light 使用 C 候选 (-55,-320) 和新实际三角面的垂直重心插值，
+重新拟合姿态并记四轮支撑。9 body/8 joint/50 kg、零初态及原 profile 门继续检查。
+动态接触/落稳仍需 SDK 验证。
+
+```bash
+# SDK 不依赖 pytest；实际 PXR 正例与 metadata/旧碰撞/辅助几何变异：
+PYTHONPATH="$REPO" VIPER_SHOWCASE_STAGE="$OUT/viper-showcase.usda" \
+  "$ISAAC_ROOT/python.sh" tests/isaac_viper/test_showcase.py
+# 真实运行由主任务统一切换进程后执行；RUN 必须尚不存在。
+ROS_DOMAIN_ID=117 ROS_LOCALHOST_ONLY=1 \
+  "$ISAAC_ROOT/python.sh" -m tools.isaac_viper.run_scene \
+  --stage "$OUT/viper-showcase.usda" --profile config/isaac_viper.yaml \
+  --output-dir "$RUN" --duration 6 --wall-timeout 120 \
+  --view-request-file "$RUN/view-request.json"
+```
+
+GUI 自动显示 Vehicle/All/A/B/C 按钮和 Inspection 人工补光、算法 NOT_RUN 文字，
+viewport 960×540；只有相机 prim，没有区域边框/标注 mesh 进入传感器世界。
+文件入口读取唯一显式路径，内容如 `{"view":"A","request_id":"a-1"}`；
+view 仅允许 vehicle/overview/A/B/C，重复字节不重复切换。切相机只设置 viewport，车辆留在 C，
+没有传送。保留 GUI 时使用 `--duration 0 --keep-open`；Pause/Stop 原安全语义保持。
+Task 1 的 phase_ms/camera_phase_ms/lidar_phase_ms、真实时钟、640×480@15 Hz 双目、
+10 Hz LiDAR、100 Hz IMU 和 .01 s 物理步未改。
+
+本轮本地仅纯 CPU/语法验证；实际 PXR、GPU、ROS 数据、RTF、控制停车及 GUI 尚为
+`NOT_RUN`，由主线程独立运行并补记。A/B 已知地图必须从新碰撞几何重建；A/B 起终点、
+Actor、建图、新规划器闭环、Humble 应用、Orin 与实车仍 `NOT_RUN`。

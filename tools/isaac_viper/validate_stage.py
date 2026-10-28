@@ -294,6 +294,9 @@ def validate_stage(stage_or_path, profile) -> dict:
     check(bool(physics) and abs(physics.GetGravityMagnitudeAttr().Get() - 1.622) < TOL, "lunar_gravity")
     check(physics.GetPrim().GetAttribute("physxScene:enableGPUDynamics").Get() is False, "cpu_physx")
     check(root.GetAttribute("physxArticulation:enabledSelfCollisions").Get() is True, "self_collisions_must_remain_enabled")
+    if metadata_text and metadata.get('showcase'):
+        from tools.isaac_viper.build_showcase import validate_showcase_environment
+        validate_showcase_environment(stage, errors)
     return {"passed": not errors, "errors": errors, "rigid_body_count": len(bodies), "joint_count": len(joints),
             "mass_kg": mass_sum, "visual_mesh_count": len(meshes), "material_asset_count": len(material_assets),
             "nominal_visual_bounds_m": [low, high], "wheel_measurements": wheel_measurements,

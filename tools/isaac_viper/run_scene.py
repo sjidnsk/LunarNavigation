@@ -9,6 +9,72 @@ import time
 import traceback
 
 
+class ShowcaseViewChannel:
+    """只读取显式文件；输入只能选择已登记相机，回调只操作 viewport。"""
+    def __init__(self, request_path, camera_paths, select_camera):
+        self.path = Path(request_path) if request_path else None
+        self.camera_paths = camera_paths
+        self.select_camera = select_camera
+        self.last_digest = None
+
+    def choose(self, name):
+        if not isinstance(name,str) or name not in self.camera_paths:
+            raise ValueError('unknown showcase view: '+str(name))
+        self.select_camera(self.camera_paths[name])
+        return name
+
+    def poll(self):
+        if self.path is None or not self.path.is_file():
+            return None
+        if self.path.stat().st_size > 4096:
+            raise ValueError('showcase view request exceeds 4096 bytes')
+        payload = self.path.read_bytes()
+        stamp = hashlib.sha256(payload).hexdigest()
+        if stamp == self.last_digest:
+            return None
+        self.last_digest = stamp
+        request = json.loads(payload)
+        if not isinstance(request, dict) or set(request)-{'view','request_id'}:
+            raise ValueError('view request accepts view/request_id only')
+        return self.choose(request.get('view'))
+
+
+def create_showcase_ui(stage, viewport, metadata, request_path, status, record, headless=False):
+    """文本/按钮使用 omni.ui；不创建任何会进入 RTX 的区域辅助几何。"""
+    camera_paths = dict(metadata['showcase']['region_camera_paths'])
+    camera_paths['vehicle'] = '/World/EngineeringView'
+    def select(path):
+        if not stage.GetPrimAtPath(path):
+            raise ValueError('showcase camera missing: '+path)
+        if viewport is not None:
+            viewport.camera_path = path
+        status['showcase_current_camera'] = path
+        record({'event':'showcase_view','camera':path,'actor_pose_changed':False})
+    channel = ShowcaseViewChannel(request_path, camera_paths, select)
+    viewport_size = tuple(metadata['showcase']['quality_settings']['viewport_size'])
+    if viewport is not None:
+        viewport.resolution = viewport_size
+    status['showcase_ui'] = {'camera_paths':camera_paths,'viewport_resolution':list(viewport_size),
+        'view_request_file':str(Path(request_path).resolve()) if request_path else None,
+        'annotation_geometry':'NONE; UI text only', 'lighting':'Inspection artificial fill lighting',
+        'navigation':'NOT_RUN; camera switching never teleports vehicle'}
+    channel.window = None
+    if not headless:
+        import omni.ui as ui
+        channel.window = ui.Window('VIPER | A/B/C showcase', width=355, height=300)
+        with channel.window.frame:
+            with ui.VStack(spacing=5):
+                ui.Label('Inspection: artificial fill lighting', word_wrap=True)
+                ui.Label(metadata['showcase']['geometry_version']+' | A/B map + Actor/planner NOT_RUN', word_wrap=True)
+                ui.Label('View only: vehicle stays in C; no teleport', word_wrap=True)
+                for name,label in (('vehicle','Vehicle'),('overview','All A/B/C'),
+                                   ('A','A | rock avoidance | 100 x 100 m'),
+                                   ('B','B | crater slope | 75 x 75 m'),
+                                   ('C','C | exploration | 240 x 240 m')):
+                    ui.Button(label, clicked_fn=lambda name=name: channel.choose(name))
+    return channel
+
+
 class RuntimeLifecycle:
     """Stop不可逆结束本控制会话；Pause不使物理视图失效。"""
     def __init__(self, keep_open):
@@ -115,10 +181,13 @@ def prepare_runtime_stage(source_path, runtime_path):
         if not bound or bound.GetPath() != tire.GetPath():
             raise RuntimeError('wheel source physics binding failed: '+path)
         material_audit['wheel_bindings'][path] = str(bound.GetPath())
-    ground = UsdShade.MaterialBindingAPI(runtime.GetPrimAtPath('/World/Environment')).ComputeBoundMaterial('physics')[0]
+    source_metadata = json.loads(source.GetRootLayer().customLayerData['engineering_metadata_json'])
+    ground_root = source_metadata.get('showcase', {}).get('ground_material_root', '/World/Environment')
+    ground = UsdShade.MaterialBindingAPI(runtime.GetPrimAtPath(ground_root)).ComputeBoundMaterial('physics')[0]
     if not ground or str(ground.GetPath()) != '/World/Materials/GroundContact':
         raise RuntimeError('source ground physics binding was lost')
     material_audit['ground_inherited_binding'] = str(ground.GetPath())
+    material_audit['ground_material_root'] = ground_root
     custom_data = dict(source.GetRootLayer().customLayerData)
     custom_data['physics_material_restore_json'] = json.dumps(material_audit, ensure_ascii=False)
     runtime.GetRootLayer().customLayerData = custom_data
@@ -174,6 +243,7 @@ def main():
     parser.add_argument('--wall-timeout', type=float, default=600.)
     parser.add_argument('--keep-open', action='store_true', help='保留GUI；Pause可恢复，Stop后需重新运行原命令建立控制会话')
     parser.add_argument('--headless', action='store_true')
+    parser.add_argument('--view-request-file', help='显式展示视角JSON文件；只接受vehicle/overview/A/B/C，绝不改变车位姿')
     parser.add_argument('--lifecycle-probe', choices=('stop','stop-play'),
         help='有界SDK回归：在.5sim秒Stop，可同frame再Play；记录后退出测试')
     args = parser.parse_args()
@@ -268,6 +338,8 @@ def main():
         viewport = get_active_viewport()
         if viewport is not None:
             viewport.camera_path = str(view.GetPath())
+        showcase_ui = (create_showcase_ui(stage, viewport, metadata, args.view_request_file, status, record, args.headless)
+                       if 'showcase' in metadata else None)
         controller = DriveController(profile)
         bridge = RosBridge(profile, controller, com, record)
         timeline = omni.timeline.get_timeline_interface()
@@ -318,6 +390,12 @@ def main():
         restart_window = None
         first_step_probe_done = False
         while app.is_running():
+            if showcase_ui is not None:
+                try:
+                    if showcase_ui.poll() is not None:
+                        save()
+                except (ValueError, OSError) as exc:
+                    record({'event':'showcase_view_request_rejected','reason':str(exc)})
             if not args.keep_open and time.monotonic()-wall_start > args.wall_timeout:
                 raise TimeoutError('bounded runtime wall timeout')
             executor_check_start_wall = time.monotonic()

@@ -8,3 +8,10 @@
 - 状态：进行中；原2次闭环与部分严格停车FAIL保留；新的三区算法效果/Actor仍NOT_RUN。
 - 外部产物D:/CodexDownloads/isaac-viper-showcase-20261029；台式对应analysis-artifacts/isaac-viper-showcase-20261029。
 - 最终处置待实际验证和授权合入；不推送/PR/删除，分支/worktree/所有源和新旧产物保留。
+
+## Task 2 本地实现交接
+
+- 执行者 Codex/implement_light_showcase，Windows 单一源码写入者；基线 `9db7ed332986d8f5a8233e341f15e5c237d13ba5`，沿用本任务专题/工作树与 owner。
+- builder、统一 1 m 几何、80 tri 岩石代理、实际三角落位、只含相机的三区层、UI/文件视角通道已实现；原 profile 与 Task 1 分段计时保留。
+- 本地局部测试和语法验证已执行，实际 PXR/GPU/ROS、误差数值、RTF、控制停车、GUI 由 root 接续；旧失败/旧源保留。
+- 处置：代码待本任务显式提交后交 root 实际验证，未合入；不推送、PR、删除或回收工作树。准确提交及命令见 D 盘 coordination/task-2-report.md。
