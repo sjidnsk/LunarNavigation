@@ -890,7 +890,7 @@ def test_lateral_odometry_motion_prevents_terminal_feedback(monkeypatch):
 
 @pytest.mark.parametrize("configured", [False, True])
 def test_direct_p3_map_qos_can_share_reliable_without_changing_state_qos(configured):
-    args=['--ros-args','-p','input_mode:=incremental_path','-p','controller_backend:=mppi_path_follower']
+    args=['--ros-args','-p','input_mode:=incremental_path','-p','controller_backend:=mppi_path_follower','-p','command_topic:=/nav1cm_task3/qos_test_cmd']
     if configured: args += ['-p','map_qos_reliability:=reliable','-p','map_qos_durability:=transient_local']
     rclpy.init(args=args)
     node=None

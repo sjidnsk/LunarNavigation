@@ -1021,7 +1021,8 @@ void HandleFeedback(const std::weak_ptr<Runtime>& weak_runtime,
       runtime->cancel_expected) {
     return;
   }
-  if (feedback != NavigationFeedbackState::kWaitingForMap) {
+  if (feedback != NavigationFeedbackState::kWaitingForMap &&
+      feedback != NavigationFeedbackState::kWaitingForPath) {
     runtime->active_goal->map_wait_started_at.reset();
   }
   switch (feedback) {
@@ -1038,12 +1039,14 @@ void HandleFeedback(const std::weak_ptr<Runtime>& weak_runtime,
       runtime->reason_code = "NAVIGATION_REPLANNING";
       break;
     case NavigationFeedbackState::kWaitingForMap:
+    case NavigationFeedbackState::kWaitingForPath:
       if (!runtime->active_goal->map_wait_started_at ||
           runtime->clock->now() < *runtime->active_goal->map_wait_started_at) {
         runtime->active_goal->map_wait_started_at = runtime->clock->now();
       }
       runtime->state = Status::WAITING_FOR_INPUT;
-      runtime->reason_code = "NAVIGATION_WAITING_FOR_MAP";
+      runtime->reason_code = feedback == NavigationFeedbackState::kWaitingForPath
+          ? "NAVIGATION_WAITING_FOR_PATH" : "NAVIGATION_WAITING_FOR_MAP";
       break;
   }
   PublishLocked(*runtime);

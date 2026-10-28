@@ -27,6 +27,15 @@ from .configuration import load_configuration
 from .runtime import PlannerRuntime
 
 
+def map_input_qos(reliability, durability):
+    """地图独立QoS；位姿/TF继续使用原配置。"""
+    reliabilities = {"best_effort": ReliabilityPolicy.BEST_EFFORT, "reliable": ReliabilityPolicy.RELIABLE}
+    durabilities = {"volatile": DurabilityPolicy.VOLATILE, "transient_local": DurabilityPolicy.TRANSIENT_LOCAL}
+    if reliability not in reliabilities or durability not in durabilities:
+        raise ValueError("invalid map input QoS")
+    return QoSProfile(depth=1, reliability=reliabilities[reliability], durability=durabilities[durability])
+
+
 def create_resources(limits, capability, settings):
     """内部 factory 可供有界接入验证替换；默认始终使用真实 native/acados。"""
     prefix = Path(get_package_prefix('lunar_nav1cm_planner'))
@@ -85,6 +94,7 @@ class PlannerNode(Node):
             'goal_tolerance_m': .1, 'goal_yaw_tolerance_rad': .05,
             'stopped_linear_mps': .01, 'stopped_angular_rps': .01,
             'map_topic': '/Car/T3/mapping/grid_map',
+            'map_qos_reliability': 'best_effort', 'map_qos_durability': 'volatile',
             'odometry_topic': '/Car/T3/localization/odometry',
             'goal_topic': '/Car/T4/navigation/goal',
             'tf_topic': '/tf', 'tf_static_topic': '/tf_static',
@@ -97,6 +107,7 @@ class PlannerNode(Node):
                              Parameter('clearance_radius_m',value=settings['clearance_radius_m'])])
         if not settings['build_dir']:
             raise ValueError('build_dir 必须显式指定仓库外 acados 构建/缓存目录，或设置 NAV1CM_BUILD_DIR')
+        source_qos = map_input_qos(settings['map_qos_reliability'], settings['map_qos_durability'])
         factory = create_resources if resource_factory is None else resource_factory
         session, store = factory(limits, capability, settings)
         self._global_publisher = self.create_publisher(PathMessage, settings['global_route_topic'], 1)
@@ -111,7 +122,7 @@ class PlannerNode(Node):
                                 durability=DurabilityPolicy.VOLATILE)
         static_tf = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.create_subscription(GridMap, settings['map_topic'], self.runtime.offer_map, latest)
+        self.create_subscription(GridMap, settings['map_topic'], self.runtime.offer_map, source_qos)
         self.create_subscription(Odometry, settings['odometry_topic'], self.runtime.offer_odometry, latest)
         self.create_subscription(PoseStamped, settings['goal_topic'], self.runtime.offer_goal, 10)
         self.create_subscription(TFMessage, settings['tf_topic'], self._tf_input, dynamic_tf)

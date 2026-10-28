@@ -22,6 +22,9 @@ std::optional<NavigationFeedbackState> MapFeedback(
   if (reason_code == "WAITING_FOR_MAP") {
     return NavigationFeedbackState::kWaitingForMap;
   }
+  if (reason_code == "WAITING_FOR_PATH") {
+    return NavigationFeedbackState::kWaitingForPath;
+  }
   switch (state) {
     case Action::Feedback::PLANNING:
       return NavigationFeedbackState::kPlanning;

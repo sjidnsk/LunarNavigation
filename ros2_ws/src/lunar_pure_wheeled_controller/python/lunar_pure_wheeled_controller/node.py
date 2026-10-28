@@ -27,6 +27,15 @@ from .tracking import TrackingPolicy, TrackingState, track_trajectory
 from .execution import PathExecutor
 
 
+def map_input_qos(reliability, durability):
+    """地图独立QoS；位姿/TF继续使用原配置。"""
+    reliabilities = {"best_effort": ReliabilityPolicy.BEST_EFFORT, "reliable": ReliabilityPolicy.RELIABLE}
+    durabilities = {"volatile": DurabilityPolicy.VOLATILE, "transient_local": DurabilityPolicy.TRANSIENT_LOCAL}
+    if reliability not in reliabilities or durability not in durabilities:
+        raise ValueError("invalid map input QoS")
+    return QoSProfile(depth=1, reliability=reliabilities[reliability], durability=durabilities[durability])
+
+
 def _yaw(odometry: Odometry) -> float | None:
     position = odometry.pose.pose.position
     orientation = odometry.pose.pose.orientation
@@ -95,6 +104,7 @@ class PureWheeledControllerNode(Node):
             "policy_map_timeout_s": 0.5,
             "standard_map_source": "direct_p3",
             "p3_map_topic": "/Car/T3/mapping/grid_map",
+            "map_qos_reliability": "best_effort", "map_qos_durability": "volatile",
             "p3_map_timeout_s": 3.0,
             "tf_static_topic": "/tf_static",
             "allow_unknown": False,
@@ -361,13 +371,15 @@ class PureWheeledControllerNode(Node):
 
         # 所有参数/话题、发布器与定时器构造成功后再启动持有 native 资源的 worker。
         if p3_setup is not None:
+            source_qos=map_input_qos(self.get_parameter("map_qos_reliability").value,
+                                     self.get_parameter("map_qos_durability").value)
             from .p3_map_source import create_p3_source
             from grid_map_msgs.msg import GridMap as P3GridMap
             capability,body,topic=p3_setup
             self._p3_source=create_p3_source(capability,body,minimum_clearance_m=self._minimum_clearance_m,
                 allow_unknown=self.get_parameter('allow_unknown').value,map_frame=self._map_frame)
             try:
-                self.create_subscription(P3GridMap,topic,self._p3_source.submit_map,state_input_qos())
+                self.create_subscription(P3GridMap,topic,self._p3_source.submit_map,source_qos)
             except Exception:
                 self._p3_source.close()
                 raise
