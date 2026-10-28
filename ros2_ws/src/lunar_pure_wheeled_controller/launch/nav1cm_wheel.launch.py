@@ -56,7 +56,7 @@ def compose(context):
                         command_topic=values['command_topic'],mppi_nominal_response_time_s=values['mppi_nominal_response_time_s'])
         actions.append(Node(package='lunar_pure_wheeled_controller',executable='lunar_pure_wheeled_controller_node.py',output='screen',parameters=[follower]))
     if values['start_rviz']:
-        actions.append(Node(package='rviz2',executable='rviz2',parameters=[{'use_sim_time':values['use_sim_time']}]))
+        actions.append(Node(package='rviz2',executable='rviz2',parameters=[{'use_sim_time':values['use_sim_time']}],remappings=[('/goal_pose',values['goal_topic'])]))
     return actions
 
 

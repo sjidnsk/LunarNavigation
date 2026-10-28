@@ -29,3 +29,9 @@ def test_navigation_only_and_shared_limits():
     for key in ('tf_topic','tf_static_topic','map_frame','allow_unknown','odometry_topic'): assert planner[key]==follower[key]
     assert follower['mppi_nominal_response_time_s']==0.15
     assert follower['standard_map_source']=='direct_p3'
+
+    ctx.launch_configurations.update(start_rviz='true',goal_topic='/private/goal')
+    rviz=module.compose(ctx)[-1]
+    from launch.utilities import perform_substitutions
+    remaps=[(perform_substitutions(ctx,a),perform_substitutions(ctx,b)) for a,b in rviz._Node__remappings]
+    assert ('/goal_pose','/private/goal') in remaps
