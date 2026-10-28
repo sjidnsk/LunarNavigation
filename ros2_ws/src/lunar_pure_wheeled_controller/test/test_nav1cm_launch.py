@@ -35,3 +35,12 @@ def test_navigation_only_and_shared_limits():
     from launch.utilities import perform_substitutions
     remaps=[(perform_substitutions(ctx,a),perform_substitutions(ctx,b)) for a,b in rviz._Node__remappings]
     assert ('/goal_pose','/private/goal') in remaps
+
+
+def test_application_profile_retains_explicit_deployment_limits():
+    module=load()
+    assert module.DEFAULTS['start_controller']=='false'
+    assert float(module.DEFAULTS['angular_speed_rps'])==.1
+    assert float(module.DEFAULTS['goal_yaw_tolerance_rad'])==.02
+    assert float(module.DEFAULTS['mppi_nominal_response_time_s'])==.15
+    assert module.DEFAULTS['tf_topic']=='/P4/input/map_to_odom'
