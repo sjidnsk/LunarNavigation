@@ -1,7 +1,7 @@
-"""MPPI reference-path following, independent of map/planner authority.
+"""MPPI reference tracking with swept motion and full-stop map certificates.
 
-Obstacle routing and reference invalidation belong to navigation. This backend
-predicts and constrains vehicle motion; it does not certify obstacle avoidance.
+Navigation owns obstacle routing and reference invalidation. Tracking proposals
+retain their path objective; published motion requires known-free map support.
 """
 import math
 from dataclasses import replace
@@ -11,7 +11,15 @@ from .mppi import MppiExecutor
 
 
 class MppiPathFollower(MppiExecutor):
-    requires_map = False
+    requires_map = True
+
+    def set_map(self,grid):
+        # StartAssumedFree is planner start-connection authority, not permission
+        # to translate into UNKNOWN. Strip it even from the clearance halo.
+        # Keep native stationary_anchor support for exact pure rotation only.
+        if np.any(grid.assumed):
+            grid=replace(grid,assumed=np.zeros_like(grid.assumed))
+        super().set_map(grid)
 
     def _kinematically_valid(self,velocity):
         p=self.policy
@@ -25,11 +33,9 @@ class MppiPathFollower(MppiExecutor):
         cost=self._tracking_cost(state,controls,target,target_yaw,poses)
         return np.where(valid,cost,np.inf),poses
 
-    def _certify_sequences(self,state,sequences,step,*,costs=None):
-        # Weighted controls define a new nonlinear trajectory. Recompute its
-        # motion constraints rather than averaging sampled poses.
-        poses,velocity=self._rollout(state,sequences,self.config.model_dt)
-        return self._kinematically_valid(velocity),poses
+    # Weighted output and sampled fallback both use MppiExecutor's continuous
+    # arc/closed-segment certificate and complete delayed braking tail. The
+    # point-free proposal score above is an objective, never safety authority.
 
     def _project_targets(self,raw,step):
         """Batch time-independent intent limits; retain slew recurrence order."""
