@@ -1,5 +1,5 @@
 {
-  "main_source": "c35749bdaf6dfda625ec3374a0b49a298757e3fb",
+  "main_source": "3fb559a4c006fef31de30dc71b345f1da328c431",
   "app_base": "81ed242c496d1d6b40aba17ccc69c46ef9b451e5",
   "adapted": [
     "node.py",
@@ -14,7 +14,7 @@
     "83d6d10a",
     "4ea7f8c-controller-execution-tracking-only"
   ],
-  "preserved_app_config": "config/wheel.yaml minimum_clearance_m=0.4 and unchanged wheel_orin.yaml; composite defaults to installed app wheel_orin and /P4/input/map_to_odom",
+  "preserved_app_config": "User explicitly requested all obstacle clearances 0.2m on 2026-10-29. Only config/wheel.yaml and config/wheel_orin.yaml minimum_clearance_m changed .4 to .2; body, underbody terrain clearance, platform, P4 TF and strict .1/.02/.15 unchanged.",
   "initial_core_tree": "b81dea40b288b3510e8ece11f2d7560bf35bd635",
   "app_core_compatibility": {
     "ruling": "task4-app-map-compatibility-ruling.md",
@@ -30,7 +30,7 @@
     "scripts/navigation/one_cm/nav1cm/terrain_bridge.cpp"
   ],
   "common_fixture_source": "eebb78b3c8f2742559f44d64fb4aca3c0a7896eb",
-  "common_fixture_scope": "two RunningSystem test-only spin startup barriers; timeout cleanup shuts global test context and throws failure; production remains c357 shared source",
+  "common_fixture_scope": "Two RunningSystem test-only barriers from main eebb78b; current production source and qualification are recorded independently.",
   "main_source_files": [
     {
       "path": "scripts/navigation/one_cm/nav1cm/__init__.py",
@@ -46,20 +46,20 @@
     },
     {
       "path": "scripts/navigation/one_cm/nav1cm/certification.py",
-      "main_source_sha256": "9b4153f2e52893bdb7411466bc369f91c172bd0c82bd0671cf3ba3bd62739ff3",
-      "app_sha256": "9b4153f2e52893bdb7411466bc369f91c172bd0c82bd0671cf3ba3bd62739ff3",
+      "main_source_sha256": "f3deaacf4ee4cfb9e676e1e059e5eda9ae8f9a3854b429f2f86cef38ba308d1a",
+      "app_sha256": "f3deaacf4ee4cfb9e676e1e059e5eda9ae8f9a3854b429f2f86cef38ba308d1a",
       "relationship": "exact"
     },
     {
       "path": "scripts/navigation/one_cm/nav1cm/contracts.py",
-      "main_source_sha256": "450d03717bea6ed8d2677c01acbd676d207d8be7d8dd0ace6ae18ed3f3c181c4",
-      "app_sha256": "450d03717bea6ed8d2677c01acbd676d207d8be7d8dd0ace6ae18ed3f3c181c4",
+      "main_source_sha256": "da14db164d78097ffc91438869e4dfe5b4fedf5dcaf4b7d596913d463d5c7879",
+      "app_sha256": "da14db164d78097ffc91438869e4dfe5b4fedf5dcaf4b7d596913d463d5c7879",
       "relationship": "exact"
     },
     {
       "path": "scripts/navigation/one_cm/nav1cm/coordinator.py",
-      "main_source_sha256": "2c77f42dccfb1a7bd8e23daf0c355fa674a9239f35e581a5264448afc614c972",
-      "app_sha256": "2c77f42dccfb1a7bd8e23daf0c355fa674a9239f35e581a5264448afc614c972",
+      "main_source_sha256": "2b6908a1183a601e7cad94e93c09782e71eba6b97989b8b2d79147a9b48ec898",
+      "app_sha256": "2b6908a1183a601e7cad94e93c09782e71eba6b97989b8b2d79147a9b48ec898",
       "relationship": "exact"
     },
     {
@@ -94,14 +94,14 @@
     },
     {
       "path": "scripts/navigation/one_cm/nav1cm/follower_map.py",
-      "main_source_sha256": "5fed53ed1e21f6d7098088f1b362e1ceeff43706c09a1d74968111cfa638d60f",
-      "app_sha256": "5fed53ed1e21f6d7098088f1b362e1ceeff43706c09a1d74968111cfa638d60f",
+      "main_source_sha256": "abb6d93f2ba4c6988e08297c189eee7a56d5eefa8dec930f0eab96c01fbfbcc6",
+      "app_sha256": "abb6d93f2ba4c6988e08297c189eee7a56d5eefa8dec930f0eab96c01fbfbcc6",
       "relationship": "exact"
     },
     {
       "path": "scripts/navigation/one_cm/nav1cm/geometry_native.py",
-      "main_source_sha256": "8245fd63a408333144b94db9a1e2b986dcdcf16088b9b36b31a71018cbb7301f",
-      "app_sha256": "8245fd63a408333144b94db9a1e2b986dcdcf16088b9b36b31a71018cbb7301f",
+      "main_source_sha256": "b4f7c5bfecce3078489eee3444965e46c42f5270d8a811a24b65eb08874e46cc",
+      "app_sha256": "b4f7c5bfecce3078489eee3444965e46c42f5270d8a811a24b65eb08874e46cc",
       "relationship": "exact"
     },
     {
@@ -112,8 +112,8 @@
     },
     {
       "path": "scripts/navigation/one_cm/nav1cm/global_planner.py",
-      "main_source_sha256": "b9d6a5cdcce26cba025bde5468adac1462880cfb465a408931bb5c1b19bd75df",
-      "app_sha256": "b9d6a5cdcce26cba025bde5468adac1462880cfb465a408931bb5c1b19bd75df",
+      "main_source_sha256": "7d914e90525954488b4c906322eac36ac9afdeb7b1ce86023fa61647681ad80d",
+      "app_sha256": "7d914e90525954488b4c906322eac36ac9afdeb7b1ce86023fa61647681ad80d",
       "relationship": "exact"
     },
     {
@@ -124,8 +124,8 @@
     },
     {
       "path": "scripts/navigation/one_cm/nav1cm/local_mpcc.py",
-      "main_source_sha256": "1639cb386a1a1cd4f953c26d950955bdd49063a60c1532f973f41b9ad9ba0fbc",
-      "app_sha256": "1639cb386a1a1cd4f953c26d950955bdd49063a60c1532f973f41b9ad9ba0fbc",
+      "main_source_sha256": "daabe7fa2516084f8a08dbf431f60c2bc254eb23f9649c85c2e75c29c60d0e61",
+      "app_sha256": "daabe7fa2516084f8a08dbf431f60c2bc254eb23f9649c85c2e75c29c60d0e61",
       "relationship": "exact"
     },
     {
@@ -142,8 +142,8 @@
     },
     {
       "path": "scripts/navigation/one_cm/nav1cm/native_geometry.cpp",
-      "main_source_sha256": "bbe8c6da1802233b68afaf03cdf560c5d694e9bfa45e7efe39541d516717df1e",
-      "app_sha256": "bbe8c6da1802233b68afaf03cdf560c5d694e9bfa45e7efe39541d516717df1e",
+      "main_source_sha256": "fc57543dcdd2f38c580ea1b18acdc69d7fdbfb7541db5f64fd5ccbd26fa6dcd6",
+      "app_sha256": "fc57543dcdd2f38c580ea1b18acdc69d7fdbfb7541db5f64fd5ccbd26fa6dcd6",
       "relationship": "exact"
     },
     {
@@ -172,8 +172,8 @@
     },
     {
       "path": "scripts/navigation/one_cm/nav1cm/pose_goal.py",
-      "main_source_sha256": "a02c800a4608826d8a72743470c27e928196724d15e922e1d339e086d9a69bd5",
-      "app_sha256": "a02c800a4608826d8a72743470c27e928196724d15e922e1d339e086d9a69bd5",
+      "main_source_sha256": "b029dfe1dfb1b4fd81bfae87a2762903590522f795e8790f01d039ae80a2d1a9",
+      "app_sha256": "b029dfe1dfb1b4fd81bfae87a2762903590522f795e8790f01d039ae80a2d1a9",
       "relationship": "exact"
     },
     {
@@ -210,7 +210,7 @@
       "path": "scripts/navigation/one_cm/nav1cm/terrain_bridge.cpp",
       "main_source_sha256": "86e1f2d18d173fdf18c61d551ff26d80e433173120e89d5b110421602d796c1a",
       "app_sha256": "2eabbb6753095c37edbc5e23a0bc11a0f96eda0a27e2128dec6c77c130ff54dc",
-      "relationship": "app adaptation"
+      "relationship": "adapted"
     },
     {
       "path": "scripts/navigation/one_cm/nav1cm/terrain_bridge.h",
@@ -246,7 +246,7 @@
       "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/CMakeLists.txt",
       "main_source_sha256": "b7382c005870c474644309564276ca30674cdcc2d7fa067087f69de5406a365b",
       "app_sha256": "88a6bdeb8be93add67c1d2702ac6abf71f0120258f9925464a542f8824fd0273",
-      "relationship": "app adaptation"
+      "relationship": "adapted"
     },
     {
       "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/README.md",
@@ -274,14 +274,14 @@
     },
     {
       "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/configuration.py",
-      "main_source_sha256": "2f24dd1d04452b3bc2b78d28fba59bbe69f33e0f3e7229e2ca86a1c101473431",
-      "app_sha256": "2f24dd1d04452b3bc2b78d28fba59bbe69f33e0f3e7229e2ca86a1c101473431",
+      "main_source_sha256": "f1b70c421a3f387bf9c6dfcfa59cbad93fa7b06fda7544cb69192ebde44057eb",
+      "app_sha256": "f1b70c421a3f387bf9c6dfcfa59cbad93fa7b06fda7544cb69192ebde44057eb",
       "relationship": "exact"
     },
     {
       "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/node.py",
-      "main_source_sha256": "8c16db9efe8b91936f7d2fe09157cabf9b041e376dc45f48df6266a561103324",
-      "app_sha256": "8c16db9efe8b91936f7d2fe09157cabf9b041e376dc45f48df6266a561103324",
+      "main_source_sha256": "de80cd2450341ae36ae72b948bd77930218fa6498af4c721ce540df5cf8405da",
+      "app_sha256": "de80cd2450341ae36ae72b948bd77930218fa6498af4c721ce540df5cf8405da",
       "relationship": "exact"
     },
     {
@@ -328,9 +328,9 @@
     },
     {
       "path": "ros2_ws/src/lunar_pure_wheeled_controller/launch/nav1cm_wheel.launch.py",
-      "main_source_sha256": "b65d53ab5baec927961592c0f2619b97710a6fb17767936b8c045de6e423faa5",
-      "app_sha256": "0cd4d73a14f0498c1afeea885a79d125412a73762527d46d27548109ae1cb188",
-      "relationship": "app adaptation"
+      "main_source_sha256": "5c27d8d84077c55717bbf5e68172846ab3faaecaa2be506ccc497f259992d860",
+      "app_sha256": "1324bb6a555ea6410e4f838ea4d591a05bd0ee32016663a5675da4299bfc6697",
+      "relationship": "adapted"
     },
     {
       "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/mppi.py",
@@ -352,8 +352,8 @@
     },
     {
       "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/p3_map_source.py",
-      "main_source_sha256": "9667b90751864de6f9a98cf2da3f03a0a13ef2fa2f842a5c091e0c65e2c588da",
-      "app_sha256": "9667b90751864de6f9a98cf2da3f03a0a13ef2fa2f842a5c091e0c65e2c588da",
+      "main_source_sha256": "491be74a68fb0d913b5340a90931bcb7739e4968cabf87d6251379ce4097ce99",
+      "app_sha256": "491be74a68fb0d913b5340a90931bcb7739e4968cabf87d6251379ce4097ce99",
       "relationship": "exact"
     },
     {
@@ -394,14 +394,14 @@
     },
     {
       "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_nav1cm_launch.py",
-      "main_source_sha256": "cc5cf977f07c3f182605aee0edc6b163f38a92a33c8dc3a7ecf43009fbe2b070",
-      "app_sha256": "9c30eb06c80ad95312516f24e3e9997d47c8cdf4d9bbdc2ed3ee278a85e0127c",
-      "relationship": "app adaptation"
+      "main_source_sha256": "fb23978525743aa3acb8f4c267db53382e2c9ac1def40bb5cf58a0c42fda3bb5",
+      "app_sha256": "40833762b156e05c2f0ba2d53bbb18ca692b16fbe7e11990abc7b5e30c92d838",
+      "relationship": "adapted"
     },
     {
       "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_p3_map_source.py",
-      "main_source_sha256": "676ac3d21f29984a1d1f1124c36df73b4f3d46c0d4bf63144d9b8521b4befa95",
-      "app_sha256": "676ac3d21f29984a1d1f1124c36df73b4f3d46c0d4bf63144d9b8521b4befa95",
+      "main_source_sha256": "0c851d910f2cfb60c8198e579e0815b988e2e8f9c150b76a000d2c1b232971ed",
+      "app_sha256": "0c851d910f2cfb60c8198e579e0815b988e2e8f9c150b76a000d2c1b232971ed",
       "relationship": "exact"
     },
     {
@@ -469,10 +469,21 @@
       "main_source_sha256": "53e9dbcd4efb1b30c107cc836c617943ea2ac23dbcc8749c1ee8bbb2f647f275",
       "app_sha256": "53e9dbcd4efb1b30c107cc836c617943ea2ac23dbcc8749c1ee8bbb2f647f275",
       "relationship": "exact"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/rectangle_distance.py",
+      "main_source_sha256": "00c738d0da1667c219a2d2a62da9b8a4c3aaf51290365918643f96fdd1332555",
+      "app_sha256": "00c738d0da1667c219a2d2a62da9b8a4c3aaf51290365918643f96fdd1332555",
+      "relationship": "exact"
+    },
+    {
+      "path": "tests/navigation/one_cm/test_clearance.py",
+      "main_source_sha256": "357c963160f8eed7e5853bd2896993b6efe42469f1330ed11c1f64536a7f5f38",
+      "app_sha256": "357c963160f8eed7e5853bd2896993b6efe42469f1330ed11c1f64536a7f5f38",
+      "relationship": "exact"
     }
   ],
-  "qualified_package_source": "fd7fe8ebebfaf4558a4ba64d1359480d802a410b",
-  "core_and_three_package_build_source": "95f886ddca0ebd1fb33261a2f778c4f8a82a9ed6",
+  "qualified_package_source": "7fcfcaa2d63a2d040935cfb00870de2eca4298c9",
   "qualified_selector_source": "15014540ae010cc3714610fc7f7827b856db1fcb",
   "initial_full_closure_build_source": "d54dba2efd584dfd5a07c85c43b715698fa95565",
   "initial_full_closure_test_status": "FAIL retained: 1987 checks / 2 errors / 10 failures; corrected targeted runs provide final qualification",
@@ -483,10 +494,11 @@
     "far": "FREE",
     "native_loaded": {
       "/mnt/data/WS/lunar-navigation/analysis-artifacts/nav1cm-p3-interface-20261027/integration-20261028/task4-app-refresh-r2/install/lunar_incremental_navigation_core/lib/liblunar_incremental_navigation_core.so": "fd228ff330dfadd7e1ab4665cd14564eb809025526bacf6e53cac635a58fe55e",
-      "/mnt/data/WS/lunar-navigation/analysis-artifacts/nav1cm-p3-interface-20261027/integration-20261028/task4-app-refresh-r2/install/lunar_nav1cm_planner/lib/libnav1cm_terrain.so": "3251766d9900ed027676b15c3f6294069ff4ff45fbd002a18ea75d7d8f2c951b"
+      "/mnt/data/WS/lunar-navigation/analysis-artifacts/nav1cm-p3-interface-20261027/integration-20261028/task4-fix2-app-build-r1/install/lunar_nav1cm_planner/lib/libnav1cm_terrain.so": "3251766d9900ed027676b15c3f6294069ff4ff45fbd002a18ea75d7d8f2c951b",
+      "/mnt/data/WS/lunar-navigation/analysis-artifacts/nav1cm-p3-interface-20261027/integration-20261028/task4-fix2-app-build-r1/install/lunar_nav1cm_planner/lib/libnav1cm_geometry.so": "7473df35a696c0f950a9eaaba5b00fe81487e30aec0278677aea3e05ef8a23cd"
     },
-    "nav1cm": "/mnt/data/WS/lunar-navigation/analysis-artifacts/nav1cm-p3-interface-20261027/integration-20261028/task4-app-refresh-r2/install/lunar_nav1cm_planner/local/lib/python3.10/dist-packages/nav1cm/__init__.py",
-    "capability": "/mnt/data/WS/lunar-navigation/analysis-artifacts/nav1cm-p3-interface-20261027/integration-20261028/task4-app-refresh-r2/install/lunar_pure_wheeled_controller/share/lunar_pure_wheeled_controller/config/wheel_orin.yaml"
+    "nav1cm": "/mnt/data/WS/lunar-navigation/analysis-artifacts/nav1cm-p3-interface-20261027/integration-20261028/task4-fix2-app-build-r1/install/lunar_nav1cm_planner/local/lib/python3.10/dist-packages/nav1cm/__init__.py",
+    "capability": "/mnt/data/WS/lunar-navigation/analysis-artifacts/nav1cm-p3-interface-20261027/integration-20261028/task4-fix2-app-build-r1/install/lunar_pure_wheeled_controller/share/lunar_pure_wheeled_controller/config/wheel_orin.yaml"
   },
   "strict_profile": {
     "max_v": 0.2,
@@ -496,9 +508,24 @@
     "nominal_response": 0.15,
     "forward_spin_seconds": 45,
     "obstacle_seconds": 75,
-    "result": "both PASS, parameters match external predeclaration, all six roles exit zero without residuals"
+    "result": "task4-fix2-app-profile-r1 both PASS under frozen .2 declaration; .1/.02/.15 and45/75 unchanged; all six roles exit0 no residuals/T5/exceptions",
+    "minimum_clearance_m": 0.2,
+    "obstacle_clearance": {
+      "pass": true,
+      "required_m": 0.2,
+      "body_m": [
+        1.182,
+        0.818
+      ],
+      "state_count": 44091,
+      "obstacle_state_count": 44091,
+      "minimum_pose_distance_m": 0.48127752669410173,
+      "minimum_swept_lower_bound_m": 0.48108823659537764,
+      "worst_t": 9.793614463880658,
+      "method": "independent exact OBB/AABB vertex-edge distance minus half adjacent-pose body motion bound"
+    }
   },
-  "final_entry_validation": "task4-app-launch-r2: real installed nav-only and explicit follower PASS; 25 source config/mock selector tests PASS; no hardware script executed",
+  "final_entry_validation": "task4-fix2-app-launch-r1: installed nav-only and explicit follower actual .2, P4, strict caps PASS;25 selector/config mock checks PASS; hardware NOT_RUN",
   "not_run": [
     "Jetson AGX Orin",
     "real vehicle/drivers",
@@ -506,5 +533,30 @@
     "real hardware wrapper",
     "real T5 command",
     "rosbag"
-  ]
+  ],
+  "initial_main_source": "c35749bdaf6dfda625ec3374a0b49a298757e3fb",
+  "main_frozen_head": "8a77ac1590d36983c8fe2855ede857b1268ab780",
+  "historical_qualification": {
+    "before_I1_report_commit": "7c1cfa491d9b1bf51b55e0b8e8d38737c33f3b71",
+    "note": "Prior .4 preservation described file contents, not effective runtime obstacle clearance. Earlier profile collision PASS did not prove margin.",
+    "round1_main": "432f266 installed / 1fee88f docs: runtime PASS but pose-goal gap remained",
+    "round1_app": "54573e2: 501 package checks and native13 PASS; explicit .4 obstacle75 no motion/terminal, retained FAIL",
+    "round2_intermediate_main": "b26191c corrected optimizer/goal but expanded rectangle still rejected safe rotation; native/reference RED retained"
+  },
+  "initial_core_and_three_package_build_source": "95f886ddca0ebd1fb33261a2f778c4f8a82a9ed6",
+  "qualified_core_build_source": "95f886ddca0ebd1fb33261a2f778c4f8a82a9ed6",
+  "core_reuse": "Unchanged own core fd228 from task4-app-refresh-r2 install; only three Python/adapter/native-geometry packages refreshed. Private geometry ABI semantic version2, not terrain core ABI/layout.",
+  "fix2_validation": "501 affected-package checks PASS;25 own-native/real-solver/clearance/goal/full rotation+brake tests PASS;54 installed Python SHA match. Common main full core629PASS1dependency skip.",
+  "open_native_performance_observation": {
+    "artifact": "task4-fix1-app-native-r1-performance-receipt.json",
+    "status": "TIMEOUT",
+    "size_m": [
+      5,
+      5
+    ],
+    "resolution_m": 0.01,
+    "timeout_s": 20,
+    "elapsed_s": 20.00299973716028,
+    "scope": "unchanged terrain bridge/core; only APPLY_STARTED, not PASS; deferred whole-branch review"
+  }
 }
