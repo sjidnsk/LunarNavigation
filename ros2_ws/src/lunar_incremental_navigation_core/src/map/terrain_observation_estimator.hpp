@@ -26,7 +26,7 @@ struct GroundEstimate {
 };
 
 // 内部只读批处理视图可证明矩形中全为同一个实测高程；不改变旧 view ABI。
-using UniformPatchKey = std::tuple<int, int, int, int, float>;
+using UniformPatchKey = std::tuple<int, int, int, int, int, std::int64_t>;
 class UniformPatchProvider {
  public:
   virtual ~UniformPatchProvider() = default;

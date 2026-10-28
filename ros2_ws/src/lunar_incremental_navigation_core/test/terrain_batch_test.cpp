@@ -5,10 +5,12 @@
 #include "lunar_incremental_navigation_core/terrain_batch.hpp"
 namespace nav=lunar::incremental_navigation;
 TEST(TerrainBatch, MatchesScalarOnConstantsSlopeStepsHolesAndIsolatedReturns) {
-  for (double r:{.01,.05,.1}) for (int scene=0;scene<6;++scene) {
+  for (double r:{.01,.05,.1}) for (int scene=0;scene<8;++scene) {
     constexpr int n=21;std::vector<float> values(n*n);
     for(int y=0;y<n;++y)for(int x=0;x<n;++x) {
       float z=scene==1?.3f:scene==2?float(.15*x*r):0.f;
+      if(scene==6)z=float(.02*y*r);
+      if(scene==7)z=float(.02*(x+y)*r);
       if(scene==3 && x>=10)z=.4f;
       if(scene==4 && x==10 && y==10)z=std::numeric_limits<float>::quiet_NaN();
       if(scene==5 && x==10 && y==10)z=.4f;

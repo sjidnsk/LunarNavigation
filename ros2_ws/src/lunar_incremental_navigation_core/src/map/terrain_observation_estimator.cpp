@@ -136,21 +136,31 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
       inliers+=weights[i]>0.;
     }
     if(inliers<4 || double(inliers)/points.size()<.7 || !fit())continue;
+    // 批处理只省去可由四个实测方向严格证明的角覆盖计算。
+    // all-inlier + 实测中心使 nearest 恰为0；±x/±y使最大角间隙≤pi/2。
+    // 缺任一方向或含拒绝样本时继续原逐角排序，不改变拟合与置信度。
+    bool cardinal_support=uniform_ && measured && inliers==points.size();
+    if (cardinal_support) for (auto d:{GridIndex{-1,0},GridIndex{1,0},GridIndex{0,-1},GridIndex{0,1}}) {
+      auto cell=detail::OffsetWithinGeometry(view_.geometry(),index,d.x,d.y);
+      cardinal_support &= cell && view_.ElevationRangeAt(*cell).has_value();
+    }
     std::vector<double> angles;
-    double nearest=std::numeric_limits<double>::infinity(),squared=0.;
+    double nearest=cardinal_support?0.:std::numeric_limits<double>::infinity(),squared=0.;
     double low=std::numeric_limits<double>::infinity(),high=-low;
     for(std::size_t i=0;i<points.size();++i) {
       const auto& p=points[i];const double plane=c+a*p.x+b*p.y;
       low=std::min(low,p.low-plane);high=std::max(high,p.high-plane);
       if(weights[i]==0.)continue;
       squared+=(p.z-plane)*(p.z-plane);
-      nearest=std::min(nearest,std::hypot(p.x,p.y));
-      if(p.x!=0. || p.y!=0.)angles.push_back(std::atan2(p.y,p.x));
+      if (!cardinal_support) {
+        nearest=std::min(nearest,std::hypot(p.x,p.y));
+        if(p.x!=0. || p.y!=0.)angles.push_back(std::atan2(p.y,p.x));
+      }
     }
     // Consensus only defines ground. Raw interval extremes remain a hard guard
     // and are separately consumed by platform obstacle/step evaluation.
     if(std::max(std::abs(low),std::abs(high))>.10 ||
-       nearest>parameters_.support_axis_distance_m+1e-12 || angles.size()<3)continue;
+       nearest>parameters_.support_axis_distance_m+1e-12 || (!cardinal_support && angles.size()<3))continue;
     bool discontinuous=false, remote_discontinuity=false, remote_consensus_conflict=false;
     const auto record_jump = [&](bool local, bool all_on_ground) {
       if(local)discontinuous=true;
@@ -230,10 +240,12 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
     if(discontinuous || (remote_discontinuity && remote_consensus_conflict))continue;
     const auto center=view_.ElevationRangeAt(index);
     if(center && std::abs(.5*(double(center->min_m)+center->max_m)-c)>.04)continue;
-    std::sort(angles.begin(),angles.end());
-    double gap=angles.front()+2.*std::acos(-1.)-angles.back();
-    for(std::size_t i=1;i<angles.size();++i)gap=std::max(gap,angles[i]-angles[i-1]);
-    if(gap>std::acos(-1.)+1e-10)continue;
+    if (!cardinal_support) {
+      std::sort(angles.begin(),angles.end());
+      double gap=angles.front()+2.*std::acos(-1.)-angles.back();
+      for(std::size_t i=1;i<angles.size();++i)gap=std::max(gap,angles[i]-angles[i-1]);
+      if(gap>std::acos(-1.)+1e-10)continue;
+    }
     const double rms=std::sqrt(squared/inliers);
     const double confidence=(measured?1.:.85)*(double(inliers)/points.size())*
         (.5+.5*std::min(1.,double(inliers)/8.))*

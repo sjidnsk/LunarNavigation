@@ -431,6 +431,12 @@ class BatchElevationView final : public ElevationRangeView, public map::UniformP
       ranges_[y*width_+x]=value;
       if (!reference_ && value && value->min_m==value->max_m) reference_=value->min_m;
     }
+    // 完整行/列逐值相同是重复窗口的精确证据，包含缺测与区间端点。
+    repeated_rows_=true;repeated_columns_=true;
+    for (std::size_t y=0;y<height_;++y) for (std::size_t x=0;x<width_;++x) {
+      repeated_rows_ &= ranges_[y*width_+x]==ranges_[x];
+      repeated_columns_ &= ranges_[y*width_+x]==ranges_[y*width_];
+    }
     if (!reference_) return;
     prefix_.resize((width_+1)*(height_+1));
     for (std::size_t y=0;y<height_;++y) {
@@ -452,21 +458,27 @@ class BatchElevationView final : public ElevationRangeView, public map::UniformP
     return source_.TerrainMeasurementsAt(i);
   }
   std::optional<map::UniformPatchKey> UniformPatch(GridIndex i,int r) const override {
-    if (prefix_.empty()) return {};
+    if (ranges_.empty()) return {};
     const auto x=i.x-minimum_.x,y=i.y-minimum_.y;
     const auto l=std::max<std::int64_t>(0,x-r),b=std::max<std::int64_t>(0,y-r);
     const auto h=std::min<std::int64_t>(width_,x+r+1),t=std::min<std::int64_t>(height_,y+r+1);
     if (l>=x || b>=y || h<=x+1 || t<=y+1) return {};
     const auto at=[&](std::int64_t xx,std::int64_t yy){return prefix_[yy*(width_+1)+xx];};
-    if (at(h,t)+at(l,b)!=at(l,t)+at(h,b)) return {};
+    int kind=0;std::int64_t identity=0;
+    if (!prefix_.empty() && at(h,t)+at(l,b)==at(l,t)+at(h,b)) {
+      identity=std::bit_cast<std::uint32_t>(*reference_);
+    } else if (repeated_rows_) {kind=1;identity=x;}
+    else if (repeated_columns_) {kind=2;identity=y;}
+    else return {};
     return map::UniformPatchKey{static_cast<int>(l-x),static_cast<int>(h-x),
-        static_cast<int>(b-y),static_cast<int>(t-y),*reference_};
+        static_cast<int>(b-y),static_cast<int>(t-y),kind,identity};
   }
  private:
   const ElevationRangeView& source_;
   std::size_t width_{},height_{}; GridIndex minimum_{};
   std::vector<std::optional<ElevationRange>> ranges_;
   std::optional<float> reference_;
+  bool repeated_rows_{},repeated_columns_{};
   std::vector<std::uint32_t> prefix_;
 };
 class SnapshotElevationEvaluator final : public PlatformElevationEvaluator {
