@@ -1,7 +1,9 @@
 # NAV1CM 与标准 Path 真实跟踪器联合验证
 
 任务归属 integration/pure-planner-orin；专题 hk/nav-1cm-feasibility-20261026。
-产品基线 46f635e339fa70fdf116454bc1d287733efa395b。默认入口保持不变。
+初始集成基线 46f635e339fa70fdf116454bc1d287733efa395b。默认入口保持不变。
+
+当前验收：F05提交3a8f2157/t3f05-build-r1的r9+r10五例全PASS，详见末节。前文r1..r8失败/NOT_RUN结论为各自历史身份，原证据保留。Task3执行完成，待root独立规格/质量审查与合入；未切默认。
 
 ## 链路与隔离
 
@@ -272,3 +274,81 @@ plant nominal_response_time_s=0理想有界执行模型边界保留；Jazzy、Or
 r8受限重建以plant记录的Path接收时间与follower实际UPDATE状态合序，测试free地图/快速MPPI/age0替代原运行环境，不能恢复原callback先后、内部activepath或精确15s阈值。实际首制动状态x1.056682162/y1.337248949/v.195727125处，旧源码重建travel=[0,0]且clock14.165990324s，新源码travel=[.999176782,.040567956]且clock.049960818s。此为机制佐证，不冒称完整replay或已通过真实障碍案例。
 
 三包Release重建/CTest、50个Python安装身份及native SHA以ART/task3-product-fix5-report.md与t3f05-build-r1回执为准。独立审查和实际受影响obstacle联合运行交root后续执行，Task3仍NEEDS_CONTEXT；Jazzy、Orin/实车、真实P3流/rosbag与DDS跨机均NOT_RUN。
+
+
+## 当前最终矩阵 F05 / r9+r10：五例全部通过
+
+Task3执行状态 **DONE，已提交待独立规格/质量审查与合入**。这仅完成当前真实联合短矩阵，默认切换和应用合入由root后续独立处理。
+当前产品/source/harness冻结HEAD均 `3a8f2157ac52c9b3bb4f71fb0026b2c06318d5bd`，实际安装 `t3f05-build-r1`。
+F05产品独立spec/quality PASS（0C/I/M）后才执行；459项包检查/50个Python源码安装身份/3个native由root交接复核。
+本Task helper再次逐文件校验实际安装Python/native，运行角色INSTALL/NATIVE_LOADED/PYTHONPATH均绑定install，无source fallback。
+本轮不改harness、fixture、产品、限值、时长、grader；两个manifest逐文件SHA完全相同。
+
+执行顺序：先 `task3_joint_humble.py task3-joint-r9 --cases obstacle --installed-label t3f05-build-r1`，
+48s真实obstacle全PASS/helper exit0后，执行
+`task3_joint_humble.py task3-joint-r10 --cases forward_spin reverse mapchange empty_smoke --installed-label t3f05-build-r1`。
+两个新标签各只执行一次，不重复obstacle，不以旧版本通过补齐当前矩阵。
+r9 archive SHA256 `9b8e9eda7503fc768681900b04a6dec1699e704257e7ff5e4254eb56526c7183`，
+r10 archive SHA256 `cc03343a67d17995dd23485808e0eac0b9d151cf51fb2a629e20dc28de5c15cc`。
+
+| 场景 / 标签 | 结果 | 正式规划 / 非空local Path / 全状态 | 首次连续.3s终端hold(s) | 最终实际(x,y,yaw)；v/w均0 |
+| --- | --- | --- | --- | --- |
+| forward_spin / task3-joint-r10 | PASS | 12 / 780 / 36163 | 17.458048472 | (1.958546643, 0.414800364, 0.571189609) |
+| reverse / task3-joint-r10 | PASS | 1 / 340 / 28904 | 8.604475477 | (-0.704677391, 0.000000000, -0.000000000) |
+| obstacle / task3-joint-r9 | PASS | 24 / 893 / 40353 | 35.882299814 | (2.503869307, 1.395212472, 0.039940216) |
+| mapchange / task3-joint-r10 | PASS | 2 / 617 / 28831 | 24.136067310 | (2.506044119, 0.000000000, 0.000000000) |
+| empty_smoke / task3-joint-r10 | PASS | 0 / 134 / 3169 | 10.447988486 | (0.705325986, 0.000000000, 0.000000000) |
+
+forward的hold针对原目标(1.4,0,.6)；38s恢复至(2.4,.7,.6)，42s真实停止planner并完成陈旧参考停车。
+最终位姿为恢复运动后停车点，不代表恢复目标到达，也不应用其与原目标的距离否定此前真实hold。
+真实worker延迟250.313906930ms期间继续运动且收到滚动Path；delay_motion/planner_stop_moving/stale_stop均true。
+reverse实测负速度通过。obstacle越过x1.5及y.95门禁并真实到达，最终xy误差.096249834m、yaw误差.039940216rad；
+934条UPDATE无failure_reason，未再出现r8 TRACKING_STALLED或r7 MPPI_STOPPING_UNSAFE。
+mapchange全程只发一次goal，7..13s临时墙后继续，17s源分辨率.05→.03热更新，one_goal/hot_resolution均true。
+empty_smoke明确由fixture注入标准Path，真实follower执行空Path停车及后续恢复；其formal=true是smoke显式豁免，实际正式planner计数0，不声称由planner产生empty。
+前四场formal门禁独立要求planning_outcome0/reason_code PLAN_FOUND/has_reference true，且真实请求goal/revision/generation/接受route身份匹配。
+
+### 计算耗时与物理到达分别记录
+
+| 场景 | 实际compute记录数 | 中位(ms) | P95(ms) | max(ms) | 最大线速(m/s) | 最大角速(rad/s) |
+| --- | --- | --- | --- | --- | --- | --- |
+| forward_spin | 876 | 0.546411 | 31.768643 | 99.561548 | 0.199796417 | 0.530805544 |
+| reverse | 376 | 0.521355 | 29.387216 | 65.529893 | 0.198632284 | 0.000000000 |
+| obstacle | 934 | 11.187600 | 44.691121 | 118.180545 | 0.198857069 | 0.883660712 |
+| mapchange | 655 | 5.669382 | 41.534436 | 125.133966 | 0.196015842 | 0.000000000 |
+| empty_smoke | 218 | 4.969818 | 27.826684 | 39.915392 | 0.195065407 | 0.000000000 |
+
+耗时由实际solve_result diagnostics派生，不能用其替代到达/安全证据；max125.134ms说明本次结果不保证50ms硬实时期限。
+五场最大线/角加速度均不超过.5，所有行进曲率≤1；body1.182×.818、|v|≤.2、|w|≤1、xy.1/yaw.05/vw.01 hold.3的合同未变。
+独立plant仅按实际Twist积分，完整矩形SAT+角向/线向运动界覆盖采样间扫掠；所有真实状态clear=true、bounds=true。
+所有case graph_ok/dds_qos/path_contract/installed/independent_plant/zero_stamp_tf均true。
+ROS_DOMAIN_ID92/localhost、私有/nav1cm_integration/cmd_vel；实际图无/Car/T5/Car_Cmd_Vel publisher。
+DDS发现history/depth仍UNKNOWN/null；实际publisher/subscription实体profile补证Path KEEP_LAST1/RELIABLE/VOLATILE，tf_static RELIABLE/TRANSIENT_LOCAL；未伪造发现端点元数据。
+plant生产禁入检查精确覆盖nav1cm、lunar_nav1cm_planner、lunar_pure_wheeled_controller及子模块。
+
+### 安装及清理身份
+
+两个helper session70773/69648自然exit0。r9三角色、r10十一角色共14角色全部returncode0、premature=false、escalated=false、remaining=[]；
+planner workers surviving/terminated均空，threads_alive空，follower map_worker_alive=false；supervisor_integrity/workers_clean全部true。
+本次未重复未改core/controller/package/QoS单测；其先前结果与此次新增联合证据区分。
+
+实际core为ROOT/install/core-humble-r1/lunar_incremental_navigation_core/lib/liblunar_incremental_navigation_core.so，
+SHA256 `0092ca1863b642f9bc0cbc7bb443b22446c26d1b29f153a3e217ce376e9bb4ec`。
+实际terrain `ff300175aff7d80aba6d5b995ef21e39612a85fbeabde92ec5e5fd5f7033c3ef`、
+geometry `f8a2366727dad8775a5f2528d93cf5ad5ea18886e782f84f5e18f27cbfeefaa2`、
+distance_field `e79c02bc87ce67c70d1f788650fed7794d5efe68442897044aae38c6cbf45c4e`，
+路径均为本次t3f05-build-r1/install/lunar_nav1cm_planner/lib，实际加载及源安装身份保留在原始记录。
+standard_path_follower.py SHA256 `9605b1b9d1d687e247da16c6d1efa2fbaa841706a489bb9ac1b99e09fb703859`。
+
+### 证据、可视检查与交接边界
+
+ART为D:/CodexDownloads/lunar_navigation/nav-1cm-feasibility-20261026/artifacts/integration-20261028。
+r9-result共10文件、r10-result共30文件完整取回，本地及远端同标签保留；两个raw-sha256.json逐文件绑定，不覆盖r1..r8及原失败/历史恢复记录。
+ART/task3-f05-final-derived-audit.json和task3-f05-final-audit.py只读派生终端hold、compute、身份、清理与图。
+ART/task3-f05-final-actual-trajectories.png已用view_image亲视，五场实际xy、body yaw、解析障碍/临时墙及obstacle yaw/速度/hold均可见；
+图展示实际轨迹，正式到达和完整扫掠仍以raw/门禁为准，没有为图新增运行。
+
+Windows本机无ROS；实际运行是KAI Ubuntu22.04/Humble/x86_64、同机DDS。
+理想有界独立plant及nominal_response_time_s=0边界保留，不代表真实执行器延迟或车辆动力学。
+Jazzy、Humble/Orin目标硬件、DDS跨机、真实P3流、rosbag、RViz、真实车辆均NOT_RUN；本轮不触发T5或DRL。
+处置为已提交待root独立Task3规格/质量审查与合入；源码写入权交回root。默认/应用入口未切，无合并/推送/PR/删除，资源保留待后续处置/回收。
