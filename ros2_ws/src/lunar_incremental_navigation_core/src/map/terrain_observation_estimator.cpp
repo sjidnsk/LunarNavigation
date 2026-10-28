@@ -37,6 +37,7 @@ TerrainObservationEstimator::TerrainObservationEstimator(
       parameters.minimum_confidence <= 0. || parameters.minimum_confidence > 1. ||
       !std::isfinite(resolution) || resolution <= 0.)
     throw std::invalid_argument("invalid terrain observation parameters");
+  uniform_ = dynamic_cast<const UniformPatchProvider*>(&view_);
   radius_ = ObservationRadiusCells(parameters.support_axis_distance_m, resolution);
 }
 const std::optional<GroundEstimate>& TerrainObservationEstimator::Estimate(GridIndex index) {
@@ -83,6 +84,13 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
   std::optional<GroundEstimate> remote_jump_fallback;
   // Every candidate uses only the immutable input, never previous predictions.
   for (int r : radii) {
+    // 同一不可变视图、相同相对窗口/常量高程只复用原算法的成功结果。
+    // 首次仍执行全部拟合与支持规则；失败、洞、坡面与台阶不会被近似。
+    const auto uniform_key = uniform_ ? uniform_->UniformPatch(index, r) : std::nullopt;
+    if (uniform_key) {
+      const auto found = uniform_estimates_.find(*uniform_key);
+      if (found != uniform_estimates_.end()) return found->second;
+    }
     points.clear();
     for(int y=-r;y<=r;++y) for(int x=-r;x<=r;++x) {
       const auto cell=detail::OffsetWithinGeometry(view_.geometry(),index,x,y);
@@ -239,6 +247,7 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
       if(!remote_jump_fallback)remote_jump_fallback=candidate;
       continue;
     }
+    if (uniform_key) uniform_estimates_.emplace(*uniform_key, candidate);
     return candidate;
   }
   return remote_jump_fallback;

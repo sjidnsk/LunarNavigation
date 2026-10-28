@@ -2,6 +2,8 @@
 #include "terrain_bridge.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -21,6 +23,7 @@
 #include "lunar_incremental_navigation_core/elevation_map.hpp"
 #include "lunar_incremental_navigation_core/fine_traversability_builder.hpp"
 #include "lunar_incremental_navigation_core/terrain_dependency.hpp"
+#include "lunar_incremental_navigation_core/terrain_batch.hpp"
 
 namespace nav = lunar::incremental_navigation;
 
@@ -74,7 +77,7 @@ struct Terrain final {
     wheel.minimum_underbody_clearance_m = clearance;
     // 使用 intrinsic evaluator，避免 FineCellEvaluator 的整车膨胀再进入
     // nav1cm 的矩形车体认证，造成双重膨胀。
-    evaluator = nav::MakePlatformElevationEvaluator(wheel);
+    capability = wheel;
   }
 
   std::pair<Lattices::iterator, nav::GridIndex> FindLattice(
@@ -120,6 +123,9 @@ struct Terrain final {
                              std::size_t width, double resolution,
                              double origin_x, double origin_y, double yaw,
                              double z_offset) {
+    CheckCancelled();
+    profile={};
+    const auto started = std::chrono::steady_clock::now();
     if (!data || height == 0 || width == 0 ||
         width > std::numeric_limits<std::size_t>::max() / height ||
         width > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max() / 4) ||
@@ -169,36 +175,68 @@ struct Terrain final {
       throw std::runtime_error("PersistentElevationMap rejected native source geometry");
     }
     const auto snapshot = lattice->elevation.Snapshot();
-    std::set<nav::GridIndex> touched;
-    // 每次都包括本次明确观测格。即便本源栅格是 duplicate，新的自由证据
-    // 也必须能替换别的分辨率/相位先前投影出来的障碍。
-    for (std::size_t y = 0; y < height; ++y) {
-      for (std::size_t x = 0; x < width; ++x) {
-        if (std::isfinite(values[y * width + x])) {
-          touched.insert({offset.x + static_cast<std::int64_t>(x),
-                          offset.y + static_cast<std::int64_t>(y)});
+    const auto accumulated = std::chrono::steady_clock::now();
+    using Span = std::pair<std::int64_t,std::int64_t>;
+    std::map<std::int64_t,std::vector<Span>> touched;
+    const auto minimum=snapshot->geometry().min_inclusive();
+    const auto maximum=snapshot->geometry().max_exclusive();
+    const auto add=[&](std::int64_t y,std::int64_t left,std::int64_t right) {
+      left=std::max(left,minimum.x);right=std::min(right,maximum.x);
+      if (y>=minimum.y && y<maximum.y && left<right) touched[y].emplace_back(left,right);
+    };
+    // 直接观测即使 duplicate 仍需发布，来源权限不能被缓存替代。
+    for (std::size_t y=0;y<height;++y) {
+      CheckCancelled();
+      for (std::size_t x=0;x<width;) {
+        if (!std::isfinite(values[y*width+x])) {++x;continue;}
+        const auto first=x++;
+        while (x<width && std::isfinite(values[y*width+x])) ++x;
+        add(offset.y+static_cast<std::int64_t>(y),offset.x+static_cast<std::int64_t>(first),offset.x+static_cast<std::int64_t>(x));
+      }
+    }
+    if (applied.status==nav::ElevationUpdateResult::Status::kApplied) {
+      const auto radius=nav::TerrainIntrinsicDependencyRadiusCells(resolution);
+      // changed 先按行压成连续区间，再膨胀；完整帧从十亿重复插入降为
+      // O(changed + 行程数 * radius)，最终只遍历每个合并区域一次。
+      std::map<std::int64_t,std::vector<std::int64_t>> changed_rows;
+      for (auto i:snapshot->changed_cells()) changed_rows[i.y].push_back(i.x);
+      for (auto& [y,xs]:changed_rows) {
+        CheckCancelled();std::sort(xs.begin(),xs.end());
+        for (std::size_t n=0;n<xs.size();) {
+          auto left=xs[n],right=left+1;++n;
+          while (n<xs.size() && xs[n]<=right) {right=std::max(right,xs[n]+1);++n;}
+          for (int dy=-radius;dy<=radius;++dy) add(y+dy,left-radius,right+radius);
         }
       }
     }
-    if (applied.status == nav::ElevationUpdateResult::Status::kApplied) {
-      // app 的背景与缺测推断均依赖相邻高程，采用 core 同源依赖半径。
-      const auto dependency_radius = nav::TerrainIntrinsicDependencyRadiusCells(resolution);
-      for (const auto changed : snapshot->changed_cells()) {
-        for (std::int64_t dy = -dependency_radius; dy <= dependency_radius; ++dy) {
-          for (std::int64_t dx = -dependency_radius; dx <= dependency_radius; ++dx) {
-            touched.insert({changed.x + dx, changed.y + dy});
-          }
-        }
+    for (auto& [y,spans]:touched) {
+      std::sort(spans.begin(),spans.end());std::vector<Span> merged;
+      for (auto span:spans) {
+        if (!merged.empty() && span.first<=merged.back().second)
+          merged.back().second=std::max(merged.back().second,span.second);
+        else merged.push_back(span);
       }
+      spans=std::move(merged);
     }
-    std::map<std::int64_t, std::map<std::int64_t, std::int64_t>> labels;
-    for (const auto index : touched) {
-      if (!snapshot->ElevationRangeAt(index)) continue;
-      const auto state = evaluator->Evaluate(*snapshot, index).state;
-      labels[index.y][index.x] = state == nav::IntrinsicCellState::kBlocked ? 1 :
-          state == nav::IntrinsicCellState::kFree ? 0 : -1;
-    }
+    const auto expanded=std::chrono::steady_clock::now();
+    CheckCancelled();
+    auto evaluator=nav::MakeSnapshotElevationEvaluator(*snapshot,capability);
+    const auto prepared=std::chrono::steady_clock::now();
+    std::map<std::int64_t,std::map<std::int64_t,std::int64_t>> labels;
+    for (const auto& [y,spans]:touched) for (const auto [left,right]:spans)
+      for (auto x=left;x<right;++x) {
+        CheckCancelled();const nav::GridIndex index{x,y};
+        if (!snapshot->ElevationRangeAt(index)) continue;
+        const auto state=evaluator->Evaluate(*snapshot,index).state;
+        labels[y][x]=state==nav::IntrinsicCellState::kBlocked?1:state==nav::IntrinsicCellState::kFree?0:-1;
+      }
+    const auto evaluated=std::chrono::steady_clock::now();
     MergeRows(labels);
+    const auto finished=std::chrono::steady_clock::now();
+    const auto seconds=[](auto a,auto b){return std::chrono::duration<double>(b-a).count();};
+    profile={seconds(started,accumulated),seconds(accumulated,expanded),
+             seconds(expanded,prepared),seconds(prepared,evaluated),seconds(evaluated,finished)};
+    CheckCancelled();
     std::uint64_t evicted_source_id = 0;
     if (pending) {
       // 成功分类后才提交新源及淘汰事件，失败不能让 Python 丢失清缓存通知。
@@ -217,7 +255,12 @@ struct Terrain final {
             lattice->source_id, evicted_source_id, kSourceCacheCapacity};
   }
 
-  std::unique_ptr<const nav::PlatformElevationEvaluator> evaluator;
+  void CheckCancelled() const {
+    if (cancelled.load(std::memory_order_relaxed)) throw std::runtime_error("terrain cancelled for shutdown");
+  }
+  std::atomic<bool> cancelled{false};
+  std::array<double,5> profile{};
+  nav::PlatformCapability capability;
   Lattices lattices;
   std::uint64_t next_source_id = 1;
   std::vector<Region> regions;
@@ -226,6 +269,14 @@ struct Terrain final {
 
 extern "C" {
 int nav1cm_terrain_abi_version(void) { return 2; }
+void nav1cm_terrain_cancel_v2(void* handle) {
+  if (handle) static_cast<Terrain*>(handle)->cancelled.store(true,std::memory_order_relaxed);
+}
+int nav1cm_terrain_profile_v2(void* handle,double* phases) {
+  if (!handle || !phases) return 1;
+  const auto& p=static_cast<Terrain*>(handle)->profile;
+  std::copy(p.begin(),p.end(),phases);return 0;
+}
 
 const char* nav1cm_terrain_last_error_v2(void) { return last_error.c_str(); }
 

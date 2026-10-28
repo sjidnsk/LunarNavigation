@@ -195,6 +195,9 @@ class PlannerRuntime:
         with self._condition:
             self._stopping = True
             self._condition.notify_all()
+        terrain = getattr(self.map_store, '_terrain', None)
+        if terrain is not None and hasattr(terrain, 'cancel'):
+            terrain.cancel()
         deadline = time.monotonic() + timeout_s
         for thread in self._threads:
             thread.join(max(0., deadline - time.monotonic()))

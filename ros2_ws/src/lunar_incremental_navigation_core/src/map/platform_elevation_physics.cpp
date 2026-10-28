@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "map/grid_bounds.hpp"
+#include "lunar_incremental_navigation_core/terrain_batch.hpp"
 #include "map/terrain_observation_estimator.hpp"
 
 namespace lunar::incremental_navigation {
@@ -414,6 +415,79 @@ MakeEvaluatorWithObservations(const PlatformCapability& capability,
 std::unique_ptr<const PlatformElevationEvaluator>
 MakePlatformElevationEvaluator(const PlatformCapability& capability, double half_width_m) {
   return MakeEvaluatorWithObservations(capability, half_width_m, nullptr);
+}
+
+namespace {
+// 有界 dense 查询缓存绑定不可变 snapshot；大域仍委托原 view。
+class BatchElevationView final : public ElevationRangeView, public map::UniformPatchProvider {
+ public:
+  explicit BatchElevationView(const ElevationRangeView& source) : source_(source) {
+    const auto& g=source.geometry();
+    width_=g.width(); height_=g.height(); minimum_=g.min_inclusive();
+    if (!width_ || !height_ || width_ > 4000000/height_) return;
+    ranges_.resize(width_*height_);
+    for (std::size_t y=0;y<height_;++y) for (std::size_t x=0;x<width_;++x) {
+      auto value=source.ElevationRangeAt({minimum_.x+static_cast<std::int64_t>(x),minimum_.y+static_cast<std::int64_t>(y)});
+      ranges_[y*width_+x]=value;
+      if (!reference_ && value && value->min_m==value->max_m) reference_=value->min_m;
+    }
+    if (!reference_) return;
+    prefix_.resize((width_+1)*(height_+1));
+    for (std::size_t y=0;y<height_;++y) {
+      std::uint32_t row=0;
+      for (std::size_t x=0;x<width_;++x) {
+        const auto& v=ranges_[y*width_+x];
+        row+=!v || v->min_m!=*reference_ || v->max_m!=*reference_;
+        prefix_[(y+1)*(width_+1)+x+1]=prefix_[y*(width_+1)+x+1]+row;
+      }
+    }
+  }
+  const SparseGridGeometry& geometry() const noexcept override {return source_.geometry();}
+  std::optional<ElevationRange> ElevationRangeAt(GridIndex i) const noexcept override {
+    if (ranges_.empty()) return source_.ElevationRangeAt(i);
+    if (!geometry().Contains(i)) return {};
+    return ranges_[static_cast<std::size_t>(i.y-minimum_.y)*width_+static_cast<std::size_t>(i.x-minimum_.x)];
+  }
+  std::optional<LocalTerrainMeasurements> TerrainMeasurementsAt(GridIndex i) const noexcept override {
+    return source_.TerrainMeasurementsAt(i);
+  }
+  std::optional<map::UniformPatchKey> UniformPatch(GridIndex i,int r) const override {
+    if (prefix_.empty()) return {};
+    const auto x=i.x-minimum_.x,y=i.y-minimum_.y;
+    const auto l=std::max<std::int64_t>(0,x-r),b=std::max<std::int64_t>(0,y-r);
+    const auto h=std::min<std::int64_t>(width_,x+r+1),t=std::min<std::int64_t>(height_,y+r+1);
+    if (l>=x || b>=y || h<=x+1 || t<=y+1) return {};
+    const auto at=[&](std::int64_t xx,std::int64_t yy){return prefix_[yy*(width_+1)+xx];};
+    if (at(h,t)+at(l,b)!=at(l,t)+at(h,b)) return {};
+    return map::UniformPatchKey{static_cast<int>(l-x),static_cast<int>(h-x),
+        static_cast<int>(b-y),static_cast<int>(t-y),*reference_};
+  }
+ private:
+  const ElevationRangeView& source_;
+  std::size_t width_{},height_{}; GridIndex minimum_{};
+  std::vector<std::optional<ElevationRange>> ranges_;
+  std::optional<float> reference_;
+  std::vector<std::uint32_t> prefix_;
+};
+class SnapshotElevationEvaluator final : public PlatformElevationEvaluator {
+ public:
+  SnapshotElevationEvaluator(const ElevationRangeView& source,const PlatformCapability& capability)
+      :source_(source),view_(source),observations_(view_),
+       evaluator_(MakeEvaluatorWithObservations(capability,0.,&observations_)) {}
+  IntrinsicTraversalEvaluation Evaluate(const ElevationRangeView& source,GridIndex i) const override {
+    if (&source!=&source_) throw std::invalid_argument("batch evaluator snapshot identity mismatch");
+    return evaluator_->Evaluate(view_,i);
+  }
+ private:
+  const ElevationRangeView& source_;
+  BatchElevationView view_;
+  mutable map::TerrainObservationEstimator observations_;
+  std::unique_ptr<const PlatformElevationEvaluator> evaluator_;
+};
+}
+std::unique_ptr<const PlatformElevationEvaluator> MakeSnapshotElevationEvaluator(
+    const ElevationRangeView& view,const PlatformCapability& capability) {
+  return std::make_unique<SnapshotElevationEvaluator>(view,capability);
 }
 
 struct FineCellEvaluator::Impl final {

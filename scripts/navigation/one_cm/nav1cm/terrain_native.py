@@ -117,6 +117,12 @@ class NativeTerrain:
                                np.ctypeslib.ndpointer(dtype=np.float32, ndim=2, flags="C_CONTIGUOUS"),
                                ctypes.c_size_t, ctypes.c_size_t] + [ctypes.c_double] * 5 + [ctypes.POINTER(_NativeResult)]
         self._apply.restype = ctypes.c_int
+        self._cancel = self._lib.nav1cm_terrain_cancel_v2
+        self._cancel.argtypes, self._cancel.restype = [ctypes.c_void_p], None
+        self._profile = self._lib.nav1cm_terrain_profile_v2
+        self._profile.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+        self._profile.restype = ctypes.c_int
+        self.phase_seconds = ()
         self.capability = (load_wheel_capability() if capability is None else
                            capability if isinstance(capability, WheelTerrainCapability) else
                            WheelTerrainCapability.from_mapping(capability))
@@ -163,6 +169,10 @@ class NativeTerrain:
                                resolution_m, *origin, yaw, z_offset_m, ctypes.byref(result))
             if code != 0:
                 raise RuntimeError(f"native terrain apply failed: {self._last_error()}")
+            phases = (ctypes.c_double * 5)()
+            if self._profile(self._handle, phases) != 0:
+                raise RuntimeError("native phase query failed")
+            self.phase_seconds = tuple(phases)
             if result.region_count:
                 if not result.regions or result.region_count > np.iinfo(np.intp).max // 5:
                     raise RuntimeError("native terrain returned invalid region buffer")
@@ -179,6 +189,11 @@ class NativeTerrain:
             self._lattice_count = int(result.lattice_count)
             self._cache_capacity = update.cache_capacity
             return update
+
+    def cancel(self):
+        """仅关闭流程调用；owner 仍须 join 后 close，不能并发 destroy。"""
+        if self._finalizer.alive:
+            self._cancel(self._handle)
 
     def close(self):
         with self._lock:

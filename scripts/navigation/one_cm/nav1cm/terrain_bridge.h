@@ -31,6 +31,10 @@ typedef struct Nav1cmTerrainResultV2 {
   size_t cache_capacity;
 } Nav1cmTerrainResultV2;
 
+// APP additive query：profile 只在 apply 结束后同 owner 读取；取消为终止性、
+// 可与 apply 并发，destroy 必须等 apply 退出。既有 V2 结果布局保持不变。
+NAV1CM_TERRAIN_EXPORT void nav1cm_terrain_cancel_v2(void* handle);
+NAV1CM_TERRAIN_EXPORT int nav1cm_terrain_profile_v2(void* handle,double* five_phases_s);
 NAV1CM_TERRAIN_EXPORT int nav1cm_terrain_abi_version(void);
 NAV1CM_TERRAIN_EXPORT const char* nav1cm_terrain_last_error_v2(void);
 NAV1CM_TERRAIN_EXPORT void* nav1cm_terrain_create_v2(

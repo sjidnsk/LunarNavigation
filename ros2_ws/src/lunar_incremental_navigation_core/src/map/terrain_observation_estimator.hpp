@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <vector>
+#include <tuple>
 #include "lunar_incremental_navigation_core/elevation_map.hpp"
 
 namespace lunar::incremental_navigation::map {
@@ -22,6 +23,14 @@ struct GroundEstimate {
   double residual_rms_m{};
   double residual_min_m{}, residual_max_m{};
   double confidence{};
+};
+
+// 内部只读批处理视图可证明矩形中全为同一个实测高程；不改变旧 view ABI。
+using UniformPatchKey = std::tuple<int, int, int, int, float>;
+class UniformPatchProvider {
+ public:
+  virtual ~UniformPatchProvider() = default;
+  virtual std::optional<UniformPatchKey> UniformPatch(GridIndex, int) const = 0;
 };
 
 // One immutable input view per instance. Request-local assumed views must use
@@ -45,6 +54,8 @@ class TerrainObservationEstimator {
   const ElevationRangeView& view_;
   TerrainObservationParameters parameters_;
   int radius_{};
+  const UniformPatchProvider* uniform_{};
+  mutable std::map<UniformPatchKey, GroundEstimate> uniform_estimates_;
   std::size_t evaluated_{};
   std::map<TileIndex, std::unique_ptr<Tile>> tiles_;
   TileIndex last_tile_index_{};

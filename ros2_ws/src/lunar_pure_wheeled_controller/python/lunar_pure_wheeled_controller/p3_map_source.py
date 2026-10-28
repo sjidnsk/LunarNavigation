@@ -81,7 +81,8 @@ class P3MapSource:
                         self._key=key
                     else:grid=self._receipt.grid
                     with self._condition:
-                        self._receipt=MapReceipt(grid,self._valid_received,monotonic())
+                        if not self._closed:
+                            self._receipt=MapReceipt(grid,self._valid_received,monotonic())
                 self.error=None
             except MissingTransform as exc:
                 self.error=str(exc)  # 保留待转换消息，下一次 TF 到达再试。
@@ -95,8 +96,9 @@ class P3MapSource:
 
     def close(self):
         with self._condition:self._closed=True;self._condition.notify_all()
-        self._worker.join()
         terrain=getattr(self._store,'_terrain',None)
+        if terrain is not None and hasattr(terrain,'cancel'):terrain.cancel()
+        self._worker.join()
         if terrain is not None:terrain.close()
 
 
