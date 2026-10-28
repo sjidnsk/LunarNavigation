@@ -195,3 +195,76 @@ def test_latest_active_geometry_cancels_older_pending_reference():
     assert e.reference.points==a
     assert r.phase=='TRACKING' and r.command.linear_x_mps>0.
     assert e.progress_m>=progress and e.no_progress_s>=.4
+
+
+def test_dense_spin_rolling_makes_physical_progress():
+    e=follower();s=TrackingState(0.,0.,0.)
+    for i in range(160):
+        e.set_standard_path(tuple((0.,0.,float(y)) for y in np.linspace(s.yaw_rad,1.5,98)),i)
+        r=tick(e,s)
+        w=s.angular_radps+float(np.clip(r.command.angular_z_radps-s.angular_radps,-.025,.025))
+        s=TrackingState(0.,0.,s.yaw_rad+w*.05,0.,w)
+    assert abs(s.yaw_rad-1.5)<.05
+    assert abs(s.angular_radps)<=.01
+
+
+def test_publication_rejects_continuous_sign_crossing_despite_safe_endpoint():
+    e=follower();e.set_standard_path(((0.,0.,0.),(-1.,0.,0.)))
+    e.note_command(.003384,0.,0.)
+    s=TrackingState(0.,0.,0.,.003384,0.)
+    target=np.array([-.0148655,-.0148655])
+    v,w=s.linear_mps,s.angular_radps
+    breach=False
+    for _ in range(100):
+        v+=float(np.clip(target[0]-v,-.0005,.0005))
+        w+=float(np.clip(target[1]-w,-.0005,.0005))
+        breach |= abs(v)>.01 and abs(w)>abs(v)+1e-9
+    assert breach  # independent actuator oracle, not production rollout
+    assert not e.certify_publication(s,*target,0.)
+
+
+@pytest.mark.parametrize('targets',[(1.,-.6), (2*math.pi,), (math.pi+.4,)])
+def test_dense_spin_preserves_unwrapped_order_and_reversals(targets):
+    e=follower();s=TrackingState(0.,0.,0.)
+    points=[(0.,0.,0.)];start=0.
+    for end in targets:
+        points.extend((0.,0.,float(y)) for y in np.linspace(start,end,100)[1:]);start=end
+    e.set_standard_path(points)
+    reached=[];yaw_trace=[]
+    for i in range(1200):
+        e.set_standard_path(points,identity=i)
+        r=tick(e,s)
+        w=s.angular_radps+float(np.clip(r.command.angular_z_radps-s.angular_radps,-.025,.025))
+        s=TrackingState(0.,0.,s.yaw_rad+w*.05,0.,w);yaw_trace.append(s.yaw_rad)
+        if len(reached)<len(targets) and abs(s.yaw_rad-targets[len(reached)])<.05:
+            reached.append(targets[len(reached)])
+        if r.phase=='WAITING':break
+    assert reached==list(targets)
+    assert abs(s.yaw_rad-targets[-1])<.05 and abs(s.angular_radps)<=.01
+    assert r.phase=='WAITING'
+
+
+@pytest.mark.parametrize('delay',[0.,.1])
+def test_accepted_targets_obey_independent_fine_actuator_with_history(delay):
+    e=follower();e.policy=replace(e.policy,control_response_time_s=delay)
+    e.set_standard_path(((0.,0.,0.),(-1.,0.,0.)))
+    v,w=.003384,0.;pending=[];last=np.array([v,w]);e.note_command(*last,0.)
+    # Include the real failing reversal, safe braking and both movement signs.
+    proposals=[(-.0148655,-.0148655),(0.,0.),(-.02,-.01),(-.04,-.02),(0.,0.),(.02,.01)]
+    for i,proposal in enumerate(proposals):
+        t=i*.05;e._model_time=t
+        state=TrackingState(0.,0.,0.,v,w)
+        target=np.array(proposal)
+        if not e.certify_publication(state,*target,0.):target=np.zeros(2)
+        assert e.certify_publication(state,*target,0.)
+        e.note_command(*target,t);pending.append((t+delay,target))
+        for j in range(50):
+            now=t+(j+1)*.001
+            for arrival,u in pending:
+                if arrival<=now+1e-10:last=u
+            old_v,old_w=v,w
+            v+=float(np.clip(last[0]-v,-.0005,.0005))
+            w+=float(np.clip(last[1]-w,-.0005,.0005))
+            assert abs(v-old_v)<=.000500001 and abs(w-old_w)<=.000500001
+            assert abs(v)<=.2 and abs(w)<=1.
+            if abs(v)>1e-8:assert abs(w)<=abs(v)+1e-8

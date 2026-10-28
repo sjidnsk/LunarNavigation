@@ -21,6 +21,25 @@ class MppiPathFollower(MppiExecutor):
             grid=replace(grid,assumed=np.zeros_like(grid.assumed))
         super().set_map(grid)
 
+    def _continuous_kinematics(self,state,tv,tw,actual,dt):
+        # 每轴限加速度响应是分段线性速度；检查所有折点及 v=0。
+        p=self.policy
+        v=np.concatenate((np.full((len(actual),1),state.linear_mps),actual[:,:-1,0]),axis=1)
+        w=np.concatenate((np.full((len(actual),1),state.angular_radps),actual[:,:-1,1]),axis=1)
+        av=np.where(abs(tv)>abs(v),p.max_linear_accel_mps2,p.max_linear_decel_mps2)*np.sign(tv-v)
+        aw=p.max_angular_accel_radps2*np.sign(tw-w)
+        safe_av=np.where(av==0,1.,av);safe_aw=np.where(aw==0,1.,aw)
+        times=np.stack((np.zeros_like(v),np.full_like(v,dt),
+            (tv-v)/safe_av,(tw-w)/safe_aw,-v/safe_av),axis=-1)
+        times=np.clip(times,0.,dt)
+        vv=v[:,:,None]+np.sign(tv-v)[:,:,None]*np.minimum(abs(tv-v)[:,:,None],abs(av)[:,:,None]*times)
+        ww=w[:,:,None]+np.sign(tw-w)[:,:,None]*np.minimum(abs(tw-w)[:,:,None],abs(aw)[:,:,None]*times)
+        # 停稳容差用于完成判定，不能豁免非零平移的曲率。
+        curvature=abs(ww)<=abs(vv)*p.max_curvature_per_m+1e-9
+        pure=(abs(v)[:,:,None]<=1e-12)&(abs(tv)[:,:,None]<=1e-12)
+        lateral=np.maximum(abs(v),abs(actual[:,:,0]))*np.maximum(abs(w),abs(actual[:,:,1]))
+        return np.all(curvature|pure,axis=(1,2)) & np.all(lateral<=p.max_lateral_accel_mps2+1e-9,axis=1)
+
     def _kinematically_valid(self,velocity):
         p=self.policy
         moving=abs(velocity[:,:,0])>p.stopped_linear_mps

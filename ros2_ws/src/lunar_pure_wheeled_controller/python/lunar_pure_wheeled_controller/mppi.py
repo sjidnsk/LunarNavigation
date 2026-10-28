@@ -142,7 +142,11 @@ class MppiExecutor:
         positions[:,1:,1]=np.where(turning,v/denom*(np.cos(yaw)-np.cos(yaw+theta)),v*dt*np.sin(yaw))
         np.cumsum(positions[:,:,0],axis=1,out=positions[:,:,0])
         np.cumsum(positions[:,:,1],axis=1,out=positions[:,:,1])
+        self._rollout_kinematic_valid=self._continuous_kinematics(state,tv,tw,actual,dt)
         return positions,actual
+
+    def _continuous_kinematics(self,state,tv,tw,actual,dt):
+        return np.ones(len(actual),dtype=bool)
 
     def _stationary_supported(self,state,poses,velocity):
         """Reuse native stationary authority without certifying translation.
@@ -182,6 +186,7 @@ class MppiExecutor:
         remaining=~valid
         if np.any(remaining):
             valid[remaining]=self.map.valid_motion(poses[remaining],actual[remaining],dt,p.execution_clearance_m)
+        valid &= self._rollout_kinematic_valid
         valid &= (abs(actual[:,-1,0])<=p.stopped_linear_mps) & (abs(actual[:,-1,1])<=p.stopped_angular_radps)
         return valid.reshape(len(scenarios),len(first)).all(axis=0)
 
