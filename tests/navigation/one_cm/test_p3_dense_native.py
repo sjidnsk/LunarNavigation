@@ -142,3 +142,20 @@ def test_sparse_dirty_union_matches_complete_reclassification(resolution):
             with terrain() as oracle:
                 expected=raster(oracle.apply(values,resolution_m=resolution,origin_xy_m=(0.,0.)))
             np.testing.assert_array_equal(observed,expected)
+
+
+@pytest.mark.parametrize('sx,sy',[(.02,0.),(0.,.02),(.02,.01)])
+def test_full_dense_gentle_plane_native_and_worker(sx,sy):
+    axis=(np.arange(500)+.5)*.01
+    values=(sx*axis[None,:]+sy*axis[:,None]).astype(np.float32)
+    with terrain() as t:timed_apply(t,values,.01,'gentle-plane-'+str((sx,sy)))
+    source=P3MapSource(P3MapStore(terrain=terrain()),NativeDistanceField(os.environ['NAV1CM_FIELD_LIB']),
+                       (1.182,.818),minimum_clearance_m=.2)
+    source.set_center(2.5,2.5)
+    try:
+        received=time.monotonic();source.submit_map(message(values),received)
+        assert source.wait_idle(3.) and source.error is None
+        receipt=source.snapshot();age=receipt.processed_at-receipt.received_at
+        print(json.dumps({'plane_worker':[sx,sy],'age_s':age}),flush=True)
+        assert age<2.5 and receipt.received_at==received and receipt.grid.eligible[250,250]
+    finally:source.close()
