@@ -89,3 +89,20 @@ TEST(TerrainBatch, ClippedThinRectanglesAndLeggedRemainScalarEquivalent) {
     }
   }
 }
+
+TEST(TerrainBatch, LocalCertificateKeepsCompleteOutlierAndHoleDependencies) {
+  for(bool hole:{false,true}) {
+    constexpr int n=81;std::vector<float> z(n*n);
+    for(int y=0;y<n;++y)for(int x=0;x<n;++x)z[y*n+x]=float(.02*x*.01+.01*y*.01);
+    z[40*n+40]=hole?std::numeric_limits<float>::quiet_NaN():z[40*n+40]+.4f;
+    nav::PersistentElevationMap map;
+    ASSERT_EQ(map.Apply({.geometry={.frame_id="map",.width=n,.height=n,.resolution_m=.01,.origin_m={0,0,0}},
+      .elevation_m=z,.map_from_source={.parent_frame="map",.child_frame="map"}}).status,nav::ElevationUpdateResult::Status::kApplied);
+    auto view=map.Snapshot();nav::WheeledCapability wheel;
+    wheel.maximum_slope_rad=.6;wheel.maximum_local_obstacle_relief_m=.2;wheel.minimum_underbody_clearance_m=.2;
+    auto scalar=nav::MakePlatformElevationEvaluator(wheel);nav::SnapshotTerrainClassifier classifier(*view,wheel);
+    for(int y:{0,2,7,8,39,40,41,72,73,78,80})for(int x:{0,2,7,8,39,40,41,72,73,78,80})
+      EXPECT_EQ(scalar->Evaluate(*view,{x,y}).state,classifier.Classify({x,y}));
+    EXPECT_GT(classifier.certified_free_cells(),0U);
+  }
+}
