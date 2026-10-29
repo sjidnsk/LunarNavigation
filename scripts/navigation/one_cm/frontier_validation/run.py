@@ -102,6 +102,7 @@ def run(args):
     assert os.environ.get('ROS_DISTRO')=='humble'
     output=Path(args.output).resolve();output.mkdir(parents=True,exist_ok=False)
     declared=declaration(args.fixture_version)
+    declared.update(tf_mode=args.tf_mode,identity_contract='exact TASK_ACCEPTED task_id/generation/map goal only; missing/conflicting binding fails qualification and forbids obstacle',terminal_contract='latest measurement before result receipt; continuous valid suffix to latest endpoint; freshness<=.15s; cancel uses latest sample')
     if args.case=='blocked_obstacle_update':
         if args.fixture_version!='v1':raise ValueError('blocked_obstacle_update uses qualified progress v1 initial source')
         declared.pop('blocked',None)
