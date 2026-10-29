@@ -44,7 +44,44 @@ def _wrap(angle):
     return float(np.arctan2(np.sin(angle), np.cos(angle)))
 
 
-def select_mode(state, reference):
+def _approach_yaw(reference, progress_s, travel_yaw, approach_distance_m):
+    """末段软朝向目标；不改变路线、方向约束或位置到达判据。"""
+    if reference.terminal_yaw is None or approach_distance_m <= 0:
+        return travel_yaw
+    remaining = max(0., float(reference.s[-1]) - progress_s)
+    fraction = float(np.clip(1. - remaining / approach_distance_m, 0., 1.))
+    weight = fraction * fraction * (3. - 2. * fraction)
+    return travel_yaw + weight * angle_error(reference.terminal_yaw, travel_yaw)
+
+
+# 局部阶段切换滞回（弧度），不放宽最终到达角度判据。
+_APPROACH_YAW_HYSTERESIS_RAD = .05
+
+
+def _continuing_approach(state, reference, travel_yaw, approach_distance_m):
+    approach_yaw = _approach_yaw(reference, reference.progress_s, travel_yaw, approach_distance_m)
+    turn = angle_error(approach_yaw, travel_yaw)
+    actual = angle_error(state.yaw, travel_yaw)
+    # 只放行已位于平滑转向区间内且有正行进投影的车体姿态。
+    in_turn = (turn > 0 and -1e-8 <= actual <= turn + _APPROACH_YAW_HYSTERESIS_RAD or
+               turn < 0 and turn - _APPROACH_YAW_HYSTERESIS_RAD <= actual <= 1e-8)
+    return in_turn and np.cos(actual) > 1e-8
+
+
+def travel_target_yaw(state, reference, mode, approach_distance_m):
+    """行进对准spin只对准路线，已开始的末段转向只制动残余角速度。"""
+    delta = reference.points[1] - reference.points[0]
+    heading = float(np.arctan2(delta[1], delta[0]))
+    if mode == 'reverse' or (mode == 'spin' and abs(_wrap(heading-state.yaw)) > np.pi*.75):
+        heading += np.pi
+    yaw = state.yaw + _wrap(heading-state.yaw)
+    if mode == 'spin' and (abs(_wrap(yaw-state.yaw)) <= .3 or
+            _continuing_approach(state, reference, yaw, approach_distance_m)):
+        yaw = state.yaw
+    return yaw
+
+
+def select_mode(state, reference, *, approach_distance_m=.8):
     if len(reference.points)<2:
         if reference.terminal_yaw is not None and abs(state.v) <= 1e-10:
             return 'spin' if abs(angle_error(reference.terminal_yaw, state.yaw)) > .05 or abs(state.w) > 1e-10 else 'brake'
@@ -58,6 +95,9 @@ def select_mode(state, reference):
     if abs(state.w)>1e-8:
         return 'spin'
     aligned=_wrap(error-(np.pi if desired=='reverse' else 0.))
+    travel_yaw = state.yaw + aligned
+    if _continuing_approach(state, reference, travel_yaw, approach_distance_m):
+        return desired
     return 'spin' if abs(aligned)>.3 else desired
 
 
@@ -152,18 +192,20 @@ class MpccPlanner:
             self._solvers[mode]=AcadosOcpSolver(ocp,json_file=str(self.build_dir/(mode+'.json')),verbose=False)
         self.build_ms=(perf_counter()-started)*1000
 
-    def _parameters(self, states, controls, reference, field, target_yaw, end):
+    def _parameters(self, states, controls, reference, field, target_yaw, end, *, mode="forward"):
         params=[]
         for k,z in enumerate(states):
             s=float(max(reference.s[0],min(end,z[5])))
             i=max(0,min(len(reference.s)-2,int(np.searchsorted(reference.s,s,side='right'))-1))
             tangent=(reference.points[i+1]-reference.points[i])/(reference.s[i+1]-reference.s[i])
             xy=reference.points[i]+tangent*(s-reference.s[i])
-            yaw=z[2]+_wrap(target_yaw-z[2])
-            # 只有当前参考实际到达最终路线终点且该终点进入求解时域时，
-            # 终端代价才采用目标车体 yaw；倒车也不能给最终朝向再加 pi。
-            if k == len(states)-1 and reference.terminal_yaw is not None and end == float(reference.s[-1]):
-                yaw=z[2]+angle_error(reference.terminal_yaw,z[2])
+            desired_yaw = target_yaw
+            if mode != 'spin':
+                desired_yaw = _approach_yaw(reference, s, target_yaw,
+                    self.N * self.dt * self.limits.linear_speed_mps)
+            # spin仅对准行进车体方向/制动；moving在末段逐点平滑趋向最终车体yaw。
+            # 方向选择已经体现在target_yaw中，最终yaw不再叠加倒车pi。
+            yaw=z[2]+angle_error(desired_yaw,z[2])
             p=np.zeros(22); p[:6]=[*xy,*tangent,s,yaw]
             p[6:9]=controls[min(k,len(controls)-1)]
             for j,offset in enumerate(self.offsets):
@@ -193,7 +235,7 @@ class MpccPlanner:
                               'TERMINAL_CANDIDATE_UNCERTIFIED')
             return finish(None,'REFERENCE_END')
         if grid.cell_at_world(*reference.points[-1])==CellState.BLOCKED: return finish(None,'KNOWN_BLOCKED_GOAL')
-        mode=select_mode(state,reference)
+        mode=select_mode(state,reference,approach_distance_m=self.N*self.dt*self.limits.linear_speed_mps)
         if mode=='brake': return finish(None,'MODE_CHANGE_REQUIRES_BRAKE')
         t=perf_counter()
         if distance_field is not None:
@@ -204,12 +246,7 @@ class MpccPlanner:
         else: field=build_distance_field(grid)
         timing['field']=(perf_counter()-t)*1000
         t=perf_counter()
-        delta=reference.points[1]-reference.points[0]
-        heading=float(np.arctan2(delta[1],delta[0]))
-        if mode=='reverse' or (mode=='spin' and abs(_wrap(heading-state.yaw))>np.pi*.75): heading+=np.pi
-        # 转向已对准但尚有角速度时，目标保持当前航向以受限角制动。
-        yaw=state.yaw+_wrap(heading-state.yaw)
-        if mode=='spin' and abs(_wrap(yaw-state.yaw))<=.3: yaw=state.yaw
+        yaw=travel_target_yaw(state,reference,mode,self.N*self.dt*self.limits.linear_speed_mps)
         end=min(float(reference.s[-1]),reference.progress_s+self.N*self.dt*self.limits.linear_speed_mps)
         initial=np.array([state.x,state.y,state.yaw,state.v,state.w,reference.progress_s])
         initial_circle_feasible=all(field.sample(state.x+offset*np.cos(state.yaw),
@@ -225,7 +262,7 @@ class MpccPlanner:
             if warmed:
                 controls=self._warm[2].copy(); states=rollout(initial,controls,self.dt)
             else: states,controls=initial_seed(initial,mode,self.limits,yaw,side,n=self.N,dt=self.dt)
-            params=self._parameters(states,controls,reference,field,yaw,end)
+            params=self._parameters(states,controls,reference,field,yaw,end,mode=mode)
             timing['seed']+=(perf_counter()-t)*1000
             row={'seed':(('warm' if warmed else 'nominal') if attempt==0 else ('left' if side>0 else 'right'))}
             def measure(stage, operation):

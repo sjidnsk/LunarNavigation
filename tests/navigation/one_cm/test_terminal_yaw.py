@@ -130,11 +130,13 @@ def test_mpcc_terminal_reference_uses_body_yaw_without_reverse_pi():
     planner = MpccPlanner.__new__(MpccPlanner)
     planner.offsets = np.array([-.394, 0, .394])
     planner.radius = .57
+    planner.limits = limits
     states = np.zeros((3, 6))
+    states[-1, 5] = ref.s[-1]
     params = planner._parameters(states, np.zeros((2, 3)), ref,
                                  build_distance_field(grid), 0., float(ref.s[-1]))
     assert params[-1][5] == pytest.approx(.2)
-    assert params[0][5] == 0.
+    assert 0. < params[0][5] < .2  # 短末段已开始平滑调整，终点仍为真实车体yaw。
 
 
 @pytest.mark.skipif(os.environ.get('NAV1CM_REAL_SOLVER') != '1', reason='real acados required')
