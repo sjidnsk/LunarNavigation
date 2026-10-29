@@ -34,9 +34,9 @@ def parser():
     return p
 
 
-def declaration(args):
-    if not all((args.actor,args.config,args.platform)) or not 0<args.duration<=90:
-        raise ValueError('explicit actor/config/platform and duration in (0,90] required')
+def declaration(args, *, maximum_duration_s=90.):
+    if not all((args.actor,args.config,args.platform)) or not 0<args.duration<=maximum_duration_s:
+        raise ValueError(f'explicit actor/config/platform and duration in (0,{maximum_duration_s:g}] required')
     from lunar_drl_exploration.runtime import ActorPolicy
     from lunar_drl_exploration.inference_node import read_policy_settings
     policy=ActorPolicy.load(args.actor)

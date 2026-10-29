@@ -79,3 +79,26 @@ def test_execution_finish_requires_fresh_terminal_status_before_result(monkeypat
     assert helper([ref,status],[finish])['terminal_completed_sessions']==['a'*32]
     for bad in (dict(status,wall=3.),dict(status,wall=.5),dict(status,state=3),dict(status,accepted=False)):
         assert not helper([ref,bad],[finish])['terminal_completed_sessions']
+
+
+def test_extended_declaration_changes_only_explicit_duration_bound(monkeypatch,tmp_path):
+    """原短窗保持90秒上限；闭环显式允许长窗，声明完整冻结预算。"""
+    import json,sys,types
+    base=load(monkeypatch).__globals__['base']
+    (tmp_path/'runtime.py').write_text('# isolated declaration unit fixture',encoding='utf-8')
+    for name,body in [('actor.pt','unit identity'),('config.json','{}'),('wheel.yaml','unit profile')]:
+        (tmp_path/name).write_text(body,encoding='utf-8')
+    parent=types.ModuleType('lunar_drl_exploration');parent.__path__=[]
+    runtime=types.ModuleType('lunar_drl_exploration.runtime');runtime.__file__=str(tmp_path/'runtime.py')
+    runtime.ActorPolicy=types.SimpleNamespace(load=lambda p:types.SimpleNamespace(actor=types.SimpleNamespace(config=object())))
+    node=types.ModuleType('lunar_drl_exploration.inference_node');node.read_policy_settings=lambda *a:None
+    for name,module in [('lunar_drl_exploration',parent),('lunar_drl_exploration.runtime',runtime),('lunar_drl_exploration.inference_node',node)]:
+        monkeypatch.setitem(sys.modules,name,module)
+    args=types.SimpleNamespace(actor=tmp_path/'actor.pt',config=tmp_path/'config.json',platform=tmp_path/'wheel.yaml',duration=600.,backend='nav1cm')
+    with pytest.raises(ValueError):base.declaration(args)
+    record=base.declaration(args,maximum_duration_s=900.)
+    assert record['duration_s']==600. and record['training'] is False
+    assert record['actor_sha256']==base.digest(args.actor)
+    for duration in (0.,-1.,900.01,float('inf'),float('nan')):
+        args.duration=duration
+        with pytest.raises(ValueError):base.declaration(args,maximum_duration_s=900.)

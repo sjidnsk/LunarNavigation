@@ -290,7 +290,7 @@ def main():
     install(args.artifact/'guard')
     if args.plant:return base.plant_worker(args.artifact)
     if args.backend!='nav1cm' or args.minimum_completed<2:raise ValueError('nav1cm and >=2 completed goals required')
-    d=base.declaration(args);d['namespace']='/lunar_inference/nav1cm_closure'
+    d=base.declaration(args,maximum_duration_s=900.);d['namespace']='/lunar_inference/nav1cm_closure'
     if args.motion_model is not None:d['motion_model_override']=args.motion_model
     d['execution_contract_required']=args.require_execution_contract
     d['closure_script_sha256']=base.digest(__file__);d['grade_sha256']=base.digest(Path(__file__).with_name('inference_closure_grade.py'))
