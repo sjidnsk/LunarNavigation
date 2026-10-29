@@ -204,3 +204,19 @@ def test_task_acceptance_notice_can_reenter_input_queue_and_wait_for_other_threa
     runtime._tick_once(.1)
     assert [r['task_id'] for r in seen]==['a','b']
     assert seen[0]['goal']==[0.,3.,0.] and seen[1]['goal']==[0.,-3.,0.]
+
+
+def test_default_notice_remains_optional_for_managed_acceptance():
+    original,session,_,_=build_runtime()
+    runtime=type(original)(session,None,publish=lambda data:None,ros_now_ns=lambda:0)
+    runtime.offer_managed_goal('a',managed());runtime._tick_once(0.)
+    assert runtime.tasks.active.task_id=='a' and session.goal.y==3.
+
+def test_waiting_pose_has_no_acceptance_notice_until_adapted_yaw_exists():
+    import json
+    runtime,session,_,_=build_runtime();seen=[];runtime.notice=lambda kind,detail:seen.append((kind,detail))
+    session.offer_state(None);runtime.offer_managed_goal('a',managed(has_yaw=False));runtime._tick_once(0.)
+    assert not [d for k,d in seen if k=='TASK_ACCEPTED']
+    session.offer_state(VehicleState(0.,0.,1.2,0.,0.));runtime._tick_once(.1)
+    accepted=[json.loads(d) for k,d in seen if k=='TASK_ACCEPTED']
+    assert len(accepted)==1 and accepted[0]['goal']==[0.,3.,1.2]
