@@ -13,3 +13,7 @@
 `scripts/drl/verify_nav1cm_backend.py` 是独立合成短推理工具。必须先 `--declare-only` 冻结 actor/config/platform/source/fixture/duration，再对同一声明 `--run`；输出目录不可复用。工具使用域 92、本机发现、私有命令主题和独立命令驱动 plant；仅 plant 持有合成物理场景，策略只读观测地图。正式训练包、权重、账本和论文 cohort 不作为写入目标。
 
 当前资格见 `docs/validation/2026-10-29-drl-nav1cm-backend.md`。在 C1 合格公共 overlay 上，固定权重已通过合成短窗的实际运动、观测推进与当前 Action 取消停稳检查；默认旧后端有界兼容 smoke 通过。45 秒内未到达目标，不可宣称策略有效或 Orin/实车就绪。公共 C1 安装必须位于 Task3 安装之后、本包安装之前；源码/部署验收仍由 ROOT 独立审查。
+
+推理 CLI 的后端优先级为显式 `--navigation-backend` > 独立配置中的 `navigation_backend` > 默认 `incremental_v2`。配置的后端值与未知字段仍先验证；同名可选字段只由 infer 接受，train 参数及默认配置加载规则不变。
+
+任务消息 START 使用 adapter/Runtime 同一个有效 `map_frame`（默认 map）。错误帧会记录拒绝并返回，不转换坐标、不覆盖当前任务，也不会因帧校验异常退出 ROS 订阅。

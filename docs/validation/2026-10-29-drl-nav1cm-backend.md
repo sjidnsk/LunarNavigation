@@ -27,3 +27,9 @@ legacy 8 s 首窗 INPUT_UNAVAILABLE、无目标，8.272434 s 后 3 子进程 exi
 上述所有窗口的 Actor/config/wheel 前后 SHA 不变。保留所有失败窗口和误选测试；未重跑成功窗口或未变全组。完整 93 文件原始收据归档 receipts-final.tar.gz SHA d6c9494eb16851d7ea650de0e7262c8fe8fce077755edf26a8b32e408237f4b4。未及时抓到 window-03 活进程 /proc/maps；已具备实际预检导入/加载 native 身份、冻结启动组合与运行日志，不把事后静态安装核对冒充全部运行进程映射。
 
 状态：已提交待 ROOT 独立审查/待合入 dev/drl-exploration，not_deployed。仅有 Humble x86_64 隔离合成闭环证据。Jazzy、Humble 容器、Orin、实车、跨机 DDS、rosbag、正式训练及策略效果均 NOT_RUN。专题/远端独立 source/build/install 与证据保留待审查，未获准删除。
+
+## Task4 review fix round1
+
+FIX_BASE 133e97e775eee1ec9e5ff4c2e3dbed1d4b0de017。I1 已贯通 Runtime/adapter 的有效地图帧，坏 START 在任何当前任务变更前返回拒绝；I2 已实现 infer 专用配置接收与显式 flag 优先级。新增纯 CLI/回调测试12项，旧实际安装 I1 两项RED/0.15s，Windows I2 五项RED；Windows另有两项因缺SciPy导入失败，不作产品RED。新独立 fix-round1/install 上12 PASS/0.44s；包build5.01s，87源码/实际安装/manifest/Gitblob一致，实际核心仍b630，C1 p3_map仍4a296，默认serialization/resume对BASE一致。测试只解析训练CLI拒绝规则，不调用训练main或构造learner/replay。
+
+已有窗口没有重跑。计数澄清：window03的181 unique processed_stamp值包含初始0/INPUT_UNAVAILABLE，实际非零处理stamp为180；旧raw不改。console main/public topic真实生命周期仍NOT_RUN，当前修复覆盖直接订阅回调的纯输入/当前任务保持；原动态maps、旧argv、未到达及历史执行偏差限制不变。待同一reviewer scoped复审，不能把本轮测试视为ROOT最终通过。
