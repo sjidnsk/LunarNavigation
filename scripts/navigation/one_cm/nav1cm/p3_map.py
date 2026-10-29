@@ -232,8 +232,11 @@ def _free_rows(regions, update):
         for y in range(math.floor(minimum + 1e-9), math.ceil(maximum - 1e-9)):
             bands.setdefault(y, []).append((polygon, minimum, maximum))
     for y, polygons in bands.items():
+        # 与行范围和截面的 1e-9 cm 容差一致：贴近整数边界的浮点顶点
+        # 不应再切出无法表示中点的数值薄片；不移动真实顶点或合并内部缺口。
         levels = sorted({float(y), float(y + 1),
-                         *(point[1] for polygon, _, _ in polygons for point in polygon if y < point[1] < y + 1)})
+                         *(point[1] for polygon, _, _ in polygons for point in polygon
+                           if y + 1e-9 < point[1] < y + 1 - 1e-9)})
         covered = None
         for lower_y, upper_y in zip(levels, levels[1:]):
             middle = (lower_y + upper_y) / 2
