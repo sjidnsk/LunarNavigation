@@ -130,6 +130,7 @@ class PlannerRuntime:
             world, odometry = self._world, self._odometry
             input_sequence, odometry_sequence = self._goal_sequence, self._odometry_sequence
             transforms = self._transforms.copy()
+            tf_sequence = self._tf_sequence
             goals, self._goals = self._goals, deque()
         if world is not None:
             self.session.set_world(world)
@@ -187,13 +188,30 @@ class PlannerRuntime:
         proposal = self.tasks.observe(packet, now_s,
                                       state_updated=odometry_sequence != self._observed_odometry_sequence,
                                       defer_commit=True)
+        odometry_error = None
         with self._condition:
-            # 校验、状态转换和内部事件提交是同一个线性化点；先入队的输入否决旧提案。
-            # 此处仅赋值/内部deque.append，不执行可重入的用户回调。
+            # 目标、最新测量和内部事件提交共享线性化点；不执行规划或外部回调。
             if not self._stopping and input_sequence == self._goal_sequence:
+                if proposal is not None and (odometry_sequence != self._odometry_sequence or
+                                             tf_sequence != self._tf_sequence):
+                    # 仅重做轻量位姿转换/纯观测，不因持续等价odom/TF而饿死反馈或终态。
+                    # 越界/运动的新测量也须提交非终态提案，以清除旧的到达保持计时。
+                    if self._odometry is not None:
+                        try:
+                            self.session.offer_state(state_from_odometry(
+                                self._odometry, self._transforms, self.map_frame))
+                        except (ValueError, AttributeError, TypeError) as exc:
+                            self.session.offer_state(None)
+                            odometry_error = exc
+                    odometry_sequence = self._odometry_sequence
+                    proposal = self.tasks.observe(packet, now_s,
+                        state_updated=odometry_sequence != self._observed_odometry_sequence,
+                        defer_commit=True)
                 self.tasks.commit_observation(proposal)
         self._observed_odometry_sequence = odometry_sequence
         self._deliver_task_events()
+        if odometry_error is not None:
+            self._notice('ODOMETRY_WAITING', odometry_error)
         if packet.result is not None:
             result = packet.result
             grid = result.grid
