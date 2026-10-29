@@ -26,3 +26,12 @@
 - RED：默认 4 m 平面为 25 点/32 面，未达新版 81 点/128 面；320tri API、梯度法线与版本映射尚缺。GREEN：授权相关 suite `191 passed / 17 skipped`；真实 PXR 质量/拓扑/法线/材质/碰撞故障变异已编写，本地跳过，不算 SDK 通过。
 - 处置：本地实现已提交待 root 实际验证/合入；准确提交与命令见 D 盘 `coordination/task-3-report.md`。旧 source/asset/receipt 与旧运行证据保留，未同步或操作台式，不推送/PR/清理。
 - 本版实际 SDK/PXR、新版 RTF、GPU/ROS 动态/前进制动、GUI 视觉均 `NOT_RUN`；0.5m/320tri + 平滑哑光 + 1280×720 必须作为整体重新实测。旧 1m 动态通过不能复用为本版证据；A/B known-map、起终点、Actor、建图/新规划器、完整导航、Orin/实车仍 `NOT_RUN`。
+
+
+## 用户最终场景选择
+
+用户要求用回原先准备的A/B/C三区场景。最终运行选择original-source-v1：直接引用e572ed3对应d24b639e原场景的地形、岩石、材质和碰撞，不采用1m或0.5m替代网格。保留规范VIPER、前置传感器与已验证消息快速路径，传感规格640x48015Hz/10Hz/100Hz不变。
+
+台式入口 /mnt/data/WS/lunar-navigation/analysis-artifacts/isaac-viper-showcase-20261029/original-v1/viper-showcase.usda，SHA256 e0573e650232211b6ef0c0281fe644028855a95f823eda7f9db9d51a9e5eb70e；运行源balanced-source/6370c29。启动回执original-selected-gui-launch.json。替代档及其测试仅作历史对照，不能将其RTF/动态结果转记原档。原档已通过当前PXR组合正例，实际GUI需最后核验；原两次导航FAIL与A/B地图、Actor、完整规划闭环NOT_RUN边界保留。
+
+当前处置：已提交待最终审查合入；中央登记的其他会话dirty内容不覆盖，不推送、不删除工作树或历史资产。
