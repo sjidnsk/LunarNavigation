@@ -49,3 +49,13 @@ def test_inference_hook_registers_existing_acados_codec_before_installing_guard(
     with patch.dict(sys.modules,{'future_fstrings':codec,'inference_only_guard':guard}), patch.dict(__import__('os').environ,{'INFERENCE_ONLY_GUARD_DIR':'test'}):
         exec(compile(source,'sitecustomize.py','exec'),{})
     assert calls==['codec','guard']
+
+
+def test_motion_override_reaches_only_planner_and_standard_follower(monkeypatch):
+    helper=load(monkeypatch).__globals__['apply_motion_model']
+    specs=[('map','node',{'x':1}),('lunar_nav1cm_planner','node',{}),('lunar_pure_wheeled_controller','node',{})]
+    changed=helper(specs,'differential_drive')
+    assert changed[0][2]=={'x':1}
+    assert changed[1][2]['motion_model']==changed[2][2]['motion_model']=='differential_drive'
+    assert specs[1][2]=={} and specs[2][2]=={}
+    with pytest.raises(ValueError):helper(specs,'typo')

@@ -24,6 +24,8 @@ class MppiPathFollower(MppiExecutor):
     def _continuous_kinematics(self,state,tv,tw,actual,dt):
         # 每轴限加速度响应是分段线性速度；检查所有折点及 v=0。
         p=self.policy
+        if p.motion_model == "differential_drive":
+            return np.ones(len(actual),dtype=bool)
         v=np.concatenate((np.full((len(actual),1),state.linear_mps),actual[:,:-1,0]),axis=1)
         w=np.concatenate((np.full((len(actual),1),state.angular_radps),actual[:,:-1,1]),axis=1)
         av=np.where(abs(tv)>abs(v),p.max_linear_accel_mps2,p.max_linear_decel_mps2)*np.sign(tv-v)
@@ -42,6 +44,8 @@ class MppiPathFollower(MppiExecutor):
 
     def _kinematically_valid(self,velocity):
         p=self.policy
+        if p.motion_model == "differential_drive":
+            return np.ones(len(velocity),dtype=bool)
         moving=abs(velocity[:,:,0])>p.stopped_linear_mps
         return np.all(~moving|((abs(velocity[:,:,1])<=abs(velocity[:,:,0])*p.max_curvature_per_m+1e-9)
             &(abs(velocity[:,:,0]*velocity[:,:,1])<=p.max_lateral_accel_mps2+1e-9)),axis=1)
@@ -59,6 +63,8 @@ class MppiPathFollower(MppiExecutor):
     def _project_targets(self,raw,step):
         """Batch time-independent intent limits; retain slew recurrence order."""
         p=self.policy
+        if p.motion_model == "differential_drive":
+            return super()._project_targets(raw,step)
         output=np.empty(raw.shape,dtype=float)
         intent_v=raw[:,:,0];intent_w=raw[:,:,1]
         curvature=abs(intent_v)*p.max_curvature_per_m

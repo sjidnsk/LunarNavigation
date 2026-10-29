@@ -156,7 +156,7 @@ class MpccPlanner:
                 q=p[9+4*j:13+4*j]
                 hs.append(q[0]*x[0]+q[1]*x[1]+q[2]*x[2]+q[3])
             sign=-1 if mode=='reverse' else 1
-            if mode!='spin':
+            if mode!='spin' and limits.motion_model=='curvature_limited':
                 hs += [sign*limits.curvature_inv_m*x[3]-x[4],sign*limits.curvature_inv_m*x[3]+x[4]]
             # 刹停距离不超过有效参考余量，终点自然减速。
             # 在 |v|<=vmax 内，vmax*|v|/(2a) 保守上界 v²/(2a)，且 RTI 不再低估凸制动项。
@@ -324,7 +324,8 @@ class MpccPlanner:
             or np.min(us[:,2]) < -1e-9): return 'LIMIT'
         if mode!='spin':
             sign=-1 if mode=='reverse' else 1
-            if np.min(sign*xs[:,3]) < -1e-9 or np.any(np.abs(xs[:,4])>l.curvature_inv_m*np.abs(xs[:,3])+1e-9): return 'CURVATURE'
+            if np.min(sign*xs[:,3]) < -1e-9: return 'MODE'
+            if l.motion_model=='curvature_limited' and np.any(np.abs(xs[:,4])>l.curvature_inv_m*np.abs(xs[:,3])+1e-9): return 'CURVATURE'
             if xs[-1,5]-xs[0,5]<.005: return 'NO_PROGRESS'
         if np.any(xs[:,5]+xs[:,3]**2/(2*l.linear_accel_mps2)>end+1e-6): return 'REFERENCE_BRAKING_BOUND'
         for z in xs:

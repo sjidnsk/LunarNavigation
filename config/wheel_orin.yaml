@@ -8,6 +8,8 @@ platform_type: WHEELED
 capability_version: wheeled-engineering-baseline-v1
 base_frame_id: base_footprint
 capability:
+  # 当前nav1cm标准Path链：v/w独立限幅；曲率数值仅供旧模型兼容。
+  motion_model: differential_drive
   footprint_xy_m: [[0.591, 0.409], [0.591, -0.409], [-0.591, -0.409], [-0.591, 0.409]]
   body_extent_m: [1.182, 0.818, 1.29996]
   wheel_diameter_m: 0.319

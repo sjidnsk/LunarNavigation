@@ -11,7 +11,7 @@ def brake_candidate(state, grid, reference, limits):
     states, controls, times = [current.copy()], [], [0.0]
     while abs(current[3]) > 1e-10 or abs(current[4]) > 1e-10:
         amax = limits.linear_accel_mps2
-        if abs(current[3]) > 1e-10 and abs(current[4]) > 1e-10:
+        if limits.motion_model == "curvature_limited" and abs(current[3]) > 1e-10 and abs(current[4]) > 1e-10:
             amax = min(amax, limits.angular_accel_rps2 * abs(current[3] / current[4]))
         tv = abs(current[3]) / amax if abs(current[3]) > 1e-10 else math.inf
         tw = abs(current[4]) / limits.angular_accel_rps2 if abs(current[4]) > 1e-10 else math.inf
@@ -41,12 +41,13 @@ def initial_seed(initial, mode, limits, yaw_target, side=0, n=20, dt=.2):
     for k in range(n):
         target_v = 0. if mode == 'spin' else sign * limits.linear_speed_mps * .85
         heading_error = yaw_target - current[2] + side * .3 * np.sin(np.pi * k / n)
-        target_w = max(-.08, min(.08, heading_error))
-        if mode != 'spin':
+        turn_limit = min(.08, limits.angular_speed_rps)
+        target_w = max(-turn_limit, min(turn_limit, heading_error))
+        if mode != 'spin' and limits.motion_model == 'curvature_limited':
             target_w = max(-abs(target_v)*limits.curvature_inv_m, min(abs(target_v)*limits.curvature_inv_m, target_w))
         a = max(-limits.linear_accel_mps2*.8, min(limits.linear_accel_mps2*.8, (target_v-current[3])/dt))
         alpha = max(-limits.angular_accel_rps2*.8, min(limits.angular_accel_rps2*.8, (target_w-current[4])/dt))
-        if mode != 'spin':
+        if mode != 'spin' and limits.motion_model == 'curvature_limited':
             next_v = current[3]+a*dt
             next_w = max(-abs(next_v)*limits.curvature_inv_m*.95, min(abs(next_v)*limits.curvature_inv_m*.95, current[4]+alpha*dt))
             alpha=(next_w-current[4])/dt

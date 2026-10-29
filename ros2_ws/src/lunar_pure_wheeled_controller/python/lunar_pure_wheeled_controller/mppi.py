@@ -211,6 +211,14 @@ class MppiExecutor:
         # measurement of the actuator. The rollout models physical slew below.
         p=self.policy
         pv,pw=previous[:,0],previous[:,1]
+        if p.motion_model == 'differential_drive':
+            # 指令各轴独立限幅；测量原值仅交由物理预测和停车认证处理。
+            target_v=np.clip(raw[:,0],-p.max_reverse_mps if p.allow_reverse else 0.,p.max_linear_mps)
+            target_w=np.clip(raw[:,1],-p.max_angular_radps,p.max_angular_radps)
+            v=pv+np.clip(target_v-pv,-p.max_linear_decel_mps2*step,p.max_linear_accel_mps2*step)
+            w=pw+np.clip(target_w-pw,-p.max_angular_accel_radps2*step,p.max_angular_accel_radps2*step)
+            return np.stack((np.clip(v,-p.max_reverse_mps if p.allow_reverse else 0.,p.max_linear_mps),
+                             np.clip(w,-p.max_angular_radps,p.max_angular_radps)),axis=1)
         v=pv+np.clip(raw[:,0]-pv,-p.max_linear_decel_mps2*step,p.max_linear_accel_mps2*step)
         tw=np.where(abs(raw[:,0])>p.stopped_linear_mps,np.clip(raw[:,1],-abs(raw[:,0])*p.max_curvature_per_m,abs(raw[:,0])*p.max_curvature_per_m),raw[:,1])
         tw=np.where((abs(raw[:,0])<=p.stopped_linear_mps)&(abs(pv)>p.stopped_linear_mps),0.,tw)
@@ -246,7 +254,8 @@ class MppiExecutor:
         # Curvature/lateral acceleration constraints apply to moving states;
         # stationary spin remains supported, including its acceleration phase.
         moving=abs(actual[:,:,0])>p.stopped_linear_mps
-        valid &= np.all(~moving | ((abs(actual[:,:,1])<=abs(actual[:,:,0])*p.max_curvature_per_m+1e-9)&(abs(actual[:,:,0]*actual[:,:,1])<=p.max_lateral_accel_mps2+1e-9)),axis=1)
+        if p.motion_model == "curvature_limited":
+            valid &= np.all(~moving | ((abs(actual[:,:,1])<=abs(actual[:,:,0])*p.max_curvature_per_m+1e-9)&(abs(actual[:,:,0]*actual[:,:,1])<=p.max_lateral_accel_mps2+1e-9)),axis=1)
         _,terrain,_=self.map.sample(xy[:,:,:2])
         cost=self._tracking_cost(state,controls,target,target_yaw,xy,terrain.mean(axis=1)*.2)
         return np.where(valid,cost,np.inf),xy
@@ -275,7 +284,8 @@ class MppiExecutor:
         if np.any(remaining):
             valid[remaining]=self.map.valid_motion(poses[remaining],velocity[remaining],c.model_dt,p.execution_clearance_m)
         moving=abs(velocity[:,:,0])>p.stopped_linear_mps
-        valid &= np.all(~moving|((abs(velocity[:,:,1])<=abs(velocity[:,:,0])*p.max_curvature_per_m+1e-9)&(abs(velocity[:,:,0]*velocity[:,:,1])<=p.max_lateral_accel_mps2+1e-9)),axis=1)
+        if p.motion_model == "curvature_limited":
+            valid &= np.all(~moving|((abs(velocity[:,:,1])<=abs(velocity[:,:,0])*p.max_curvature_per_m+1e-9)&(abs(velocity[:,:,0]*velocity[:,:,1])<=p.max_lateral_accel_mps2+1e-9)),axis=1)
         valid &= continuous_valid
         indices=np.flatnonzero(valid)
         if costs is not None:
@@ -383,7 +393,7 @@ class MppiExecutor:
         # Seed controls accelerate exploration; optimization still considers both
         # signs and time-varying sequences and uses a genuine weighted update.
         seed=np.array([0. if near or abs(error)>.2 else self.direction*min(p.max_linear_mps,p.max_reverse_mps),np.clip(1.5*error,-p.max_angular_radps,p.max_angular_radps)])
-        if abs(seed[0])>0:seed[1]=np.clip(seed[1],-abs(seed[0])*p.max_curvature_per_m,abs(seed[0])*p.max_curvature_per_m)
+        if p.motion_model == "curvature_limited" and abs(seed[0])>0:seed[1]=np.clip(seed[1],-abs(seed[0])*p.max_curvature_per_m,abs(seed[0])*p.max_curvature_per_m)
         if not np.any(self._nominal):self._nominal[:]=seed
         best=None;best_xy=None;fallback=None;fallback_costs=None
         for _ in range(c.iterations):

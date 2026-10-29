@@ -199,6 +199,7 @@ class PureWheeledControllerNode(Node):
             if not platform_path:
                 from ament_index_python.packages import get_package_share_directory
                 platform_path=str(FilePath(get_package_share_directory('lunar_nav1cm_planner'))/'config/wheel.yaml')
+        capability = {}
         if platform_path:
             capability = yaml.safe_load(
                 FilePath(platform_path).read_text(encoding="utf-8")
@@ -221,6 +222,9 @@ class PureWheeledControllerNode(Node):
             for name,value in dict(max_angular_radps=1.,goal_position_tolerance_m=.1,goal_yaw_tolerance_rad=.05,stopped_angular_radps=.01).items():
                 if name not in self._parameter_overrides:
                     policy_values[name]=min(value,float(capability[names[name]])) if platform_path and name in names else value
+        from lunar_pure_wheeled_controller.motion_configuration import resolve_motion_model
+        policy_values['motion_model']=resolve_motion_model(capability,policy_values['motion_model'],
+            standard_path=self._standard_mode,explicit='motion_model' in self._parameter_overrides)
         self._policy = TrackingPolicy(**policy_values)
         if self._standard_mode:
             from nav1cm.contracts import resolve_minimum_clearance

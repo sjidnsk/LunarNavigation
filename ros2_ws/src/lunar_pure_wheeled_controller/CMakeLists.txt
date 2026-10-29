@@ -24,6 +24,8 @@ install(DIRECTORY launch
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(${PROJECT_NAME}_motion_capability_test test/test_motion_capability.py)
+  ament_add_pytest_test(${PROJECT_NAME}_motion_model_node_test test/test_motion_model_node.py)
   ament_add_pytest_test(${PROJECT_NAME}_nav1cm_launch_test test/test_nav1cm_launch.py)
   ament_add_pytest_test(${PROJECT_NAME}_p3_map_source_test test/test_p3_map_source.py)
   ament_add_pytest_test(${PROJECT_NAME}_shutdown_test test/test_shutdown.py)

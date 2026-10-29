@@ -20,6 +20,19 @@ def canonical_event(kind,**values):
     return json.loads(json.dumps(dict(kind=kind,wall=time.monotonic(),**values)))
 
 
+def apply_motion_model(specs,model):
+    """显式记录的隔离能力覆盖；不修改冻结平台文件或原spec。"""
+    if model not in (None,'differential_drive','curvature_limited'):
+        raise ValueError('unknown motion_model override')
+    result=[]
+    for package,entry,parameters in specs:
+        parameters=dict(parameters)
+        if model is not None and package in ('lunar_nav1cm_planner','lunar_pure_wheeled_controller'):
+            parameters['motion_model']=model
+        result.append((package,entry,parameters))
+    return result
+
+
 def inference_ros_arguments(namespace,parameters):
     """仅验证器私有推理端点；不修改原训练/产品启动器的命名空间合同。"""
     if not namespace.startswith('/lunar_inference/') or '/..' in namespace:
@@ -110,6 +123,7 @@ def run(args,d):
             if others:raise RuntimeError('domain92 occupied: '+repr(others))
         finally:pre.destroy_node()
         specs=owned_nav1cm_specs(ns,platform_config=d['platform'],build_dir=str(art/'planner-cache'),use_sim_time=False)
+        specs=apply_motion_model(specs,d.get('motion_model_override'))
         commands=[]
         for i,(package,entry,params) in enumerate(specs):
             command=[str(Path(get_package_prefix(package))/'lib'/package/entry),*inference_ros_arguments(ns,params)]
@@ -228,11 +242,13 @@ def run(args,d):
 def main():
     p=base.parser();p.set_defaults(duration=90.)
     p.add_argument('--minimum-completed',type=int,default=2)
+    p.add_argument('--motion-model',choices=('differential_drive','curvature_limited'))
     args=p.parse_args()
     install(args.artifact/'guard')
     if args.plant:return base.plant_worker(args.artifact)
     if args.backend!='nav1cm' or args.minimum_completed<2:raise ValueError('nav1cm and >=2 completed goals required')
     d=base.declaration(args);d['namespace']='/lunar_inference/nav1cm_closure'
+    if args.motion_model is not None:d['motion_model_override']=args.motion_model
     d['closure_script_sha256']=base.digest(__file__);d['grade_sha256']=base.digest(Path(__file__).with_name('inference_closure_grade.py'))
     d['guard_sha256']=base.digest(Path(__file__).with_name('inference_only_guard.py'));d['minimum_completed']=args.minimum_completed
     d['criteria'].update(arrival_claim=True,next_actor_decision=True,reset_via_topic=True)

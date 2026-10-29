@@ -54,11 +54,15 @@ class WheelLimits:
     angular_accel_rps2: float = 0.5
     curvature_inv_m: float = 1.0
     minimum_clearance_m: float = 0.0
+    motion_model: str = "curvature_limited"
 
     def __post_init__(self):
-        values = tuple(vars(self).values())
+        if self.motion_model not in ("differential_drive", "curvature_limited"):
+            raise ValueError("unknown wheel motion_model")
+        numeric = {name: value for name, value in vars(self).items() if name != "motion_model"}
+        values = tuple(numeric.values())
         if (not all(np.isfinite(values)) or self.minimum_clearance_m < 0 or
-                any(value <= 0 for name,value in vars(self).items() if name != "minimum_clearance_m")):
+                any(value <= 0 for name,value in numeric.items() if name != "minimum_clearance_m")):
             raise ValueError("wheel limits must be finite and positive")
 
     def global_clearance_radius(self, requested=None):
@@ -78,7 +82,7 @@ class WheelLimits:
             self.angular_speed_rps, self.linear_accel_mps2,
             self.angular_accel_rps2, self.curvature_inv_m, self.minimum_clearance_m,
         ), dtype="<f8")
-        return hashlib.sha256(b"WheelLimits-v3-euclidean-clearance" + values.tobytes()).hexdigest()
+        return hashlib.sha256(b"WheelLimits-v4-motion-model:" + self.motion_model.encode("ascii") + b":" + values.tobytes()).hexdigest()
 
 
 @dataclass(frozen=True)
