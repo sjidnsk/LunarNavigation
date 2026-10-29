@@ -220,3 +220,87 @@ def test_waiting_pose_has_no_acceptance_notice_until_adapted_yaw_exists():
     session.offer_state(VehicleState(0.,0.,1.2,0.,0.));runtime._tick_once(.1)
     accepted=[json.loads(d) for k,d in seen if k=='TASK_ACCEPTED']
     assert len(accepted)==1 and accepted[0]['goal']==[0.,3.,1.2]
+
+
+# 最终审查I1：最新已接收测量必须参与同一终态提交。
+import pytest
+
+
+def inject_after_proposal(runtime, callback):
+    original = runtime.tasks.observe
+    injected = False
+    def observe(packet, now_s, **kwargs):
+        nonlocal injected
+        proposal = original(packet, now_s, **kwargs)
+        if not injected:
+            injected = True
+            callback()
+        return proposal
+    runtime.tasks.observe = observe
+    return original
+
+
+@pytest.mark.parametrize('measurement', ['moving', 'outside', 'tf'])
+def test_latest_measurement_vetoes_arrival_and_restarts_hold(measurement):
+    runtime, session, events = arriving_runtime()
+    from test_runtime import tf
+    changed = odometry_at_goal(.2 if measurement == 'moving' else 0.)
+    if measurement == 'outside':
+        changed.pose.pose.position.x = .2
+    if measurement == 'tf':
+        runtime.offer_tf(tf())
+        old = odometry_at_goal()
+        old.header.frame_id = 'goal_frame'
+        runtime.offer_odometry(old)
+        changed_tf = tf()
+        changed_tf.transforms[0].transform.translation.x = .2
+        callback = lambda: runtime.offer_tf(changed_tf)
+    else:
+        runtime.offer_odometry(odometry_at_goal())
+        callback = lambda: runtime.offer_odometry(changed)
+    original = inject_after_proposal(runtime, callback)
+    runtime._tick_once(.4)
+    runtime.tasks.observe = original
+    assert runtime.tasks.active.outcome is None
+    assert not any(e.outcome == 'GOAL_REACHED' for e in events)
+    assert events[-1].task_id == 'a' and events[-1].outcome is None
+    runtime.offer_odometry(odometry_at_goal())
+    runtime._tick_once(.5)
+    runtime.offer_odometry(odometry_at_goal())
+    runtime._tick_once(.79)
+    assert runtime.tasks.active.outcome is None
+    runtime.offer_odometry(odometry_at_goal())
+    runtime._tick_once(.81)
+    assert events[-1].outcome == 'GOAL_REACHED'
+
+
+def test_latest_moving_measurement_vetoes_cancel_stop():
+    runtime, session, events = arriving_runtime()
+    runtime.request_cancel('a')
+    runtime.offer_odometry(odometry_at_goal())
+    original = inject_after_proposal(runtime, lambda: runtime.offer_odometry(odometry_at_goal(.2)))
+    runtime._tick_once(.1)
+    runtime.tasks.observe = original
+    assert runtime.tasks.active.phase == 'CANCELING'
+    assert runtime.tasks.active.outcome is None
+    assert not any(e.reason_code == 'CANCELED_STOPPED' for e in events)
+    runtime.offer_odometry(odometry_at_goal())
+    runtime._tick_once(.2)
+    assert events[-1].reason_code == 'CANCELED_STOPPED'
+
+
+def test_equivalent_measurement_on_every_tick_does_not_starve_feedback_or_arrival():
+    runtime, session, events = arriving_runtime()
+    tick = session.tick
+    def changing_input(now):
+        packet = tick(now)
+        runtime.offer_odometry(odometry_at_goal())
+        from test_runtime import tf
+        runtime.offer_tf(tf())
+        return packet
+    session.tick = changing_input
+    for now in (.1, .2, .3):
+        previous = len(events)
+        runtime._tick_once(now)
+        assert len(events) > previous
+    assert events[-1].outcome == 'GOAL_REACHED'
