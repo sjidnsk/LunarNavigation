@@ -37,3 +37,7 @@
 4. 所有分支/worktree/ignored运行依赖保留，未获删除或push授权，不回收。
 
 独立限定复审通过：HEAD和MERGE_HEAD登记非空行缺失均0，无冲突标记，产品范围及职责通过。用户已明确授权把原脏root切到同HEAD保护分支，保留所有文件、未跟踪与暂存内容，再由独立D工作树接管并快进main；不绕过保护直接update-ref。
+
+## 本地主线落地
+
+用户明确授权同HEAD保护分支方案后，原目录已切至hk/protected-main-working-20261029@1532cf0；180个修改/未跟踪文件SHA及暂存树逐项保持。主线由D:/CodexDownloads/lunar_navigation/git-preservation-20261029/main-worktree接管，已正常ff-only落地fe5cef6ea5649c5c371e4431fef499236b172aec，工作树干净。外部protected-root-receipt.json保存保护证据。无push或部署切换。
