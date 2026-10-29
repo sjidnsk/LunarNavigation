@@ -142,6 +142,7 @@ def test_viewport_poll_draws_projected_plan_and_original_truth_trace(tmp_path):
     session.observe_reference(ref(),102); session.accept_goal(SESSION); session.observe_diagnostics(diag())
     payload=dict(schema=vp.SCHEMA,run_id='test',frame='map',source='live_ros',sequence=1,
                  display_map={'sha256':'unit-map','region':'A','source_stage_sha256':SOURCE_SHA,'path':'cached-unit-map.npz'},**session.snapshot())
+    payload['paths']['global_route']['points'].append([2.2,.1,0])  # 当前live与初始history可辨。
     payload['paths']['actual_trace']=dict(stamp_ns=9,points=[[.1,.1,11],[.2,.1,11]])
     path=tmp_path/'overlay.json'; path.write_text(json.dumps(payload),encoding='utf-8')
     captured=[]
@@ -163,10 +164,18 @@ def test_viewport_poll_draws_projected_plan_and_original_truth_trace(tmp_path):
     assert global_curves and min(p[2] for p in global_curves[0])==8.12 and max(p[2] for p in global_curves[0])==10.12
     assert actual==[[[.1,.1,11.12],[.2,.1,11.12]]]
     assert all(style['thicknesses']==[8.] for _,style in captured if style['colors']==[vp.COLORS['global_route']])
-    assert all(style['thicknesses']==[3.] for _,style in captured if style['colors']==[vp.COLORS['actual_trace']])
+    assert global_curves[0][-1][0]==2.1 and global_curves[1][-1][0]==2.2, 'history must draw before live global'
+    assert captured[-1][1]['colors']==[vp.COLORS['actual_trace']], 'actual trace must be drawn after every plan/history curve'
+    assert all(style['thicknesses']==[6.] for _,style in captured if style['colors']==[vp.COLORS['actual_trace']])
     assert all(p[2]==0 for p in json.loads(path.read_text())['paths']['global_route']['points'])
     assert 'HISTORY' in overlay.status_label.text
-    payload['sequence']=2; payload['path_reference']=ref(OTHER,state=1)
+    payload['sequence']=2; payload['paths']['actual_trace']['stamp_ns']=10
+    payload['paths']['actual_trace']['points'].append([.3,.1,12])
+    path.write_text(json.dumps(payload),encoding='utf-8'); overlay.poll()
+    assert captured[-1][1]['colors']==[vp.COLORS['actual_trace']]
+    assert captured[-1][0][-1]==[.3,.1,12.12], 'latest real point must remain on the top stroke'
+    assert 'cyan (6px)' in overlay.legend_label.text
+    payload['sequence']=3; payload['path_reference']=ref(OTHER,state=1)
     path.write_text(json.dumps(payload),encoding='utf-8')
     try: overlay.poll()
     except ValueError: pass
