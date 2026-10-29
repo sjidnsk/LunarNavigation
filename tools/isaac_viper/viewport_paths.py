@@ -56,6 +56,8 @@ def validate_payload(payload):
             validate_points(path.get('points'))
             if name=='actual_trace':
                 if history: raise ValueError('trace is actual, never planner history')
+                audit=path.get('simplification',{})
+                if not isinstance(audit,dict) or any(type(audit.get(k,0)) is not int or audit.get(k,0)<0 for k in ('capacity','accepted_samples','retained_samples','omitted_display_samples','compactions')): raise ValueError('invalid trace simplification audit')
                 continue
             binding=path.get('binding',{}); reference=path.get('verified_reference',{})
             if not isinstance(binding,dict) or not isinstance(reference,dict): raise ValueError('invalid reference/binding object')
@@ -138,7 +140,7 @@ class ViewportPaths:
                 self.view=sc.SceneView()
                 with ui.VStack():
                     ui.Spacer(height=12)
-                    ui.Label('  Global: blue | Local reference: yellow | Actual truth odom: cyan',height=24,style={'color':0xffffffff})
+                    ui.Label('  GLOBAL PLAN: blue (8px) | LOCAL REF: yellow | ACTUAL traveled: cyan (3px)',height=24,style={'color':0xffffffff})
                     self.status_label=ui.Label('  Waiting for accepted Action and verified reference',height=24,style={'color':0xffffffff})
                     ui.Spacer()
         self.window.viewport_api.add_scene_view(self.view)
@@ -164,9 +166,11 @@ class ViewportPaths:
                         segments=([[[x,y,z+.12] for x,y,z in path['points']]] if name=='actual_trace' else self.projector.segments(path['points']))
                         for segment in segments:
                             if len(segment)>=2:
-                                self.sc.Curve(segment,curve_type=self.sc.Curve.CurveType.LINEAR,colors=[COLORS[name]],thicknesses=[5. if name=='actual_trace' else 3. if path.get('display_status')=='history' else 4.])
+                                self.sc.Curve(segment,curve_type=self.sc.Curve.CurveType.LINEAR,colors=[COLORS[name]],thicknesses=[8. if name=='global_route' else 3. if name=='actual_trace' else 4.])
             history=bool(payload.get('history_paths'))
-            self.status_label.text='  '+payload.get('goal_state','waiting')+(' | initial verified plan: HISTORY, frozen' if history else '')+' | planner height: A collision map (display only)'
+            trace_audit=payload['paths'].get('actual_trace',{}).get('simplification',{})
+            trace_status=(' | ACTUAL full-span simplified display '+str(trace_audit.get('retained_samples'))+'/'+str(trace_audit.get('accepted_samples'))+' samples' if trace_audit.get('compactions',0)>0 else '')
+            self.status_label.text='  '+payload.get('goal_state','waiting')+(' | initial verified plan: HISTORY, frozen' if history else '')+' | planner height: A collision map (display only)'+trace_status
         except (ValueError,KeyError,OSError) as exc:
             self.view.scene.clear(); self.status_label.text='  REJECTED overlay; no live planner claim'; self.digest=digest
             raise ValueError('navigation overlay rejected: '+str(exc)) from exc

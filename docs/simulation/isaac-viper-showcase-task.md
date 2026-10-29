@@ -69,3 +69,10 @@
 - 仅移除demo capability YAML的非法根字段 `simulation_only`，保留profile marker、文件名、注释与demo capability_version；所有capability/base_frame等语义逐项不变，生产wheel_orin不改。无需派生第二份能力档。
 - 新C++ gtest直接调用实际LoadPlatformConfig(demo)，核2/2和原reverse/accel/brake/yawaccel/lateral/坡度/clearance/足迹/primitive；再注入simulation_only验证仍拒绝未知字段。该C++测试需root在已有Humble包重编执行，本机Windows NOT_RUN。
 - 本地schema回归真实RED 1failed/6passed，明确根多出simulation_only；删除该字段后相关完整Python suite与原严格ROS double setter回归一起复测。准确结果、提交和root实际运行边界见外部task-5-report.md附录。未修改C++生产parser、地图/源USD、速度值/安全值或发送行为。
+
+### Task5 显示fix2：保留全程实走痕迹
+
+- 基线8e2c0e9；用户反馈轨迹仅短段、全局不显，root已明确此前nav FATAL无goal/plan不能假画全局。本修复只改善真实数据留存和覆盖可读性，原PLAN_FOUND/session门不放宽。
+- ActualTrace容量满不再pop起点；首点/最新点保护，按最小3D点到邻段偏差渐进抽稀到75%容量，保留跨全时段形状并记录audit。局部删除偏差明确不是全局近似误差界；原actual_odom/odometry事件仍完整保存，不按静止位置去重，不改变stamp高水位/健康门/新goal行为。
+- result.actual_trace_audit和overlay实际trace.simplification记录accepted/retained/omitted、compactions、首尾stamp与方法。抽稀后UI明确ACTUAL full-span simplified display；GLOBAL PLAN蓝线8px（历史同宽），ACTUAL traveled青线3px，LOCAL REF黄线4px。真实全局未生成时仍不画规划。
+- 真实RED2failed/8passed，暴露旧起点被pop到stamp194与全局宽度不足；核心GREEN17passed。新增limit8/201点跨全程L形回归验证首尾与两个拐角、容量/时间顺序/抽稀审计/重复stamp/新goal高水位。最终完整相关结果与提交见外部task5report；Kit截图实际效果待root部署验证，不SCP/运行。

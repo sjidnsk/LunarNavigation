@@ -41,16 +41,54 @@ def transform_point(point,rotation,translation):
 
 
 class ActualTrace:
-    def __init__(self,limit=10000): self.limit=limit; self.points=[]; self.highwater=-1
+    """显示轨迹保留全时段；容量到限仅渐进抽稀，原始actual_odom日志不删。"""
+    def __init__(self,limit=10000):
+        if type(limit) is not int or limit<2 or limit>10000: raise ValueError('invalid trace limit')
+        self.limit=limit; self.points=[]; self.highwater=-1; self.reset()
+
     def reset(self):
         self.points.clear()  # 新 goal 清轨迹，但不退回真实 stamp 高水位。
+        self.accepted_samples=0; self.compactions=0; self.max_local_removal_deviation_m=0.
+
+    def _compact(self):
+        import heapq
+        n=len(self.points); previous=list(range(-1,n-1)); following=list(range(1,n+1)); alive=[True]*n; heap=[]
+        def schedule(i):
+            if i<=0 or i>=n-1 or not alive[i]: return
+            left,right=previous[i],following[i]
+            a,p,b=(self.points[j]['xyz'] for j in (left,i,right))
+            delta=[b[k]-a[k] for k in range(3)]; length=sum(v*v for v in delta)
+            t=0. if length==0 else max(0.,min(1.,sum((p[k]-a[k])*delta[k] for k in range(3))/length))
+            error=sum((p[k]-a[k]-t*delta[k])**2 for k in range(3))
+            heapq.heappush(heap,(error,i,left,right))
+        for i in range(1,n-1): schedule(i)
+        retained=n; target=max(2,self.limit*3//4)
+        while retained>target:
+            error,i,left,right=heapq.heappop(heap)
+            if not alive[i] or previous[i]!=left or following[i]!=right: continue
+            alive[i]=False; following[left]=right; previous[right]=left; retained-=1
+            self.max_local_removal_deviation_m=max(self.max_local_removal_deviation_m,math.sqrt(error))
+            schedule(left); schedule(right)
+        self.points=[point for i,point in enumerate(self.points) if alive[i]]
+        self.compactions+=1
+
+    def audit(self):
+        return dict(method='progressive smallest 3D point-to-neighbour-segment deviation; endpoints protected',
+            capacity=self.limit,accepted_samples=self.accepted_samples,retained_samples=len(self.points),
+            omitted_display_samples=self.accepted_samples-len(self.points),compactions=self.compactions,
+            first_stamp_ns=self.points[0]['stamp_ns'] if self.points else None,
+            last_stamp_ns=self.points[-1]['stamp_ns'] if self.points else None,
+            maximum_local_removal_deviation_m=self.max_local_removal_deviation_m,
+            error_meaning='largest local removal deviation; not a global approximation error bound',
+            raw_samples='all preserved in actual_odom events; display trace only is simplified')
+
     def append(self,stamp_ns,xyz,rotation,translation):
         if not isinstance(stamp_ns,int) or stamp_ns<0: raise ValueError('invalid odom stamp')
         if stamp_ns<self.highwater: raise ValueError('odom stamp rollback')
         if stamp_ns==self.highwater: return False
         point=transform_point(xyz,rotation,translation)
-        self.highwater=stamp_ns; self.points.append(dict(stamp_ns=stamp_ns,xyz=point))
-        if len(self.points)>self.limit: self.points.pop(0)
+        self.highwater=stamp_ns; self.accepted_samples+=1; self.points.append(dict(stamp_ns=stamp_ns,xyz=point))
+        if len(self.points)>self.limit: self._compact()
         return True
 
 
@@ -237,8 +275,8 @@ def main():
         if not all(math.isfinite(v) for v in (o.x,o.y,o.z,o.w)) or abs(math.sqrt(o.x*o.x+o.y*o.y+o.z*o.z+o.w*o.w)-1)>1e-3: raise ValueError('invalid odom orientation')
         if not trace.append(stamp,[p.x,p.y,p.z],q,t): return
         latest['odom_wall']=time.monotonic(); latest['odom_stamp']=stamp
-        state['actual_trace_samples']=len(trace.points); state['last_odom_stamp_ns']=stamp; state['last_actual_xyz']=trace.points[-1]['xyz']
-        paths['actual_trace']=dict(stamp_ns=stamp,points=[p['xyz'] for p in trace.points])
+        state['actual_trace_samples']=len(trace.points); state['actual_trace_audit']=trace.audit(); state['last_odom_stamp_ns']=stamp; state['last_actual_xyz']=trace.points[-1]['xyz']
+        paths['actual_trace']=dict(stamp_ns=stamp,points=[p['xyz'] for p in trace.points],simplification=trace.audit())
         raw('odometry',msg)
         record('actual_odom',stamp_ns=stamp,xyz=trace.points[-1]['xyz'],tf_stamp_ns=stamp)
     def on_odom(msg):

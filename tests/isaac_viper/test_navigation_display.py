@@ -93,6 +93,33 @@ class DisplayRegressions(unittest.TestCase):
         self.assertFalse(trace.append(10,[99,99,99],[0,0,0,1],[0,0,0]))
         self.assertTrue(trace.append(11,[1,2,3],[0,0,0,1],[0,0,0]))
 
+def test_trace_capacity_preserves_full_travel_and_turns_with_audit():
+    trace=nav.ActualTrace(limit=8)
+    journey=([[float(x),0.,0.] for x in range(51)]
+             +[[50.,float(y),0.] for y in range(1,51)]
+             +[[float(x),50.,0.] for x in range(51,151)])
+    for stamp,point in enumerate(journey,1):
+        assert trace.append(stamp,point,[0,0,0,1],[0,0,0])
+        assert len(trace.points)<=8
+    assert trace.points[0]==dict(stamp_ns=1,xyz=[0.,0.,0.])
+    assert trace.points[-1]==dict(stamp_ns=201,xyz=[150.,50.,0.])
+    retained=[p['xyz'] for p in trace.points]
+    assert [50.,0.,0.] in retained and [50.,50.,0.] in retained
+    assert trace.highwater==201
+    assert [p['stamp_ns'] for p in trace.points]==sorted(p['stamp_ns'] for p in trace.points)
+    assert hasattr(trace,'audit'),'progressive simplification must have an audit'
+    audit=trace.audit()
+    assert audit['accepted_samples']==201 and audit['retained_samples']==len(trace.points)
+    assert audit['compactions']>0 and audit['first_stamp_ns']==1 and audit['last_stamp_ns']==201
+    assert audit['raw_samples']=='all preserved in actual_odom events; display trace only is simplified'
+    assert not trace.append(201,[999,999,999],[0,0,0,1],[0,0,0])
+    assert trace.audit()['accepted_samples']==201
+    trace.reset()
+    assert trace.highwater==201 and trace.points==[]
+    assert trace.append(202,[150,50,0],[0,0,0,1],[0,0,0])
+    assert trace.audit()['accepted_samples']==1
+
+
 def test_viewport_poll_draws_projected_plan_and_original_truth_trace(tmp_path):
     session=nav.DisplayPlanSession(); session.begin_goal(SESSION,100)
     session.observe_global(dict(stamp_ns=0,points=[[.1,.1,0],[1.1,.1,0],[2.1,.1,0]]),101)
@@ -118,6 +145,8 @@ def test_viewport_poll_draws_projected_plan_and_original_truth_trace(tmp_path):
     actual=[points for points,style in captured if style['colors']==[vp.COLORS['actual_trace']]]
     assert global_curves and min(p[2] for p in global_curves[0])==8.12 and max(p[2] for p in global_curves[0])==10.12
     assert actual==[[[.1,.1,11.12],[.2,.1,11.12]]]
+    assert all(style['thicknesses']==[8.] for _,style in captured if style['colors']==[vp.COLORS['global_route']])
+    assert all(style['thicknesses']==[3.] for _,style in captured if style['colors']==[vp.COLORS['actual_trace']])
     assert all(p[2]==0 for p in json.loads(path.read_text())['paths']['global_route']['points'])
     assert 'HISTORY' in overlay.status_label.text
     payload['sequence']=2; payload['path_reference']=ref(OTHER,state=1)
