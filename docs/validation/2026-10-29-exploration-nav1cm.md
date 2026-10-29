@@ -165,3 +165,8 @@ obstacle-update-once通过：当前UUID10eafaff2e8851ff410061999435b73c逻辑接
 远端ROOT=`/mnt/data/WS/lunar-navigation/analysis-artifacts/nav1cm-p3-interface-20261027`，本轮所有source/build/install/log位于 `ROOT/exploration-integration-20261029/task4-common-map-fix`，原Task4和Task3安装不覆盖。按操作指令末节source顺序，最后新common install；38个Python安装文件SHA及Gitblob与734838aa源码一致，实际导入全部来自新安装；`/proc/self/maps`实际core SHA b63079f301e2f1b1d6a0fc126d86eda152d98b6d30baa0b530b7da28260a9ce4。mapROS解析到task2/fix-round1的617d4d71（本诊断未运行mapROS节点）；3个planner native与旧安装SHA完全相同，1574个旧安装文件前后SHA不变。系统 `/usr/bin/python3`、NumPy1.21.5与SciPy1.8.0，关闭user-site，不注入整个用户site。
 
 本地证据 `D:/CodexDownloads/lunar_navigation/nav-1cm-feasibility-20261026/artifacts/exploration-integration-20261029/task4-common-map-fix`，逐字命令/原始输出、Windows路径错误、三次远端环境诊断、初次五层payload维度诊断错误、shell CRLF错误/遗留路径、身份及受保护安装清单见同SDD `task-4-c1-report.md`。所有原失败保留；诊断脚本只读原SensorModel，不运行Actor、ROS节点、solver求解或训练。Task4原45s真实motion仍待独立审查后复验，不能用C1替代；Orin/实车/真实P3流/生产DDS/RViz/rosbag NOT_RUN。专题与资源已提交待审查/owner合入/授权回收，无合并/推送/PR/upstream/删除。
+
+
+## 任务级审查与DRL交接更新
+
+Task3原独立审查I1–I3已由68f52d2/5b179e0修复并复审关闭；C1由734838aa修复并独立审查关闭。DRL专题以a094b902为基线，产品9149f3c9、legacy验证帧744ee2bb、接口修复4ebcbf24/任务审查HEAD874c1527；Task4 map_frame和infer配置白名单两项阻挡均已关闭，定向安装12PASS。新后端45s有真实运动/观测推进/取消停稳，未到达；旧后端8s只作兼容smoke。原“待Task4复验”条目保留为当时状态，不改变旧原始资格。当前统一状态和逐项边界见[交付汇总](2026-10-29-exploration-nav1cm-closeout.md)，两owner专题仍待合入，最后跨分支审查进行中。
