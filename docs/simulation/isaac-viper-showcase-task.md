@@ -5,9 +5,9 @@
 - 原工程accf75b由e15c667按19文件差量晋级，未合入34个继承TCP提交；原工程登记与完整历史仍在原专题及D盘coordination/viper-original-task-registration.md，台式共享入口/mnt/data/WS/lunar-navigation/docs/任务登记.md。
 - 主线中央登记有其他任务未提交内容，本阶段用本文件记录本子阶段并更新既有台式同任务入口，不覆盖/暂存它。
 - 执行者Codex/root；调查只读并行，源码subagent顺序单写入；本地Windows，台式SDK/Humble独立验证。
-- 状态：进行中；原2次闭环与部分严格停车FAIL保留；新的三区算法效果/Actor仍NOT_RUN。
+- 当前状态：源码已本地合入 integration/pure-planner-orin（落地 1e8f9b9）；台式运行原 A 区 104.4m 绕坑规划与慢速真实轨迹。完整绕坑执行和严格终态尚未通过；原失败保留，C/Actor/Orin/实车仍 NOT_RUN。
 - 外部产物D:/CodexDownloads/isaac-viper-showcase-20261029；台式对应analysis-artifacts/isaac-viper-showcase-20261029。
-- 最终处置待实际验证和授权合入；不推送/PR/删除，分支/worktree/所有源和新旧产物保留。
+- 源码处置已合入；用户选择先看现有路径和慢速轨迹，连续转向/驻车改造暂停。未推送/PR/删除；工作树有已备份的暂停改动及运行依赖，明确保留待后续恢复或授权回收。
 
 ## Task 2 本地实现交接
 
@@ -126,4 +126,13 @@
 SHA256 7fffefc7628d73af6921f3f7b985dea4566eab896176b8272da399d4db84045e。
 实际静态验证为 9 刚体、8 关节、50kg，通过；当前运行回执在 navigation-selected-live-A-crater100-r2/launch.json。真实青色轨迹在该 Kit 原生窗口截图已确认可见，并保留从起点开始的全时段；绕坑全程执行、GOAL_REACHED 和严格停车仍在本轮运行中，不提前声明通过。
 
-Humble 真实原生规划、PhysX/RTX 运行和本机纯测试分别记录；SDK 跳过项、Orin/实车与 C 区自主探索不得据此推断通过。未推送、未创建 PR、未删除分支/工作树或历史失败。当前处置：源码已提交待合入，绕坑执行继续验收；暂停物理改造另存恢复来源。
+Humble 真实原生规划、PhysX/RTX 运行和本机纯测试分别记录；SDK 跳过项、Orin/实车与 C 区自主探索不得据此推断通过。未推送、未创建 PR、未删除分支/工作树或历史失败。当前处置：源码已合入主线 1e8f9b9，绕坑执行继续验收；暂停物理改造另存恢复来源。
+
+
+### 当前展示快照及收尾登记
+
+用户最终选择：先看现有路径和慢速轨迹，连续转向与驻车调整稍后处理。当前原 A 区实际全局规划 104.4322m；原生截图时累计真实行驶约 19m，从起点保留全时段，超过 10000 样本后只抽稀显示，不截断起点，原始每条 odom 保留。当前仍慢速执行，未到终点，不能报告完整绕坑或 GOAL_REACHED 已通过。
+
+台式保持当前 Kit PID984884、窗口0x5e00009（后续操作必须重新核身份）；全景与车辆跟随视角可通过现有按钮切换，最终留全景。两张原生未编辑截图 A-crater100-current-overview.png / A-crater100-current-vehicle.png 已存台式任务根目录，并取回 D:/CodexDownloads/isaac-viper-showcase-20261029。
+
+本地 ff-only 合入落地 1e8f9b9991a26c97da69b84348c2116d98fdbbaf，主线原有14个tracked dirty与166个untracked路径共180项的逐文件哈希均未变，staged diff未变。保护回执 main-protection-before/after-navigation-merge.json 与命令日志存仓库外coordination。主线中央登记属于其他会话的未提交内容，未覆盖或暂存；本任务更新本文件与台式既有同任务登记。未推送、PR、设置upstream或删除资源。源码已合入；场景保持供用户查看；暂停改造和依赖资源保留待恢复/回收，不宣称全部动态验收完成。
