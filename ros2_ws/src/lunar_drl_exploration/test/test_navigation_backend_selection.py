@@ -187,3 +187,25 @@ def test_optional_backend_cannot_resume_as_legacy_experience():
     assert 'navigation_backend' not in resume_semantics(default)
     explicit=replace(default,navigation_backend='nav1cm')
     assert resume_semantics(explicit)['navigation_backend']=='nav1cm'
+
+
+@pytest.mark.parametrize('frame',['map','world'])
+def test_task_callback_uses_configured_frame_and_rejects_wrong_start_without_mutation(frame):
+    from lunar_drl_exploration.runtime import InferenceRuntime
+    warnings=[]
+    adapter=SimpleNamespace(map_frame=frame,inflight=False,
+        require_fresh_snapshot=lambda:None,
+        node=SimpleNamespace(get_logger=lambda:SimpleNamespace(warning=warnings.append)))
+    runtime=InferenceRuntime(adapter,lambda observation:0)
+    def message(task_id,task_frame):
+        return SimpleNamespace(command=1,START=1,PAUSE=2,RESUME=3,CANCEL=4,
+            task_id=task_id,header=SimpleNamespace(frame_id=task_frame),
+            boundary=SimpleNamespace(points=[SimpleNamespace(x=x,y=y) for x,y in [(0,0),(2,0),(2,2),(0,2)]]))
+    runtime.handle_task(message('valid',frame))
+    original=runtime.core
+    assert original.task.frame_id==frame and runtime.state=='RUNNING'
+    adapter.inflight=True
+    assert runtime.handle_task(message('bad','unexpected')) is False
+    assert runtime.core is original and runtime.state=='RUNNING'
+    assert runtime._pending_task is None and warnings
+    assert original.task.task_id=='valid'
