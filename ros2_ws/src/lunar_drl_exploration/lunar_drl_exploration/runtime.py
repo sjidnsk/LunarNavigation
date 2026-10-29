@@ -50,6 +50,7 @@ class ActorPolicy:
 class InferenceRuntime:
     def __init__(self,adapter,policy,sensor=None,graph_config=None,*,policy_graph_mode='fine',remote_frontier_positions=32):
         self.adapter=adapter;self.policy=policy;self.sensor=sensor or SensorSpec()
+        self.map_frame=getattr(adapter,'map_frame','map')
         self.graph_config=graph_config;self.core=None;self.state='IDLE';self.report=None
         self.last_result=None;self._after_stop=None;self._pending_task=None;self._stamp=-1
         self.last_error=None
@@ -79,7 +80,12 @@ class InferenceRuntime:
 
     def handle_task(self,msg):
         if msg.command==msg.START:
-            if msg.header.frame_id!='map':raise ValueError('task polygon must use native map frame')
+            if msg.header.frame_id!=self.map_frame:
+                # 坏的新任务不能终止订阅回调或覆盖当前有效任务。
+                node=getattr(self.adapter,'node',None)
+                if node is not None:
+                    node.get_logger().warning('task rejected: polygon frame must be '+self.map_frame)
+                return False
             self.start(TaskSpec(msg.task_id,msg.header.frame_id,
                 np.asarray([(p.x,p.y) for p in msg.boundary.points],np.float32)))
         elif self.core is not None and msg.task_id==self.core.task.task_id:
