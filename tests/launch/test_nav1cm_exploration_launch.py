@@ -62,3 +62,16 @@ def test_invalid_composition_explains_input(monkeypatch,values):
 def test_frontier_uses_shared_static_tf_topic(monkeypatch):
     g=nodes(graph(monkeypatch,exploration_strategy="frontier",tf_static_topic="/private/latched_static"))
     assert all(n["parameters"][0]["tf_static_topic"]=="/private/latched_static" for n in g)
+
+
+def test_execution_contract_topics_only_reach_actual_execution_participants(monkeypatch):
+    g=nodes(graph(monkeypatch,exploration_strategy='frontier',enable_controller='true',
+        execution_reference_topic='/private/execution',tracking_status_topic='/private/tracking'))
+    maps,planner,frontier,follower=[n['parameters'][0] for n in g]
+    for participant in (planner,follower):
+        assert participant['execution_contract_enabled'] is True
+        assert participant['execution_reference_topic']=='/private/execution'
+        assert participant['tracking_status_topic']=='/private/tracking'
+    for unrelated in (maps,frontier):
+        assert 'execution_reference_topic' not in unrelated
+        assert 'tracking_status_topic' not in unrelated

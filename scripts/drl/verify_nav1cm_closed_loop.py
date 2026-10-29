@@ -33,6 +33,18 @@ def apply_motion_model(specs,model):
     return result
 
 
+def execution_evidence(rows,events=()):
+    key=lambda row:(row['session_id'],row['revision'],row['path_digest'],row['intent'])
+    refs={key(row):row for row in rows if row['kind']=='reference'}
+    statuses=[row for row in rows if row['kind']=='status' and row['accepted'] and
+        key(row) in refs and row['stamp_ns']>=refs[key(row)]['stamp_ns']]
+    terminal=[row for row in statuses if row['intent'] in (1,2,3) and row['state'] in (0,5)]
+    completed={event['session_id'] for event in events if event['kind']=='finish' and event['outcome']==0
+        and any(row['session_id']==event['session_id'] and 0<=event['wall']-row['wall']<=1. for row in terminal)}
+    return dict(references=len(refs),accepted_bound_statuses=len(statuses),
+        accepted_sessions=sorted({row['session_id'] for row in statuses}),terminal_completed_sessions=sorted(completed))
+
+
 def inference_ros_arguments(namespace,parameters):
     """仅验证器私有推理端点；不修改原训练/产品启动器的命名空间合同。"""
     if not namespace.startswith('/lunar_inference/') or '/..' in namespace:
@@ -70,7 +82,7 @@ def run(args,d):
     from lunar_drl_exploration.navigation_backend import owned_nav1cm_specs
     from lunar_drl_exploration.ros_messages import velocity_is_stopped
     art=args.artifact;ns=d['namespace'];events=[];children=[];logs=[];owned={};runtime=None;node=None
-    accepted=set();error=None;summary={};task_pub=None;python_expected={}
+    accepted=set();error=None;summary={};task_pub=None;python_expected={};execution_rows=[];execution_stream=None;execution_paths=None
     python_expected[os.getpid()]=Path('/proc/self/stat').read_text().split()[21]
     event_stream=(art/'events.jsonl').open('x',buffering=1)
     trace=(art/'runtime.jsonl').open('x',buffering=1)
@@ -134,6 +146,26 @@ def run(args,d):
             platform_config=d['platform'],task_topic=ns+'/task',status_topic=ns+'/status',action_name=ns+'/navigate',
             policy_map_service=ns+'/get_map',odometry_topic=ns+'/odom',tf_topic=ns+'/tf',tf_static_topic=ns+'/tf_static',global_route_topic=ns+'/route')
         node=rclpy.create_node('drl_closure_inference',namespace=ns,parameter_overrides=[Parameter(k,value=v) for k,v in values.items()])
+        if d.get('execution_contract_required'):
+            from lunar_planning_msgs.msg import PathExecutionReference,TrackingStatus
+            from nav1cm.execution_ros import reference_from_message,status_from_message
+            from nav1cm.execution_contract import path_fingerprint
+            from nav_msgs.msg import Path as RosPath
+            execution_paths=(art/'execution-paths.jsonl').open('x',buffering=1)
+            def observe_path(message):
+                points=[]
+                for item in message.poses:
+                    p,q=item.pose.position,item.pose.orientation
+                    points.append([p.x,p.y,math.atan2(2*(q.w*q.z+q.x*q.y),1-2*(q.y*q.y+q.z*q.z))])
+                execution_paths.write(json.dumps(dict(wall=time.monotonic(),path_digest=path_fingerprint(message),points=points))+'\n')
+            node.create_subscription(RosPath,ns+'/path',observe_path,10)
+            execution_stream=(art/'execution-feedback.jsonl').open('x',buffering=1)
+            def observe_execution(message,kind):
+                record=vars(reference_from_message(message) if kind=='reference' else status_from_message(message))
+                row=dict(kind=kind,wall=time.monotonic(),**record)
+                execution_rows.append(row);execution_stream.write(json.dumps(row)+'\n')
+            node.create_subscription(PathExecutionReference,ns+'/execution_reference',lambda m:observe_execution(m,'reference'),10)
+            node.create_subscription(TrackingStatus,ns+'/tracking_status',lambda m:observe_execution(m,'status'),10)
         runtime=attach_node(node);a=runtime.adapter
         original_begin=a.begin_goal;original_finish=a._finish
         def begin(goal):
@@ -230,9 +262,19 @@ def run(args,d):
         frozen={key:base.digest(d[key]) for key in ('actor','config','platform')}
         summary.update(child_exits=exits,forced_exit=forced,workers_remaining=remaining,guard_attempts=attempts,
             guard_startups=starts,guard_expected_processes=[dict(pid=p,starttime=t) for p,t in python_expected.items()],frozen_after=frozen,frozen_unchanged=all(frozen[k]==d[k+'_sha256'] for k in frozen))
+        if execution_paths is not None:execution_paths.close()
+        if execution_stream is not None:execution_stream.close()
+        if d.get('execution_contract_required'):
+            summary['execution_contract']=execution_evidence(execution_rows,events)
         event_stream.close();trace.close()
         base.write_json(art/'summary.json',summary)
         verdict=grade(events,summary,minimum_completed=args.minimum_completed)
+        if d.get('execution_contract_required'):
+            matched=set(summary['execution_contract']['accepted_sessions'])
+            terminal=set(summary['execution_contract']['terminal_completed_sessions'])
+            completed_sessions={row['session_id'] for row in events if row['kind']=='finish' and row['outcome']==0}
+            if not matched or not completed_sessions.issubset(terminal):
+                verdict['ok']=False;verdict.setdefault('errors',[]).append('missing identity-bound execution acceptance or fresh terminal evidence')
         if error:verdict['ok']=False;verdict.setdefault('errors',[]).append(error)
         base.write_json(art/'verdict.json',verdict)
     print(json.dumps(verdict))
@@ -243,12 +285,14 @@ def main():
     p=base.parser();p.set_defaults(duration=90.)
     p.add_argument('--minimum-completed',type=int,default=2)
     p.add_argument('--motion-model',choices=('differential_drive','curvature_limited'))
+    p.add_argument('--require-execution-contract',action='store_true')
     args=p.parse_args()
     install(args.artifact/'guard')
     if args.plant:return base.plant_worker(args.artifact)
     if args.backend!='nav1cm' or args.minimum_completed<2:raise ValueError('nav1cm and >=2 completed goals required')
     d=base.declaration(args);d['namespace']='/lunar_inference/nav1cm_closure'
     if args.motion_model is not None:d['motion_model_override']=args.motion_model
+    d['execution_contract_required']=args.require_execution_contract
     d['closure_script_sha256']=base.digest(__file__);d['grade_sha256']=base.digest(Path(__file__).with_name('inference_closure_grade.py'))
     d['guard_sha256']=base.digest(Path(__file__).with_name('inference_only_guard.py'));d['minimum_completed']=args.minimum_completed
     d['criteria'].update(arrival_claim=True,next_actor_decision=True,reset_via_topic=True)

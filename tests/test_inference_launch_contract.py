@@ -59,3 +59,23 @@ def test_motion_override_reaches_only_planner_and_standard_follower(monkeypatch)
     assert changed[1][2]['motion_model']==changed[2][2]['motion_model']=='differential_drive'
     assert specs[1][2]=={} and specs[2][2]=={}
     with pytest.raises(ValueError):helper(specs,'typo')
+
+
+def test_execution_evidence_requires_matching_actual_acceptance(monkeypatch):
+    helper=load(monkeypatch).__globals__['execution_evidence']
+    ref=dict(kind='reference',session_id='a'*32,revision=1,path_digest='d'*64,intent=3,stamp_ns=10)
+    status=dict(ref,kind='status',accepted=True,state=4,stamp_ns=11)
+    assert helper([status,ref])['accepted_sessions']==['a'*32]
+    assert not helper([ref,dict(status,accepted=False)])['accepted_sessions']
+    assert not helper([ref,dict(status,path_digest='e'*64)])['accepted_sessions']
+    assert not helper([ref,dict(status,stamp_ns=9)])['accepted_sessions']
+
+
+def test_execution_finish_requires_fresh_terminal_status_before_result(monkeypatch):
+    helper=load(monkeypatch).__globals__['execution_evidence']
+    ref=dict(kind='reference',session_id='a'*32,revision=1,path_digest='d'*64,intent=3,stamp_ns=10,wall=1.)
+    status=dict(ref,kind='status',accepted=True,state=5,stamp_ns=11,wall=2.)
+    finish=dict(kind='finish',outcome=0,session_id='a'*32,wall=2.3)
+    assert helper([ref,status],[finish])['terminal_completed_sessions']==['a'*32]
+    for bad in (dict(status,wall=3.),dict(status,wall=.5),dict(status,state=3),dict(status,accepted=False)):
+        assert not helper([ref,bad],[finish])['terminal_completed_sessions']

@@ -32,4 +32,5 @@ def test_package_installs_core_native_config_and_uses_only_two_path_outputs():
     assert (PACKAGE / 'launch/planner.launch.py').exists()
     node = (PACKAGE / 'lunar_nav1cm_planner/node.py').read_text(encoding='utf-8')
     assert 'Car_Cmd_Vel' not in node and 'verification_plant' not in node
-    assert node.count('create_publisher(') == 2
+    assert node.count('create_publisher(') == 3
+    assert 'execution_contract_enabled' in node

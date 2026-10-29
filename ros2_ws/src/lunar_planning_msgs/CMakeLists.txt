@@ -18,6 +18,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/HopSegment.msg"
   "msg/MotionReference.msg"
   "msg/PathReference.msg"
+  "msg/PathExecutionReference.msg"
   "msg/PolicyMapTile.msg"
   "msg/PlannerDiagnostics.msg"
   "msg/TrackingStatus.msg"

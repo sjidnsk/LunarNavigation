@@ -34,10 +34,12 @@ def owned_nav1cm_specs(namespace, *, platform_config, build_dir, use_sim_time,
                  goal_position_tolerance_m=goal_position_tolerance_m)
     planning=dict(inputs,wheel_config=platform_config,action_name=ns+'/navigate',
         goal_topic=ns+'/goal',global_route_topic=ns+'/route',local_path_topic=ns+'/path',
-        build_dir=build_dir,allow_unknown=False,goal_tolerance_m=goal_position_tolerance_m)
+        build_dir=build_dir,allow_unknown=False,goal_tolerance_m=goal_position_tolerance_m,
+        execution_contract_enabled=True,execution_reference_topic=ns+'/execution_reference',tracking_status_topic=ns+'/tracking_status')
     follower=dict(inputs,platform_config=platform_config,input_mode='incremental_path',
         goal_position_tolerance_m=goal_position_tolerance_m,
         controller_backend='mppi_path_follower',standard_map_source='direct_p3',
+        execution_contract_enabled=True,execution_reference_topic=ns+'/execution_reference',tracking_status_topic=ns+'/tracking_status',
         p3_map_topic=ns+'/grid',path_topic=ns+'/path',command_topic=ns+'/cmd_vel',
         mppi_diagnostics_topic=ns+'/mppi_diagnostics',mppi_nominal_response_time_s=.15,allow_unknown=False)
     follower.pop('map_topic')

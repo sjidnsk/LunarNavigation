@@ -38,6 +38,22 @@ class PlannerRuntime:
         self._threads = []
         self._notices = {}
         self._reported_grid_geometry = None
+        self.execution_contract_enabled=False
+        self.execution_context=None
+        self._tracking_inputs=deque(maxlen=128)
+
+    def enable_execution_contract(self,timeout_s=2.):
+        self.execution_contract_enabled=True
+        self.tasks.configure_execution_feedback(required=True,timeout_s=timeout_s)
+
+    def offer_tracking_status(self,status):
+        with self._condition:
+            self._tracking_inputs.append((status,time.monotonic()))
+
+    def register_execution_reference(self,reference):
+        # 仅tick线程发布回调调用；登记必须先于实际发送元信息。
+        self.tasks.register_execution_reference(reference,time.monotonic())
+
 
     def _notice(self, kind, detail):
         detail, now = str(detail), time.monotonic()
@@ -184,6 +200,13 @@ class PlannerRuntime:
         with self._condition:
             self._goals.extendleft(reversed(remaining))
         self._deliver_task_events()
+        if self.execution_contract_enabled:
+            with self._condition:
+                tracking_inputs,self._tracking_inputs=self._tracking_inputs,deque(maxlen=128)
+            for status,received_s in tracking_inputs:
+                self.tasks.offer_execution_status(status,received_s)
+            fault=self.tasks.check_execution_fault(now_s)
+            if fault:self.tasks.fail_tracking(fault,now_s)
         packet = self.session.tick(now_s)
         proposal = self.tasks.observe(packet, now_s,
                                       state_updated=odometry_sequence != self._observed_odometry_sequence,
@@ -244,6 +267,17 @@ class PlannerRuntime:
             if (not self._stopping and input_sequence == self._goal_sequence and
                     packet.generation == self.session.accepted_generation and
                     (packet.waiting or self.session.publication_current(packet))):
+                if self.execution_contract_enabled:
+                    from nav1cm.execution_contract import FOLLOW,BRAKE,HOLD,FINAL_ALIGN,INVALIDATED
+                    active=self.tasks.active
+                    status=None if packet.result is None else packet.result.status
+                    candidate=packet.candidate
+                    intent=(INVALIDATED if candidate is None else HOLD if status=='ARRIVED' else
+                            FINAL_ALIGN if status=='GOAL_TURNING' else
+                            BRAKE if candidate.source=='brake' or self.session.canceling else FOLLOW)
+                    # cancel_goal提升generation，执行身份仍固定在原接受任务上。
+                    self.execution_context=(None if active is None else active.task_id,
+                        self.session.accepted_generation if active is None else active.generation,intent)
                 self.publish(data)
         return packet
 
