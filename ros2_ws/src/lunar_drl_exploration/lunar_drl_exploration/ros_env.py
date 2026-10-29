@@ -406,7 +406,9 @@ class RosExplorationEnv:
             from .navigation_backend import owned_nav1cm_specs
             build_dir=str(Path(self.config.artifact_root or self.config.output_dir)/'nav1cm-cache')
             for package,executable,parameters in owned_nav1cm_specs(ns,
-                    platform_config=self.config.platform.capability_path,build_dir=build_dir,use_sim_time=True):
+                    platform_config=self.config.platform.capability_path,build_dir=build_dir,use_sim_time=True,
+                    goal_position_tolerance_m=self.config.goal_position_tolerance_m,
+                    goal_yaw_tolerance_rad=self.config.goal_yaw_tolerance_rad):
                 self.owned.start(package,executable,ns,parameters,dict(env,ROS_LOCALHOST_ONLY='1'))
             return
         common={'platform_config':self._runtime_platform_config(),'use_sim_time':True,
