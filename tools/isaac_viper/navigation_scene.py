@@ -38,7 +38,11 @@ def rasterize_triangles(triangles, bounds, resolution):
                 poly = list(tri)
                 for axis,value,lower in ((0,x0+ix*resolution,True),(0,x0+(ix+1)*resolution,False),(1,y0+iy*resolution,True),(1,y0+(iy+1)*resolution,False)):
                     if poly: poly = _clip(poly,axis,value,lower)
-                if poly:
+                area = 0.
+                if len(poly)>=3:
+                    origin=poly[0]
+                    area=abs(sum((a[0]-origin[0])*(b[1]-origin[1])-(a[1]-origin[1])*(b[0]-origin[0]) for a,b in zip(poly[1:-1],poly[2:])))/2
+                if area>1e-12:
                     z = [p[2] for p in poly]
                     high[iy,ix] = max(high[iy,ix],max(z)); low[iy,ix] = min(low[iy,ix],min(z))
     valid = np.isfinite(high)

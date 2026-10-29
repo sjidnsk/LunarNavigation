@@ -42,6 +42,7 @@ class NavigationContracts(unittest.TestCase):
         self.assertAlmostEqual(float(grid[2,2]), .7, places=5)
         self.assertAlmostEqual(float(relief[2,2]), .7, places=5)
         self.assertTrue(np.isnan(grid[2,7]))
+        self.assertTrue(np.isnan(grid[2,5]), "zero-area boundary is not measured surface")
 
     def test_route_refuses_unknown_and_rock_footprint(self):
         grid = np.zeros((60,60)); relief = np.zeros_like(grid)
