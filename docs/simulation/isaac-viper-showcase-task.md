@@ -85,3 +85,10 @@
 - 真正只读SSH CPU核验新起终点三层1/FREE，净距101.6366m、native无切角可行110.3994m；阻挡324.5,-229.1三层2/BLOCKED；原起点真实被新函数拒绝。约5.58s含原PXR重算；新Pose/USD/真实新导航仍由root生成/运行，不SCP不控制。
 - 按用户显示口径，overlay默认只GLOBAL PLAN+ACTUAL traveled，local live/history仅在host显式`--show-local-path`时显示。过滤只作用snapshot副本；local/PathReference原订阅、raw、证据、controller接线和会话门不变；图例动态对应实际显示种类。
 - native功能真实RED7failed，默认隐藏local RED1failed/10passed。身份/硬膨胀/高程篡改/断联拒绝及显示副本不变回归已补；最终suite、提交和真实边界见外部task5report。处置已提交待root同步、实际SDK/Humble新run和独立复审。
+
+### Task5 runtime fix4：旧Humble双参MessageInfo订阅兼容
+
+- 基线ec5bf6c。root新native run r1 host在global/reference双参回调报TypeError；只读实机Humble executors.py398..407确认take_message原tuple被裁成msg_info[0]、execute只callback(msg)，node.py1322的订阅callback签名同为单参。
+- navigation_showcase新增限定旧Humble API的MessageInfoExecutor(SingleThreadedExecutor)工厂，仅显式登记global_route与PathReference两个订阅保留原take_message `(msg,info)`，await真实双参callback；普通单参回调仍delegate原executor，不修改rclpy安装或全局猴子补丁。
+- dds_source_timestamp支持实际dict/object，保留原正int source_timestamp；缺失/非法为0，原DDS新鲜度/session门继续拒绝，绝不取墙钟或接收时间补值。主循环及pending/cancel/result四处spin均显式同一个executor，shutdown正常关闭它。
+- 真实RED3failed；单测覆盖原msg/info identity、未登记单参、无消息、async双参、dict/object原timestamp与非法0拒绝。适配器单测替代的是本机缺失rclpy依赖，不冒称真实DDS通过；最终suite/提交见外部task5report。未启动/控制/修改远端进程或输出，root将在domain218独立DDS smoke再做r2。

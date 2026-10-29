@@ -12,6 +12,43 @@ import numpy as np
 from tools.isaac_viper.viewport_paths import SCHEMA,validate_payload,validate_points
 
 
+def dds_source_timestamp(info):
+    """真实take_message metadata可为dict或对象；缺失/非法仍为0，绝不补墙钟。"""
+    from collections.abc import Mapping
+    value=info.get('source_timestamp',0) if isinstance(info,Mapping) else getattr(info,'source_timestamp',0)
+    return value if type(value) is int and value>0 else 0
+
+
+def message_info_executor_type(base_executor=None,await_callback=None):
+    """限定旧Humble take/execute API，仅两个显式登记订阅保留原DDS metadata。"""
+    if base_executor is None or await_callback is None:
+        from rclpy.executors import SingleThreadedExecutor,await_or_execute
+        if base_executor is None: base_executor=SingleThreadedExecutor
+        if await_callback is None: await_callback=await_or_execute
+    if not callable(getattr(base_executor,'_take_subscription',None)) or not callable(getattr(base_executor,'_execute_subscription',None)):
+        raise RuntimeError('unsupported rclpy executor API; true MessageInfo cannot be preserved safely')
+
+    class MessageInfoExecutor(base_executor):
+        def __init__(self,*args,**kwargs):
+            super().__init__(*args,**kwargs); self._message_info_subscriptions=set()
+
+        def preserve_message_info(self,subscription):
+            self._message_info_subscriptions.add(id(subscription))
+
+        def _take_subscription(self,sub):
+            if id(sub) not in self._message_info_subscriptions: return super()._take_subscription(sub)
+            with sub.handle:
+                return sub.handle.take_message(sub.msg_type,sub.raw)
+
+        async def _execute_subscription(self,sub,taken):
+            if id(sub) not in self._message_info_subscriptions:
+                return await super()._execute_subscription(sub,taken)
+            if taken is not None:
+                message,info=taken
+                await await_callback(sub.callback,message,info)
+    return MessageInfoExecutor
+
+
 def configure_grid_info(info,bounds,resolution):
     """NPZ/JSON 数值进入生成的 ROS double setter 前必须转原生 float。"""
     x0,x1,y0,y1=(float(value) for value in bounds)
@@ -275,7 +312,7 @@ def main():
     def on_path(name,msg,info=None):
         value=path_value(msg); raw(name,msg)
         if name=='global_route':
-            source=int(getattr(info,'source_timestamp',0))
+            source=dds_source_timestamp(info)
             accepted=display.observe_global(value,source)
             record('global_display_candidate',transport_source_stamp_ns=source,accepted=accepted)
     def consume(stamp):
@@ -319,7 +356,8 @@ def main():
         key=(ref['session_id'],ref['segment_revision'],ref['traversability_revision'])
         if ref['state']==0 or key not in references: references[key]=ref
         state['latest_path_reference']=ref
-        display.observe_reference(ref,int(getattr(info,'source_timestamp',0)))
+        source=dds_source_timestamp(info)
+        display.observe_reference(ref,source); record('reference_transport_info',transport_source_stamp_ns=source)
         raw('path_reference',msg); match()
     def on_diagnostics(msg):
         raw('diagnostics',msg)
@@ -330,9 +368,15 @@ def main():
                 diagnostics[key]=dict(values,source_stamp_ns=_stamp_ns(msg.header.stamp))
                 display.observe_diagnostics(diagnostics[key])
         match()
+    global_subscription=node.create_subscription(RosPath,'/Car/T4/planning/global_route',lambda m,info:on_path('global_route',m,info),route_qos)
+    reference_subscription=node.create_subscription(PathReference,'/Car/T4/planning/path_reference',on_reference,latched)
     subscriptions=[node.create_subscription(Odometry,'/Car/T3/localization/odometry',on_odom,best),node.create_subscription(TFMessage,'/tf',on_tf,best),node.create_subscription(Clock,'/clock',on_clock,best),
-        node.create_subscription(RosPath,'/Car/T4/planning/global_route',lambda m,info:on_path('global_route',m,info),route_qos),node.create_subscription(RosPath,'/Car/T4/planning/local_path',lambda m:on_path('local_path',m),latched),
-        node.create_subscription(PathReference,'/Car/T4/planning/path_reference',on_reference,latched),node.create_subscription(DiagnosticArray,'/Car/T4/planning/diagnostics',on_diagnostics,10)]
+        global_subscription,node.create_subscription(RosPath,'/Car/T4/planning/local_path',lambda m:on_path('local_path',m),latched),
+        reference_subscription,node.create_subscription(DiagnosticArray,'/Car/T4/planning/diagnostics',on_diagnostics,10)]
+    executor=message_info_executor_type()()
+    executor.preserve_message_info(global_subscription); executor.preserve_message_info(reference_subscription)
+    state['subscription_transport']={'executor':'MessageInfoExecutor(SingleThreadedExecutor), old Humble take/execute API',
+        'info_topics':['/Car/T4/planning/global_route','/Car/T4/planning/path_reference'],'source_timestamp':'original DDS metadata; unavailable stays 0 and is rejected'}
     def write_overlay():
         nonlocal sequence
         sequence+=1; snapshot=overlay_snapshot(display,paths,args.show_local_path)
@@ -345,7 +389,7 @@ def main():
     record('start',run_id=run_id,scene=scene,argv=vars(args)); save()
     try:
         while rclpy.ok():
-            rclpy.spin_once(node,timeout_sec=.02); now=time.monotonic()
+            rclpy.spin_once(node,executor=executor,timeout_sec=.02); now=time.monotonic()
             ns=state['clock_ns']
             if ns is not None and state['map_publish_count']<2 and now-last_map>=1:
                 msg=GridMap(); msg.header.frame_id='odom'; stamp_message(msg.header.stamp,ns)
@@ -396,7 +440,7 @@ def main():
         try:
             if goal_handle is None and send_future is not None:
                 deadline=time.monotonic()+5
-                while not send_future.done() and time.monotonic()<deadline: rclpy.spin_once(node,timeout_sec=.05)
+                while not send_future.done() and time.monotonic()<deadline: rclpy.spin_once(node,executor=executor,timeout_sec=.05)
                 if send_future.done():
                     goal_handle=send_future.result()
                     state['goal_accepted']=bool(goal_handle.accepted)
@@ -404,10 +448,10 @@ def main():
                 else: state['pending_goal_response']='UNRESOLVED; root must inspect action server'
             if goal_handle is not None and goal_handle.accepted and result_future is not None and not result_future.done():
                 cancel_future=goal_handle.cancel_goal_async(); deadline=time.monotonic()+5
-                while not cancel_future.done() and time.monotonic()<deadline: rclpy.spin_once(node,timeout_sec=.05)
+                while not cancel_future.done() and time.monotonic()<deadline: rclpy.spin_once(node,executor=executor,timeout_sec=.05)
                 state['cancel_response_received']=cancel_future.done()
                 if cancel_future.done(): raw('cancel_response',cancel_future.result())
-                while not result_future.done() and time.monotonic()<deadline: rclpy.spin_once(node,timeout_sec=.05)
+                while not result_future.done() and time.monotonic()<deadline: rclpy.spin_once(node,executor=executor,timeout_sec=.05)
                 if result_future.done():
                     result=result_future.result(); raw('action_result_after_cancel',result.result)
                     state['action_result']=dict(status=int(result.status),message=message_to_ordereddict(result.result))
@@ -422,7 +466,7 @@ def main():
         state['wall_elapsed_s']=time.monotonic()-wall_start
         state['sim_elapsed_s']=0 if state['clock_ns'] is None else (state['clock_ns']-state['first_clock_ns'])/1e9
         state['strict_stop']='NOT_RUN; root must inspect actual odom/physics/sole-controller command tail'
-        save(); events.close(); node.destroy_node(); rclpy.shutdown()
+        save(); events.close(); executor.shutdown(); node.destroy_node(); rclpy.shutdown()
     print(json.dumps(state,ensure_ascii=False,allow_nan=False))
     return 0 if (not args.send_goal or (state['planning_evidence']['has_reference'] and state.get('long_route_evidence',{}).get('satisfied',False))) else 2
 
