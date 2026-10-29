@@ -109,3 +109,21 @@
 - root已独立获得新ROI native snapshot与新候选start[-394.3,-223.3]、goal[-484.9,-180.9]，净距100.0306m、offline108.1627m、真实rock blocker[-466.9,-189.3]；属root预检，真实Action规划/行驶仍待本新场景运行。
 - run_scene仅3条UI标签改为读取metadata region（标题/总览/跟随），用干净HEAD文本生成label-only patch经git apply --cached部分暂存；暂停中的parking工作副本保留，不通过git add整文件带入。
 - 本工作树suite246passed/17SDKskip/5subtests、3.39s，但含暂停parking代码/5项测试，不能当冻结HEAD验证。root将git archive本提交后独立跑冻结suite；本次RED4failed和固定ROI/native v2/标签换图/map-only门回归已保存。准确提交、CLI与边界见外部flat-demo-region-report.md。
+
+## 2026-10-29 运行验收与最新绕坑展示
+
+源码冻结为 b70b1e672fb1755fa5362d205ca58fbe556d30cc：旧 Humble MessageInfo 兼容、host 的 Humble/domain117/localhost1 前置门、固定已知平地区域、地图缓存身份核验，以及先画历史/当前规划、最后画 6px 青色真实轨迹。全局蓝线为 8px，局部路径默认隐藏。正式冻结导出在本机独立验证为 243 passed、17 SDK skipped、5 subtests passed；不把包含暂停改动的工作树测试算作冻结源码结果。限定源码复审无未关闭 P1/P2。
+
+原场景、生产配置和传感规格保持既定选择。停车位置保持实现及连续转向调整按用户要求暂停，未提交、未部署；独立补丁与逐字节快照保存在仓库外 coordination/paused-parking-hold-b514dee-20261029。当前专题三个已修改文件和两个未跟踪文件属于该暂停工作，不能纳入本次提交或运行归档。
+
+平缓区域 flat100-r1 实测：原生 PLAN_FOUND 与同会话 ACTIVE reference 匹配，全局 100.6971m；真实 odom 累积 101.6559m、净位移 100.0302m，终点位置误差 0.0310m。最终 Action 为 FINAL_POSE_NOT_REACHED，不能记为 GOAL_REACHED 或完整最终姿态验收通过。原始失败、日志和全程真实轨迹保留。用户认为该路线过直，已切换为原 A 区绕月坑方案。
+
+最新用户要求为约百米、绕月坑，起步不要立即爬坡或转弯，后续允许坡度。当前 case 使用原 A 区两处真实地形凹陷：局部背景下深度约 1.80m、2.01m；不修改源地形或制造障碍。起点 (331.9,-237.3)，终点 (268.9,-303.7)，原生离线候选 103.9935m 仅作选点；实际新导航器已收得 PLAN_FOUND/reference 对应全局路径 104.4322m，绕真实阻挡的静态间距约 11.16m。后续路线坡度门仍为原 20deg，不放宽能力参数。
+
+最初离线朝向与实际规划首段不同；已保存该次实际规划并有界取消原 Action，保留 CANCELED 证据。当前新初始朝向按实际首段设为 -97.125deg，首段约 6.45m；前 5m 碰撞地图高程整体下降 0.153m，最高仅比起点高 0.0175m。此为新会话启动前的静态初始位姿强层，重新计算真实四轮落位；不写运行中的车辆位置或速度，不发布离线路线。
+
+台式当前入口：/mnt/data/WS/lunar-navigation/analysis-artifacts/isaac-viper-showcase-20261029/navigation-A-crater100-v2/viper-crater-initial-heading.usda
+SHA256 7fffefc7628d73af6921f3f7b985dea4566eab896176b8272da399d4db84045e。
+实际静态验证为 9 刚体、8 关节、50kg，通过；当前运行回执在 navigation-selected-live-A-crater100-r2/launch.json。真实青色轨迹在该 Kit 原生窗口截图已确认可见，并保留从起点开始的全时段；绕坑全程执行、GOAL_REACHED 和严格停车仍在本轮运行中，不提前声明通过。
+
+Humble 真实原生规划、PhysX/RTX 运行和本机纯测试分别记录；SDK 跳过项、Orin/实车与 C 区自主探索不得据此推断通过。未推送、未创建 PR、未删除分支/工作树或历史失败。当前处置：源码已提交待合入，绕坑执行继续验收；暂停物理改造另存恢复来源。
