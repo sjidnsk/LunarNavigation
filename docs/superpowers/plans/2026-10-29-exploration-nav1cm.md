@@ -127,3 +127,13 @@
 - Each task report exact BASE..HEAD, RED/GREEN, commands/results, loaded native/Python identities and actual scope; reviewers get unique full diff packages and do not rerun unchanged suites.
 - After four review-clean gates, one broad final review across MAIN and DRL exact ranges; coordinated fix wave if needed. No duplicate unchanged full builds/performance runs.
 - Commit source/docs only, preserve dependencies/logs/failures in external artifacts. Final status: 已提交待合入 (owners unchanged), explicit resources pending authorized recycle and Orin/realP3/vehicle NOT_RUN.
+
+
+### Task4 依赖修复 C1：P3 自由区域的数值接缝
+
+Task4 固定既有 Actor 的真实短窗暴露共用 P3MapStore._free_rows 缺陷：0.2m 源格、(-3,-3)原点产生 -79.99999999999999cm 顶点，数值微片段被判断为空，连续已观测自由区出现假的1cm UNKNOWN行，起点净空.885858m小于硬圆.921722m。ROOT已用最小纯函数与真实709观测初帧离线重放确认；原失败保留，既有Task1–3资格仍绑定原SHA。
+
+- 在 MAIN 专题执行最小数值几何修复，保持真实UNKNOWN/亚厘米缺口、旋转、来源权限与native/solver/车体/净空约束；不换Actor/目标/场景或放宽约束。
+- 先行精确反例与真实缺口/旋转回归，执行受影响P3地图/几何/缓存/native和planner包检查；不重复无关训练或已通过的运动窗。
+- 独立build/install/log前缀，记录source/实际加载native身份，独立规格与质量审查通过后交给原Task4实现者，用相同45s fixture/Actor继续真实运动验证与legacy smoke。
+- 具体证据、最小reproducer、范围与成本裁定位于本计划workspace/task-4-c1-brief.md及外部任务ART/task4-common-seam-ruling.md；不改owner分支、不推送或操作正式训练。
