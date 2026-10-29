@@ -104,7 +104,9 @@ def plant_worker(art):
             tf.publish(TFMessage(transforms=[transform]))
             measurements=SensorModel.observe(terrain,plant.pose,sensor)
             buffer.add(measurements,stamp)
-            origin,planes=buffer.payload();grid.publish(grid_message(planes,origin,.2,stamp,frame='map'))
+            # 旧地图输入契约是 odom；此处 map→odom 为恒等变换，物理量测不变。
+            frame='odom' if d['backend']=='incremental_v2' else 'map'
+            origin,planes=buffer.payload();grid.publish(grid_message(planes,origin,.2,stamp,frame=frame))
     node.create_timer(.05,tick)
     try:
         while not stopped[0] and rclpy.ok():rclpy.spin_once(node,timeout_sec=.05)
