@@ -92,3 +92,10 @@
 - navigation_showcase新增限定旧Humble API的MessageInfoExecutor(SingleThreadedExecutor)工厂，仅显式登记global_route与PathReference两个订阅保留原take_message `(msg,info)`，await真实双参callback；普通单参回调仍delegate原executor，不修改rclpy安装或全局猴子补丁。
 - dds_source_timestamp支持实际dict/object，保留原正int source_timestamp；缺失/非法为0，原DDS新鲜度/session门继续拒绝，绝不取墙钟或接收时间补值。主循环及pending/cancel/result四处spin均显式同一个executor，shutdown正常关闭它。
 - 真实RED3failed；单测覆盖原msg/info identity、未登记单参、无消息、async双参、dict/object原timestamp与非法0拒绝。适配器单测替代的是本机缺失rclpy依赖，不冒称真实DDS通过；最终suite/提交见外部task5report。未启动/控制/修改远端进程或输出，root将在domain218独立DDS smoke再做r2。
+
+### Final review P1-N1：host canonical ROS隔离前置门
+
+- 基线c2c79d2；独立final-navigation-source-review确认host即使不send-goal也会发布canonical A真值图，必须在任何ROS实体前验证隔离环境。
+- main解析CLI后立即复用ros_bridge.assert_ros_environment，严格Humble/domain117/localhost1；在读取scene、创建输出、导入rclpy/init和publisher/ActionClient之前拒绝错误/缺失环境。--help仍可无ROS环境执行，domain218直接executor工厂smoke不经过main门。
+- 真实RED7failed/2passed，错误/缺失三项环境均触到被替身拦截的ROS导入；修复后全部在ROS导入和输出之前失败，正确环境继续到原ROS启动边界。仅改host入口和对应测试/记录，不改drive/停车安全门或现存运行。
+- root转述r3真实PLAN_FOUND和111.2058m global绕障且Kit可见，尚有95% waiting_for_stop/坡面零速诊断；本修复不将这些转述升级为GOAL_REACHED/严格停车通过。具体提交与最终相关suite见外部task5report。

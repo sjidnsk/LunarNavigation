@@ -253,6 +253,8 @@ def main():
     parser.add_argument('--wall-timeout',type=float,default=300); parser.add_argument('--sim-timeout',type=float,default=150)
     parser.add_argument('--freshness-wall',type=float,default=2.,help='发送目标前真实 odom/TF 接收年龄上限；不改变控制器阈值')
     args=parser.parse_args()
+    from tools.isaac_viper.ros_bridge import assert_ros_environment
+    assert_ros_environment()  # 任何文件输出、rclpy.init、canonical publisher/ActionClient之前拒绝错域。
     if min(args.wall_timeout,args.sim_timeout,args.freshness_wall)<=0: parser.error('timeouts must be positive')
     scene_path=Path(args.scene_json).resolve(); scene=json.loads(scene_path.read_text(encoding='utf-8'))
     if scene.get('schema')!='lunar.viper-navigation-scene.v1' or scene.get('region')!='A' or scene.get('resolution_m')!=.2: raise ValueError('only explicit original A known map is authorized')
