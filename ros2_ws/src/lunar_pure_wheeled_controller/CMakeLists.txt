@@ -24,6 +24,7 @@ install(DIRECTORY launch
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(${PROJECT_NAME}_progress_anchor_lifecycle_test test/test_progress_anchor_lifecycle.py)
   ament_add_pytest_test(${PROJECT_NAME}_terminal_execution_contract_test test/test_terminal_execution_contract.py)
   ament_add_pytest_test(${PROJECT_NAME}_execution_contract_ros_test test/test_execution_contract_ros.py)
   ament_add_pytest_test(${PROJECT_NAME}_motion_capability_test test/test_motion_capability.py)

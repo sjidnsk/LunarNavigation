@@ -49,7 +49,7 @@ class MppiExecutor:
         self.phase='WAITING';self.failure=None;self.progress_m=0.;self.error=0.;self.heading_error=0.;self.direction=1
         self._last_command=np.zeros(2);self._model_time=0.;self._state_age_s=0.;self._command_history=[];self._nominal=np.zeros((self.config.time_steps,2))
         self._first_target_step=self.config.model_dt
-        self._best_progress=0.;self.no_progress_s=0.;self._last_pose=None
+        self._translation_credit_m=0.;self.no_progress_s=0.;self._last_pose=None
         self.diagnostics={};self.predicted_trajectory=np.empty((0,3))
 
     def note_command(self,v,w,stamp_s=None):
@@ -65,7 +65,7 @@ class MppiExecutor:
 
     def clear(self):
         self.path=None;self.phase='WAITING';self.failure=None
-        self._nominal[:]=0.;self.note_command(0.,0.);self.no_progress_s=0.;self._last_pose=None;self._command_history=[]
+        self._nominal[:]=0.;self.note_command(0.,0.);self.no_progress_s=0.;self._last_pose=None;self._translation_credit_m=0.;self._command_history=[]
 
     def set_map(self,grid):
         if self.map is None or grid.epoch!=self.map.epoch:self._nominal[:]=0.
@@ -83,7 +83,7 @@ class MppiExecutor:
                 return True
             # Keep physical net-progress time across rolling revisions.
         else:self.no_progress_s=0.;self._last_pose=None
-        self.path=path;self.identity=identity;self.final=final;self.progress_m=0.;self._best_progress=0.
+        self.path=path;self.identity=identity;self.final=final;self.progress_m=0.;self._translation_credit_m=0.
         self.failure=None;self.phase='BRAKING';self._nominal[:]=0.
         return True
 
@@ -94,8 +94,12 @@ class MppiExecutor:
     def _stopped(self,state):
         return math.hypot(state.linear_mps,state.lateral_mps)<=self.policy.stopped_linear_mps and abs(state.angular_radps)<=self.policy.stopped_angular_radps
 
-    def _bind_progress_anchor(self,state,*,progress_m=None):
-        """绑定当前几何的比较基准；不清计时、故障或已发布命令历史。"""
+    def _bind_progress_anchor(self,state,*,progress_m=None,retain_translation=False):
+        """绑定实际位姿；参考换向前结转尚未达门槛的有向物理位移。"""
+        if retain_translation and self._last_pose is not None:
+            anchor,travel,_=self._last_pose
+            self._translation_credit_m+=float(np.dot(np.array([state.x_m,state.y_m])-anchor,travel))
+        else:self._translation_credit_m=0.
         progress=self.progress_m if progress_m is None else progress_m
         ahead=self.path.point_at(min(self.path.length,progress+.35))
         vector=np.array(ahead)-[state.x_m,state.y_m]
@@ -107,7 +111,7 @@ class MppiExecutor:
         """唯一物理进展/行进停滞计算；滚动参考刷新本身不产生进展。"""
         if self._last_pose is None:self._bind_progress_anchor(state)
         anchor,travel,best_angle=self._last_pose
-        advance=float(np.dot(np.array([state.x_m,state.y_m])-anchor,travel))
+        advance=self._translation_credit_m+float(np.dot(np.array([state.x_m,state.y_m])-anchor,travel))
         progressed=(advance>.03 or (distance<=self.policy.goal_position_tolerance_m
             and abs(yaw_error)<best_angle-.01))
         if progressed:

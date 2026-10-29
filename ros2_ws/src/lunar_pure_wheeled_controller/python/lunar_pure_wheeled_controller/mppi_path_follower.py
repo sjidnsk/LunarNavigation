@@ -216,7 +216,7 @@ class MppiPathFollower(MppiExecutor):
             self.path=route;self.policy=policy;self.final=final;self._tracking_corner=False
         if result.phase=='COMPLETED':
             self._passed_corner=route.points[i];self._corner_target=None;self.phase='TRACKING'
-            self._nominal[:]=0.;self._last_pose=None;self.no_progress_s=0.
+            self._nominal[:]=0.;self._last_pose=None;self._translation_credit_m=0.;self.no_progress_s=0.
             return self._result()
         return result
 
