@@ -173,59 +173,74 @@ r1修复版当前源码SHA256为`fd45ff464993c88c568f77d84ee10699859acdef02f83e7
 本机172passed/11SDKskip；冻结v5真实CPU/PXR已完成：原profile通过，轮径/轴距/轮距/外参/基线/焦距/双孔径8个合法profile变更全部拒绝；实际光学与frame/metadata/unit共10个session/匿名层故障全部拒绝。源码493f206在`E/final-contract-source`隔离快照运行，11测试组0fail/0error/0skip，回执`E/final-contract-cpu-receipt.json`和RED/GREEN日志、`E/final-fix-cpu-{red,green}`逐案JSON保留；冻结SHA前后均c4354150...。新版runtime的Kit/ROS集成仍NOT_RUN；现存GUI继续运行旧750bc3bf/task3-source，不能把新源码CPU检查写成该实例已升级；主恢复命令已切到含新门的final-contract-source，只有本实例明确关闭后才新建会话。最终波限定复审尚待，不预记通过。
 
 
-### 2026-10-29 三区轻量展示构建入口
+### 2026-10-29 当前入口：原 A/B/C 场景与真实新导航同视窗
 
-续作基线 `9db7ed3`；独立分支 `hk/isaac-viper-showcase-20261029`。新 API 为
-`tools.isaac_viper.build_showcase.build_showcase(profile, region_config, source_scene, assets_dir, output_dir, quality='light') -> dict`。
-质量配置 `config/isaac_viper_showcase.yaml` 只记录几何/显示，不复制传感器能力。
+用户最终选择 `original-source-v1`。当前运行场景应直接保留原 A/B/C 地形、岩石、材质、
+碰撞和区域相机；历史 `uniform1m-rock80-v1`、`uniform0p5m-rock320-v2` 只作历史对照。
+构建器 API 为兼容历史仍缺省 `quality='light'`，当前入口必须显式传 `--quality original`。
+`light` 新版为 0.5m / 8,000,000 三角 / 每岩石320三角，不能再写成1m/80。
+当前 viewport 来自回执的 `viewport_size`（1280×720），双目仍是640×480@15Hz。
+
+已冻结原展示根层 `/mnt/data/WS/lunar-navigation/analysis-artifacts/isaac-viper-showcase-20261029/original-v1/viper-showcase.usda`，
+SHA256 `e0573e650232211b6ef0c0281fe644028855a95f823eda7f9db9d51a9e5eb70e`。
+原场景车辆初始在C，切A/B相机不会移动车辆。A真实导航必须使用独立生成的新初始位姿层与新运行会话，
+不能把旧C车辆加A镜头算作A执行。以下命令都是新入口示例；SDK/ROS实跑结果由每次独立回执确认。
 
 ```bash
-# REPO 为本任务新 showcase-source；OUT 必须尚不存在。原始资产不改写。
 cd "$REPO"
-"$ISAAC_ROOT/python.sh" -m tools.isaac_viper.build_showcase \
-  --profile config/isaac_viper.yaml \
-  --regions docs/simulation/isaac-polar-v02-midterm-regions.json \
-  --source-scene /mnt/data/WS/ZDYF-lunar-navigation/local_assets/lunar_polar_1km_v02/rover/Lunar_Polar_V02_Rover.usda \
-  --assets-dir /mnt/data/WS/lunar-navigation/analysis-artifacts/isaac-viper-midterm-20261028/source-assets \
-  --output-dir "$OUT" --quality light
-# 原精度对照使用同一命令、不同新目录和 --quality original。
+# SDK CPU/PXR；AOUT 必须尚不存在。原 stage / metadata 不写。
+"$ISAAC_ROOT/python.sh" -m tools.isaac_viper.navigation_scene \
+  --source-stage "$S/original-v1/viper-showcase.usda" \
+  --profile config/isaac_viper.yaml --output-dir "$AOUT"
 ```
 
-输出 `viper-showcase.usda`、`showcase-environment.usdc`、区域 JSON 副本、
-`showcase-receipt.json` 和原工程 `.validation.json`。默认 light 的统一 1 m 网格有
-1,002,001 顶点、2,000,000 三角面；每个生效 Rock_ 实例聚合其实际世界顶点包络，生成
-80 面凸岩石代理。旧 Environment 整树 inactive，移除其显示/碰撞及无碰撞碎屑；
-新网格共用显示/碰撞且没有地形纹理绑定。岩石代理保留世界 AABB（误差按 float32 实际写入值测量），
-不承诺原占据、坑坡阈值、通道或通行等价。源高程/细区每个源格点与新三角面比较，
-回执记录 n、mean、RMSE、max、p50/p90/p95/p99；格点之间误差上界未建立。
-这些数据只用于几何核对，不进入 Actor。
-
-`build_stage` 增加 keyword-only `terrain_mesh_path`、`spawn_xy_m`、`spawn_yaw_deg`，
-CLI 对应 `--terrain-mesh-path`、`--spawn-xy-m X Y`、`--spawn-yaw-deg DEG`。
-缺省保留旧落位；light 使用 C 候选 (-55,-320) 和新实际三角面的垂直重心插值，
-重新拟合姿态并记四轮支撑。9 body/8 joint/50 kg、零初态及原 profile 门继续检查。
-动态接触/落稳仍需 SDK 验证。
+生成器只在 A `[235,335,-315,-215]` 内搜索16×16m近场与4m候选起终点，按真实启用碰撞
+Mesh、Rock实例世界变换裁剪三角/栅格，0.2m绝对高程取每格最高支撑；未知保留NaN，不抹岩石。
+`navigation-scene.json` 保存源层/NPZ/USD哈希、格内高程包络误差界、碰撞来源、
+wheel_orin包络外接圆+.5m余量与保守坡度/起伏检查、实际三角落位和 `NOT_RUN`。
+候选直线仅用于选择起终点，从不作为规划消息发布；正式路径来自新导航 Action。
+本地图明确是A已知图 `known_map_from_same_scene_collision_geometry`，禁止注入C或Actor。
+静态几何核对不能代替运行时PhysX接触/落稳与碰撞验收。
 
 ```bash
-# SDK 不依赖 pytest；实际 PXR 正例与 metadata/旧碰撞/辅助几何变异：
-PYTHONPATH="$REPO" VIPER_SHOWCASE_STAGE="$OUT/viper-showcase.usda" \
-  "$ISAAC_ROOT/python.sh" tests/isaac_viper/test_showcase.py
-# 真实运行由主任务统一切换进程后执行；RUN 必须尚不存在。
+# Kit cp312 独立进程，不 source 系统 Humble/host overlay；KLOG 必须尚不存在。
 ROS_DOMAIN_ID=117 ROS_LOCALHOST_ONLY=1 \
   "$ISAAC_ROOT/python.sh" -m tools.isaac_viper.run_scene \
-  --stage "$OUT/viper-showcase.usda" --profile config/isaac_viper.yaml \
-  --output-dir "$RUN" --duration 6 --wall-timeout 120 \
-  --view-request-file "$RUN/view-request.json"
+  --stage "$AOUT/viper-navigation.usda" --profile config/isaac_viper.yaml \
+  --output-dir "$KLOG" --duration 0 --keep-open \
+  --navigation-overlay-file "$OVERLAY"
 ```
 
-GUI 自动显示 Vehicle/All/A/B/C 按钮和 Inspection 人工补光、算法 NOT_RUN 文字，
-viewport 960×540；只有相机 prim，没有区域边框/标注 mesh 进入传感器世界。
-文件入口读取唯一显式路径，内容如 `{"view":"A","request_id":"a-1"}`；
-view 仅允许 vehicle/overview/A/B/C，重复字节不重复切换。切相机只设置 viewport，车辆留在 C，
-没有传送。保留 GUI 时使用 `--duration 0 --keep-open`；Pause/Stop 原安全语义保持。
-Task 1 的 phase_ms/camera_phase_ms/lidar_phase_ms、真实时钟、640×480@15 Hz 双目、
-10 Hz LiDAR、100 Hz IMU 和 .01 s 物理步未改。
+`OVERLAY` 为显式新会话JSON路径。SDK `omni.ui.scene.SceneView/Curve` 仅绘制viewport叠加，
+全局蓝、局部黄、真实odom轨迹青；原始坐标保存在JSON，显示统一抬高.12m避免路面遮挡。
+没有路径USD Mesh进入RTX/碰撞。每app帧poll，因此Pause可继续更新；Stop仍结束旧控制会话。
+近景相机按实际起终点/初始高程生成，不改车辆运行位姿；保留Vehicle/All/A/B/C按钮。
 
-本轮本地仅纯 CPU/语法验证；实际 PXR、GPU、ROS 数据、RTF、控制停车及 GUI 尚为
-`NOT_RUN`，由主线程独立运行并补记。A/B 已知地图必须从新碰撞几何重建；A/B 起终点、
-Actor、建图、新规划器闭环、Humble 应用、Orin 与实车仍 `NOT_RUN`。
+新导航必须由独立、同源码身份的Humble cp310完整闭包构建，旧仅controller的install不足以启动它。
+启动正式导航和唯一项目控制器的参数参照 `config/incremental_navigation_interfaces.yaml`、
+`config/wheel_orin.yaml` 与本任务构建回执；导航使用 `adaptive_known` 和真实T3输入，控制器为唯一T5发布者。
+不要运行旧会手造local_path的 `verify_ros` fixture，也不运行合成terrain/运动emulator。
+
+```bash
+# 单独 host shell：source /opt/ros/humble/setup.bash 及本次独立新导航 install/setup.bash。
+# 不与 Kit cp312 混 Python overlay。HLOG 与 OVERLAY 必须尚不存在。
+ROS_DOMAIN_ID=117 ROS_LOCALHOST_ONLY=1 python3 -m tools.isaac_viper.navigation_showcase \
+  --scene-json "$AOUT/navigation-scene.json" --output-dir "$HLOG" \
+  --overlay-file "$OVERLAY" --send-goal --wall-timeout 180 --sim-timeout 30
+```
+
+缺省不加 `--send-goal` 时只发布A图、监听原消息与真实轨迹；加开关后先核验clock、两次可靠持久图、
+递增odom/同stamp直接TF与起点位置，至多发一次真实 `NavigateToPose`。
+`--freshness-wall` 缺省2s仅是助手发目标前的接收健康门，不改变正式控制器门限。
+地图header为odom，规范layout与反转双轴编码，绝对elevation/NaN保留。
+真实轨迹topic `/Car/T4/showcase/actual_trace` 使用原stamp，拒绝倒退和非法pose/TF；
+源odom、TF、diagnostics、PathReference、Action feedback/result保留在 `events.jsonl`。
+`result.json` 中 `planning_outcome=0/has_reference=true` 只能从同Action session、同segment/
+traversability revision 的原 `PLAN_FOUND` 与非空ACTIVE reference派生，不能当成原诊断字段。
+Action `outcome=0/reason_code=GOAL_REACHED`另判；图上有线、accepted或ROS SUCCEEDED均不代替到达/严格停车验收。
+助手有wall/sim界和有界取消；取消回执、真实尾窗/唯一控制器停车仍由root核对。
+
+本轮本机相关纯Python测试197 passed、17 SDK skipped（另5 subtests passed）；3个CLI help已执行。
+实际PXR地图生成/派生USD门、Kit SceneView显示、Humble导航/控制闭环、目标到达及停车均 `NOT_RUN`，
+由root在独立新运行补记。C Actor、完整三区导航、Jazzy、Orin、实车也未由本轮证明。
+原两次工程短路径失败与原/轻档全部历史产物保留，不借其结果替代新导航验收。

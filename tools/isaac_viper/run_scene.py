@@ -43,6 +43,8 @@ def create_showcase_ui(stage, viewport, metadata, request_path, status, record, 
     """文本/按钮使用 omni.ui；不创建任何会进入 RTX 的区域辅助几何。"""
     camera_paths = dict(metadata['showcase']['region_camera_paths'])
     camera_paths['vehicle'] = '/World/EngineeringView'
+    if 'navigation_showcase' in metadata:
+        camera_paths['navigation'] = '/World/NavigationView'
     def select(path):
         if not stage.GetPrimAtPath(path):
             raise ValueError('showcase camera missing: '+path)
@@ -65,8 +67,10 @@ def create_showcase_ui(stage, viewport, metadata, request_path, status, record, 
         with channel.window.frame:
             with ui.VStack(spacing=5):
                 ui.Label('Inspection: artificial fill lighting', word_wrap=True)
-                ui.Label(metadata['showcase']['geometry_version']+' | A/B map + Actor/planner NOT_RUN', word_wrap=True)
-                ui.Label('View only: vehicle stays in C; no teleport', word_wrap=True)
+                ui.Label(metadata['showcase']['geometry_version']+(' | A known-map navigation; live ROS overlay' if 'navigation_showcase' in metadata else ' | A/B map + Actor/planner NOT_RUN'), word_wrap=True)
+                ui.Label('View only: camera changes never move vehicle', word_wrap=True)
+                if 'navigation_showcase' in metadata:
+                    ui.Button('A | navigation close view', clicked_fn=lambda: channel.choose('navigation'))
                 for name,label in (('vehicle','Vehicle'),('overview','All A/B/C'),
                                    ('A','A | rock avoidance | 100 x 100 m'),
                                    ('B','B | crater slope | 75 x 75 m'),
@@ -244,9 +248,12 @@ def main():
     parser.add_argument('--keep-open', action='store_true', help='保留GUI；Pause可恢复，Stop后需重新运行原命令建立控制会话')
     parser.add_argument('--headless', action='store_true')
     parser.add_argument('--view-request-file', help='显式展示视角JSON文件；只接受vehicle/overview/A/B/C，绝不改变车位姿')
+    parser.add_argument('--navigation-overlay-file', help='显式真实 ROS 路径 JSON；仅 viewport SceneView，不写 USD/RTX几何')
     parser.add_argument('--lifecycle-probe', choices=('stop','stop-play'),
         help='有界SDK回归：在.5sim秒Stop，可同frame再Play；记录后退出测试')
     args = parser.parse_args()
+    if args.navigation_overlay_file and args.headless:
+        parser.error('navigation overlay requires GUI viewport')
     if args.duration < 0 or (args.duration == 0 and not args.keep_open):
         parser.error('duration must be positive, or zero with --keep-open')
     output = Path(args.output_dir).resolve()
@@ -334,12 +341,28 @@ def main():
         matrix = Gf.Matrix4d().SetLookAt(Gf.Vec3d(initial[0]+3,initial[1]+3,initial[2]+2.5),
             Gf.Vec3d(initial[0],initial[1],initial[2]+.6),Gf.Vec3d(0,0,1)).GetInverse()
         view_xf.AddTransformOp().Set(matrix)
+        if 'navigation_showcase' in metadata:
+            nav = metadata['navigation_showcase']
+            start, goal = nav['start_xy_m'], nav['goal_xy_m']
+            center = Gf.Vec3d((start[0]+goal[0])/2,(start[1]+goal[1])/2,initial[2]+.25)
+            camera = UsdGeom.Camera.Define(stage, '/World/NavigationView')
+            UsdGeom.Xformable(camera.GetPrim()).AddTransformOp().Set(Gf.Matrix4d().SetLookAt(
+                center+Gf.Vec3d(4,-6,6),center,Gf.Vec3d(0,0,1)).GetInverse())
+            camera.CreateFocalLengthAttr(24.)
         from omni.kit.viewport.utility import get_active_viewport
         viewport = get_active_viewport()
         if viewport is not None:
             viewport.camera_path = str(view.GetPath())
         showcase_ui = (create_showcase_ui(stage, viewport, metadata, args.view_request_file, status, record, args.headless)
                        if 'showcase' in metadata else None)
+        if showcase_ui is not None and 'navigation_showcase' in metadata:
+            showcase_ui.choose('navigation')
+        navigation_overlay = None
+        if args.navigation_overlay_file:
+            enable_extension('omni.ui.scene')
+            from tools.isaac_viper.viewport_paths import ViewportPaths
+            navigation_overlay = ViewportPaths(args.navigation_overlay_file)
+            status['navigation_overlay'] = {'input':str(Path(args.navigation_overlay_file).resolve()), 'geometry':'UI_ONLY; RTX invisible'}
         controller = DriveController(profile)
         bridge = RosBridge(profile, controller, com, record)
         timeline = omni.timeline.get_timeline_interface()
@@ -390,6 +413,14 @@ def main():
         restart_window = None
         first_step_probe_done = False
         while app.is_running():
+            if navigation_overlay is not None:
+                try:
+                    overlay_update = navigation_overlay.poll()
+                    if overlay_update is not None:
+                        status['navigation_overlay'].update(overlay_update)
+                        record({'event':'navigation_overlay', **overlay_update})
+                except (ValueError, OSError) as exc:
+                    record({'event':'navigation_overlay_rejected','reason':str(exc)})
             if showcase_ui is not None:
                 try:
                     if showcase_ui.poll() is not None:

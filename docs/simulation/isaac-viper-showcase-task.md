@@ -35,3 +35,12 @@
 台式入口 /mnt/data/WS/lunar-navigation/analysis-artifacts/isaac-viper-showcase-20261029/original-v1/viper-showcase.usda，SHA256 e0573e650232211b6ef0c0281fe644028855a95f823eda7f9db9d51a9e5eb70e；运行源balanced-source/6370c29。启动回执original-selected-gui-launch.json。替代档及其测试仅作历史对照，不能将其RTF/动态结果转记原档。原档已通过当前PXR组合正例，实际GUI需最后核验；原两次导航FAIL与A/B地图、Actor、完整规划闭环NOT_RUN边界保留。
 
 当前处置：已提交待最终审查合入；中央登记的其他会话dirty内容不覆盖，不推送、不删除工作树或历史资产。
+
+## Task 4 原三区真实新导航展示（本地实现交接）
+
+- 续接同一任务、owner、专题与工作树；执行者 Codex/implement_navigation_showcase，基线 `cddf95e8fd576863cb34082985320e668f92dfc8`；Windows 唯一源码写入者，root 统一 Humble 构建、台式部署和有界运行。
+- 按用户最终原场景选择，新增 CPU `navigation_scene`：严格冻结原 `original-v1` 根层 SHA，从原 A 地形和实际启用碰撞 Mesh/实例世界变换生成 0.2m 绝对高程图，逐三角/格裁剪取最高值、未知 NaN；保留岩石和格内 relief。在 A 内搜索 16×16m 近场和 4m 候选起终点，用 wheel_orin 包络外接圆加 .5m 余量和保守坡度/起伏门；拒绝合成回退。新 USD 强层仅更改 VIPER 新初始位姿和 root metadata，原层不改。
+- 新增 host Humble cp310 `navigation_showcase`：RELIABLE/TRANSIENT_LOCAL 规范双轴反序 GridMap；仅真实同 stamp odom/direct map→odom 生成 Path；保存原始 diagnostics/reference/action/odom/TF。显式 `--send-goal` 才发一次真正 NavigateToPose；等待时钟、地图、真实 TF/odom 与起点健康。它不发布 T5 或 planner Path。超时有界取消；PLAN_FOUND + 同 session/revision 的非空 ACTIVE reference 才派生正式规划摘要，GOAL_REACHED 与停车另判。
+- `run_scene --navigation-overlay-file` 使用 Kit SDK 实际 SceneView/Curve API、每 app 帧读取严格 bounded JSON，Pause 同样可看；全局蓝/局部黄/真实轨迹青。它不创建 USD 路径 Mesh，RTX 不可见。A 近景相机来自实际起终点/新初始高程；A/B/C 相机和原物理、传感、typed 传输、安全门保持。
+- 本机真实 RED 为缺模块的 6 项断言失败，GREEN 相关 suite 197 passed / 17 SDK skipped（另 5 subtests passed）；CLI help 已实际执行。SDK 示例仅只读核对，不算运行通过。准确命令与最终提交见外部 coordination/task-4-report.md。
+- 本地代码已提交待 root 同步/验收/审查；PXR 真实地图生成、Kit UI、Humble 真实导航/控制/到达/停车、C Actor、Orin/实车均 `NOT_RUN`。源/新旧产物和失败保留，不推送、PR、删除或清理；中央 dirty 登记不改。
