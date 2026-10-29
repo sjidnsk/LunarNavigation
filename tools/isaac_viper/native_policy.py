@@ -8,26 +8,40 @@ import numpy as np
 INDEX_ORDER='array[y,x] ascending world axes; cell centers origin+(index+0.5)*resolution; policy indices0..499 exactly source grid'
 
 
+def native_index_order(shape):
+    ny,nx=shape
+    suffix=f'policy indices0..{nx-1}' if nx==ny else f'policy indices x0..{nx-1}, y0..{ny-1}'
+    return 'array[y,x] ascending world axes; cell centers origin+(index+0.5)*resolution; '+suffix+' exactly source grid'
+
+
 def _digest(path): return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def load_native_policy(manifest_path,profile,elevation,relief,bounds,resolution,source_layers,expected_profile_hash,expected_profile_sha256=None):
-    from tools.isaac_viper.navigation_scene import SOURCE_SHA
+def load_native_policy(manifest_path,profile,elevation,relief,bounds,resolution,source_layers,expected_profile_hash,expected_profile_sha256=None,region='A'):
+    from tools.isaac_viper.known_regions import SOURCE_SHA,validate_region_map
     path=Path(manifest_path).resolve(); manifest=json.loads(path.read_text(encoding='utf-8'))
-    if manifest.get('schema')!='native-policy-aligned500-v1': raise ValueError('unknown native policy schema')
+    schema=manifest.get('schema'); shape=tuple(np.asarray(elevation).shape)
+    validate_region_map(region,list(bounds),resolution,shape)
+    if schema=='native-policy-aligned500-v1':
+        if region!='A' or manifest.get('region','A')!='A': raise ValueError('legacy aligned500 manifest is A only')
+        expected_order=INDEX_ORDER
+    elif schema=='native-policy-aligned-v2':
+        if manifest.get('region')!=region: raise ValueError('native manifest region mismatch')
+        expected_order=native_index_order(shape)
+    else: raise ValueError('unknown native policy schema')
     if not isinstance(expected_profile_hash,str) or len(expected_profile_hash)!=16 or any(c not in '0123456789abcdef' for c in expected_profile_hash) or manifest.get('profile_hash')!=expected_profile_hash: raise ValueError('native profile hash mismatch; explicit runtime receipt hash required')
     if not isinstance(manifest.get('epoch'),str) or not manifest['epoch'] or any(type(manifest.get(k)) is not int or manifest[k]<1 for k in ('fine_revision','raw_elevation_revision')): raise ValueError('native epoch/revision unavailable')
-    if manifest.get('wire')!={'unknown':0,'free':1,'blocked':2} or manifest.get('index_order')!=INDEX_ORDER: raise ValueError('native wire/axis contract mismatch')
+    if manifest.get('wire')!={'unknown':0,'free':1,'blocked':2} or manifest.get('index_order')!=expected_order: raise ValueError('native wire/axis contract mismatch')
     response=path.parent/manifest['response_cdr']
     if response.stat().st_size>64*1024*1024 or _digest(response)!=manifest.get('response_sha256'): raise ValueError('native original service response SHA mismatch')
-    shape=tuple(np.asarray(elevation).shape)
     if manifest.get('frame_id')!='map' or manifest.get('resolution_m')!=resolution or manifest.get('bounds_xy_m')!=list(bounds) or manifest.get('array_shape')!=list(shape) or manifest.get('origin')!=[bounds[0],bounds[2],0.]: raise ValueError('native manifest geometry mismatch')
     source_map=Path(manifest['source_map']); source_map=source_map if source_map.is_absolute() else path.parent/source_map
     native=path.parent/manifest['native_npz']
     if source_map.stat().st_size>32*1024*1024 or _digest(source_map)!=manifest.get('source_map_sha256'): raise ValueError('native source map SHA mismatch')
     if native.stat().st_size>32*1024*1024 or _digest(native)!=manifest.get('native_sha256'): raise ValueError('native snapshot SHA mismatch')
     receipt_path=source_map.with_name('navigation-scene.json'); receipt=json.loads(receipt_path.read_text(encoding='utf-8'))
-    if receipt.get('schema')!='lunar.viper-navigation-scene.v1' or receipt.get('region')!='A' or receipt.get('map_sha256')!=manifest['source_map_sha256'] or receipt.get('source_sha256')!=SOURCE_SHA or receipt.get('source_layer_sha256')!=source_layers: raise ValueError('native source scene geometry receipt mismatch')
+    if receipt.get('schema')!='lunar.viper-navigation-scene.v1' or receipt.get('region')!=region or receipt.get('map_sha256')!=manifest['source_map_sha256'] or receipt.get('source_sha256')!=SOURCE_SHA or receipt.get('source_layer_sha256')!=source_layers: raise ValueError('native source scene geometry receipt mismatch')
+    validate_region_map(receipt.get('region'),receipt.get('bounds_xy_m'),receipt.get('resolution_m'),shape)
     if receipt.get('capability_limits')!=profile['capability']: raise ValueError('native source capability semantics mismatch')
     if expected_profile_sha256 is not None and receipt.get('profile_sha256')!=expected_profile_sha256: raise ValueError('native source profile receipt SHA mismatch')
     with np.load(source_map,allow_pickle=False) as source:
@@ -43,7 +57,7 @@ def load_native_policy(manifest_path,profile,elevation,relief,bounds,resolution,
     free=np.isfinite(elevation)
     blocked=np.isfinite(elevation)
     for value in states.values(): free=free&(value==1); blocked=blocked&(value==2)
-    audit=dict(manifest=str(path),manifest_sha256=_digest(path),snapshot=str(native),snapshot_sha256=manifest['native_sha256'],
+    audit=dict(region=region,manifest_schema=schema,manifest=str(path),manifest_sha256=_digest(path),snapshot=str(native),snapshot_sha256=manifest['native_sha256'],
         source_map=str(source_map),source_map_sha256=manifest['source_map_sha256'],source_scene_receipt=str(receipt_path),source_scene_receipt_sha256=_digest(receipt_path),response_cdr=str(response),response_cdr_sha256=manifest['response_sha256'],
         response_verification='original captured CDR file SHA checked; not deserialized/reissued as live ROS evidence',
         epoch=manifest['epoch'],fine_revision=manifest['fine_revision'],raw_elevation_revision=manifest['raw_elevation_revision'],profile_hash=manifest['profile_hash'],

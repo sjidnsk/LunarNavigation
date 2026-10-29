@@ -15,7 +15,8 @@ def setup_main(tmp_path,monkeypatch,environment):
     source=tmp_path/'map.npz'
     np.savez_compressed(source,elevation=np.zeros((2,2),np.float32),bounds_xy_m=[235.,235.4,-315.,-314.6],resolution_m=.2)
     scene=tmp_path/'scene.json'
-    scene.write_text(json.dumps(dict(schema='lunar.viper-navigation-scene.v1',region='A',resolution_m=.2,
+    from tools.isaac_viper.known_regions import SOURCE_SHA
+    scene.write_text(json.dumps(dict(source_sha256=SOURCE_SHA,schema='lunar.viper-navigation-scene.v1',region='A',resolution_m=.2,
         map_npz=str(source),map_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),bounds_xy_m=[235.,235.4,-315.,-314.6])),encoding='utf-8')
     output=tmp_path/'host-output'; overlay=tmp_path/'new-overlay'/'paths.json'
     monkeypatch.setattr(sys,'argv',['navigation_showcase','--scene-json',str(scene),'--output-dir',str(output),'--overlay-file',str(overlay)])

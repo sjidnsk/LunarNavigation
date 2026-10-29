@@ -1,4 +1,4 @@
-"""真实 ROS 路径的 Kit UI 叠加；二维规划高度仅按核验 A 图投影。"""
+"""真实 ROS 路径的 Kit UI 叠加；二维规划高度仅按核验已知演示区地图投影。"""
 import hashlib
 import json
 import math
@@ -115,14 +115,14 @@ class TerrainProjector:
 
     @classmethod
     def from_source(cls,source):
-        from tools.isaac_viper.navigation_scene import SOURCE_SHA
-        if not isinstance(source,dict) or source.get('region')!='A' or source.get('source_stage_sha256')!=SOURCE_SHA: raise ValueError('display map must be the current original A map')
+        from tools.isaac_viper.known_regions import SOURCE_SHA,validate_region_map
+        if not isinstance(source,dict) or source.get('source_stage_sha256')!=SOURCE_SHA: raise ValueError('display map must use the frozen original source')
         if not isinstance(source.get('path'),str) or not isinstance(source.get('sha256'),str): raise ValueError('invalid display map source')
         path=Path(source['path'])
         if path.stat().st_size>16*1024*1024 or hashlib.sha256(path.read_bytes()).hexdigest()!=source.get('sha256'): raise ValueError('display map hash/size mismatch')
         with np.load(path,allow_pickle=False) as archive:
             bounds=archive['bounds_xy_m'].tolist(); resolution=float(archive['resolution_m'])
-            if not (235<=bounds[0]<bounds[1]<=335 and -315<=bounds[2]<bounds[3]<=-215 and resolution==.2): raise ValueError('display map outside authorized A bounds/resolution')
+            validate_region_map(source.get('region'),bounds,resolution,archive['elevation'].shape)
             return cls(archive['elevation'],bounds,resolution)
 
 
@@ -171,7 +171,7 @@ class ViewportPaths:
             history=bool(payload.get('history_paths'))
             trace_audit=payload['paths'].get('actual_trace',{}).get('simplification',{})
             trace_status=(' | ACTUAL full-span simplified display '+str(trace_audit.get('retained_samples'))+'/'+str(trace_audit.get('accepted_samples'))+' samples' if trace_audit.get('compactions',0)>0 else '')
-            self.status_label.text='  '+payload.get('goal_state','waiting')+(' | initial verified plan: HISTORY, frozen' if history else '')+' | planner height: A collision map (display only)'+trace_status
+            self.status_label.text='  '+payload.get('goal_state','waiting')+(' | initial verified plan: HISTORY, frozen' if history else '')+' | planner height: '+str(payload.get('display_map',{}).get('region','known demo'))+' collision map (display only)'+trace_status
         except (ValueError,KeyError,OSError) as exc:
             self.view.scene.clear(); self.status_label.text='  REJECTED overlay; no live planner claim'; self.digest=digest
             raise ValueError('navigation overlay rejected: '+str(exc)) from exc

@@ -68,11 +68,11 @@ def create_showcase_ui(stage, viewport, metadata, request_path, status, record, 
         with channel.window.frame:
             with ui.VStack(spacing=5):
                 ui.Label('Inspection: artificial fill lighting', word_wrap=True)
-                ui.Label(metadata['showcase']['geometry_version']+(' | A known-map navigation; live ROS overlay' if 'navigation_showcase' in metadata else ' | A/B map + Actor/planner NOT_RUN'), word_wrap=True)
+                ui.Label(metadata['showcase']['geometry_version']+(' | '+str(metadata['navigation_showcase'].get('region','A'))+' known-map navigation; live ROS overlay' if 'navigation_showcase' in metadata else ' | A/B map + Actor/planner NOT_RUN'), word_wrap=True)
                 ui.Label('View only: camera changes never move vehicle', word_wrap=True)
                 if 'navigation_showcase' in metadata:
-                    ui.Button('A | navigation whole-route overview', clicked_fn=lambda: channel.choose('navigation'))
-                    ui.Button('A | follow actual VIPER', clicked_fn=lambda: channel.choose('navigation_follow'))
+                    ui.Button(str(metadata['navigation_showcase'].get('region','A'))+' | navigation whole-route overview', clicked_fn=lambda: channel.choose('navigation'))
+                    ui.Button(str(metadata['navigation_showcase'].get('region','A'))+' | follow actual VIPER', clicked_fn=lambda: channel.choose('navigation_follow'))
                 for name,label in (('vehicle','Vehicle'),('overview','All A/B/C'),
                                    ('A','A | rock avoidance | 100 x 100 m'),
                                    ('B','B | crater slope | 75 x 75 m'),

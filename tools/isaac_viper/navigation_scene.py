@@ -1,4 +1,4 @@
-"""原 A 区碰撞几何的 CPU 已知地图；不向 C/Actor 提供真值。"""
+"""冻结原场景固定区域的 CPU 已知地图；不向 C/Actor 提供真值。"""
 import argparse
 import hashlib
 import json
@@ -7,9 +7,9 @@ import time
 from pathlib import Path
 import numpy as np
 
-TERRAIN = '/World/Environment/DetailTerrain_Rockfield/DetailMesh_Rockfield'
-SOURCE_SHA = 'e0573e650232211b6ef0c0281fe644028855a95f823eda7f9db9d51a9e5eb70e'
-A_BOUNDS = [235.,335.,-315.,-215.]
+from tools.isaac_viper.known_regions import SOURCE_SHA,REGION_NAMES,region_spec,validate_region_map
+TERRAIN = region_spec('A')['terrain_path']
+A_BOUNDS = region_spec('A')['bounds_xy_m']
 
 
 def _clip(poly, axis, value, lower):
@@ -179,7 +179,7 @@ def select_long_route(elevation,relief,bounds,resolution,minimum_length_m=100.,c
             blocking_evidence='finite actual collision cell exceeds capability clipped-height relief threshold; unknown is never an obstacle substitute',
             threshold_source='explicit capability maximum_slope_rad / maximum_local_obstacle_relief_m' if capability is not None else 'legacy Task4 conservative candidate gates',
             endpoint_checks=checks,search_attempts=attempts,method='offline 8-neighbour A*; no corner cutting; fixture reachability only, never published/drawn as navigator output')
-    raise ValueError('A bounded search found no connected real-obstacle detour of required length; no synthetic fallback')
+    raise ValueError('Fixed known-region search found no connected real-obstacle detour of required length; no synthetic fallback')
 
 
 def select_route(elevation, relief, bounds, resolution):
@@ -247,10 +247,34 @@ def collision_triangles(stage, bounds):
     return np.concatenate(chunks),audit
 
 
-def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.,native_policy_json=None,start_xy_m=None,goal_xy_m=None,native_profile_hash=None):
+def _write_map_only_scene(output,source_path,source_layers,profile_path,profile,spec,elevation,relief,audit,raster_wall_s,minimum_length,reason):
+    """phase1只图回执：不生成PoseStage、不补造端点/路线/原生成功。"""
+    from tools.isaac_viper.build_showcase import digest
+    bounds=spec['bounds_xy_m']; output=Path(output)
+    np.savez_compressed(output/'map.npz',elevation=elevation,relief=relief,bounds_xy_m=bounds,resolution_m=.2)
+    cap_path=Path(profile_path).resolve().parent/profile['sources']['capability']
+    receipt=dict(schema='lunar.viper-navigation-scene.v1',region=spec['region'],phase='MAP_ONLY',simulation_only=True,
+        source_stage=str(source_path),source_sha256=SOURCE_SHA,source_layer_sha256=source_layers,
+        stage=None,stage_sha256=None,map_npz=str(output/'map.npz'),map_sha256=digest(output/'map.npz'),bounds_xy_m=bounds,resolution_m=.2,
+        placement_terrain_path=spec['terrain_path'],start_xy_m=None,goal_xy_m=None,goal_yaw_rad=None,
+        map_source=spec['usage'],raster_method='NumPy batched exact triangle/cell polygon clipping; absolute max elevation; unknown NaN',
+        raster_wall_s=raster_wall_s,collision_meshes=audit,
+        capability_profile=str(Path(profile_path).resolve()),capability_path=str(cap_path),capability_sha256=digest(cap_path),
+        profile_sha256=digest(profile_path),capability_limits=profile['capability'],
+        fixture_precheck=dict(offline_only=True,connectivity='NOT_RUN',native_endpoint_validation='NOT_RUN',path_length_m=None,
+            minimum_required_m=float(minimum_length),line_of_sight_blocked=None,selection_status=reason),
+        NOT_RUN=['pose_stage','native_endpoint_validation','Kit','ROS','navigation','dynamic_settle','Orin','real_vehicle','C Actor'])
+    (output/'navigation-scene.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
+    return receipt
+
+
+def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.,native_policy_json=None,start_xy_m=None,goal_xy_m=None,native_profile_hash=None,region='A',map_only=False):
     from pxr import Usd,UsdGeom,UsdPhysics
     from tools.isaac_viper.build_stage import _placement,_transform
     from tools.isaac_viper.config import load_profile
+    spec=region_spec(region); terrain_path=spec['terrain_path']
+    if not math.isfinite(minimum_route_length_m) or minimum_route_length_m<=0: raise ValueError('minimum route length must be finite positive')
+    if map_only and native_policy_json is not None: raise ValueError('map-only phase cannot consume native fixture endpoints')
     source_path=Path(source_stage).resolve()
     sha=hashlib.sha256(source_path.read_bytes()).hexdigest()
     if sha!=SOURCE_SHA: raise ValueError('source stage differs from frozen original A/B/C')
@@ -258,22 +282,29 @@ def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.
     source=Usd.Stage.Open(str(source_path))
     from tools.isaac_viper.build_showcase import digest
     source_layers={str(Path(layer.realPath).resolve()):digest(layer.realPath) for layer in source.GetUsedLayers() if layer.realPath and Path(layer.realPath).is_file()}
-    if not source.GetPrimAtPath(TERRAIN): raise ValueError('original A terrain missing')
+    if not source.GetPrimAtPath(terrain_path).IsA(UsdGeom.Mesh): raise ValueError('fixed region original terrain Mesh missing')
     profile=load_profile(profile_path)
     if profile.get('simulation_only') is not True: raise ValueError('navigation demo requires an explicit simulation_only profile')
     if profile['capability']['maximum_forward_speed_mps']!=2. or profile['capability']['maximum_spin_rate_radps']!=2.: raise ValueError('navigation demo capability must be forward2/spin2')
-    # 只在原A100x100已知区；不扩大已知、不触碰C/Actor。
-    bounds=list(A_BOUNDS); started=time.perf_counter()
+    # 只用两个固定已知图演示区；没有任意bounds或C/Actor真值入口。
+    bounds=spec['bounds_xy_m']; validate_region_map(region,bounds,.2); started=time.perf_counter()
     triangles,audit=collision_triangles(source,bounds)
     elevation,relief=rasterize_triangles_batched(triangles,bounds,.2)
     raster_wall_s=time.perf_counter()-started
+    if not any(mesh['path']==terrain_path for mesh in audit): raise ValueError('fixed placement terrain is not an enabled collision source in this ROI')
+    def map_receipt(reason):
+        receipt=_write_map_only_scene(output,source_path,source_layers,profile_path,profile,spec,elevation,relief,audit,raster_wall_s,minimum_route_length_m,reason)
+        if digest(source_path)!=sha or any(digest(path)!=value for path,value in source_layers.items()): raise RuntimeError('source modified')
+        return receipt
+    if map_only: return map_receipt('explicit map-only phase; approximate/native fixture NOT_RUN')
     if native_policy_json is not None:
         from tools.isaac_viper.native_policy import load_native_policy,select_native_route
-        policy=load_native_policy(native_policy_json,profile,elevation,relief,bounds,.2,source_layers,native_profile_hash,digest(profile_path))
+        policy=load_native_policy(native_policy_json,profile,elevation,relief,bounds,.2,source_layers,native_profile_hash,digest(profile_path),region=region)
         start,goal,fixture=select_native_route(policy,elevation,relief,bounds,.2,start_xy_m,goal_xy_m,minimum_route_length_m,profile['capability'])
     else:
         if any(value is not None for value in (start_xy_m,goal_xy_m,native_profile_hash)): raise ValueError('explicit endpoints/hash require a native policy snapshot')
-        start,goal,fixture=select_long_route(elevation,relief,bounds,.2,minimum_route_length_m,profile['capability'])
+        try: start,goal,fixture=select_long_route(elevation,relief,bounds,.2,minimum_route_length_m,profile['capability'])
+        except ValueError as exc: return map_receipt('approximate endpoint search failed: '+str(exc))
         fixture['native_endpoint_validation']='NOT_RUN; approximate candidate only, not native endpoint acceptance'
     blocker=fixture['blocked_cell_xy_m']; collision_sources=[]
     # 根据真实三角XY包围盒列出阻挡格的候选来源；精确高度/relief来自裁剪图。
@@ -290,7 +321,7 @@ def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.
                 attribution='actual positive-area triangle/cell intersection; no bbox-only obstacle claim'))
     fixture['obstacle_collision_sources']=collision_sources
     yaw=math.atan2(goal[1]-start[1],goal[0]-start[0])
-    position,orientation,placement=_placement(source,profile,TERRAIN,start,math.degrees(yaw))
+    position,orientation,placement=_placement(source,profile,terrain_path,start,math.degrees(yaw))
     stage_path=output/'viper-navigation.usda'
     stage=Usd.Stage.CreateNew(str(stage_path)); stage.GetRootLayer().subLayerPaths=[str(source_path)]
     for key in ('metersPerUnit','upAxis','kilogramsPerUnit','timeCodesPerSecond','framesPerSecond','defaultPrim'):
@@ -298,13 +329,13 @@ def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.
     _transform(stage.OverridePrim('/World/ProjectVIPER'),position).AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(orientation)
     meta=json.loads(source.GetRootLayer().customLayerData['engineering_metadata_json'])
     meta.update(initial_position_m=position,initial_orientation_wxyz=[orientation.GetReal(),*orientation.GetImaginary()],placement=placement)
-    meta['navigation_showcase']=dict(region='A',map_bounds_xy_m=bounds,map_height_range_m=[float(np.nanmin(elevation)),float(np.nanmax(elevation))],start_xy_m=start,goal_xy_m=goal,goal_yaw_rad=yaw,fixture_precheck=fixture,simulation_only=True)
+    meta['navigation_showcase']=dict(region=region,map_bounds_xy_m=bounds,map_height_range_m=[float(np.nanmin(elevation)),float(np.nanmax(elevation))],start_xy_m=start,goal_xy_m=goal,goal_yaw_rad=yaw,fixture_precheck=fixture,simulation_only=True)
     data=dict(source.GetRootLayer().customLayerData); data['engineering_metadata_json']=json.dumps(meta,ensure_ascii=False)
     stage.GetRootLayer().customLayerData=data; stage.GetRootLayer().Save()
     np.savez_compressed(output/'map.npz',elevation=elevation,relief=relief,bounds_xy_m=bounds,resolution_m=.2)
-    report=dict(map_sha256=digest(output/'map.npz'),stage_sha256=digest(stage_path),schema='lunar.viper-navigation-scene.v1',region='A',source_stage=str(source_path),source_sha256=sha,
+    report=dict(map_sha256=digest(output/'map.npz'),stage_sha256=digest(stage_path),schema='lunar.viper-navigation-scene.v1',region=region,phase='NATIVE_FIXTURE' if native_policy_json else 'APPROXIMATE_FIXTURE',source_stage=str(source_path),source_sha256=sha,
         stage=str(stage_path),map_npz=str(output/'map.npz'),bounds_xy_m=bounds,resolution_m=.2,start_xy_m=start,goal_xy_m=goal,goal_yaw_rad=yaw,
-        map_source='known_map_from_same_scene_collision_geometry; A only; forbidden for C/Actor',
+        map_source=spec['usage'],placement_terrain_path=terrain_path,
         raster_method='NumPy batched exact triangle/cell polygon clipping; absolute max elevation; unknown NaN',
         raster_wall_s=raster_wall_s,fixture_precheck=fixture,simulation_only=True,
         capability_profile=str(Path(profile_path).resolve()),
@@ -326,6 +357,8 @@ def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.
 
 def main():
     p=argparse.ArgumentParser(description=__doc__); p.add_argument('--source-stage',required=True); p.add_argument('--output-dir',required=True); p.add_argument('--profile',default='config/isaac_viper_navigation_demo.yaml')
+    p.add_argument('--region',choices=REGION_NAMES,default='A',help='固定已知地图演示区；KNOWN_DEMO_FLAT不是C探索')
+    p.add_argument('--map-only',action='store_true',help='phase1只生成同源图/CPU回执，不生成PoseStage或端点')
     p.add_argument('--minimum-route-length-m',type=float,default=100.,help='仅离线fixture长度门；正式成功仍要求真实新导航规划>=此长度')
     p.add_argument('--native-policy-json',help='第二阶段：同源实际GetPolicyMap快照manifest；不启动导航器')
     p.add_argument('--native-policy-profile-hash',help='运行回执中的期望原生profile_hash，非YAML SHA')
@@ -334,6 +367,7 @@ def main():
     a=p.parse_args()
     native_values=(a.native_policy_json,a.native_policy_profile_hash,a.start_xy_m,a.goal_xy_m)
     if any(value is not None for value in native_values) and not all(value is not None for value in native_values): p.error('native policy manifest, runtime profile hash and both cell-center endpoints are required together')
-    print(json.dumps(build_scene(a.source_stage,a.output_dir,a.profile,a.minimum_route_length_m,a.native_policy_json,a.start_xy_m,a.goal_xy_m,a.native_policy_profile_hash),ensure_ascii=False))
+    if a.map_only and a.native_policy_json: p.error('--map-only and native endpoints are mutually exclusive')
+    print(json.dumps(build_scene(a.source_stage,a.output_dir,a.profile,a.minimum_route_length_m,a.native_policy_json,a.start_xy_m,a.goal_xy_m,a.native_policy_profile_hash,a.region,a.map_only),ensure_ascii=False))
 
 if __name__=='__main__': main()

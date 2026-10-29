@@ -99,3 +99,13 @@
 - main解析CLI后立即复用ros_bridge.assert_ros_environment，严格Humble/domain117/localhost1；在读取scene、创建输出、导入rclpy/init和publisher/ActionClient之前拒绝错误/缺失环境。--help仍可无ROS环境执行，domain218直接executor工厂smoke不经过main门。
 - 真实RED7failed/2passed，错误/缺失三项环境均触到被替身拦截的ROS导入；修复后全部在ROS导入和输出之前失败，正确环境继续到原ROS启动边界。仅改host入口和对应测试/记录，不改drive/停车安全门或现存运行。
 - root转述r3真实PLAN_FOUND和111.2058m global绕障且Kit可见，尚有95% waiting_for_stop/坡面零速诊断；本修复不将这些转述升级为GOAL_REACHED/严格停车通过。具体提交与最终相关suite见外部task5report。
+
+### 固定平缓已知演示区 KNOWN_DEMO_FLAT
+
+- 基线b514dee；用户新要求先平缓地形、非直线且百米左右。停车/连续转向暂停工作全部保留在未提交工作树，不纳入本次交付。
+- 共用known_regions合同只接受A和固定KNOWN_DEMO_FLAT；新ROI严格 `[-490,-370,-250,-130]`、.2m/600×600、原碰撞地形 `/World/Environment/Terrain_0_1__250m/V02_TerrainMesh_0_1`。无任意bounds/terrain CLI，不与C `[-140,100,-420,-180]`相交；明确known-map demo而非C/Actor探索。A保留原范围内legacy小图兼容。
+- generator `--region KNOWN_DEMO_FLAT` 使用原SOURCE_SHA/实际启用collision/原层hash；PXR落位与receipt用固定terrain。可 `--map-only` 只产同源NPZ/CPU receipt，无PoseStage/端点/导航成功。approx选点失败同样回退为明确MAP_ONLY，native验证失败仍fail closed。
+- native支持新schema native-policy-aligned-v2（显式region），600图index_order为 `array[y,x] ascending world axes; cell centers origin+(index+0.5)*resolution; policy indices0..599 exactly source grid`；旧aligned500-v1只兼容A。host/native/projector共用region+bounds+res+shape门，禁止标签换图；SOURCE_SHA/能力/环境隔离/session/DDS/PLAN_FOUND门保持。
+- root已独立获得新ROI native snapshot与新候选start[-394.3,-223.3]、goal[-484.9,-180.9]，净距100.0306m、offline108.1627m、真实rock blocker[-466.9,-189.3]；属root预检，真实Action规划/行驶仍待本新场景运行。
+- run_scene仅3条UI标签改为读取metadata region（标题/总览/跟随），用干净HEAD文本生成label-only patch经git apply --cached部分暂存；暂停中的parking工作副本保留，不通过git add整文件带入。
+- 本工作树suite246passed/17SDKskip/5subtests、3.39s，但含暂停parking代码/5项测试，不能当冻结HEAD验证。root将git archive本提交后独立跑冻结suite；本次RED4failed和固定ROI/native v2/标签换图/map-only门回归已保存。准确提交、CLI与边界见外部flat-demo-region-report.md。

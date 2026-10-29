@@ -1,4 +1,4 @@
-"""Humble cp310 原 A 已知图助手：真实 Action/odom/TF/规划输出；绝不发布车辆控制。"""
+"""Humble cp310 冻结已知演示区地图助手：真实 Action/odom/TF/规划输出；绝不发布车辆控制。"""
 import argparse
 import copy
 import hashlib
@@ -47,6 +47,10 @@ def message_info_executor_type(base_executor=None,await_callback=None):
                 message,info=taken
                 await await_callback(sub.callback,message,info)
     return MessageInfoExecutor
+
+
+def scene_has_endpoints(scene):
+    return all(isinstance(scene.get(key),list) and len(scene[key])==2 and all(isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) for v in scene[key]) for key in ('start_xy_m','goal_xy_m')) and isinstance(scene.get('goal_yaw_rad'),(int,float)) and not isinstance(scene['goal_yaw_rad'],bool) and math.isfinite(scene['goal_yaw_rad'])
 
 
 def configure_grid_info(info,bounds,resolution):
@@ -257,7 +261,11 @@ def main():
     assert_ros_environment()  # 任何文件输出、rclpy.init、canonical publisher/ActionClient之前拒绝错域。
     if min(args.wall_timeout,args.sim_timeout,args.freshness_wall)<=0: parser.error('timeouts must be positive')
     scene_path=Path(args.scene_json).resolve(); scene=json.loads(scene_path.read_text(encoding='utf-8'))
-    if scene.get('schema')!='lunar.viper-navigation-scene.v1' or scene.get('region')!='A' or scene.get('resolution_m')!=.2: raise ValueError('only explicit original A known map is authorized')
+    from tools.isaac_viper.known_regions import SOURCE_SHA,validate_region_map
+    if scene.get('schema')!='lunar.viper-navigation-scene.v1' or scene.get('source_sha256')!=SOURCE_SHA: raise ValueError('only frozen original-scene known demo maps are authorized')
+    validate_region_map(scene.get('region'),scene.get('bounds_xy_m'),scene.get('resolution_m'))
+    has_endpoints=scene_has_endpoints(scene)
+    if args.send_goal and not has_endpoints: raise ValueError('map-only receipt has no verified fixture endpoints; cannot send a goal')
     if hashlib.sha256(Path(scene['map_npz']).read_bytes()).hexdigest()!=scene['map_sha256']: raise ValueError('known map hash mismatch')
     archive=np.load(scene['map_npz'],allow_pickle=False); elevation=archive['elevation']; bounds=archive['bounds_xy_m'].tolist(); resolution=float(archive['resolution_m'])
     if bounds!=scene['bounds_xy_m'] or resolution!=.2 or elevation.shape!=(round((bounds[3]-bounds[2])/resolution),round((bounds[1]-bounds[0])/resolution)): raise ValueError('map/scene identity mismatch')
@@ -384,7 +392,7 @@ def main():
         sequence+=1; snapshot=overlay_snapshot(display,paths,args.show_local_path)
         state['long_route_evidence']=long_route_evidence(display,scene)
         payload=dict(schema=SCHEMA,run_id=run_id,sequence=sequence,frame='map',source='live_ros',clock_ns=state['clock_ns'],
-            display_map=dict(path=scene['map_npz'],sha256=scene['map_sha256'],source_stage_sha256=scene['source_sha256'],region='A',
+            display_map=dict(path=scene['map_npz'],sha256=scene['map_sha256'],source_stage_sha256=scene['source_sha256'],region=scene['region'],
                 usage='display-only projection of original planner XY; never changes raw ROS geometry; unknown/outside split'),**snapshot)
         validate_payload(payload); tmp=overlay.with_suffix(overlay.suffix+'.tmp'); tmp.write_text(json.dumps(payload,allow_nan=False),encoding='utf-8'); tmp.replace(overlay)
         state['display_session']=dict(goal_state=snapshot['goal_state'],action_session_id=snapshot['action_session_id'],history_paths=list(snapshot['history_paths']))
@@ -401,7 +409,7 @@ def main():
                 msg.data=[layer]; msg.outer_start_index=0; msg.inner_start_index=0
                 map_pub.publish(msg); state['map_publish_count']+=1; last_map=now
                 record('known_map_publish',stamp_ns=ns,frame='odom',resolution=resolution,source=scene['source_sha256'])
-            healthy=(ns is not None and state['map_publish_count']>=2 and len(trace.points)>=2 and all(now-latest.get(k,-math.inf)<=args.freshness_wall for k in ('odom_wall','tf_wall'))
+            healthy=(has_endpoints and ns is not None and state['map_publish_count']>=2 and len(trace.points)>=2 and all(now-latest.get(k,-math.inf)<=args.freshness_wall for k in ('odom_wall','tf_wall'))
                 and 0<=ns-latest.get('odom_stamp',-10**18)<=500000000
                 and math.dist(trace.points[-1]['xyz'][:2],scene['start_xy_m'])<=.5)
             if args.send_goal and not state['goal_sent'] and healthy and action.server_is_ready():
