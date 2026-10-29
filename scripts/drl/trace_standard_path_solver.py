@@ -22,6 +22,7 @@ def install(path):
             active=None if active is None else vars(active),path=e.path.original if e.path else None,
             policy=asdict(e.policy),config=asdict(e.config),progress_m=e.progress_m,
             local_progress_m=e._local_progress,no_progress_s=e.no_progress_s,anchor=e._last_pose,
+            translation_credit_m=getattr(e,'_translation_credit_m',0.),
             phase=e.phase,failure=e.failure,direction=e.direction,last_command=e._last_command,
             history=[(t,u.tolist()) for t,u in e._command_history],model_time=e._model_time,state_age=e._state_age_s)
     def score(e,state,controls,target,target_yaw,dt):

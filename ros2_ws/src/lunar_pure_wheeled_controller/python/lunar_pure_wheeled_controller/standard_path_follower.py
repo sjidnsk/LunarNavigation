@@ -130,6 +130,34 @@ class StandardPathFollower(MppiPathFollower):
         self.diagnostics['stop_certified']=False
         return self._result()
 
+    def _seed_sequence(self,state,seed,near):
+        fallback=super()._seed_sequence(state,seed,near)
+        if near or not self.path.lengths or self.progress_m>=self.path.length-1e-10:
+            return fallback
+        # 仅对已有有序几何作时间参数化，不在执行器中重新规划路线。
+        # 与实际候选使用同一接近/制动限速，速度与yaw随弧长变化保持配套。
+        p=self.policy;c=self.config
+        sequence=np.zeros((c.time_steps,2))
+        sequence[:,0]=self.direction*min(p.max_linear_mps,p.max_reverse_mps)
+        sequence=self._limit_sample_speeds(state,sequence[None],False)[0]
+        speed=abs(sequence[0,0])
+        if speed<=1e-12:return fallback
+        points=np.asarray(self.path.original)
+        lengths=np.linalg.norm(np.diff(points[:,:2],axis=0),axis=1)
+        arcs=np.concatenate(([0.],np.cumsum(lengths)))
+        delta=np.arctan2(np.sin(np.diff(points[:,2])),np.cos(np.diff(points[:,2])))
+        yaw=np.concatenate(([points[0,2]],points[0,2]+np.cumsum(delta)))
+        samples=np.minimum(arcs[-1],self.progress_m+speed*c.model_dt*np.arange(c.time_steps+1))
+        body=np.interp(samples,arcs,yaw)
+        sequence[:,1]=np.diff(body)/c.model_dt
+        # 沿用原seed的恒定角误差反馈，不把初始偏差误当作路径曲率。
+        sequence[:,1]+=1.5*angle(body[0]-state.yaw_rad)
+        sequence[:,1]=np.clip(sequence[:,1],-p.max_angular_radps,p.max_angular_radps)
+        if p.motion_model=='curvature_limited':
+            bound=abs(sequence[:,0])*p.max_curvature_per_m
+            sequence[:,1]=np.clip(sequence[:,1],-bound,bound)
+        return sequence
+
     def _reference_errors(self, poses):
         distance,heading=super()._reference_errors(poses)
         # MPPI 基类按行进方向评分；在此保留标准 Path 的中间车体 yaw。

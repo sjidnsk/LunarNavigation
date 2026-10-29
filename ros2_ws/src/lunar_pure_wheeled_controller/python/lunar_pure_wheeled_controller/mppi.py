@@ -345,6 +345,9 @@ class MppiExecutor:
         noise=self.rng.normal(size=(c.batch_size,blocks,2))*[c.linear_std,c.angular_std]
         return np.repeat(noise,8,axis=1)[:,:c.time_steps]
 
+    def _seed_sequence(self,state,seed,near):
+        return np.tile(seed,(self.config.time_steps,1))
+
     def _travel_direction(self,state,desired):
         p=self.policy
         return -1 if p.allow_reverse and abs(angle(desired-state.yaw_rad))>math.pi*.5 else 1
@@ -405,6 +408,7 @@ class MppiExecutor:
         # signs and time-varying sequences and uses a genuine weighted update.
         seed=np.array([0. if near or abs(error)>.2 else self.direction*min(p.max_linear_mps,p.max_reverse_mps),np.clip(1.5*error,-p.max_angular_radps,p.max_angular_radps)])
         if p.motion_model == "curvature_limited" and abs(seed[0])>0:seed[1]=np.clip(seed[1],-abs(seed[0])*p.max_curvature_per_m,abs(seed[0])*p.max_curvature_per_m)
+        seed=self._seed_sequence(state,seed,near)
         if not np.any(self._nominal):self._nominal[:]=seed
         best=None;best_xy=None;fallback=None;fallback_costs=None
         for _ in range(c.iterations):
