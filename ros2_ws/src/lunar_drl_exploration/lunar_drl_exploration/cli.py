@@ -40,6 +40,7 @@ def parser():
         elif name == 'infer':
             cmd.add_argument('--actor', required=True, type=Path)
             cmd.add_argument('--task-topic', default='/Car/T4/exploration/task')
+            cmd.add_argument('--navigation-backend', choices=('incremental_v2','nav1cm'),default='incremental_v2')
         else:
             cmd.add_argument('--checkpoint', required=True, type=Path)
             cmd.add_argument('--output', required=True, type=Path)
@@ -101,7 +102,7 @@ def main(argv=None):
         return evaluate(config, args.actor, seeds=args.seeds, families=args.families,
             extents=args.extents, budget=args.budget, output=args.output, domain_base=args.domain_base)
     from .evaluation import infer
-    return infer(config, args.actor, task_topic=args.task_topic)
+    return infer(config, args.actor, task_topic=args.task_topic,navigation_backend=args.navigation_backend)
 
 
 def console_main():

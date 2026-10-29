@@ -260,6 +260,7 @@ class TrainingConfig:
     ordered_rehearsal_fraction: float = .2
     ordered_rehearsal_by_phase: tuple | None = None
     ordered_budget_rule: dict | None = None
+    navigation_backend: str = 'incremental_v2'
     policy_graph_mode: str = 'fine'
     remote_frontier_positions: int = 32
     environments: int = 8
@@ -301,6 +302,10 @@ class TrainingConfig:
                 else self.ordered_rehearsal_by_phase[phase])
 
     def __post_init__(self):
+        if self.navigation_backend not in ('incremental_v2', 'nav1cm'):
+            raise ValueError('unknown navigation_backend')
+        if self.navigation_backend == 'nav1cm' and self.safe_start_radius_m:
+            raise ValueError('nav1cm requires real observed start support')
         if bool(self.cave_generator_version) != bool(self.cave_split_manifest_hash):
             raise ValueError('cave generator version and split manifest hash required together')
         if (type(self.safe_start_radius_m) not in (int, float)
@@ -427,7 +432,8 @@ def config_record(value):
     """Explicit canonical JSON/spawn record; asdict cannot deepcopy mappingproxy."""
     from dataclasses import fields, is_dataclass
     if is_dataclass(value):
-        return {f.name: config_record(getattr(value, f.name)) for f in fields(value)}
+        return {f.name: config_record(getattr(value, f.name)) for f in fields(value)
+                if not (f.name == 'navigation_backend' and getattr(value, f.name) == 'incremental_v2')}
     if isinstance(value, Mapping):
         return {str(key): config_record(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
@@ -467,6 +473,8 @@ def resume_semantics(config):
         schedule=dict(warmup=config.warmup, ratio=config.update_ratio),
         curriculum_budgets=record['curriculum_budgets'],
         curriculum_extents_m=record['curriculum_extents_m'])
+    if config.navigation_backend != 'incremental_v2':
+        result['navigation_backend'] = config.navigation_backend
     if config.safe_start_radius_m:
         result['safe_start_region'] = dict(version='native_navigation_disk_v1',
             navigation_radius_m=config.safe_start_radius_m,

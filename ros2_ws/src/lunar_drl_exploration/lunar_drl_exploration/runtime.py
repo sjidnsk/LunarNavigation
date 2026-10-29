@@ -2,7 +2,7 @@
 import numpy as np
 from .contracts import TaskSpec, SensorSpec
 from .decision import DecisionCore
-from .ros_messages import InfrastructureError, RosNavigationAdapter, velocity_is_stopped
+from .ros_messages import InfrastructureError, velocity_is_stopped
 
 
 class ActorPolicy:
@@ -48,11 +48,13 @@ class ActorPolicy:
 
 
 class InferenceRuntime:
-    def __init__(self,adapter,policy,sensor=None,graph_config=None):
+    def __init__(self,adapter,policy,sensor=None,graph_config=None,*,policy_graph_mode='fine',remote_frontier_positions=32):
         self.adapter=adapter;self.policy=policy;self.sensor=sensor or SensorSpec()
         self.graph_config=graph_config;self.core=None;self.state='IDLE';self.report=None
         self.last_result=None;self._after_stop=None;self._pending_task=None;self._stamp=-1
         self.last_error=None
+        self.policy_graph_mode=policy_graph_mode;self.remote_frontier_positions=remote_frontier_positions
+        self.last_observation=None;self.policy_graph_stats=None
 
     def start(self,task):
         if self.adapter.inflight:
@@ -113,6 +115,13 @@ class InferenceRuntime:
         if self.report.completed:
             self.state='EXHAUSTED'
             return
+        from .policy_preparation import prepare_policy_state
+        model=getattr(getattr(self.policy,'actor',None),'config',None)
+        observation,_,_,self.policy_graph_stats=prepare_policy_state(observation,snapshot=snap,
+            architecture_version=getattr(model,'architecture_version','region_relation_v2'),
+            mode=self.policy_graph_mode,cap=self.remote_frontier_positions,
+            task_id=self.core.task.task_id,sensor=self.sensor)
+        self.last_observation=observation
         if not len(observation.goals):raise InfrastructureError('available nonexhausted state has no actions')
         action=int(self.policy(observation))
         if not 0<=action<len(observation.goals):raise ValueError('Actor action outside frozen observation')
@@ -134,13 +143,19 @@ class InferenceRuntime:
                policy_map_service='/Car/T4/mapping/get_policy_map',
                odometry_topic='/Car/T3/localization/odometry',
                diagnostics_topic='/Car/T4/planning/diagnostics',
-               path_reference_topic='/Car/T4/planning/path_reference',tf_topic='/tf'):
+               path_reference_topic='/Car/T4/planning/path_reference',tf_topic='/tf',
+               navigation_backend='incremental_v2',tf_static_topic='/tf_static',
+               global_route_topic=None,map_frame='map',odom_frame='odom',
+               policy_graph_mode='fine',remote_frontier_positions=32):
         """Attach to existing navigator/controller; caller spins supplied ROS node."""
         from lunar_pure_exploration_msgs.msg import PureExplorationTask
         from diagnostic_msgs.msg import DiagnosticArray,DiagnosticStatus,KeyValue
-        adapter=RosNavigationAdapter(node,action_name=action_name,policy_map_service=policy_map_service,
-            odometry_topic=odometry_topic,diagnostics_topic=diagnostics_topic,path_reference_topic=path_reference_topic,tf_topic=tf_topic)
-        runtime=cls(adapter,policy,sensor,graph_config)
+        from .navigation_backend import create_navigation_adapter
+        adapter=create_navigation_adapter(node,navigation_backend=navigation_backend,action_name=action_name,policy_map_service=policy_map_service,
+            odometry_topic=odometry_topic,diagnostics_topic=diagnostics_topic,path_reference_topic=path_reference_topic,tf_topic=tf_topic,
+            tf_static_topic=tf_static_topic,global_route_topic=global_route_topic,map_frame=map_frame,odom_frame=odom_frame)
+        runtime=cls(adapter,policy,sensor,graph_config,policy_graph_mode=policy_graph_mode,
+                    remote_frontier_positions=remote_frontier_positions)
         runtime._task_subscription=node.create_subscription(PureExplorationTask,task_topic,runtime.handle_task,10)
         runtime._status_publisher=node.create_publisher(DiagnosticArray,status_topic,10)
         def tick():
