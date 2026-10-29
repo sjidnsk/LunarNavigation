@@ -51,3 +51,14 @@
 - P2：local改为已接受Action UUID、ACTIVE reference/revision与PLAN_FOUND匹配的原reference.path；global只接volatile新样本，以本goal请求后的DDS source_timestamp与紧邻同周期reference关联，原Path header stamp不改、不认领原生UUID。旧session和INVALIDATED不画live。
 - 首份验证规划保留为清楚标注HISTORY，失效/终态清live且标状态，最终全局完整对照不消失；新goal清旧plan/history/trace并保持stamp高水位。非法会话JSON清旧曲线后拒绝。
 - 真实RED8failed；修复后相关206passed/17SDKskip/5subtests，含实际poll曲线坐标8.12..10.12与真实轨迹11.12、原raw规划z=0不改的定向测试。EOF空行已清，git diff --check cddf95e通过。实际Kit/Humble仍NOT_RUN，提交与命令见外部task4report，交root同步/复审/实跑。
+
+## Task 5 原 A 百米绕障和仿真专用 2m/s 档
+
+- 延续同任务、owner与专题；执行者 Codex/implement_long_navigation_demo，基线 `7fb7f583af9eebde5b52d183e158e9e0f0cc44cb`；唯一源码写入者。root负责台式同步、Kit/Humble导航和控制；本执行者只读SSH CPU/PXR，不启动ROS/GPU/控制，不写台式。
+- 新 `isaac_viper_navigation_demo.yaml` 引用 `wheel_isaac_navigation_demo.yaml`，显式 `simulation_only`；只将forward上限改2m/s、自转上限改2rad/s。reverse .2、加速度/制动/横向加速度/曲率/安全watchdog、原车几何质量和传感规格均保持；生产 `wheel_orin.yaml` 未改。真实导航器/控制器/Kit必须用同一demo能力档。
+- 原A100×100m、.2m栅格由真实collision批量精确裁剪生成，未知NaN、最高高程/格内relief不平滑；地图/层/能力配置hash入回执。先按原Task4额外保守12deg/.08m搜索，真实拒绝；root授权从原cap权威20deg/.2m读取后，保持车包络外接圆+.5m，真实找到静态连通绕障fixture。无扩界，无C/Actor真值。
+- 只读真实CPU结果：1344437三角/55 Mesh，提取.85s、整区地图累计4.64s、fixture累计5.20s。起点 `[282.3,-307.1]`、终点 `[333.5,-216.5]`，净距104.0663m，离线无切角A*可行长度111.8077m，直线阻挡格 `[308.3,-261.1]`。这是选点预检；该路线从不发布或绘制，新navigator规划长度仍 `NOT_RUN`。
+- 总览相机按XY/真实高程八角点和显式24mm/36×20.25mm、16:9视锥拟合；`navigation_follow` 按真实物理pose更新独立近景相机。只改相机，不传送车辆；viewport线加宽、会话/地图高度/历史绑定保持。
+- host默认150sim/300wall，单次显式 `--send-goal` 和拒覆盖、健康门、超时取消保持。`result.json.long_route_evidence` 单列真实navigator global长度、原session/revision、真实阻挡格到规划折线净距，长度>=100且车包络绕过阻挡才满足；PLAN_FOUND、GOAL_REACHED、严格停车分别判定。
+- 本机真实RED 5failed；证据门RED 1failed/5passed；额外真实global直穿障碍RED 1failed/5passed。最终相关suite 213passed/17SDKskip/5subtests，CLI与diff检查通过。17skip不算SDK通过；真实原A只读PXR地图预检已执行，派生stage/PhysX/实际Kit视图/Humble闭环/严格停车/Orin/实车仍NOT_RUN，交root实测。
+- 处置：已提交待root验证、独立审查和合入；准确提交与输出见外部 `coordination/task-5-report.md`。旧失败、原资产和所有输出保留，无push/PR/清理，不碰中央dirty登记。

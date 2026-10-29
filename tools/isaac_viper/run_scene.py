@@ -45,6 +45,7 @@ def create_showcase_ui(stage, viewport, metadata, request_path, status, record, 
     camera_paths['vehicle'] = '/World/EngineeringView'
     if 'navigation_showcase' in metadata:
         camera_paths['navigation'] = '/World/NavigationView'
+        camera_paths['navigation_follow'] = '/World/NavigationFollowView'
     def select(path):
         if not stage.GetPrimAtPath(path):
             raise ValueError('showcase camera missing: '+path)
@@ -70,7 +71,8 @@ def create_showcase_ui(stage, viewport, metadata, request_path, status, record, 
                 ui.Label(metadata['showcase']['geometry_version']+(' | A known-map navigation; live ROS overlay' if 'navigation_showcase' in metadata else ' | A/B map + Actor/planner NOT_RUN'), word_wrap=True)
                 ui.Label('View only: camera changes never move vehicle', word_wrap=True)
                 if 'navigation_showcase' in metadata:
-                    ui.Button('A | navigation close view', clicked_fn=lambda: channel.choose('navigation'))
+                    ui.Button('A | navigation whole-route overview', clicked_fn=lambda: channel.choose('navigation'))
+                    ui.Button('A | follow actual VIPER', clicked_fn=lambda: channel.choose('navigation_follow'))
                 for name,label in (('vehicle','Vehicle'),('overview','All A/B/C'),
                                    ('A','A | rock avoidance | 100 x 100 m'),
                                    ('B','B | crater slope | 75 x 75 m'),
@@ -247,7 +249,7 @@ def main():
     parser.add_argument('--wall-timeout', type=float, default=600.)
     parser.add_argument('--keep-open', action='store_true', help='保留GUI；Pause可恢复，Stop后需重新运行原命令建立控制会话')
     parser.add_argument('--headless', action='store_true')
-    parser.add_argument('--view-request-file', help='显式展示视角JSON文件；只接受vehicle/overview/A/B/C，绝不改变车位姿')
+    parser.add_argument('--view-request-file', help='显式展示视角JSON文件；只接受vehicle/overview/A/B/C/navigation/navigation_follow，绝不改变车位姿')
     parser.add_argument('--navigation-overlay-file', help='显式真实 ROS 路径 JSON；仅 viewport SceneView，不写 USD/RTX几何')
     parser.add_argument('--lifecycle-probe', choices=('stop','stop-play'),
         help='有界SDK回归：在.5sim秒Stop，可同frame再Play；记录后退出测试')
@@ -341,14 +343,22 @@ def main():
         matrix = Gf.Matrix4d().SetLookAt(Gf.Vec3d(initial[0]+3,initial[1]+3,initial[2]+2.5),
             Gf.Vec3d(initial[0],initial[1],initial[2]+.6),Gf.Vec3d(0,0,1)).GetInverse()
         view_xf.AddTransformOp().Set(matrix)
+        follow_camera_op = None
         if 'navigation_showcase' in metadata:
+            from tools.isaac_viper.viewport_paths import navigation_camera_pose,CAMERA_FOCAL_MM,CAMERA_APERTURE_MM
             nav = metadata['navigation_showcase']
-            start, goal = nav['start_xy_m'], nav['goal_xy_m']
-            center = Gf.Vec3d((start[0]+goal[0])/2,(start[1]+goal[1])/2,initial[2]+.25)
+            eye,target = navigation_camera_pose(nav['map_bounds_xy_m'],initial[2],height_range=nav.get('map_height_range_m'))
             camera = UsdGeom.Camera.Define(stage, '/World/NavigationView')
             UsdGeom.Xformable(camera.GetPrim()).AddTransformOp().Set(Gf.Matrix4d().SetLookAt(
-                center+Gf.Vec3d(4,-6,6),center,Gf.Vec3d(0,0,1)).GetInverse())
-            camera.CreateFocalLengthAttr(24.)
+                Gf.Vec3d(*eye),Gf.Vec3d(*target),Gf.Vec3d(0,0,1)).GetInverse())
+            camera.CreateFocalLengthAttr(CAMERA_FOCAL_MM)
+            camera.CreateHorizontalApertureAttr(CAMERA_APERTURE_MM[0]); camera.CreateVerticalApertureAttr(CAMERA_APERTURE_MM[1])
+            follow = UsdGeom.Camera.Define(stage, '/World/NavigationFollowView')
+            follow_camera_op = UsdGeom.Xformable(follow.GetPrim()).AddTransformOp()
+            eye,target = navigation_camera_pose(nav['map_bounds_xy_m'],initial[2],initial)
+            follow_camera_op.Set(Gf.Matrix4d().SetLookAt(Gf.Vec3d(*eye),Gf.Vec3d(*target),Gf.Vec3d(0,0,1)).GetInverse())
+            follow.CreateFocalLengthAttr(CAMERA_FOCAL_MM)
+            follow.CreateHorizontalApertureAttr(CAMERA_APERTURE_MM[0]); follow.CreateVerticalApertureAttr(CAMERA_APERTURE_MM[1])
         from omni.kit.viewport.utility import get_active_viewport
         viewport = get_active_viewport()
         if viewport is not None:
@@ -507,6 +517,9 @@ def main():
             stamp = float(sim.get_simulation_time())
             last_control_stamp = stamp
             pose, velocity = av.get_root_transforms()[0].copy(), av.get_root_velocities()[0].copy()
+            if follow_camera_op is not None:
+                eye,target=navigation_camera_pose(nav['map_bounds_xy_m'],initial[2],pose[:3])
+                follow_camera_op.Set(Gf.Matrix4d().SetLookAt(Gf.Vec3d(*eye),Gf.Vec3d(*target),Gf.Vec3d(0,0,1)).GetInverse())
             positions_post = av.get_dof_positions()[0].copy()
             velocities_post = av.get_dof_velocities()[0].copy()
             if not first_step_probe_done:

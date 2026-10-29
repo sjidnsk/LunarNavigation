@@ -131,6 +131,33 @@ class DisplayPlanSession:
                     path_reference=copy.deepcopy(self.reference),paths=copy.deepcopy(self.live),history_paths=copy.deepcopy(self.history))
 
 
+def long_route_evidence(display,scene):
+    """实际新navigator global长度与fixture分列；没有原消息绑定时保持未满足。"""
+    fixture=scene.get('fixture_precheck',{}); minimum=float(fixture.get('minimum_required_m',100.))
+    value=dict(satisfied=False,minimum_required_m=minimum,navigator_global_length_m=None,
+        source='verified original navigator global_route; accepted Action + matching PLAN_FOUND/ACTIVE reference',
+        offline_fixture_length_m=fixture.get('path_length_m'),goal_reached_is_separate=True)
+    path=display.history.get('global_route')
+    if not display.accepted or not path or path.get('binding',{}).get('session_id')!=display.session_id: return value
+    points=path['points']; length=sum(math.dist(a[:2],b[:2]) for a,b in zip(points,points[1:]))
+    value.update(navigator_global_length_m=length,session_id=display.session_id,
+        segment_revision=path['binding']['segment_revision'],traversability_revision=path['binding']['traversability_revision'],
+        fixture_straight_line_real_obstacle_blocked=fixture.get('line_of_sight_blocked') is True)
+    blocker=fixture.get('blocked_cell_xy_m'); distance=None
+    if blocker is not None and len(points)>=2:
+        distance=math.inf
+        for a,b in zip(points,points[1:]):
+            dx,dy=b[0]-a[0],b[1]-a[1]; norm=dx*dx+dy*dy
+            t=0. if norm==0 else max(0.,min(1.,((blocker[0]-a[0])*dx+(blocker[1]-a[1])*dy)/norm))
+            distance=min(distance,math.hypot(blocker[0]-a[0]-t*dx,blocker[1]-a[1]-t*dy))
+    required_clearance=math.hypot(.591,.409)+.5+float(scene.get('resolution_m',.2))*math.sqrt(.5)
+    detour=distance is not None and distance>=required_clearance
+    value.update(blocker_to_navigator_polyline_clearance_m=distance,required_blocker_clearance_m=required_clearance,
+        detour_around_fixture_obstacle=detour,collision_runtime='NOT_RUN; this is a static XY display/fixture check')
+    value['satisfied']=length>=minimum and fixture.get('line_of_sight_blocked') is True and detour
+    return value
+
+
 def _stamp_ns(stamp): return int(stamp.sec)*1000000000+int(stamp.nanosec)
 
 
@@ -138,7 +165,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scene-json',required=True); parser.add_argument('--output-dir',required=True); parser.add_argument('--overlay-file',required=True)
     parser.add_argument('--send-goal',action='store_true',help='显式发送一次真实 NavigateToPose；缺省仅发布图和监听')
-    parser.add_argument('--wall-timeout',type=float,default=180); parser.add_argument('--sim-timeout',type=float,default=30)
+    parser.add_argument('--wall-timeout',type=float,default=300); parser.add_argument('--sim-timeout',type=float,default=150)
     parser.add_argument('--freshness-wall',type=float,default=2.,help='发送目标前真实 odom/TF 接收年龄上限；不改变控制器阈值')
     args=parser.parse_args()
     if min(args.wall_timeout,args.sim_timeout,args.freshness_wall)<=0: parser.error('timeouts must be positive')
@@ -261,6 +288,7 @@ def main():
     def write_overlay():
         nonlocal sequence
         sequence+=1; snapshot=display.snapshot(); snapshot['paths'].update(paths)
+        state['long_route_evidence']=long_route_evidence(display,scene)
         payload=dict(schema=SCHEMA,run_id=run_id,sequence=sequence,frame='map',source='live_ros',clock_ns=state['clock_ns'],
             display_map=dict(path=scene['map_npz'],sha256=scene['map_sha256'],source_stage_sha256=scene['source_sha256'],region='A',
                 usage='display-only projection of original planner XY; never changes raw ROS geometry; unknown/outside split'),**snapshot)
@@ -348,6 +376,6 @@ def main():
         state['strict_stop']='NOT_RUN; root must inspect actual odom/physics/sole-controller command tail'
         save(); events.close(); node.destroy_node(); rclpy.shutdown()
     print(json.dumps(state,ensure_ascii=False,allow_nan=False))
-    return 0 if (not args.send_goal or state['planning_evidence']['has_reference']) else 2
+    return 0 if (not args.send_goal or (state['planning_evidence']['has_reference'] and state.get('long_route_evidence',{}).get('satisfied',False))) else 2
 
 if __name__=='__main__': raise SystemExit(main())

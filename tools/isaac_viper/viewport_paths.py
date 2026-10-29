@@ -10,6 +10,32 @@ MAX_BYTES=4*1024*1024
 COLORS={'global_route':0xffff7733,'local_path':0xff33ddff,'actual_trace':0xffffff22}
 
 
+CAMERA_FOCAL_MM=24.
+CAMERA_APERTURE_MM=(36.,20.25)  # 显式16:9，与1280x720 viewport一致。
+
+
+def navigation_camera_pose(bounds,initial_z,actual_xyz=None,height_range=None):
+    """按真实bounds八角点/两轴视锥拟合总览；近景只跟随实际pose。"""
+    if actual_xyz is not None:
+        if len(actual_xyz)!=3 or not all(math.isfinite(v) for v in actual_xyz): raise ValueError('invalid actual camera pose')
+        x,y,z=map(float,actual_xyz)
+        return [x+5.,y-7.,z+5.],[x,y,z+.6]
+    x0,x1,y0,y1=map(float,bounds)
+    if not all(math.isfinite(v) for v in (x0,x1,y0,y1,initial_z)) or x1<=x0 or y1<=y0: raise ValueError('invalid camera bounds')
+    z0,z1=(float(initial_z),float(initial_z)+2.) if height_range is None else (float(height_range[0]),float(height_range[1])+2.)
+    target=np.array([(x0+x1)/2,(y0+y1)/2,float(initial_z)+.25])
+    direction=np.array([0.,-.35,1.]); direction/=np.linalg.norm(direction)
+    right=np.array([1.,0.,0.]); up=np.cross(direction,right)
+    tan_h,tan_v=np.asarray(CAMERA_APERTURE_MM)/(2*CAMERA_FOCAL_MM)
+    distance=6.
+    for x in (x0,x1):
+        for y in (y0,y1):
+            for z in (z0,z1):
+                delta=np.array([x,y,z])-target
+                distance=max(distance,float(np.dot(delta,direction)+1.2*max(abs(np.dot(delta,right))/tan_h,abs(np.dot(delta,up))/tan_v)))
+    return (target+direction*distance).tolist(),target.tolist()
+
+
 def validate_points(points):
     if not isinstance(points,list) or len(points)>10000: raise ValueError('path point limit')
     for point in points:
@@ -138,7 +164,7 @@ class ViewportPaths:
                         segments=([[[x,y,z+.12] for x,y,z in path['points']]] if name=='actual_trace' else self.projector.segments(path['points']))
                         for segment in segments:
                             if len(segment)>=2:
-                                self.sc.Curve(segment,curve_type=self.sc.Curve.CurveType.LINEAR,colors=[COLORS[name]],thicknesses=[4. if name=='actual_trace' else 2. if path.get('display_status')=='history' else 3.])
+                                self.sc.Curve(segment,curve_type=self.sc.Curve.CurveType.LINEAR,colors=[COLORS[name]],thicknesses=[5. if name=='actual_trace' else 3. if path.get('display_status')=='history' else 4.])
             history=bool(payload.get('history_paths'))
             self.status_label.text='  '+payload.get('goal_state','waiting')+(' | initial verified plan: HISTORY, frozen' if history else '')+' | planner height: A collision map (display only)'
         except (ValueError,KeyError,OSError) as exc:

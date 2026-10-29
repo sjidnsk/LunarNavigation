@@ -3,6 +3,7 @@ import argparse
 import hashlib
 import json
 import math
+import time
 from pathlib import Path
 import numpy as np
 
@@ -49,6 +50,136 @@ def rasterize_triangles(triangles, bounds, resolution):
     relief = np.full_like(high,np.nan); relief[valid] = high[valid]-low[valid]
     high[~valid] = np.nan
     return high.astype(np.float32),relief.astype(np.float32)
+
+
+def rasterize_triangles_batched(triangles, bounds, resolution, batch_size=32768):
+    """批量精确三角/格裁剪；与小图参考算法相同的最高高程与格内起伏。"""
+    x0,x1,y0,y1=map(float,bounds)
+    if resolution<=0 or x1<=x0 or y1<=y0: raise ValueError('invalid raster bounds')
+    nx,ny=round((x1-x0)/resolution),round((y1-y0)/resolution)
+    if nx*ny>1000000 or nx<1 or ny<1: raise ValueError('raster size limit')
+    triangles=np.asarray(triangles,float)
+    if triangles.ndim!=3 or triangles.shape[1:]!=(3,3) or not np.isfinite(triangles).all(): raise ValueError('invalid triangles')
+    high,low=np.full(nx*ny,-np.inf),np.full(nx*ny,np.inf)
+    # 每块先做真实XY包围盒 broad phase，后续四次裁剪全部在NumPy批量进行。
+    for base in range(0,len(triangles),2048):
+        tris=triangles[base:base+2048]
+        lo=tris[:,:,:2].min(axis=1); hi=tris[:,:,:2].max(axis=1)
+        ix0=np.maximum(0,np.floor((lo[:,0]-x0)/resolution).astype(int)); ix1=np.minimum(nx-1,np.ceil((hi[:,0]-x0)/resolution).astype(int)-1)
+        iy0=np.maximum(0,np.floor((lo[:,1]-y0)/resolution).astype(int)); iy1=np.minimum(ny-1,np.ceil((hi[:,1]-y0)/resolution).astype(int)-1)
+        widths=np.maximum(0,ix1-ix0+1); counts=widths*np.maximum(0,iy1-iy0+1)
+        cumulative=np.cumsum(counts); total=int(cumulative[-1])
+        for first in range(0,total,batch_size):
+            flat=np.arange(first,min(total,first+batch_size)); ids=np.searchsorted(cumulative,flat,side='right')
+            offset=flat-(cumulative[ids]-counts[ids]); ix=ix0[ids]+offset%widths[ids]; iy=iy0[ids]+offset//widths[ids]
+            polys=np.zeros((len(ids),8,3)); polys[:,:3]=tris[ids]; n=np.full(len(ids),3,int)
+            for axis,values,lower in ((0,x0+ix*resolution,True),(0,x0+(ix+1)*resolution,False),(1,y0+iy*resolution,True),(1,y0+(iy+1)*resolution,False)):
+                out=np.zeros_like(polys); out_n=np.zeros_like(n); rows=np.arange(len(ids))
+                for k in range(7):
+                    active=k<n; a=polys[:,k]; b=polys[rows,np.where(active,(k+1)%np.maximum(n,1),0)]
+                    ain=a[:,axis]>=values if lower else a[:,axis]<=values
+                    bin_=b[:,axis]>=values if lower else b[:,axis]<=values
+                    keep=active&ain; rr=rows[keep]; out[rr,out_n[keep]]=a[keep]; out_n[keep]+=1
+                    cross=active&(ain!=bin_); rr=rows[cross]
+                    if len(rr):
+                        t=(values[cross]-a[cross,axis])/(b[cross,axis]-a[cross,axis])
+                        out[rr,out_n[cross]]=a[cross]+(b[cross]-a[cross])*t[:,None]; out_n[cross]+=1
+                polys,n=out,out_n
+            area=np.zeros(len(ids)); zhigh=np.full(len(ids),-np.inf); zlow=np.full(len(ids),np.inf); origin=polys[:,0]
+            for k in range(8):
+                active=k<n; nxt=polys[np.arange(len(ids)),np.where(active,(k+1)%np.maximum(n,1),0)]
+                area+=np.where(active,(polys[:,k,0]-origin[:,0])*(nxt[:,1]-origin[:,1])-(polys[:,k,1]-origin[:,1])*(nxt[:,0]-origin[:,0]),0)
+                zhigh=np.maximum(zhigh,np.where(active,polys[:,k,2],-np.inf)); zlow=np.minimum(zlow,np.where(active,polys[:,k,2],np.inf))
+            valid=(n>=3)&(np.abs(area)>2e-12); cell=iy[valid]*nx+ix[valid]
+            np.maximum.at(high,cell,zhigh[valid]); np.minimum.at(low,cell,zlow[valid])
+    valid=np.isfinite(high); relief=np.full_like(high,np.nan); relief[valid]=high[valid]-low[valid]; high[~valid]=np.nan
+    return high.reshape(ny,nx).astype(np.float32),relief.reshape(ny,nx).astype(np.float32)
+
+
+def conservative_footprint_mask(elevation,relief,resolution,slope_limit_deg=12.,maximum_relief_m=.08):
+    """车体外接圆+.5m校验全部yaw；实际构建从权威capability传入坡度/起伏门。"""
+    elevation,relief=np.asarray(elevation),np.asarray(relief)
+    if elevation.ndim!=2 or elevation.shape!=relief.shape or resolution<=0: raise ValueError('invalid footprint map')
+    safe=np.isfinite(elevation)&np.isfinite(relief)&(relief<=maximum_relief_m)
+    radius=math.hypot(.591,.409)+.5; cells=math.ceil(radius/resolution); good=safe.copy()
+    for dy in range(-cells,cells+1):
+        for dx in range(-cells,cells+1):
+            distance=math.hypot(dx,dy)*resolution
+            if distance>radius+resolution: continue
+            ys,ye=max(0,-dy),min(len(safe),len(safe)-dy); xs,xe=max(0,-dx),min(safe.shape[1],safe.shape[1]-dx)
+            shifted=np.zeros_like(safe); shifted[ys:ye,xs:xe]=safe[ys+dy:ye+dy,xs+dx:xe+dx]
+            z=np.full_like(elevation,np.nan); z[ys:ye,xs:xe]=elevation[ys+dy:ye+dy,xs+dx:xe+dx]
+            good &= shifted & (np.abs(z-elevation)<=math.tan(math.radians(slope_limit_deg))*max(resolution,distance))
+    return good,safe
+
+
+def _offline_distance(good,start,goal,resolution):
+    """八邻域A*，禁止切过障碍角；只返回可达长度，不返回/发布规划折线。"""
+    import heapq
+    queue=[(math.dist(start,goal)*resolution,0.,start)]; costs={start:0.}
+    ny,nx=good.shape
+    while queue:
+        _,cost,(y,x)=heapq.heappop(queue)
+        if cost>costs.get((y,x),math.inf): continue
+        if (y,x)==goal: return cost
+        for dy,dx in ((1,0),(-1,0),(0,1),(0,-1),(1,1),(-1,1),(1,-1),(-1,-1)):
+            yy,xx=y+dy,x+dx
+            if not (0<=yy<ny and 0<=xx<nx and good[yy,xx]): continue
+            if dx and dy and not (good[y,xx] and good[yy,x]): continue
+            value=cost+resolution*math.hypot(dx,dy)
+            if value<costs.get((yy,xx),math.inf):
+                costs[(yy,xx)]=value; heapq.heappush(queue,(value+math.hypot(goal[0]-yy,goal[1]-xx)*resolution,value,(yy,xx)))
+    return None
+
+
+def select_long_route(elevation,relief,bounds,resolution,minimum_length_m=100.,capability=None):
+    """仅为真正导航选fixture：要求实际有限障碍阻断直线且保守绕行长度足够。"""
+    if not math.isfinite(minimum_length_m) or minimum_length_m<=0: raise ValueError('invalid minimum route length')
+    slope_limit_deg=12. if capability is None else math.degrees(float(capability['maximum_slope_rad']))
+    maximum_relief_m=.08 if capability is None else float(capability['maximum_local_obstacle_relief_m'])
+    good,safe=conservative_footprint_mask(elevation,relief,resolution,slope_limit_deg,maximum_relief_m)
+    candidates=np.argwhere(good)
+    if not len(candidates): raise ValueError('no safe endpoints on actual collision terrain')
+    # 16方向边界点与其附近分位点，确定有界搜索，不随机改变fixture身份。
+    selected=set()
+    for angle in np.linspace(0,2*math.pi,16,endpoint=False):
+        order=np.argsort(candidates[:,0]*math.sin(angle)+candidates[:,1]*math.cos(angle))
+        for fraction in (0.,.02,.10): selected.add(tuple(map(int,candidates[order[min(len(order)-1,int(fraction*len(order)))]])))
+    # 无切角8邻域与4邻域连通域相同；先分量过滤，避免反复搜不可达端点。
+    from collections import deque
+    labels=np.zeros(good.shape,np.int32); label=0
+    for sy,sx in np.argwhere(good):
+        if labels[sy,sx]: continue
+        label+=1; labels[sy,sx]=label; queue=deque([(int(sy),int(sx))])
+        while queue:
+            y,x=queue.popleft()
+            for yy,xx in ((y+1,x),(y-1,x),(y,x+1),(y,x-1)):
+                if 0<=yy<good.shape[0] and 0<=xx<good.shape[1] and good[yy,xx] and not labels[yy,xx]:
+                    labels[yy,xx]=label; queue.append((yy,xx))
+    pairs=sorted(((math.dist(a,b)*resolution,a,b) for a in selected for b in selected if a<b and labels[a]==labels[b]),reverse=True)
+    attempts=0
+    for direct,start,goal in pairs:
+        if direct<minimum_length_m*.65: continue
+        steps=max(1,math.ceil(math.dist(start,goal)*3)); line=np.rint(np.linspace(start,goal,steps+1)).astype(int)
+        # 未知/单纯车体margin不作为真实障碍来源；必须命中有高度的不可通行格。
+        blocked=[tuple(map(int,p)) for p in line if not safe[tuple(p)] and np.isfinite(elevation[tuple(p)])]
+        if not blocked: continue
+        attempts+=1
+        if attempts>96: break
+        length=_offline_distance(good,start,goal,resolution)
+        if length is None or length<minimum_length_m: continue
+        def xy(p): return [float(bounds[0]+(p[1]+.5)*resolution),float(bounds[2]+(p[0]+.5)*resolution)]
+        checks={}
+        for name,p in (('start',start),('goal',goal)):
+            checks[name]=dict(xy_m=xy(p),elevation_m=float(elevation[p]),footprint_clear=True,
+                footprint_half_extent_m=[.591,.409],clearance_margin_m=.5,slope_limit_deg=slope_limit_deg,maximum_cell_relief_m=maximum_relief_m,
+                acceptance='conservative all-yaw footprint mask on actual collision geometry; PhysX settle NOT_RUN')
+        return xy(start),xy(goal),dict(offline_only=True,connectivity='PASS',path_length_m=float(length),net_displacement_m=float(direct),
+            minimum_required_m=float(minimum_length_m),line_of_sight_blocked=True,blocked_cell_xy_m=xy(blocked[len(blocked)//2]),
+            blocking_evidence='finite actual collision cell exceeds capability clipped-height relief threshold; unknown is never an obstacle substitute',
+            threshold_source='explicit capability maximum_slope_rad / maximum_local_obstacle_relief_m' if capability is not None else 'legacy Task4 conservative candidate gates',
+            endpoint_checks=checks,search_attempts=attempts,method='offline 8-neighbour A*; no corner cutting; fixture reachability only, never published/drawn as navigator output')
+    raise ValueError('A bounded search found no connected real-obstacle detour of required length; no synthetic fallback')
 
 
 def select_route(elevation, relief, bounds, resolution):
@@ -100,11 +231,15 @@ def collision_triangles(stage, bounds):
         x0,x1,y0,y1=bounds
         if high[0]<x0 or low[0]>x1 or high[1]<y0 or low[1]>y1: continue
         counts=np.asarray(mesh.GetFaceVertexCountsAttr().Get(),int); ids=np.asarray(mesh.GetFaceVertexIndicesAttr().Get(),int)
-        triangles=[]; offset=0
-        for count in counts:
-            face=ids[offset:offset+count]; offset+=count
-            for k in range(1,count-1): triangles.append([face[0],face[k],face[k+1]])
-        tris=pts[np.asarray(triangles,int)]
+        if np.all(counts==3):
+            triangles=ids.reshape(-1,3)
+        else:
+            triangles=[]; offset=0
+            for count in counts:
+                face=ids[offset:offset+count]; offset+=count
+                for k in range(1,count-1): triangles.append([face[0],face[k],face[k+1]])
+            triangles=np.asarray(triangles,int)
+        tris=pts[triangles]
         keep=(tris[:,:,0].max(axis=1)>=x0)&(tris[:,:,0].min(axis=1)<=x1)&(tris[:,:,1].max(axis=1)>=y0)&(tris[:,:,1].min(axis=1)<=y1)
         if np.any(keep):
             chunks.append(tris[keep]); audit.append(dict(path=str(prim.GetPath()),collider=str(collider.GetPath()),triangles=int(keep.sum())))
@@ -112,7 +247,7 @@ def collision_triangles(stage, bounds):
     return np.concatenate(chunks),audit
 
 
-def build_scene(source_stage,output_dir,profile_path):
+def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.):
     from pxr import Usd,UsdGeom,UsdPhysics
     from tools.isaac_viper.build_stage import _placement,_transform
     from tools.isaac_viper.config import load_profile
@@ -124,19 +259,31 @@ def build_scene(source_stage,output_dir,profile_path):
     from tools.isaac_viper.build_showcase import digest
     source_layers={str(Path(layer.realPath).resolve()):digest(layer.realPath) for layer in source.GetUsedLayers() if layer.realPath and Path(layer.realPath).is_file()}
     if not source.GetPrimAtPath(TERRAIN): raise ValueError('original A terrain missing')
-    # 优先中心近场，不可通行时继续 A 内独立候选；每候选均实际重新裁剪。
-    selected=None
-    for cx,cy in ((285,-265),(265,-265),(305,-265),(285,-285),(285,-245),(255,-295),(315,-235)):
-        bounds=[cx-8,cx+8,cy-8,cy+8]
-        triangles,audit=collision_triangles(source,bounds)
-        elevation,relief=rasterize_triangles(triangles,bounds,.2)
-        try: start,goal=select_route(elevation,relief,bounds,.2)
-        except ValueError: continue
-        selected=(bounds,elevation,relief,start,goal,audit); break
-    if selected is None: raise ValueError('A safe nearfield search exhausted; no fake fallback')
-    bounds,elevation,relief,start,goal,audit=selected
+    profile=load_profile(profile_path)
+    if profile.get('simulation_only') is not True: raise ValueError('navigation demo requires an explicit simulation_only profile')
+    if profile['capability']['maximum_forward_speed_mps']!=2. or profile['capability']['maximum_spin_rate_radps']!=2.: raise ValueError('navigation demo capability must be forward2/spin2')
+    # 只在原A100x100已知区；不扩大已知、不触碰C/Actor。
+    bounds=list(A_BOUNDS); started=time.perf_counter()
+    triangles,audit=collision_triangles(source,bounds)
+    elevation,relief=rasterize_triangles_batched(triangles,bounds,.2)
+    raster_wall_s=time.perf_counter()-started
+    start,goal,fixture=select_long_route(elevation,relief,bounds,.2,minimum_route_length_m,profile['capability'])
+    blocker=fixture['blocked_cell_xy_m']; collision_sources=[]
+    # 根据真实三角XY包围盒列出阻挡格的候选来源；精确高度/relief来自裁剪图。
+    offset=0
+    for mesh in audit:
+        group=triangles[offset:offset+mesh['triangles']]; offset+=mesh['triangles']
+        lo=group[:,:,:2].min(axis=1); hi=group[:,:,:2].max(axis=1)
+        hit=(lo[:,0]<=blocker[0]+.1)&(hi[:,0]>=blocker[0]-.1)&(lo[:,1]<=blocker[1]+.1)&(hi[:,1]>=blocker[1]-.1)
+        if np.any(hit):
+            cell_bounds=[blocker[0]-.1,blocker[0]+.1,blocker[1]-.1,blocker[1]+.1]
+            mesh_z,mesh_relief=rasterize_triangles_batched(group[hit],cell_bounds,.2)
+            if np.isfinite(mesh_z[0,0]): collision_sources.append(dict(path=mesh['path'],collider=mesh['collider'],
+                clipped_cell_max_elevation_m=float(mesh_z[0,0]),clipped_cell_relief_m=float(mesh_relief[0,0]),
+                attribution='actual positive-area triangle/cell intersection; no bbox-only obstacle claim'))
+    fixture['obstacle_collision_sources']=collision_sources
     yaw=math.atan2(goal[1]-start[1],goal[0]-start[0])
-    position,orientation,placement=_placement(source,load_profile(profile_path),TERRAIN,start,math.degrees(yaw))
+    position,orientation,placement=_placement(source,profile,TERRAIN,start,math.degrees(yaw))
     stage_path=output/'viper-navigation.usda'
     stage=Usd.Stage.CreateNew(str(stage_path)); stage.GetRootLayer().subLayerPaths=[str(source_path)]
     for key in ('metersPerUnit','upAxis','kilogramsPerUnit','timeCodesPerSecond','framesPerSecond','defaultPrim'):
@@ -144,20 +291,25 @@ def build_scene(source_stage,output_dir,profile_path):
     _transform(stage.OverridePrim('/World/ProjectVIPER'),position).AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(orientation)
     meta=json.loads(source.GetRootLayer().customLayerData['engineering_metadata_json'])
     meta.update(initial_position_m=position,initial_orientation_wxyz=[orientation.GetReal(),*orientation.GetImaginary()],placement=placement)
-    meta['navigation_showcase']=dict(region='A',map_bounds_xy_m=bounds,start_xy_m=start,goal_xy_m=goal,goal_yaw_rad=yaw)
+    meta['navigation_showcase']=dict(region='A',map_bounds_xy_m=bounds,map_height_range_m=[float(np.nanmin(elevation)),float(np.nanmax(elevation))],start_xy_m=start,goal_xy_m=goal,goal_yaw_rad=yaw,fixture_precheck=fixture,simulation_only=True)
     data=dict(source.GetRootLayer().customLayerData); data['engineering_metadata_json']=json.dumps(meta,ensure_ascii=False)
     stage.GetRootLayer().customLayerData=data; stage.GetRootLayer().Save()
     np.savez_compressed(output/'map.npz',elevation=elevation,relief=relief,bounds_xy_m=bounds,resolution_m=.2)
     report=dict(map_sha256=digest(output/'map.npz'),stage_sha256=digest(stage_path),schema='lunar.viper-navigation-scene.v1',region='A',source_stage=str(source_path),source_sha256=sha,
         stage=str(stage_path),map_npz=str(output/'map.npz'),bounds_xy_m=bounds,resolution_m=.2,start_xy_m=start,goal_xy_m=goal,goal_yaw_rad=yaw,
         map_source='known_map_from_same_scene_collision_geometry; A only; forbidden for C/Actor',
-        raster_method='exact triangle/cell polygon clipping; absolute max elevation; unknown NaN',
+        raster_method='NumPy batched exact triangle/cell polygon clipping; absolute max elevation; unknown NaN',
+        raster_wall_s=raster_wall_s,fixture_precheck=fixture,simulation_only=True,
+        capability_profile=str(Path(profile_path).resolve()),
+        capability_path=str((Path(profile_path).resolve().parent/profile['sources']['capability']).resolve()),
+        capability_sha256=digest(Path(profile_path).resolve().parent/profile['sources']['capability']),
+        profile_sha256=digest(profile_path),capability_limits=profile['capability'],
         elevation_approximation='conservative per-cell upper envelope, no terrain smoothing; spatial cell width .2m',
         source_layer_sha256=source_layers,
         elevation_cell_envelope_error_bound_m=dict(max=float(np.nanmax(relief)),p95=float(np.nanpercentile(relief,95)),
             meaning='per-cell max-minus-min over actual clipped triangles; conservative height quantization bound, including rocks'),
         collision_meshes=audit,collision_check=dict(footprint_half_extent_m=[.591,.409],safety_margin_m=.5,
-        acceptance_slope_limit_deg=12,maximum_cell_relief_m=.08,route_length_m=math.dist(start,goal),
+        acceptance_slope_limit_deg=math.degrees(profile['capability']['maximum_slope_rad']),maximum_cell_relief_m=profile['capability']['maximum_local_obstacle_relief_m'],offline_fixture_route_length_m=fixture['path_length_m'],net_displacement_m=math.dist(start,goal),
         static_corridor='PASS',dynamic_settle='NOT_RUN',collision_runtime='NOT_RUN'),placement=placement,
         NOT_RUN=['Kit','ROS','dynamic_settle','navigation','Orin','real_vehicle'])
     (output/'navigation-scene.json').write_text(json.dumps(report,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
@@ -166,7 +318,8 @@ def build_scene(source_stage,output_dir,profile_path):
 
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument('--source-stage',required=True); p.add_argument('--output-dir',required=True); p.add_argument('--profile',default='config/isaac_viper.yaml')
-    a=p.parse_args(); print(json.dumps(build_scene(a.source_stage,a.output_dir,a.profile),ensure_ascii=False))
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument('--source-stage',required=True); p.add_argument('--output-dir',required=True); p.add_argument('--profile',default='config/isaac_viper_navigation_demo.yaml')
+    p.add_argument('--minimum-route-length-m',type=float,default=100.,help='仅离线fixture长度门；正式成功仍要求真实新导航规划>=此长度')
+    a=p.parse_args(); print(json.dumps(build_scene(a.source_stage,a.output_dir,a.profile,a.minimum_route_length_m),ensure_ascii=False))
 
 if __name__=='__main__': main()
