@@ -387,3 +387,31 @@ def test_missing_native_library_fails_explicitly(monkeypatch, tmp_path):
     monkeypatch.setenv("NAV1CM_TERRAIN_LIB", str(tmp_path / "missing-terrain-library"))
     with pytest.raises((OSError, RuntimeError), match="(?i)(native|terrain|library|原生|地形)"):
         store_type()
+
+
+@pytest.mark.parametrize("origin,yaw,bounds", [
+    ((-3., -3.), 0., (-260, -80, 280, 100)),
+    ((-3., -3.), math.pi / 2, (-700, -260, -520, 280)),
+    ((-3., -3.), math.pi, (-880, -700, -340, -520)),
+    ((-3.003, -3.007), 0., (-260, -80, 279, 99)),
+])
+def test_continuous_free_has_no_integer_boundary_roundoff_seam(origin, yaw, bounds):
+    """真实 .2 m 源格矩形；整数事件的浮点薄片不能吞掉整条厘米行。"""
+    from scripts.navigation.one_cm.nav1cm.p3_map import _free_rows
+    _, update_type = _api()
+    update = update_type(.2, origin, yaw, np.array([[2, 11, 29, 20, CellState.FREE]], dtype=np.int64))
+    x0, y0, x1, y1 = bounds
+    assert sorted(_free_rows(update.regions, update)) == [
+        (y, x0, x1, int(CellState.FREE)) for y in range(y0, y1)]
+
+
+@pytest.mark.parametrize("gap_m", [1e-9, .0001])
+def test_genuine_open_gap_near_integer_event_keeps_centimeter_unknown(gap_m):
+    """大于既有 1e-9 cm 容差的真实缺口仍使整条相交厘米行未知。"""
+    from scripts.navigation.one_cm.nav1cm.p3_map import _free_rows
+    _, update_type = _api()
+    update = update_type(.2, (-3., -3. + gap_m), 0.,
+                         np.array([[2, 11, 29, 20, CellState.FREE]], dtype=np.int64))
+    rows = list(_free_rows(update.regions, update))
+    assert not any(y == -80 for y, *_ in rows)
+    assert any(y == -79 for y, *_ in rows)

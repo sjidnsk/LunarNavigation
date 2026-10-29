@@ -352,3 +352,28 @@ def test_native_nan_update_does_not_erase_historical_obstacle(compiled):
     assert result_cells(first, elevation.shape)[4, 4] == 1
     assert unknown.regions.shape == (0, 5)
     assert result_cells(cleared, elevation.shape)[4, 4] == 0
+
+
+
+def test_observed_709_cell_disk_projects_without_interior_seams(compiled):
+    """固定初帧测量掩码；真实 intrinsic 分类、整厘米投影和硬圆支持。"""
+    from scripts.navigation.one_cm.nav1cm.contracts import CellState, VehicleState
+    from scripts.navigation.one_cm.nav1cm.maps import build_distance_field, extract_window
+    from scripts.navigation.one_cm.nav1cm.p3_map import P3MapStore
+    from test_p3_map import grid_map
+    yy, xx = np.mgrid[:31, :31]
+    observed = (yy - 15) ** 2 + (xx - 15) ** 2 <= 225
+    elevation = np.where(observed, 0., np.nan).astype(np.float32)
+    assert int(np.count_nonzero(observed)) == 709
+    capability = _api().load_wheel_capability()
+    intrinsic, _ = reference_cells(compiled[1], elevation, .2, capability)
+    # 原生 .2 m 分类的独立逐格展开，初始 5 m 窗口原点是 (-2.4,-2.4)。
+    expected = np.repeat(np.repeat(intrinsic, 20, axis=0), 20, axis=1)[60:560, 60:560]
+    with _api().NativeTerrain(compiled[0], capability=capability) as terrain:
+        world = P3MapStore(terrain=terrain).apply(grid_map(elevation, .2, (-3., -3.)))
+    grid = extract_window(world, VehicleState(.1, .1, 0., 0., 0.), False)
+    np.testing.assert_array_equal(grid.cells, expected)
+    assert np.all(grid.cells[150:350, 150:350] == CellState.FREE)
+    # 固定车体 1.182 x .818、净空 .2 与 solver .003 均不放宽。
+    required_circle = np.hypot(1.182, .818) / 2 + .2 + .003
+    assert build_distance_field(grid).sample(.1, .1)[0] >= required_circle
