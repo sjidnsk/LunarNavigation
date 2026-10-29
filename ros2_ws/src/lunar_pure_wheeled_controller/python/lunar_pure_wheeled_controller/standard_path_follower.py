@@ -106,11 +106,7 @@ class StandardPathFollower(MppiPathFollower):
 
     def _orient_progress_anchor(self, state):
         # 换向或越过有序屏障后更新方向，保留已经累积的物理停滞时间。
-        ahead=self.path.point_at(min(self.path.length,self._local_progress+.35))
-        vector=np.asarray(ahead)-[state.x_m,state.y_m]
-        vector=vector/max(float(np.linalg.norm(vector)),1e-12)
-        self._last_pose=(np.array([state.x_m,state.y_m]),vector,
-            abs(angle(self.path.final_yaw-state.yaw_rad)))
+        self._bind_progress_anchor(state,progress_m=self._local_progress)
 
     def _stop(self, state, dt, now_s, state_age_s, *, switching=False):
         self._model_time=self._model_time+dt if now_s is None else float(now_s)

@@ -94,6 +94,28 @@ class MppiExecutor:
     def _stopped(self,state):
         return math.hypot(state.linear_mps,state.lateral_mps)<=self.policy.stopped_linear_mps and abs(state.angular_radps)<=self.policy.stopped_angular_radps
 
+    def _bind_progress_anchor(self,state,*,progress_m=None):
+        """绑定当前几何的比较基准；不清计时、故障或已发布命令历史。"""
+        progress=self.progress_m if progress_m is None else progress_m
+        ahead=self.path.point_at(min(self.path.length,progress+.35))
+        vector=np.array(ahead)-[state.x_m,state.y_m]
+        vector=vector/max(float(np.linalg.norm(vector)),1e-12)
+        self._last_pose=(np.array([state.x_m,state.y_m]),vector,
+            abs(angle(self.path.final_yaw-state.yaw_rad)))
+
+    def _observe_progress(self,state,distance,yaw_error,dt):
+        """唯一物理进展/行进停滞计算；滚动参考刷新本身不产生进展。"""
+        if self._last_pose is None:self._bind_progress_anchor(state)
+        anchor,travel,best_angle=self._last_pose
+        advance=float(np.dot(np.array([state.x_m,state.y_m])-anchor,travel))
+        progressed=(advance>.03 or (distance<=self.policy.goal_position_tolerance_m
+            and abs(yaw_error)<best_angle-.01))
+        if progressed:
+            self._bind_progress_anchor(state)
+            self.no_progress_s=0.
+        else:self.no_progress_s+=min(dt,.2)
+        return self.no_progress_s>self.policy.no_progress_timeout_s
+
     def _rollout(self,state,controls,dt,*,delay=True,delay_ticks=None,history_delay_ticks=None,project=True):
         p=self.policy;n,h,_=controls.shape
         # Candidate intents and published targets are different interfaces.
@@ -363,22 +385,7 @@ class MppiExecutor:
         if distance<=p.goal_position_tolerance_m and pose_safe and (not self.final or abs(yaw_error)<=p.goal_yaw_tolerance_rad):
             self.phase='COMPLETED' if self._stopped(state) else 'BRAKING'
             return self._result()
-        # A fixed physical anchor and path-travel direction survive rolling
-        # revisions. Crossing a corner need not hit a particular waypoint.
-        if self._last_pose is None:
-            ahead=self.path.point_at(min(self.path.length,self.progress_m+.35))
-            vector=np.array(ahead)-[state.x_m,state.y_m]
-            vector=vector/max(float(np.linalg.norm(vector)),1e-12)
-            self._last_pose=(np.array([state.x_m,state.y_m]),vector,abs(yaw_error))
-        anchor,travel,best_angle=self._last_pose
-        advance=float(np.dot(np.array([state.x_m,state.y_m])-anchor,travel))
-        if advance>.03 or (distance<=p.goal_position_tolerance_m and abs(yaw_error)<best_angle-.01):
-            ahead=self.path.point_at(min(self.path.length,self.progress_m+.35))
-            vector=np.array(ahead)-[state.x_m,state.y_m]
-            vector=vector/max(float(np.linalg.norm(vector)),1e-12)
-            self._last_pose=(np.array([state.x_m,state.y_m]),vector,abs(yaw_error));self.no_progress_s=0.
-        else:self.no_progress_s+=min(dt,.2)
-        if self.no_progress_s>p.no_progress_timeout_s:
+        if self._observe_progress(state,distance,yaw_error,dt):
             self.failure='TRACKING_STALLED';self.phase='FAILED' if self._stopped(state) else 'BRAKING';return self._result()
         target=np.array(self.path.point_at(min(self.path.length,self.progress_m+.35)))
         desired=math.atan2(target[1]-state.y_m,target[0]-state.x_m)

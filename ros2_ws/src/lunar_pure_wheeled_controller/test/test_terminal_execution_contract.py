@@ -394,3 +394,74 @@ def test_failed_task_cannot_revive_when_explicit_terminal_rebinds():
     e.update(TrackingState(0.,0.,0.),.05)
     assert e.failure=='TRACKING_STALLED' and e.no_progress_s==15.1
     assert e.last_execution_state==6
+
+
+def test_progress_is_physical_for_plain_and_contract_translation_and_spin():
+    """传输/参考刷新不生成进展；真实位移或朝向误差下降才清钟。"""
+    for contract in (False,True):
+        for spin in (False,True):
+            e=follower()
+            path=spin_path([0.,1.]) if spin else ((0.,0.,0.),(1.,0.,0.))
+            if contract:e.offer_execution_reference(path,ref(intent=3 if spin else 0))
+            else:e.set_standard_path(path,1)
+            e.update(TrackingState(0.,0.,0.),.05)
+            e.no_progress_s=.4
+            history=list(e._command_history)
+            anchor=e._last_pose
+            if contract:e.offer_execution_reference(path,ref(2,3 if spin else 0))
+            else:e.set_standard_path(path,2)
+            e.update(TrackingState(0.,0.,0.),.05)
+            assert abs(e.no_progress_s-.45)<1e-9
+            assert e._last_pose is anchor
+            assert len(e._command_history)==len(history)
+            actual=(TrackingState(0.,0.,.02,0.,.1) if spin
+                    else TrackingState(.04,0.,0.,.1))
+            e.update(actual,.05)
+            assert e.no_progress_s==0. and e.failure is None
+
+
+def test_stage_rebinding_is_not_physical_progress_or_command_publication():
+    """改变阶段比较基准时保留时间余额和已发布命令事实。"""
+    import numpy as np
+    e=follower()
+    e.offer_execution_reference(((0.,0.,0.),(1.,0.,0.)),ref())
+    e.update(TrackingState(0.,0.,0.),.05)
+    e.no_progress_s=.7
+    history=[(t,u.copy()) for t,u in e._command_history]
+    e.offer_execution_reference((),ref(2,1))
+    e.update(TrackingState(0.,0.,0.),.05)
+    e.offer_execution_reference(((0.,0.,1.57),(0.,1.,1.57)),ref(3))
+    e.update(TrackingState(0.,0.,0.),.05)
+    assert abs(e.no_progress_s-.75)<1e-9
+    assert np.allclose(e._last_pose[1],(0.,1.))
+    assert len(e._command_history)==len(history)
+    assert all(t==old_t and np.array_equal(u,old_u)
+               for (t,u),(old_t,old_u) in zip(e._command_history,history))
+
+def test_brake_to_follow_while_still_moving_rebinds_without_requiring_stop():
+    """FOLLOW许可不因进展锚归并新增停稳条件，保留原合同交接语义。"""
+    import numpy as np
+    e=follower()
+    e.offer_execution_reference(((0.,0.,0.),(1.,0.,0.)),ref())
+    e.update(TrackingState(0.,0.,0.),.05)
+    e.note_command(0.,.1);e.no_progress_s=.7
+    e.offer_execution_reference((),ref(2,1))
+    e.update(TrackingState(0.,0.,0.,0.,.1),.05)
+    assert e.path is None and e.execution_reference.intent==1
+    e.offer_execution_reference(((0.,0.,1.57),(0.,1.,1.57)),ref(3))
+    e.update(TrackingState(0.,0.,.01,0.,.05),.05)
+    assert e.reference_accepted and e.execution_reference.intent==0
+    assert np.allclose(e._last_pose[1],(0.,1.))
+    assert abs(e._last_pose[2]-1.56)<1e-9
+    assert abs(e.no_progress_s-.75)<1e-9 and e.failure is None
+
+def test_plain_initial_path_waits_for_map_before_binding_physical_progress():
+    """无地图等待不提前建立行进锚，也不把等待期间外力位移算成进展。"""
+    e=follower();grid=e.map;e.map=None;e.no_progress_s=.7
+    e.set_standard_path(((0.,0.,0.),(1.,0.,0.)),1)
+    e.update(TrackingState(0.,0.,0.),.05)
+    assert e._last_pose is None and e.no_progress_s==.7
+    e.set_map(grid)
+    e.update(TrackingState(.04,0.,0.),.05)
+    assert abs(e.no_progress_s-.75)<1e-9
+    assert abs(e._last_pose[0][0]-.04)<1e-9
