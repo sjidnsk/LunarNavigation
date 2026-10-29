@@ -101,6 +101,6 @@
     "baseline": "a094b90206db9c9bef2b6cf075db55cf210ccc22",
     "navigation_backend": "nav1cm",
     "training_switch": false,
-    "qualification": "interface_cancel_only_motion_gate_failed_not_deployed"
+    "qualification": "fixed_actor_synthetic_motion_cancel_and_legacy_smoke_not_deployed"
   }
 }

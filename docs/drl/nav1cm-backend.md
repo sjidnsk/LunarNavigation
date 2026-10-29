@@ -12,4 +12,4 @@
 
 `scripts/drl/verify_nav1cm_backend.py` 是独立合成短推理工具。必须先 `--declare-only` 冻结 actor/config/platform/source/fixture/duration，再对同一声明 `--run`；输出目录不可复用。工具使用域 92、本机发现、私有命令主题和独立命令驱动 plant；仅 plant 持有合成物理场景，策略只读观测地图。正式训练包、权重、账本和论文 cohort 不作为写入目标。
 
-当前资格见 `docs/validation/2026-10-29-drl-nav1cm-backend.md`。接口/取消接线已有证据；固定权重窗口实际未运动，尚未通过最终接入验收，不可宣称策略有效或 Orin/实车就绪。
+当前资格见 `docs/validation/2026-10-29-drl-nav1cm-backend.md`。在 C1 合格公共 overlay 上，固定权重已通过合成短窗的实际运动、观测推进与当前 Action 取消停稳检查；默认旧后端有界兼容 smoke 通过。45 秒内未到达目标，不可宣称策略有效或 Orin/实车就绪。公共 C1 安装必须位于 Task3 安装之后、本包安装之前；源码/部署验收仍由 ROOT 独立审查。
