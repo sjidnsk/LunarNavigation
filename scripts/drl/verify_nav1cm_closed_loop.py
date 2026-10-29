@@ -15,6 +15,19 @@ from inference_only_guard import install
 from inference_closure_grade import grade
 
 
+def inference_ros_arguments(namespace,parameters):
+    """仅验证器私有推理端点；不修改原训练/产品启动器的命名空间合同。"""
+    if not namespace.startswith('/lunar_inference/') or '/..' in namespace:
+        raise ValueError('private inference namespace required')
+    result=['--ros-args','-r','__ns:='+namespace,'--log-level','error',
+            '--disable-rosout-logs','--disable-external-lib-logs']
+    for key,value in parameters.items():
+        if ('topic' in key or key in ('action_name','navigation_action','policy_map_service')) and not str(value).startswith(namespace+'/'):
+            raise ValueError(key+' must remain private')
+        result.extend(['-p',key+':='+ (str(value).lower() if isinstance(value,bool) else str(value))])
+    return result
+
+
 def descendants(pid):
     result={};pending=[pid]
     while pending:
@@ -37,7 +50,6 @@ def run(args,d):
     from lunar_pure_exploration_msgs.msg import PureExplorationTask
     from lunar_drl_exploration.inference_node import attach_node
     from lunar_drl_exploration.navigation_backend import owned_nav1cm_specs
-    from lunar_drl_exploration.processes import ros_arguments
     from lunar_drl_exploration.ros_messages import velocity_is_stopped
     art=args.artifact;ns=d['namespace'];events=[];children=[];logs=[];owned={};runtime=None;node=None
     accepted=set();error=None;summary={};task_pub=None;python_expected={}
@@ -92,11 +104,13 @@ def run(args,d):
             others=[(n,s) for n,s in pre.get_node_names_and_namespaces() if n!='drl_closure_preflight']
             if others:raise RuntimeError('domain92 occupied: '+repr(others))
         finally:pre.destroy_node()
-        spawn('plant',[sys.executable,str(Path(__file__).resolve()),'--plant','--artifact',str(art)])
         specs=owned_nav1cm_specs(ns,platform_config=d['platform'],build_dir=str(art/'planner-cache'),use_sim_time=False)
+        commands=[]
         for i,(package,entry,params) in enumerate(specs):
-            command=[str(Path(get_package_prefix(package))/'lib'/package/entry),*ros_arguments(ns,params)]
-            command[command.index('--log-level')+1]='info';spawn('node'+str(i),command)
+            command=[str(Path(get_package_prefix(package))/'lib'/package/entry),*inference_ros_arguments(ns,params)]
+            command[command.index('--log-level')+1]='info';commands.append(('node'+str(i),command))
+        spawn('plant',[sys.executable,str(Path(__file__).resolve()),'--plant','--artifact',str(art)])
+        for name,command in commands:spawn(name,command)
         values=dict(actor_path=d['actor'],actor_config_path=str(art/'inference-config.json'),navigation_backend='nav1cm',
             platform_config=d['platform'],task_topic=ns+'/task',status_topic=ns+'/status',action_name=ns+'/navigate',
             policy_map_service=ns+'/get_map',odometry_topic=ns+'/odom',tf_topic=ns+'/tf',tf_static_topic=ns+'/tf_static',global_route_topic=ns+'/route')
