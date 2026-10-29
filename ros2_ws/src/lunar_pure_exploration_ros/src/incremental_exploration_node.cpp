@@ -1466,6 +1466,7 @@ void IncrementalExplorationNode::Initialize(
     throw std::invalid_argument{
         "navigation_map_wait_timeout_s must be finite and nonnegative"};
   }
+  const auto tf_static_topic = AbsoluteTopic(*this, "tf_static_topic", "/tf_static");
   const auto exploration_qos = ConfiguredExplorationMapQos(*this);
   auto runtime = std::make_shared<Runtime>(*this, std::move(parameters));
   const std::weak_ptr<Runtime> weak_runtime{runtime};
@@ -1492,14 +1493,15 @@ void IncrementalExplorationNode::Initialize(
           resolver.UpdateOdometry(*odometry);
         });
       });
+  const auto transforms_callback = [weak_runtime](tf2_msgs::msg::TFMessage::SharedPtr transforms) {
+    HandlePose(weak_runtime, [transforms = std::move(transforms)](PoseResolver& resolver) {
+      resolver.UpdateTransforms(*transforms);
+    });
+  };
   tf_subscription_ = create_subscription<tf2_msgs::msg::TFMessage>(
-      runtime->parameters.tf_topic, rclcpp::QoS{10}.reliable(),
-      [weak_runtime](tf2_msgs::msg::TFMessage::SharedPtr transforms) {
-        HandlePose(weak_runtime, [transforms = std::move(transforms)](
-                                     PoseResolver& resolver) {
-          resolver.UpdateTransforms(*transforms);
-        });
-      });
+      runtime->parameters.tf_topic, rclcpp::QoS{10}.reliable(), transforms_callback);
+  tf_static_subscription_ = create_subscription<tf2_msgs::msg::TFMessage>(
+      tf_static_topic, rclcpp::QoS{1}.reliable().transient_local(), transforms_callback);
   task_subscription_ = create_subscription<Task>(
       runtime->parameters.task_topic, rclcpp::QoS{10}.reliable(),
       [weak_runtime](Task::SharedPtr task) {

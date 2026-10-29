@@ -167,6 +167,12 @@ class PlannerRuntime:
                 self._notice('GOAL_REJECTED', event.reason_code)
             else:
                 self._last_accepted_input = sequence
+                if task_id is not None:
+                    # 唯一owner在逻辑接受后立即捕获原语值；外部notice在输入锁外交付。
+                    adapted=self.session.goal
+                    accepted=json.dumps({'task_id': task_id, 'accepted_generation': self.session.accepted_generation,
+                                         'goal': [adapted.x, adapted.y, adapted.yaw]},sort_keys=True)
+                    self._notice('TASK_ACCEPTED',accepted)
                 self._notice('GOAL_ACCEPTED', f'generation={self.session.accepted_generation}, pose={goal}')
         remaining = []
         for item in unresolved:

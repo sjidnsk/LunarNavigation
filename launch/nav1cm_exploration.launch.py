@@ -58,7 +58,7 @@ def _compose(context):
             **{k: values[k] for k in ("action_name","goal_topic","global_route_topic","local_path_topic","build_dir")},
             "allow_unknown": False}),
     ]
-    shared_policy = {**{k: values[k] for k in ("task_topic","status_topic","odometry_topic","tf_topic")},
+    shared_policy = {**{k: values[k] for k in ("task_topic","status_topic","odometry_topic","tf_topic","tf_static_topic")},
                      **frames, "platform_config": config}
     if strategy == "frontier":
         actions.append(node("lunar_pure_exploration_ros", "incremental_exploration_node", {

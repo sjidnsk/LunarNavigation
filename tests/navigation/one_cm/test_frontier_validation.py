@@ -9,8 +9,8 @@ def load():
     spec=spec_from_file_location("frontier_grade",FILE);m=module_from_spec(spec);spec.loader.exec_module(m);return m
 
 def evidence():
-    return dict(case="frontier_progress",common={k:True for k in ("graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received","sensor_timing")},
-                reached=[dict(uuid="current",xy_error=.05,yaw_error=.02,v=0.,w=0.,hold_s=.3,status=4,outcome=0)],
+    return dict(case="frontier_progress",common={k:True for k in ("graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received","sensor_timing","authoritative_identity")},
+                reached=[dict(uuid="current",xy_error=.05,yaw_error=.02,v=0.,w=0.,hold_s=.3,status=4,outcome=0,sample_age_s=0.)],
                 distinct_goals=2,observed_growth=20,waits=0,canceled_stopped=0,cancel_while_moving=False,no_goals_after_cancel=True)
 
 def test_actual_terminal_requires_uuid_xy_yaw_stop_and_hold():
@@ -23,7 +23,7 @@ def test_path_or_no_map_cannot_count_as_frontier_completion():
     e=evidence();e["reached"]=[];e["nonempty_paths"]=100
     assert not load().grade(e)["pass_"]
 
-@pytest.mark.parametrize("key",["graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received","sensor_timing"])
+@pytest.mark.parametrize("key",["graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received","sensor_timing","authoritative_identity"])
 def test_every_common_safety_and_identity_gate_is_independent(key):
     e=evidence();e["common"][key]=False;assert not load().grade(e)["pass_"]
 
@@ -108,12 +108,12 @@ def test_cancel_stop_measurement_must_precede_terminal_receipt():
 def obstacle_evidence():
     e=evidence();e['case']='blocked_obstacle_update'
     e['obstacle_sequence']={
-      'event':dict(uuid='a',monotonic_s=1.,pose=[2.,0.,0.],distance_m=2.,accepted_at=.9,active=True),
+      'event':dict(uuid='a',monotonic_s=1.,pose=[2.,0.,0.],distance_m=2.,accepted_at=.9,active=True,generation=1,binding_source='TASK_ACCEPTED'),
       'source':dict(monotonic_s=1.1,changed=True),
       'map':dict(monotonic_s=1.2,changed=True),
       'wait':dict(uuid='a',monotonic_s=1.3,reason='WAITING_FOR_PATH'),
       'terminal':dict(uuid='a',monotonic_s=3.3,status=5,outcome=5,reason='CANCELED_STOPPED',stopped_before=True),
-      'next':dict(uuid='b',monotonic_s=3.4,pose=[2.,1.,0.],logical_accepted=True)}
+      'next':dict(uuid='b',monotonic_s=3.4,pose=[2.,1.,0.],logical_accepted=True,generation=2,binding_source='TASK_ACCEPTED')}
     return e
 
 def test_obstacle_update_requires_real_event_source_map_current_uuid_stop_and_new_xy():
@@ -179,3 +179,17 @@ def test_acceptance_conflicts_and_missing_binding_fail_closed():
     ledger.record(dict(task_id=a,accepted_generation=1,goal=[0.,0.,0.]),1.)
     ledger.record(dict(task_id=a,accepted_generation=1,goal=[1.,0.,0.]),2.)
     assert not ledger.ok and ledger.current is None and ledger.get(a) is None
+
+
+@pytest.mark.parametrize('order',[("current_goal","feedback","status"),("current_goal","status","feedback"),("feedback","current_goal","status"),("feedback","status","current_goal"),("status","current_goal","feedback"),("status","feedback","current_goal")])
+def test_all_cross_topic_orders_wait_for_authoritative_exact_binding(order):
+    ledger=acceptance_module().AcceptanceLedger();old,new='a'*32,'b'*32
+    ledger.record(dict(task_id=old,accepted_generation=1,goal=[-1.,0.,0.]),0.)
+    for event in order:
+        if event=='current_goal':ledger.observe_frontend_goal([3.,4.,.5])
+        else:assert ledger.observe_uuid(new) is None
+    assert ledger.get(new) is None
+    ledger.record(dict(task_id=new,accepted_generation=2,goal=[3.,4.,.5]),1.)
+    ledger.observe_frontend_goal([-100.,100.,1.])
+    assert ledger.observe_uuid(old).goal==(-1.,0.,0.)
+    assert ledger.observe_uuid(new).goal==(3.,4.,.5) and ledger.current.task_id==new
