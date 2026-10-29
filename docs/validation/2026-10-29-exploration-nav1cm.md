@@ -143,3 +143,25 @@ obstacle-update-once通过：当前UUID10eafaff2e8851ff410061999435b73c逻辑接
 新安装60项source/install与8native核对；新incremental.so SHAa80a185e38825a26f7992f44cc2310b4ab6eabd19d94c8caac3745af4d2b39e0，runtime.py SHA5fd57cd774fd63209149d4e3f288bdbd38caeced34f99416638440e4ede57f33。原Task3/install60文件+8native逐项SHA未变；新build/install/log/cache与raw保存在fix-round1，67文件归档SHA已核对。详细命令、全部UUID/最新xyyawstop、旧raw差异/限制、固定窗原始数据、安装身份与收尾见同SDD task-3-report.md追加段。
 
 原frontend首次11/12/未定legacy5s超时、旧Windows2路径失败、M1/M2、默认T5零Twist发布尝试（无送达/订阅者记录）及全部失败保留，不能倒写首次全绿。NOT_RUN仍含设备/生产DDS/真实P3/DRL与未知捷径；本轮只完成实现者验证，待同reviewer scoped复审/owner合入/授权回收，无merge/push/PR/upstream/delete/reset/stash。
+
+
+### Task4公共依赖C1：连续观测FREE浮点接缝修复（待独立审查）
+
+本轮BASE `0ebc43ea5a0f7f2849039a146bc3ffc49fd4c80a`，先行测试 `01f02bb9`，产品 `734838aa9e9f4955ee3c42bfdf9e058a6d25bb2e`。Task4原固定权重window02保留：45.346s无运动、44次正式 `0/PLAN_FOUND/has_reference=true`、重复QP3，不能算实际导航通过。ROOT对原709源格初帧独立重建后证明公共P3MapStore误造厘米UNKNOWN行，Actor yaw转换正确；C1据此只修公共依赖，不改变Actor/目标/场景/物理限制。
+
+精确反例 `TerrainUpdate(.2,(-3.,-3.),0.,[[2,11,29,20,FREE]])` 应覆盖x[-260,280)、y[-80,100) cm。旧版179行且缺-80，因为minY=-79.99999999999999进入内部事件，数值薄片中点落边界导致整行拒绝。修复只在选择条带内部事件时采用已有 `1e-9 cm` 边界容差；原顶点/真实观测支持和连续分量判定均保留。新增90/180度旋转、非整数原点、1e-9m与.1mm真实缺口；原旋转断开分量/部分厘米/来源历史和BLOCKED优先回归继续通过。
+
+| 本轮检查 | 真实结果 |
+|---|---|
+| Windows最小RED | 3 failed / 3 passed，.55s；精确反例及两旋转失败 |
+| Windows受影响P3/map/geometry/cache/UNKNOWN/reference组 | 96 passed / 9 skipped / 1 error，4.50s；error为--basetemp父目录不存在的WinError3，明确建D盘父目录后仅该单例1 passed/.49s。9 native skip不算Windows原生验证 |
+| Linux709真实native RED | 新增独立core oracle逐格展开与旧P3投影相差2660/250000；1 failed，7.29s。先前scripts命名遮蔽与默认user-site NumPy2/SciPy1失败另存，不充作几何RED |
+| Humble新安装构建 | 仅lunar_nav1cm_planner Release，1包2.66s；无core/controller/训练数值重建 |
+| Linux受影响地图/native/cache/reference | 168 passed，19.15s；含709 disk原生流水线、真实缺口/旋转/来源历史。系统pytest保留1条旧pythonpath配置不识别warning |
+| planner包CTest | `ctest -j1 --output-on-failure`，6/6，6.53s；domain92/localhost1，Action mockworker、无controller/真实运动窗 |
+| 安装级原SensorModel709重放 | elevation31x31、origin(-3,-3)、.2m，与固定disk掩码逐值/字节相同，SHA63a944371264ebbc4ea934f6b465292f45196e25af622643ec5d00e984a232d0。FREE220140→222800，UNKNOWN29860→27200，恢复恰2660格；y=-80内侧连续FREE |
+| 固定初始硬圆 | native/Python距离场最大差0；中心净空.8858578643762691→2.487928932188135 m，要求.9217224777339302 m不变，可行性false→true；只是初帧几何支持证明 |
+
+远端ROOT=`/mnt/data/WS/lunar-navigation/analysis-artifacts/nav1cm-p3-interface-20261027`，本轮所有source/build/install/log位于 `ROOT/exploration-integration-20261029/task4-common-map-fix`，原Task4和Task3安装不覆盖。按操作指令末节source顺序，最后新common install；38个Python安装文件SHA及Gitblob与734838aa源码一致，实际导入全部来自新安装；`/proc/self/maps`实际core SHA b63079f301e2f1b1d6a0fc126d86eda152d98b6d30baa0b530b7da28260a9ce4。mapROS解析到task2/fix-round1的617d4d71（本诊断未运行mapROS节点）；3个planner native与旧安装SHA完全相同，1574个旧安装文件前后SHA不变。系统 `/usr/bin/python3`、NumPy1.21.5与SciPy1.8.0，关闭user-site，不注入整个用户site。
+
+本地证据 `D:/CodexDownloads/lunar_navigation/nav-1cm-feasibility-20261026/artifacts/exploration-integration-20261029/task4-common-map-fix`，逐字命令/原始输出、Windows路径错误、三次远端环境诊断、初次五层payload维度诊断错误、shell CRLF错误/遗留路径、身份及受保护安装清单见同SDD `task-4-c1-report.md`。所有原失败保留；诊断脚本只读原SensorModel，不运行Actor、ROS节点、solver求解或训练。Task4原45s真实motion仍待独立审查后复验，不能用C1替代；Orin/实车/真实P3流/生产DDS/RViz/rosbag NOT_RUN。专题与资源已提交待审查/owner合入/授权回收，无合并/推送/PR/upstream/删除。
