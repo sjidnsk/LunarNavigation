@@ -2,7 +2,7 @@
 # Source Git SHA: c8cf14e167345150ba64dd141cfec5470e09ba41
 # Source content SHA-256: b80b57fbf904bebcffda57731a7ae3f86e45aabcaa7871e204551f04d55ef161
 # Isaac simulation-only: forward 2m/s, spin 2rad/s; reverse and all safety constraints retained.
-simulation_only: true
+# Marker lives in isaac_viper_navigation_demo.yaml; capability root follows strict C++ schema.
 platform: wheel
 platform_id: wheeled-lunar-explorer
 platform_type: WHEELED

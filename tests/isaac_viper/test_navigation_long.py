@@ -33,6 +33,16 @@ class LongNavigation(unittest.TestCase):
         controller.receive_twist(0.,0.,2.,.1)
         self.assertEqual(controller.target,(0.,2.))
 
+    def test_demo_capability_has_cpp_strict_root_schema(self):
+        # C++ ValidateIdentity(surface_platform=true) 的有效根字段；真实parser另有gtest。
+        capability=yaml.safe_load((ROOT/'config/wheel_isaac_navigation_demo.yaml').read_text(encoding='utf-8'))
+        allowed={'platform','platform_id','platform_type','capability_version','base_frame_id','start_blind_zone_margin_m','capability'}
+        self.assertEqual(set(capability)-allowed,set(),'unknown roots make real C++ navigator fail before a goal')
+        self.assertEqual(capability['base_frame_id'],'base_footprint')
+        profile=yaml.safe_load((ROOT/'config/isaac_viper_navigation_demo.yaml').read_text(encoding='utf-8'))
+        self.assertTrue(profile['simulation_only'])
+        self.assertEqual(profile['sources']['capability'],'wheel_isaac_navigation_demo.yaml')
+
     def test_long_route_bends_around_real_blocked_cells(self):
         self.assertTrue(hasattr(ns,'select_long_route'),'long route precheck missing')
         z=np.zeros((120,120)); relief=np.zeros_like(z)

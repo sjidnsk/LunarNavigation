@@ -62,3 +62,10 @@
 - host默认150sim/300wall，单次显式 `--send-goal` 和拒覆盖、健康门、超时取消保持。`result.json.long_route_evidence` 单列真实navigator global长度、原session/revision、真实阻挡格到规划折线净距，长度>=100且车包络绕过阻挡才满足；PLAN_FOUND、GOAL_REACHED、严格停车分别判定。
 - 本机真实RED 5failed；证据门RED 1failed/5passed；额外真实global直穿障碍RED 1failed/5passed。最终相关suite 213passed/17SDKskip/5subtests，CLI与diff检查通过。17skip不算SDK通过；真实原A只读PXR地图预检已执行，派生stage/PhysX/实际Kit视图/Humble闭环/严格停车/Orin/实车仍NOT_RUN，交root实测。
 - 处置：已提交待root验证、独立审查和合入；准确提交与输出见外部 `coordination/task-5-report.md`。旧失败、原资产和所有输出保留，无push/PR/清理，不碰中央dirty登记。
+
+### Task5 runtime fix1：C++严格能力根schema
+
+- root实际新导航启动FATAL：`PLANNER_ERROR ...wheel_isaac_navigation_demo.yaml: unknown field: simulation_only`，尚无goal/plan；controller零，Kit实际trace线由root观察。此前Python loader宽松通过不能证明C++兼容。
+- 仅移除demo capability YAML的非法根字段 `simulation_only`，保留profile marker、文件名、注释与demo capability_version；所有capability/base_frame等语义逐项不变，生产wheel_orin不改。无需派生第二份能力档。
+- 新C++ gtest直接调用实际LoadPlatformConfig(demo)，核2/2和原reverse/accel/brake/yawaccel/lateral/坡度/clearance/足迹/primitive；再注入simulation_only验证仍拒绝未知字段。该C++测试需root在已有Humble包重编执行，本机Windows NOT_RUN。
+- 本地schema回归真实RED 1failed/6passed，明确根多出simulation_only；删除该字段后相关完整Python suite与原严格ROS double setter回归一起复测。准确结果、提交和root实际运行边界见外部task-5-report.md附录。未修改C++生产parser、地图/源USD、速度值/安全值或发送行为。
