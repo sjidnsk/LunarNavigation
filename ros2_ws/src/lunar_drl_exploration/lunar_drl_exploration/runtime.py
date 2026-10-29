@@ -100,7 +100,9 @@ class InferenceRuntime:
             if result is not None:
                 self.last_result=result
                 self.adapter.require_fresh_snapshot()
-        snap=self.adapter.poll_snapshot()
+        # 新请求可以返回同一帧；沿用现有观测stamp要求严格前进。
+        # 停止生命周期在下方独立确认，不因等待新地图而阻塞。
+        snap=self.adapter.poll_snapshot(self._stamp+1)
         if snap is not None:self.core.consume(snap)
         stamp=getattr(self.adapter,'processed_stamp_ns',0)
         if snap is not None and stamp!=self._stamp:

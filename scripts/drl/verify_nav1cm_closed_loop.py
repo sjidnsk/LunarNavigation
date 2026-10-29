@@ -82,7 +82,7 @@ def run(args,d):
     from lunar_drl_exploration.navigation_backend import owned_nav1cm_specs
     from lunar_drl_exploration.ros_messages import velocity_is_stopped
     art=args.artifact;ns=d['namespace'];events=[];children=[];logs=[];owned={};runtime=None;node=None
-    accepted=set();error=None;summary={};task_pub=None;python_expected={};execution_rows=[];execution_stream=None;execution_paths=None
+    accepted=set();error=None;summary={};task_pub=None;python_expected={};execution_rows=[];execution_stream=None;execution_paths=None;mppi_stream=None
     python_expected[os.getpid()]=Path('/proc/self/stat').read_text().split()[21]
     event_stream=(art/'events.jsonl').open('x',buffering=1)
     trace=(art/'runtime.jsonl').open('x',buffering=1)
@@ -151,6 +151,13 @@ def run(args,d):
             from nav1cm.execution_ros import reference_from_message,status_from_message
             from nav1cm.execution_contract import path_fingerprint
             from nav_msgs.msg import Path as RosPath
+            from std_msgs.msg import String
+            from rclpy.qos import QoSProfile,ReliabilityPolicy
+            mppi_stream=(art/'mppi-diagnostics.jsonl').open('x',buffering=1)
+            def observe_mppi(message):
+                mppi_stream.write(json.dumps(dict(wall=time.monotonic(),data=json.loads(message.data)))+'\n')
+            node.create_subscription(String,ns+'/mppi_diagnostics',observe_mppi,
+                QoSProfile(depth=20,reliability=ReliabilityPolicy.BEST_EFFORT))
             execution_paths=(art/'execution-paths.jsonl').open('x',buffering=1)
             def observe_path(message):
                 points=[]
@@ -262,6 +269,7 @@ def run(args,d):
         frozen={key:base.digest(d[key]) for key in ('actor','config','platform')}
         summary.update(child_exits=exits,forced_exit=forced,workers_remaining=remaining,guard_attempts=attempts,
             guard_startups=starts,guard_expected_processes=[dict(pid=p,starttime=t) for p,t in python_expected.items()],frozen_after=frozen,frozen_unchanged=all(frozen[k]==d[k+'_sha256'] for k in frozen))
+        if mppi_stream is not None:mppi_stream.close()
         if execution_paths is not None:execution_paths.close()
         if execution_stream is not None:execution_stream.close()
         if d.get('execution_contract_required'):

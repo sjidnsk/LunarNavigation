@@ -63,7 +63,9 @@ def test_runtime_prepares_v5_before_calling_actor(monkeypatch):
     class Adapter:
         inflight=False;velocity=(0.,0.);pose=None
         def require_fresh_snapshot(self):pass
-        def poll_snapshot(self):return snapshot
+        def poll_snapshot(self,minimum_map_stamp_ns=0):
+            assert minimum_map_stamp_ns==0
+            return snapshot
         def begin_goal(self,goal):self.goal=goal;self.inflight=True
     a=Adapter();runtime=module.InferenceRuntime(a,Policy(),SensorSpec())
     runtime.start(SimpleNamespace(task_id='synthetic'));runtime.tick()
