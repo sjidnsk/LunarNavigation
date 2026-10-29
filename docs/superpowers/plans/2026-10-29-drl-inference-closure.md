@@ -13,3 +13,7 @@
 - [ ] 独立审查，完整raw与最终grader、权重/config前后hash、所有子进程退出证据保存；仅在满足门槛时声明隔离合成推理闭环通过。真实P3/Orin/实车/策略效果仍NOT_RUN。
 
 本任务不自动push、合并owner或删除资源。对原training ledger不读取、不写入、不声称其前后字节证明。两子任务独立写纯grader与只读验收审计，主线程唯一修改运行验证入口；无共享文件并发写。
+
+## 2026-10-29执行状态
+
+验证器与禁止训练守卫已实现，相关纯测试61 passed。r1/r2失败已定位并仅修复验证环境；r3有界真实ROS推理实际运动，但首目标前0.241m停滞，完整闭环FAIL。精确冻结位姿在空白图上真实acados三组status0、NO_PROGRESS，尚需在线候选证据。详细身份/退出/边界见docs/drl/2026-10-29-inference-closure-validation.md。末段行为修改待用户讨论，owner/main/apps未晋级。

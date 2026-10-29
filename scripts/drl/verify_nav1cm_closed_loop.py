@@ -15,6 +15,11 @@ from inference_only_guard import install
 from inference_closure_grade import grade
 
 
+def canonical_event(kind,**values):
+    """内存验收使用与落盘JSON相同的标准数值类型。"""
+    return json.loads(json.dumps(dict(kind=kind,wall=time.monotonic(),**values)))
+
+
 def inference_ros_arguments(namespace,parameters):
     """仅验证器私有推理端点；不修改原训练/产品启动器的命名空间合同。"""
     if not namespace.startswith('/lunar_inference/') or '/..' in namespace:
@@ -58,7 +63,7 @@ def run(args,d):
     trace=(art/'runtime.jsonl').open('x',buffering=1)
     base.write_json(art/'inference-config.json',d['inference_config'])
     def emit(kind,**values):
-        event=dict(kind=kind,wall=time.monotonic(),**values);events.append(event)
+        event=canonical_event(kind,**values);events.append(event)
         event_stream.write(json.dumps(event,default=lambda v:vars(v))+'\n')
     def spawn(name,command):
         log=(art/(name+'.log')).open('x');logs.append(log)
