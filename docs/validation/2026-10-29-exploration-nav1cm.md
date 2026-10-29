@@ -126,3 +126,20 @@ obstacle-update-once通过：当前UUID10eafaff2e8851ff410061999435b73c逻辑接
 该窗0GOAL_REACHED、2不同XY、2CANCELED_STOPPED；不将新goal接受写为到达。实际odom49.278849Hz，最大v.199809/w.871312、a/alpha<=.5，独立净空下界.859790m，全部正式规划/实际运动/私有graph/安装/无异常/cleanup及严格事件门禁通过，owned remaining=[]。未知捷径/绕行优先仍未覆盖。
 
 补证grader10项RED→GREEN，最后Windows focused55passed、Linux合同51passed；未重建/重复未变产品包或原四窗。追加固定60s使总固定窗465s，补充原始12.18MB/压缩2.07MB已回收D盘并核对14文件SHA；之前所有失败和174项原始回执保留。完整次序/UUID/源SHA/成本见task-3-report.md与obstacle-update-once。
+
+
+### Task3 scoped审查修复 round1：静态输入与终态身份
+
+本节取代前文旧运动窗的可复用资格。旧summary/raw原样保留，离线最新suffix重算到达/停稳计数未变，但所有旧运动raw缺权威接受通知，不能由current_goal跨topic顺序证明UUID目标归属；旧1cm无目标预检仅接收资格不受影响。本轮仅修开放I1-I3，独立复审仍待ROOT安排。
+
+产品68f52d2f9daade228e4b815ef23ba1f53df0a3ce：frontend接可配置reliable/transient_local tf_static_topic并复用PoseResolver；原动态订阅保留，launch给策略传相同静态topic。Runtime唯一owner逻辑接受后通过既有锁外notice捕获TASK_ACCEPTED(task_id,generation,adapted map x/y/yaw)，不增topic/Action/Path/schema。runner只凭exactID通知绑定，current_goal只旁观，缺失/冲突failclosed且不触发障碍；终态改为最新实测端点的连续有效suffix与.15s新鲜度，取消只查最新样本，不留历史best/any。
+
+先行Python7red/42pass；C++早发布零stamp静态TF且frontend晚启动反例红4.018s→绿21ms。Windows最终focused71passed；Humble planner6/6（22例）、frontend12/12（248例）串行通过，Linuxlaunch/grade48passed，最后默认notice/pendingyaw追加后Runtime定向10passed。只构建planner/frontend独立task3/fix-round1 prefix（30.3s），core/MPPI/controller数值未改不重复全套。
+
+冻结harness5b179e0，原固定75/60/30/60各一次全部PASS：GOAL_REACHED6/2/0/1，不同pose7/5/1/7，不同XY3/1/1/3，CSTOP1/3/1/6；正式global0/PLAN_FOUND/has_reference45/5/7/33。实测odom49.335/49.444/49.425/49.349Hz，独立扫掠净空下界1.495108/3.850028/4.074838/.859851m>=.2。75s全链仅启动前一次latched零stamp静态TF，无dynamic publisher；20个接受/终态UUID全有权威通知，无冲突。225s运动窗全部私有domain92/localhost1/cmd，cleanup exit0、无升级/owned残留。
+
+新障碍60s精确通知UUID53bb80d7f254a6445791f0ee6e1284d4、距离1.883933m后加障碍，source/map occupied0→193、匹配WAIT/CSTOP、新UUID889af5ca0d0cbb3f30509c532087ce1d不同XY（3.762555m）链通过；该轮1到达/3XY，不能用旧轮0到达/2XY替代。v2仍无实际障碍更新、global未知缝交集0，未知捷径/绕行优先未触发。
+
+新安装60项source/install与8native核对；新incremental.so SHAa80a185e38825a26f7992f44cc2310b4ab6eabd19d94c8caac3745af4d2b39e0，runtime.py SHA5fd57cd774fd63209149d4e3f288bdbd38caeced34f99416638440e4ede57f33。原Task3/install60文件+8native逐项SHA未变；新build/install/log/cache与raw保存在fix-round1，67文件归档SHA已核对。详细命令、全部UUID/最新xyyawstop、旧raw差异/限制、固定窗原始数据、安装身份与收尾见同SDD task-3-report.md追加段。
+
+原frontend首次11/12/未定legacy5s超时、旧Windows2路径失败、M1/M2、默认T5零Twist发布尝试（无送达/订阅者记录）及全部失败保留，不能倒写首次全绿。NOT_RUN仍含设备/生产DDS/真实P3/DRL与未知捷径；本轮只完成实现者验证，待同reviewer scoped复审/owner合入/授权回收，无merge/push/PR/upstream/delete/reset/stash。
