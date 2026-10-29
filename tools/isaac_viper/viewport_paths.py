@@ -140,7 +140,7 @@ class ViewportPaths:
                 self.view=sc.SceneView()
                 with ui.VStack():
                     ui.Spacer(height=12)
-                    ui.Label('  GLOBAL PLAN: blue (8px) | LOCAL REF: yellow | ACTUAL traveled: cyan (3px)',height=24,style={'color':0xffffffff})
+                    self.legend_label=ui.Label('  GLOBAL PLAN: blue (8px) | ACTUAL traveled: cyan (3px)',height=24,style={'color':0xffffffff})
                     self.status_label=ui.Label('  Waiting for accepted Action and verified reference',height=24,style={'color':0xffffffff})
                     ui.Spacer()
         self.window.viewport_api.add_scene_view(self.view)
@@ -167,6 +167,7 @@ class ViewportPaths:
                         for segment in segments:
                             if len(segment)>=2:
                                 self.sc.Curve(segment,curve_type=self.sc.Curve.CurveType.LINEAR,colors=[COLORS[name]],thicknesses=[8. if name=='global_route' else 3. if name=='actual_trace' else 4.])
+            self.legend_label.text='  GLOBAL PLAN: blue (8px) | ACTUAL traveled: cyan (3px)'+(' | LOCAL REF: yellow (explicit display)' if any('local_path' in group for group in groups) else '')
             history=bool(payload.get('history_paths'))
             trace_audit=payload['paths'].get('actual_trace',{}).get('simplification',{})
             trace_status=(' | ACTUAL full-span simplified display '+str(trace_audit.get('retained_samples'))+'/'+str(trace_audit.get('accepted_samples'))+' samples' if trace_audit.get('compactions',0)>0 else '')

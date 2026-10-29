@@ -93,6 +93,21 @@ class DisplayRegressions(unittest.TestCase):
         self.assertFalse(trace.append(10,[99,99,99],[0,0,0,1],[0,0,0]))
         self.assertTrue(trace.append(11,[1,2,3],[0,0,0,1],[0,0,0]))
 
+def test_overlay_default_hides_local_without_mutating_original_reference():
+    session=DisplayRegressions().verified()
+    assert hasattr(nav,'overlay_snapshot'),'display-only local filtering missing'
+    actual={'actual_trace':dict(stamp_ns=9,points=[[0,0,0],[1,0,0]])}
+    before=session.snapshot()
+    filtered=nav.overlay_snapshot(session,actual)
+    assert set(filtered['paths'])=={'global_route','actual_trace'}
+    assert set(filtered['history_paths'])=={'global_route'}
+    assert filtered['path_reference']==before['path_reference']
+    assert session.snapshot()==before
+    visible=nav.overlay_snapshot(session,actual,show_local_path=True)
+    assert set(visible['paths'])=={'global_route','local_path','actual_trace'}
+    assert set(visible['history_paths'])=={'global_route','local_path'}
+
+
 def test_trace_capacity_preserves_full_travel_and_turns_with_audit():
     trace=nav.ActualTrace(limit=8)
     journey=([[float(x),0.,0.] for x in range(51)]
@@ -139,7 +154,7 @@ def test_viewport_poll_draws_projected_plan_and_original_truth_trace(tmp_path):
     overlay=vp.ViewportPaths.__new__(vp.ViewportPaths)
     overlay.path=path; overlay.digest=None; overlay.sequence=-1; overlay.session=None
     overlay.map_sha='unit-map'; overlay.projector=vp.TerrainProjector(np.array([[8.,9.,10.],[8.,9.,10.]]),[0,3,0,2],1.)
-    overlay.view=SimpleNamespace(scene=Scene()); overlay.sc=SimpleNamespace(Curve=Curve); overlay.status_label=SimpleNamespace(text='')
+    overlay.view=SimpleNamespace(scene=Scene()); overlay.sc=SimpleNamespace(Curve=Curve); overlay.status_label=SimpleNamespace(text=''); overlay.legend_label=SimpleNamespace(text='')
     overlay.poll()
     global_curves=[points for points,style in captured if style['colors']==[vp.COLORS['global_route']]]
     actual=[points for points,style in captured if style['colors']==[vp.COLORS['actual_trace']]]

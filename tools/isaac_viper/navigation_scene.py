@@ -247,7 +247,7 @@ def collision_triangles(stage, bounds):
     return np.concatenate(chunks),audit
 
 
-def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.):
+def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.,native_policy_json=None,start_xy_m=None,goal_xy_m=None,native_profile_hash=None):
     from pxr import Usd,UsdGeom,UsdPhysics
     from tools.isaac_viper.build_stage import _placement,_transform
     from tools.isaac_viper.config import load_profile
@@ -267,7 +267,14 @@ def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.
     triangles,audit=collision_triangles(source,bounds)
     elevation,relief=rasterize_triangles_batched(triangles,bounds,.2)
     raster_wall_s=time.perf_counter()-started
-    start,goal,fixture=select_long_route(elevation,relief,bounds,.2,minimum_route_length_m,profile['capability'])
+    if native_policy_json is not None:
+        from tools.isaac_viper.native_policy import load_native_policy,select_native_route
+        policy=load_native_policy(native_policy_json,profile,elevation,relief,bounds,.2,source_layers,native_profile_hash,digest(profile_path))
+        start,goal,fixture=select_native_route(policy,elevation,relief,bounds,.2,start_xy_m,goal_xy_m,minimum_route_length_m,profile['capability'])
+    else:
+        if any(value is not None for value in (start_xy_m,goal_xy_m,native_profile_hash)): raise ValueError('explicit endpoints/hash require a native policy snapshot')
+        start,goal,fixture=select_long_route(elevation,relief,bounds,.2,minimum_route_length_m,profile['capability'])
+        fixture['native_endpoint_validation']='NOT_RUN; approximate candidate only, not native endpoint acceptance'
     blocker=fixture['blocked_cell_xy_m']; collision_sources=[]
     # 根据真实三角XY包围盒列出阻挡格的候选来源；精确高度/relief来自裁剪图。
     offset=0
@@ -310,7 +317,7 @@ def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.
             meaning='per-cell max-minus-min over actual clipped triangles; conservative height quantization bound, including rocks'),
         collision_meshes=audit,collision_check=dict(footprint_half_extent_m=[.591,.409],safety_margin_m=.5,
         acceptance_slope_limit_deg=math.degrees(profile['capability']['maximum_slope_rad']),maximum_cell_relief_m=profile['capability']['maximum_local_obstacle_relief_m'],offline_fixture_route_length_m=fixture['path_length_m'],net_displacement_m=math.dist(start,goal),
-        static_corridor='PASS',dynamic_settle='NOT_RUN',collision_runtime='NOT_RUN'),placement=placement,
+        static_corridor='captured native FREE corridor' if native_policy_json else 'approximate physical candidate only',native_endpoint_validation=fixture['native_endpoint_validation'],dynamic_settle='NOT_RUN',collision_runtime='NOT_RUN'),placement=placement,
         NOT_RUN=['Kit','ROS','dynamic_settle','navigation','Orin','real_vehicle'])
     (output/'navigation-scene.json').write_text(json.dumps(report,ensure_ascii=False,indent=2,allow_nan=False),encoding='utf-8')
     if hashlib.sha256(source_path.read_bytes()).hexdigest()!=sha or any(digest(path)!=value for path,value in source_layers.items()): raise RuntimeError('source modified')
@@ -320,6 +327,13 @@ def build_scene(source_stage,output_dir,profile_path,minimum_route_length_m=100.
 def main():
     p=argparse.ArgumentParser(description=__doc__); p.add_argument('--source-stage',required=True); p.add_argument('--output-dir',required=True); p.add_argument('--profile',default='config/isaac_viper_navigation_demo.yaml')
     p.add_argument('--minimum-route-length-m',type=float,default=100.,help='仅离线fixture长度门；正式成功仍要求真实新导航规划>=此长度')
-    a=p.parse_args(); print(json.dumps(build_scene(a.source_stage,a.output_dir,a.profile,a.minimum_route_length_m),ensure_ascii=False))
+    p.add_argument('--native-policy-json',help='第二阶段：同源实际GetPolicyMap快照manifest；不启动导航器')
+    p.add_argument('--native-policy-profile-hash',help='运行回执中的期望原生profile_hash，非YAML SHA')
+    p.add_argument('--start-xy-m',type=float,nargs=2,metavar=('X','Y'))
+    p.add_argument('--goal-xy-m',type=float,nargs=2,metavar=('X','Y'))
+    a=p.parse_args()
+    native_values=(a.native_policy_json,a.native_policy_profile_hash,a.start_xy_m,a.goal_xy_m)
+    if any(value is not None for value in native_values) and not all(value is not None for value in native_values): p.error('native policy manifest, runtime profile hash and both cell-center endpoints are required together')
+    print(json.dumps(build_scene(a.source_stage,a.output_dir,a.profile,a.minimum_route_length_m,a.native_policy_json,a.start_xy_m,a.goal_xy_m,a.native_policy_profile_hash),ensure_ascii=False))
 
 if __name__=='__main__': main()

@@ -76,3 +76,12 @@
 - ActualTrace容量满不再pop起点；首点/最新点保护，按最小3D点到邻段偏差渐进抽稀到75%容量，保留跨全时段形状并记录audit。局部删除偏差明确不是全局近似误差界；原actual_odom/odometry事件仍完整保存，不按静止位置去重，不改变stamp高水位/健康门/新goal行为。
 - result.actual_trace_audit和overlay实际trace.simplification记录accepted/retained/omitted、compactions、首尾stamp与方法。抽稀后UI明确ACTUAL full-span simplified display；GLOBAL PLAN蓝线8px（历史同宽），ACTUAL traveled青线3px，LOCAL REF黄线4px。真实全局未生成时仍不画规划。
 - 真实RED2failed/8passed，暴露旧起点被pop到stamp194与全局宽度不足；核心GREEN17passed。新增limit8/201点跨全程L形回归验证首尾与两个拐角、容量/时间顺序/抽稀审计/重复stamp/新goal高水位。最终完整相关结果与提交见外部task5report；Kit截图实际效果待root部署验证，不SCP/运行。
+
+### Task5 fixture fix3：原生端点第二阶段与默认双线展示
+
+- 基线4649708。root R3实际goal发送/接受，但NO_PATH/ENDPOINT_BLOCKED；旧approx起点282.3,-307.1本格intrinsic/observed FREE，硬膨胀state BLOCKED，邻格原生3×3坡度20.2226deg>20deg。旧静态近似不能声明native端点合格；导航阈值/算法不改。
+- generator新增显式native二阶段CLI：`--native-policy-json .../native-aligned-manifest.json --native-policy-profile-hash c10bb8e11bf9e420 --start-xy-m 280.7 -307.1 --goal-xy-m 330.5 -218.5`，四项须同时提供。核对实际manifest/NPZ键、源map和CDR SHA、geometry/axis/state wire、源scene receipt/源层hash/profile SHA/capability深相等、原生与本次PXR高程/relief逐值完全相等（含NaN）；原生hash显式与运行回执比对，不假称重算C++hash。
+- native observed/intrinsic/inflated均FREE才可作端点/无切角离线通路；两端仍要求原物理候选包络mask通过；直线须命中三层native BLOCKED的有限真实高程格，并继续做原mesh精确归因。offline路线仍不发布/不绘制，captured native FREE不是新run落稳/PLAN_FOUND证明。非native第一阶段回执现在明确仅approx候选、native NOT_RUN。
+- 真正只读SSH CPU核验新起终点三层1/FREE，净距101.6366m、native无切角可行110.3994m；阻挡324.5,-229.1三层2/BLOCKED；原起点真实被新函数拒绝。约5.58s含原PXR重算；新Pose/USD/真实新导航仍由root生成/运行，不SCP不控制。
+- 按用户显示口径，overlay默认只GLOBAL PLAN+ACTUAL traveled，local live/history仅在host显式`--show-local-path`时显示。过滤只作用snapshot副本；local/PathReference原订阅、raw、证据、controller接线和会话门不变；图例动态对应实际显示种类。
+- native功能真实RED7failed，默认隐藏local RED1failed/10passed。身份/硬膨胀/高程篡改/断联拒绝及显示副本不变回归已补；最终suite、提交和真实边界见外部task5report。处置已提交待root同步、实际SDK/Humble新run和独立复审。

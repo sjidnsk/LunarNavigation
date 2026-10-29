@@ -169,6 +169,15 @@ class DisplayPlanSession:
                     path_reference=copy.deepcopy(self.reference),paths=copy.deepcopy(self.live),history_paths=copy.deepcopy(self.history))
 
 
+def overlay_snapshot(display,actual_paths,show_local_path=False):
+    """仅过滤展示副本；原reference/session/raw订阅和controller输入完全保留。"""
+    snapshot=display.snapshot()
+    if not show_local_path:
+        snapshot['paths'].pop('local_path',None); snapshot['history_paths'].pop('local_path',None)
+    snapshot['paths'].update(copy.deepcopy(actual_paths))
+    return snapshot
+
+
 def long_route_evidence(display,scene):
     """实际新navigator global长度与fixture分列；没有原消息绑定时保持未满足。"""
     fixture=scene.get('fixture_precheck',{}); minimum=float(fixture.get('minimum_required_m',100.))
@@ -202,6 +211,7 @@ def _stamp_ns(stamp): return int(stamp.sec)*1000000000+int(stamp.nanosec)
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--scene-json',required=True); parser.add_argument('--output-dir',required=True); parser.add_argument('--overlay-file',required=True)
+    parser.add_argument('--show-local-path',action='store_true',help='显式开启局部参考线；默认仅全局规划和实际走过轨迹')
     parser.add_argument('--send-goal',action='store_true',help='显式发送一次真实 NavigateToPose；缺省仅发布图和监听')
     parser.add_argument('--wall-timeout',type=float,default=300); parser.add_argument('--sim-timeout',type=float,default=150)
     parser.add_argument('--freshness-wall',type=float,default=2.,help='发送目标前真实 odom/TF 接收年龄上限；不改变控制器阈值')
@@ -325,7 +335,7 @@ def main():
         node.create_subscription(PathReference,'/Car/T4/planning/path_reference',on_reference,latched),node.create_subscription(DiagnosticArray,'/Car/T4/planning/diagnostics',on_diagnostics,10)]
     def write_overlay():
         nonlocal sequence
-        sequence+=1; snapshot=display.snapshot(); snapshot['paths'].update(paths)
+        sequence+=1; snapshot=overlay_snapshot(display,paths,args.show_local_path)
         state['long_route_evidence']=long_route_evidence(display,scene)
         payload=dict(schema=SCHEMA,run_id=run_id,sequence=sequence,frame='map',source='live_ros',clock_ns=state['clock_ns'],
             display_map=dict(path=scene['map_npz'],sha256=scene['map_sha256'],source_stage_sha256=scene['source_sha256'],region='A',
