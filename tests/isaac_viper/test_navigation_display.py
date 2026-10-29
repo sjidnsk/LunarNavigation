@@ -6,6 +6,7 @@ import unittest
 import numpy as np
 from tools.isaac_viper import navigation_showcase as nav
 from tools.isaac_viper import viewport_paths as vp
+from tools.isaac_viper.known_regions import SOURCE_SHA
 
 SESSION='a'*32
 OTHER='b'*32
@@ -140,7 +141,7 @@ def test_viewport_poll_draws_projected_plan_and_original_truth_trace(tmp_path):
     session.observe_global(dict(stamp_ns=0,points=[[.1,.1,0],[1.1,.1,0],[2.1,.1,0]]),101)
     session.observe_reference(ref(),102); session.accept_goal(SESSION); session.observe_diagnostics(diag())
     payload=dict(schema=vp.SCHEMA,run_id='test',frame='map',source='live_ros',sequence=1,
-                 display_map={'sha256':'unit-map'},**session.snapshot())
+                 display_map={'sha256':'unit-map','region':'A','source_stage_sha256':SOURCE_SHA,'path':'cached-unit-map.npz'},**session.snapshot())
     payload['paths']['actual_trace']=dict(stamp_ns=9,points=[[.1,.1,11],[.2,.1,11]])
     path=tmp_path/'overlay.json'; path.write_text(json.dumps(payload),encoding='utf-8')
     captured=[]
@@ -153,6 +154,7 @@ def test_viewport_poll_draws_projected_plan_and_original_truth_trace(tmp_path):
         def __init__(self,points,**kwargs): captured.append((points,kwargs))
     overlay=vp.ViewportPaths.__new__(vp.ViewportPaths)
     overlay.path=path; overlay.digest=None; overlay.sequence=-1; overlay.session=None
+    overlay.map_identity=('A',SOURCE_SHA,'cached-unit-map.npz','unit-map')
     overlay.map_sha='unit-map'; overlay.projector=vp.TerrainProjector(np.array([[8.,9.,10.],[8.,9.,10.]]),[0,3,0,2],1.)
     overlay.view=SimpleNamespace(scene=Scene()); overlay.sc=SimpleNamespace(Curve=Curve); overlay.status_label=SimpleNamespace(text=''); overlay.legend_label=SimpleNamespace(text='')
     overlay.poll()

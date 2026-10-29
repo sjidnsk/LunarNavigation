@@ -129,7 +129,7 @@ class TerrainProjector:
 class ViewportPaths:
     """SceneView 跟随相机；路径不会进入 RTX/碰撞世界。"""
     def __init__(self,path):
-        self.path=Path(path); self.digest=None; self.sequence=-1; self.session=None; self.projector=None; self.map_sha=None
+        self.path=Path(path); self.digest=None; self.sequence=-1; self.session=None; self.projector=None; self.map_sha=None; self.map_identity=None
         import omni.ui as ui
         from omni.ui import scene as sc
         from omni.kit.viewport.utility import get_active_viewport_window
@@ -154,11 +154,12 @@ class ViewportPaths:
             payload=validate_payload(json.loads(raw)); session=payload.get('run_id')
             if session==self.session and payload['sequence']<=self.sequence: raise ValueError('overlay sequence not increasing')
             groups=(payload['paths'],payload.get('history_paths',{}))
-            if any(name!='actual_trace' for group in groups for name in group):
+            if 'display_map' in payload or any(name!='actual_trace' for group in groups for name in group):
                 source=payload.get('display_map',{})
                 if not isinstance(source,dict): raise ValueError('invalid display map metadata')
-                if self.projector is None or source.get('sha256')!=self.map_sha:
-                    self.projector=TerrainProjector.from_source(source); self.map_sha=source['sha256']
+                identity=tuple(source.get(key) for key in ('region','source_stage_sha256','path','sha256'))
+                if self.projector is None or identity!=getattr(self,'map_identity',None):
+                    self.projector=TerrainProjector.from_source(source); self.map_sha=source['sha256']; self.map_identity=identity
             self.view.scene.clear()
             with self.view.scene:
                 for group in groups:
