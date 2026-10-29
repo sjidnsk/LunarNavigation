@@ -35,7 +35,7 @@ FIX_BASE 133e97e775eee1ec9e5ff4c2e3dbed1d4b0de017。I1 已贯通 Runtime/adapter
 已有窗口没有重跑。计数澄清：window03的181 unique processed_stamp值包含初始0/INPUT_UNAVAILABLE，实际非零处理stamp为180；旧raw不改。console main/public topic真实生命周期仍NOT_RUN，当前修复覆盖直接订阅回调的纯输入/当前任务保持；原动态maps、旧argv、未到达及历史执行偏差限制不变。待同一reviewer scoped复审，不能把本轮测试视为ROOT最终通过。
 
 
-## 最终协调修复波：owned 到达容差（待 scoped 复审）
+## 最终协调修复波：owned 到达容差（限定复审通过）
 
 FIX_BASE b16c8ca8a8914dfc4a06c280d301e310eee61329；测试9a74401，产品072f75d6fdd482495567212af20503ed81dd3f3a，唯一实现者auto_nav_final_fix。owned RosEnv把已记录的goal_position_tolerance_m/goal_yaw_tolerance_rad同时传给map（goal_position_tolerance_m）、planner（goal_tolerance_m）和标准Path follower（goal_position_tolerance_m）；yaw均为goal_yaw_tolerance_rad。helper无参仍采用公共.1/.05，公共launch与legacy启动字典/config_record/resume默认未变。
 
@@ -43,4 +43,8 @@ FIX_BASE b16c8ca8a8914dfc4a06c280d301e310eee61329；测试9a74401，产品072f75
 
 final-fix-wave/drl/install的87 Python逐文件等于Gitblob/开发manifest；仅刷新ros_env.py/navigation_backend.py的2个开发SHA，其他metadata不动。MAIN依赖产品a1e4c46的新独立安装同波构建；真实装载core b63079f3。正式79manifest和portable配置与FIX_BASE字节相同；Actor/config前后SHA相同，ledger未读。旧安装目标文件与FIX_BASE一致，全部旧物理窗/raw/失败保留。
 
-原45s未到达、console main/public topic生命周期及完整新RosEnv episode仍NOT_RUN；本轮无训练、ROS节点、Actor或运动窗口，不为旧窗口回填新源码。保留初次只读identity脚本旧MAIN路径错误及共享colcon重名mixin警告，详见唯一SDD final-fix-report.md和本地ART/final-fix-wave/receipts.tar.gz。状态已提交待原final reviewer单次scoped复审/待owner合入，资源待授权回收，无merge/push/删除。
+原45s未到达、console main/public topic生命周期及完整新RosEnv episode仍NOT_RUN；本轮无训练、ROS节点、Actor或运动窗口，不为旧窗口回填新源码。保留初次只读identity脚本旧MAIN路径错误及共享colcon重名mixin警告，详见唯一SDD final-fix-report.md和本地ART/final-fix-wave/receipts.tar.gz。状态已通过原final reviewer单次scoped复审/已提交待owner合入，资源待授权回收，无merge/push/删除。
+
+## ROOT最终接纳
+
+公共I1最新odom/TF终态及DRL I2三方容差经同一原审查员限定复审全部ADDRESSED，0新增C/I/M。DRL产品072f75d6，review HEAD6678837f；MAIN产品a1e4c469，review HEAD6e21fdf6。ROOT实际核对300source/125install/87manifest、5native/core、21+8XML及冻结资源/旧安装，旧启动AST与配置源码保持。只获得源码集成审查资格，不授权owner合并/默认或正式训练切换；旧45sNOARRIVAL、console/public topic和完整RosEnv/真实P3/Orin/实车NOT_RUN及历史执行偏差继续保留。原任务级待审条目为对应提交时历史状态，本节为当前结论。
