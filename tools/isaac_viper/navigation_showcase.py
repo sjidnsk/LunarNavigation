@@ -1,5 +1,6 @@
 """Humble cp310 原 A 已知图助手：真实 Action/odom/TF/规划输出；绝不发布车辆控制。"""
 import argparse
+import copy
 import hashlib
 from array import array
 import json
@@ -8,7 +9,7 @@ from pathlib import Path
 import time
 import uuid
 import numpy as np
-from tools.isaac_viper.viewport_paths import SCHEMA,validate_payload
+from tools.isaac_viper.viewport_paths import SCHEMA,validate_payload,validate_points
 
 
 def grid_encoding(elevation):
@@ -26,6 +27,8 @@ def transform_point(point,rotation,translation):
 
 class ActualTrace:
     def __init__(self,limit=10000): self.limit=limit; self.points=[]; self.highwater=-1
+    def reset(self):
+        self.points.clear()  # 新 goal 清轨迹，但不退回真实 stamp 高水位。
     def append(self,stamp_ns,xyz,rotation,translation):
         if not isinstance(stamp_ns,int) or stamp_ns<0: raise ValueError('invalid odom stamp')
         if stamp_ns<self.highwater: raise ValueError('odom stamp rollback')
@@ -43,6 +46,74 @@ def planning_evidence(diag,reference):
             and int(diag['fine_traversability_revision'])==reference['traversability_revision'])
     except (KeyError,ValueError,TypeError): matched=False
     return dict(planning_outcome=0 if matched else None,has_reference=bool(matched),derivation='matching original DiagnosticArray PLAN_FOUND and nonempty ACTIVE PathReference; not Action result')
+
+
+class DisplayPlanSession:
+    """显示限定本 Action：local 取带 UUID 的 reference，global 只关联新 volatile 样本。"""
+    def __init__(self):
+        self.begin_goal(None,0)
+
+    def begin_goal(self,session_id,request_source_time_ns):
+        self.session_id=session_id; self.request_source_time_ns=request_source_time_ns
+        self.accepted=False; self.goal_state='pending' if session_id else 'waiting'; self.terminal=False
+        self.reference=None; self.reference_transport_stamp_ns=0; self.invalidated=set()
+        self.candidates=[]; self.diagnostics={}; self.live={}; self.history={}
+
+    def accept_goal(self,session_id):
+        if session_id!=self.session_id: raise ValueError('accepted goal UUID mismatch')
+        self.accepted=True; self.goal_state='active'; self._refresh()
+
+    def observe_global(self,path,transport_source_stamp_ns):
+        validate_points(path['points'])
+        if self.terminal or not self.session_id or transport_source_stamp_ns<self.request_source_time_ns or transport_source_stamp_ns<=0: return False
+        # 订阅是 VOLATILE；source_timestamp 是 DDS 原始发布时刻，不伪造 Path header。
+        self.candidates.append((transport_source_stamp_ns,copy.deepcopy(path)))
+        self.candidates=self.candidates[-64:]; self._refresh(); return True
+
+    def observe_reference(self,reference,transport_source_stamp_ns):
+        if self.terminal or reference['session_id']!=self.session_id: return False
+        key=(reference['session_id'],reference['segment_revision'],reference['traversability_revision'])
+        if transport_source_stamp_ns<self.reference_transport_stamp_ns: return False
+        if reference['state']==0 and key in self.invalidated: return False
+        if self.reference and (reference['segment_revision']<self.reference['segment_revision'] or
+            (reference['segment_revision']==self.reference['segment_revision'] and reference['traversability_revision']<self.reference['traversability_revision'])): return False
+        self.reference=copy.deepcopy(reference); self.reference_transport_stamp_ns=transport_source_stamp_ns
+        if reference['state']!=0:
+            self.invalidated.add(key); self.live={}; self.goal_state='invalidated'; return True
+        self.goal_state='active' if self.accepted else 'pending'; self._refresh(); return True
+
+    def observe_diagnostics(self,diagnostic):
+        if diagnostic.get('session_id')!=self.session_id: return False
+        key=(diagnostic['session_id'],int(diagnostic['segment_revision']),int(diagnostic['fine_traversability_revision']))
+        self.diagnostics[key]=copy.deepcopy(diagnostic); self._refresh(); return True
+
+    def _refresh(self):
+        self.live={}
+        ref=self.reference
+        if self.terminal or not self.accepted or not ref or ref['state']!=0 or not ref['points']: return
+        key=(ref['session_id'],ref['segment_revision'],ref['traversability_revision'])
+        if not planning_evidence(self.diagnostics.get(key,{}),ref)['has_reference']: return
+        binding=dict(session_id=ref['session_id'],segment_revision=ref['segment_revision'],traversability_revision=ref['traversability_revision'],reference_stamp_ns=ref['stamp_ns'])
+        self.live['local_path']=dict(stamp_ns=ref['stamp_ns'],points=copy.deepcopy(ref['points']),binding=copy.deepcopy(binding),verified_reference=copy.deepcopy(ref),display_status='live')
+        for source,path in reversed(self.candidates):
+            if 0<=self.reference_transport_stamp_ns-source<=1000000000:
+                if path['points']:
+                    global_binding=dict(binding,request_source_time_ns=self.request_source_time_ns,transport_source_stamp_ns=source,reference_transport_stamp_ns=self.reference_transport_stamp_ns,
+                        association='volatile sample after this goal request, immediately before matching ACTIVE reference and PLAN_FOUND; Path has no native UUID')
+                    self.live['global_route']=dict(copy.deepcopy(path),binding=global_binding,verified_reference=copy.deepcopy(ref),display_status='live')
+                break
+        # 每类只冻结首份已验证几何，完整初始全局路线不随末端短段消失。
+        for name,path in self.live.items():
+            if name not in self.history:
+                self.history[name]=copy.deepcopy(path); self.history[name]['display_status']='history'
+
+    def finish(self,status):
+        if status not in ('completed','failed','timeout','cancelled'): raise ValueError('invalid terminal display state')
+        self.terminal=True; self.goal_state=status; self.live={}
+
+    def snapshot(self):
+        return dict(action_session_id=self.session_id,goal_accepted=self.accepted,goal_state=self.goal_state,
+                    path_reference=copy.deepcopy(self.reference),paths=copy.deepcopy(self.live),history_paths=copy.deepcopy(self.history))
 
 
 def _stamp_ns(stamp): return int(stamp.sec)*1000000000+int(stamp.nanosec)
@@ -78,9 +149,11 @@ def main():
     from diagnostic_msgs.msg import DiagnosticArray
     from lunar_planning_msgs.msg import PathReference
     from lunar_planning_msgs.action import NavigateToPose
+    from unique_identifier_msgs.msg import UUID
     from rosidl_runtime_py.convert import message_to_ordereddict
     rclpy.init(); node=rclpy.create_node('viper_navigation_showcase')
     latched=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
+    route_qos=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.VOLATILE)
     best=QoSProfile(depth=100,reliability=ReliabilityPolicy.BEST_EFFORT)
     map_pub=node.create_publisher(GridMap,'/Car/T3/mapping/grid_map',latched)
     trace_pub=node.create_publisher(RosPath,'/Car/T4/showcase/actual_trace',latched)
@@ -88,7 +161,7 @@ def main():
     run_id=uuid.uuid4().hex; events=(output/'events.jsonl').open('w',encoding='utf-8',buffering=1)
     state=dict(run_id=run_id,scene=scene,argv=vars(args),clock_ns=None,first_clock_ns=None,map_publish_count=0,
                goal_sent=False,goal_accepted=False,goal_reached=False,planning_evidence=dict(planning_outcome=None,has_reference=False),NOT_RUN=['Orin','real_vehicle','C Actor'])
-    paths={}; trace=ActualTrace(); pending={}; transforms={}; latest={}; references={}; diagnostics={}; sequence=0
+    display=DisplayPlanSession(); paths={}; trace=ActualTrace(); pending={}; transforms={}; latest={}; references={}; diagnostics={}; sequence=0
     wall_start=time.monotonic(); last_map=last_overlay=-1.; goal_handle=None; send_future=result_future=cancel_future=None
     def record(kind,**values):
         events.write(json.dumps(dict(event=kind,wall_elapsed_s=time.monotonic()-wall_start,**values),ensure_ascii=False,allow_nan=False)+'\n')
@@ -107,10 +180,14 @@ def main():
         if msg.header.frame_id!='map': raise ValueError('planner path frame must be map')
         points=[[p.pose.position.x,p.pose.position.y,p.pose.position.z] for p in msg.poses]
         value=dict(stamp_ns=_stamp_ns(msg.header.stamp),points=points)
-        validate_payload(dict(schema=SCHEMA,frame='map',source='live_ros',sequence=0,paths={'local_path':value}))
+        validate_points(points)
         return value
-    def on_path(name,msg):
-        value=path_value(msg); paths[name]=value; raw(name,msg)
+    def on_path(name,msg,info=None):
+        value=path_value(msg); raw(name,msg)
+        if name=='global_route':
+            source=int(getattr(info,'source_timestamp',0))
+            accepted=display.observe_global(value,source)
+            record('global_display_candidate',transport_source_stamp_ns=source,accepted=accepted)
     def consume(stamp):
         if stamp not in pending or stamp not in transforms: return
         msg=pending.pop(stamp); q,t=transforms[stamp]; p=msg.pose.pose.position
@@ -147,11 +224,12 @@ def main():
         if state['clock_ns'] is not None and ns<state['clock_ns']: raise ValueError('simulation clock rollback')
         state['clock_ns']=ns
         if state['first_clock_ns'] is None: state['first_clock_ns']=ns
-    def on_reference(msg):
+    def on_reference(msg,info):
         value=path_value(msg.path); ref=dict(session_id=bytes(msg.session_id.uuid).hex(),segment_revision=int(msg.segment_revision),traversability_revision=int(msg.traversability_revision),state=int(msg.state),**value)
         key=(ref['session_id'],ref['segment_revision'],ref['traversability_revision'])
         if ref['state']==0 or key not in references: references[key]=ref
         state['latest_path_reference']=ref
+        display.observe_reference(ref,int(getattr(info,'source_timestamp',0)))
         raw('path_reference',msg); match()
     def on_diagnostics(msg):
         raw('diagnostics',msg)
@@ -160,10 +238,19 @@ def main():
             if all(k in values for k in ('session_id','segment_revision','fine_traversability_revision','cycle_result','reason_code')):
                 key=(values['session_id'],int(values['segment_revision']),int(values['fine_traversability_revision']))
                 diagnostics[key]=dict(values,source_stamp_ns=_stamp_ns(msg.header.stamp))
+                display.observe_diagnostics(diagnostics[key])
         match()
     subscriptions=[node.create_subscription(Odometry,'/Car/T3/localization/odometry',on_odom,best),node.create_subscription(TFMessage,'/tf',on_tf,best),node.create_subscription(Clock,'/clock',on_clock,best),
-        node.create_subscription(RosPath,'/Car/T4/planning/global_route',lambda m:on_path('global_route',m),latched),node.create_subscription(RosPath,'/Car/T4/planning/local_path',lambda m:on_path('local_path',m),latched),
+        node.create_subscription(RosPath,'/Car/T4/planning/global_route',lambda m,info:on_path('global_route',m,info),route_qos),node.create_subscription(RosPath,'/Car/T4/planning/local_path',lambda m:on_path('local_path',m),latched),
         node.create_subscription(PathReference,'/Car/T4/planning/path_reference',on_reference,latched),node.create_subscription(DiagnosticArray,'/Car/T4/planning/diagnostics',on_diagnostics,10)]
+    def write_overlay():
+        nonlocal sequence
+        sequence+=1; snapshot=display.snapshot(); snapshot['paths'].update(paths)
+        payload=dict(schema=SCHEMA,run_id=run_id,sequence=sequence,frame='map',source='live_ros',clock_ns=state['clock_ns'],
+            display_map=dict(path=scene['map_npz'],sha256=scene['map_sha256'],source_stage_sha256=scene['source_sha256'],region='A',
+                usage='display-only projection of original planner XY; never changes raw ROS geometry; unknown/outside split'),**snapshot)
+        validate_payload(payload); tmp=overlay.with_suffix(overlay.suffix+'.tmp'); tmp.write_text(json.dumps(payload,allow_nan=False),encoding='utf-8'); tmp.replace(overlay)
+        state['display_session']=dict(goal_state=snapshot['goal_state'],action_session_id=snapshot['action_session_id'],history_paths=list(snapshot['history_paths']))
     record('start',run_id=run_id,scene=scene,argv=vars(args)); save()
     try:
         while rclpy.ok():
@@ -184,17 +271,22 @@ def main():
             if args.send_goal and not state['goal_sent'] and healthy and action.server_is_ready():
                 goal=NavigateToPose.Goal(); goal.target_x_m,goal.target_y_m=scene['goal_xy_m']; goal.has_target_yaw=True; goal.target_yaw_rad=scene['goal_yaw_rad']
                 state['goal_sent']=True; record('goal_request',target_xy_m=scene['goal_xy_m'],target_yaw_rad=scene['goal_yaw_rad'],health=dict(latest),map_count=state['map_publish_count'])
-                send_future=action.send_goal_async(goal,feedback_callback=lambda m:raw('action_feedback',m.feedback))
+                session_id=uuid.uuid4().hex; display.begin_goal(session_id,time.time_ns()); trace.reset(); paths.clear()
+                state['action_session_id']=session_id
+                record('goal_display_epoch',session_id=session_id,request_source_time_ns=display.request_source_time_ns)
+                send_future=action.send_goal_async(goal,goal_uuid=UUID(uuid=list(bytes.fromhex(session_id))),feedback_callback=lambda m:raw('action_feedback',m.feedback))
             if send_future is not None and send_future.done() and goal_handle is None:
                 goal_handle=send_future.result(); state['goal_accepted']=bool(goal_handle.accepted); state['action_session_id']=bytes(goal_handle.goal_id.uuid).hex()
                 record('goal_response',accepted=state['goal_accepted'],session_id=state['action_session_id']); match()
                 if not goal_handle.accepted: state['stop_reason']='GOAL_REJECTED'; break
+                display.accept_goal(state['action_session_id'])
                 result_future=goal_handle.get_result_async()
             if result_future is not None and result_future.done():
                 result=result_future.result(); raw('action_result',result.result)
                 state['action_result']=dict(status=int(result.status),message=message_to_ordereddict(result.result))
                 state['goal_reached']=result.result.outcome==0 and result.result.reason_code=='GOAL_REACHED'
                 # 留观测尾窗由 root 控制；Action 到达与严格停车分别验收。
+                display.finish('completed' if state['goal_reached'] else 'failed')
                 state['stop_reason']='ACTION_RESULT'; break
             if now-last_overlay>=.2:
                 if trace.points:
@@ -203,8 +295,7 @@ def main():
                         pose=PoseStamped(); pose.header.frame_id='map'; stamp_message(pose.header.stamp,item['stamp_ns'])
                         pose.pose.position.x,pose.pose.position.y,pose.pose.position.z=item['xyz']; pose.pose.orientation.w=1.; path.poses.append(pose)
                     trace_pub.publish(path)
-                sequence+=1; payload=dict(schema=SCHEMA,run_id=run_id,sequence=sequence,frame='map',source='live_ros',clock_ns=ns,paths=paths,action_session_id=state.get('action_session_id'),path_reference=state.get('latest_path_reference'))
-                validate_payload(payload); tmp=overlay.with_suffix(overlay.suffix+'.tmp'); tmp.write_text(json.dumps(payload,allow_nan=False),encoding='utf-8'); tmp.replace(overlay)
+                write_overlay()
                 last_overlay=now; save()
             sim_elapsed=0 if ns is None else (ns-state['first_clock_ns'])/1e9
             if now-wall_start>=args.wall_timeout or sim_elapsed>=args.sim_timeout:
@@ -233,6 +324,11 @@ def main():
         except BaseException as exc:
             state['cancel_error']=repr(exc)
             record('cancel_error',detail=repr(exc))
+        if not display.terminal:
+            display.finish('timeout' if state.get('stop_reason') in ('WALL_TIMEOUT','SIM_TIMEOUT') else 'cancelled' if state.get('stop_reason')!='ERROR' else 'failed')
+        try: write_overlay()
+        except (ValueError,OSError) as exc:
+            state['final_overlay_error']=repr(exc); record('final_overlay_error',detail=repr(exc))
         state['wall_elapsed_s']=time.monotonic()-wall_start
         state['sim_elapsed_s']=0 if state['clock_ns'] is None else (state['clock_ns']-state['first_clock_ns'])/1e9
         state['strict_stop']='NOT_RUN; root must inspect actual odom/physics/sole-controller command tail'

@@ -44,3 +44,10 @@
 - `run_scene --navigation-overlay-file` 使用 Kit SDK 实际 SceneView/Curve API、每 app 帧读取严格 bounded JSON，Pause 同样可看；全局蓝/局部黄/真实轨迹青。它不创建 USD 路径 Mesh，RTX 不可见。A 近景相机来自实际起终点/新初始高程；A/B/C 相机和原物理、传感、typed 传输、安全门保持。
 - 本机真实 RED 为缺模块的 6 项断言失败，GREEN 相关 suite 197 passed / 17 SDK skipped（另 5 subtests passed）；CLI help 已实际执行。SDK 示例仅只读核对，不算运行通过。准确命令与最终提交见外部 coordination/task-4-report.md。
 - 本地代码已提交待 root 同步/验收/审查；PXR 真实地图生成、Kit UI、Humble 真实导航/控制/到达/停车、C Actor、Orin/实车均 `NOT_RUN`。源/新旧产物和失败保留，不推送、PR、删除或清理；中央 dirty 登记不改。
+
+### Task4 review 修复 round1
+
+- P1：规划显示按本次A碰撞地图的绝对高程采样，原z/XY/ROS消息保留；未知/越界断线，无0高程回退。actual仍取真实odom三维高度。JSON记录显示地图路径/哈希/原根层哈希，Kit复验。
+- P2：local改为已接受Action UUID、ACTIVE reference/revision与PLAN_FOUND匹配的原reference.path；global只接volatile新样本，以本goal请求后的DDS source_timestamp与紧邻同周期reference关联，原Path header stamp不改、不认领原生UUID。旧session和INVALIDATED不画live。
+- 首份验证规划保留为清楚标注HISTORY，失效/终态清live且标状态，最终全局完整对照不消失；新goal清旧plan/history/trace并保持stamp高水位。非法会话JSON清旧曲线后拒绝。
+- 真实RED8failed；修复后相关206passed/17SDKskip/5subtests，含实际poll曲线坐标8.12..10.12与真实轨迹11.12、原raw规划z=0不改的定向测试。EOF空行已清，git diff --check cddf95e通过。实际Kit/Humble仍NOT_RUN，提交与命令见外部task4report，交root同步/复审/实跑。

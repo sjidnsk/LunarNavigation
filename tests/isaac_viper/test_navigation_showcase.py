@@ -60,4 +60,3 @@ class NavigationContracts(unittest.TestCase):
         self.assertFalse(nav.planning_evidence(diag,ref)['has_reference'])
 
 if __name__ == '__main__': unittest.main()
-

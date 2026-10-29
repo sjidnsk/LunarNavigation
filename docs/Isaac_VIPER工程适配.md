@@ -212,7 +212,15 @@ ROS_DOMAIN_ID=117 ROS_LOCALHOST_ONLY=1 \
 ```
 
 `OVERLAY` 为显式新会话JSON路径。SDK `omni.ui.scene.SceneView/Curve` 仅绘制viewport叠加，
-全局蓝、局部黄、真实odom轨迹青；原始坐标保存在JSON，显示统一抬高.12m避免路面遮挡。
+全局蓝、局部黄、真实odom轨迹青。规划原消息z=0时，仅为显示按本次原A碰撞map.npz的绝对高程投影，
+原规划消息和XY折线不改；按半格间隔加密显示采样以在NaN/越界处断线，不补0。真实odom保留原3D高度，
+显示再抬高.12m。JSON记录显示地图路径/哈希/原stage哈希，Kit加载时复验来源和A边界。
+局部线直接取已接受Action UUID匹配的ACTIVE PathReference.path，并核对segment/traversability revision
+与PLAN_FOUND；不把无UUID的retained local_path认成当前规划。global改VOLATILE订阅，
+只关联本次goal请求后的DDS source_timestamp样本与紧邻匹配reference（发布间隔≤1s），
+关联方式在JSON明示，原Path的0 stamp不改。没有足够关联证据时不画global。
+同session首条已验证完整规划冻结为HISTORY；失效/终态清live，界面标invalidated/completed/failed/timeout，
+保留历史与实走轨迹便于核对。新goal清旧规划/历史/轨迹，stamp高水位不回退。
 没有路径USD Mesh进入RTX/碰撞。每app帧poll，因此Pause可继续更新；Stop仍结束旧控制会话。
 近景相机按实际起终点/初始高程生成，不改车辆运行位姿；保留Vehicle/All/A/B/C按钮。
 
@@ -240,7 +248,8 @@ traversability revision 的原 `PLAN_FOUND` 与非空ACTIVE reference派生，�
 Action `outcome=0/reason_code=GOAL_REACHED`另判；图上有线、accepted或ROS SUCCEEDED均不代替到达/严格停车验收。
 助手有wall/sim界和有界取消；取消回执、真实尾窗/唯一控制器停车仍由root核对。
 
-本轮本机相关纯Python测试197 passed、17 SDK skipped（另5 subtests passed）；3个CLI help已执行。
+本轮review修复后本机相关纯Python测试206 passed、17 SDK skipped（另5 subtests passed）；
+新增高地显示/旧session/失效/终态历史/新goal和实际poll坐标回归。CLI help已执行。
 实际PXR地图生成/派生USD门、Kit SceneView显示、Humble导航/控制闭环、目标到达及停车均 `NOT_RUN`，
 由root在独立新运行补记。C Actor、完整三区导航、Jazzy、Orin、实车也未由本轮证明。
 原两次工程短路径失败与原/轻档全部历史产物保留，不借其结果替代新导航验收。
