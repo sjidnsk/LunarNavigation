@@ -33,3 +33,14 @@ legacy 8 s 首窗 INPUT_UNAVAILABLE、无目标，8.272434 s 后 3 子进程 exi
 FIX_BASE 133e97e775eee1ec9e5ff4c2e3dbed1d4b0de017。I1 已贯通 Runtime/adapter 的有效地图帧，坏 START 在任何当前任务变更前返回拒绝；I2 已实现 infer 专用配置接收与显式 flag 优先级。新增纯 CLI/回调测试12项，旧实际安装 I1 两项RED/0.15s，Windows I2 五项RED；Windows另有两项因缺SciPy导入失败，不作产品RED。新独立 fix-round1/install 上12 PASS/0.44s；包build5.01s，87源码/实际安装/manifest/Gitblob一致，实际核心仍b630，C1 p3_map仍4a296，默认serialization/resume对BASE一致。测试只解析训练CLI拒绝规则，不调用训练main或构造learner/replay。
 
 已有窗口没有重跑。计数澄清：window03的181 unique processed_stamp值包含初始0/INPUT_UNAVAILABLE，实际非零处理stamp为180；旧raw不改。console main/public topic真实生命周期仍NOT_RUN，当前修复覆盖直接订阅回调的纯输入/当前任务保持；原动态maps、旧argv、未到达及历史执行偏差限制不变。待同一reviewer scoped复审，不能把本轮测试视为ROOT最终通过。
+
+
+## 最终协调修复波：owned 到达容差（待 scoped 复审）
+
+FIX_BASE b16c8ca8a8914dfc4a06c280d301e310eee61329；测试9a74401，产品072f75d6fdd482495567212af20503ed81dd3f3a，唯一实现者auto_nav_final_fix。owned RosEnv把已记录的goal_position_tolerance_m/goal_yaw_tolerance_rad同时传给map（goal_position_tolerance_m）、planner（goal_tolerance_m）和标准Path follower（goal_position_tolerance_m）；yaw均为goal_yaw_tolerance_rad。helper无参仍采用公共.1/.05，公共launch与legacy启动字典/config_record/resume默认未变。
+
+纯helper/caller RED4失败/1通过、Windows GREEN5通过；Humble独立包构建4.84s，预读8项纯白名单0.17s通过。caller测试执行真实_start_ros的完整owned AST分支，用fake process recorder跳过ROS初始化，不构造RosEnv/learner/replay/optimizer或运行任何episode。测试覆盖.05m/pi12rad与.03m/.07rad三方实际参数。
+
+final-fix-wave/drl/install的87 Python逐文件等于Gitblob/开发manifest；仅刷新ros_env.py/navigation_backend.py的2个开发SHA，其他metadata不动。MAIN依赖产品a1e4c46的新独立安装同波构建；真实装载core b63079f3。正式79manifest和portable配置与FIX_BASE字节相同；Actor/config前后SHA相同，ledger未读。旧安装目标文件与FIX_BASE一致，全部旧物理窗/raw/失败保留。
+
+原45s未到达、console main/public topic生命周期及完整新RosEnv episode仍NOT_RUN；本轮无训练、ROS节点、Actor或运动窗口，不为旧窗口回填新源码。保留初次只读identity脚本旧MAIN路径错误及共享colcon重名mixin警告，详见唯一SDD final-fix-report.md和本地ART/final-fix-wave/receipts.tar.gz。状态已提交待原final reviewer单次scoped复审/待owner合入，资源待授权回收，无merge/push/删除。
