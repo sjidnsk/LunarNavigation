@@ -124,5 +124,72 @@ TEST(ExplorationMapProjectorTest,
   EXPECT_DOUBLE_EQ(projection.geometry.origin_m().y, 0.25);
 }
 
+// 同一几何下对照两种公开语义，避免共享遍历意外统一占据规则。
+TEST(ExplorationMapProjectorTest, MixedEvidencePreservesDistinctPolicies) {
+  using State = core::FineCellState;
+  struct Case {
+    std::vector<State> states;
+    std::int8_t legacy;
+    std::int8_t conservative;
+  };
+  const std::vector<Case> cases{
+      {{State::kFree, State::kFree, State::kFree, State::kFree}, 0, 0},
+      {{State::kBlocked, State::kBlocked, State::kBlocked, State::kBlocked}, 100, 100},
+      {{State::kUnknown, State::kUnknown, State::kUnknown, State::kUnknown}, -1, -1},
+      {{State::kFree, State::kBlocked, State::kUnknown, State::kUnknown}, 0, 100},
+      {{State::kBlocked, State::kUnknown, State::kUnknown, State::kFree}, 0, 100},
+      {{State::kFree, State::kUnknown, State::kUnknown, State::kUnknown}, 0, -1},
+      {{State::kBlocked, State::kUnknown, State::kUnknown, State::kUnknown}, -1, 100},
+  };
+  for (std::size_t i = 0; i < cases.size(); ++i) {
+    SCOPED_TRACE(i);
+    std::vector<std::pair<core::GridIndex, State>> cells;
+    for (std::int64_t j = 0; j < 4; ++j) {
+      cells.push_back({{.x = j % 2, .y = j / 2}, cases[i].states[j]});
+    }
+    const auto fine = MakeFine(cells);
+    EXPECT_EQ(ExplorationMapProjector{}.Project(*fine, CoarseGeometry()).data[0],
+              cases[i].legacy);
+    EXPECT_EQ(ExplorationMapProjector{}.ProjectConservative(
+                  *fine, CoarseGeometry()).data[0], cases[i].conservative);
+  }
+}
+
+TEST(ExplorationMapProjectorTest, ShiftedBoundaryKeepsUncoveredAreaUnknown) {
+  // 世界范围为 [-.25, 2.75)，中间格完整覆盖，两侧仅部分覆盖。
+  const core::SparseGridGeometry shifted(
+      "map", 1.0, {.x = .75}, {.x = -1, .y = 0}, {.x = 2, .y = 1});
+  for (const auto state : {core::FineCellState::kFree,
+                           core::FineCellState::kBlocked}) {
+    std::vector<std::pair<core::GridIndex, core::FineCellState>> cells;
+    for (std::int64_t y = 0; y < 4; ++y) {
+      for (std::int64_t x = 0; x < 4; ++x) {
+        cells.push_back({{.x = x, .y = y}, state});
+      }
+    }
+    const auto fine = MakeFine(cells);
+    const auto legacy = ExplorationMapProjector{}.Project(*fine, shifted);
+    const auto conservative =
+        ExplorationMapProjector{}.ProjectConservative(*fine, shifted);
+    const bool free = state == core::FineCellState::kFree;
+    EXPECT_EQ(legacy.data, (free ? std::vector<std::int8_t>{0, 0, 0}
+                                : std::vector<std::int8_t>{-1, 100, -1}));
+    EXPECT_EQ(conservative.data, (free ? std::vector<std::int8_t>{-1, 0, -1}
+                                      : std::vector<std::int8_t>{100, 100, 100}));
+    EXPECT_DOUBLE_EQ(conservative.geometry.origin_m().x, .75);
+    EXPECT_EQ(conservative.source_fine_traversability_revision, 7U);
+  }
+}
+
+TEST(ExplorationMapProjectorTest, BothPoliciesRejectIncompatibleFrames) {
+  const auto fine = MakeFine({});
+  const core::SparseGridGeometry other(
+      "odom", 1.0, {}, {.x = 0, .y = 0}, {.x = 1, .y = 1});
+  EXPECT_THROW(ExplorationMapProjector{}.Project(*fine, other),
+               std::invalid_argument);
+  EXPECT_THROW(ExplorationMapProjector{}.ProjectConservative(*fine, other),
+               std::invalid_argument);
+}
+
 }  // namespace
 }  // namespace lunar::incremental_navigation_ros

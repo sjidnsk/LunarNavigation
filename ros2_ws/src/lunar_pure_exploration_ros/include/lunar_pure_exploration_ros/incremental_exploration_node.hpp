@@ -73,7 +73,7 @@ class IncrementalExplorationNode final : public rclcpp::Node {
       exploration_map_subscription_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr
       odometry_subscription_;
-  rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_subscription_;
+  rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_subscription_, tf_static_subscription_;
   rclcpp::Subscription<
       lunar_pure_exploration_msgs::msg::PureExplorationTask>::SharedPtr
       task_subscription_;

@@ -200,7 +200,7 @@ def validate_geometry(geometry,margin_m=.4):
     return True
 
 
-def build_geometry(mother,seed,extent_m):
+def build_geometry(mother,seed,extent_m,*,start_room_radius_m=0.):
     if mother['generator_version']!=VERSION or not math.isfinite(extent_m) or not 30<=extent_m<=1000:
         raise ValueError('v2 cave requires extent in [30,1000]')
     _adjacency(mother['node_count'],mother['edges'])
@@ -208,12 +208,20 @@ def build_geometry(mother,seed,extent_m):
     # 30 m supports at most 4*6.25+2*2.2=29.4 m. Larger extents stretch corridors;
     # chamber and corridor width remain wheel-sized rather than scale with extent.
     spacing=float(rng.uniform(5.8,max(5.800001,(extent_m-5.)/4)))
+    if not math.isfinite(start_room_radius_m) or start_room_radius_m < 0:
+        raise ValueError('invalid safe start room radius')
+    if start_room_radius_m:
+        # Reserve the room before rasterization. Leave a real corridor core
+        # between it and neighboring rooms and preserve nonincident clearances.
+        spacing=max(spacing,start_room_radius_m+2.2+1.5)
     points=np.asarray(mother['lattice_points'],float)*spacing
     points-=(points.min(axis=0)+points.max(axis=0))/2
     angle=int(rng.integers(4))*math.pi/2
     rotation=np.array([[math.cos(angle),-math.sin(angle)],[math.sin(angle),math.cos(angle)]])
     points=points@rotation.T
     rooms=[(*map(float,p),float(rng.uniform(2.1,2.2))) for p in points]
+    if start_room_radius_m:
+        rooms[0]=(*rooms[0][:2],max(rooms[0][2],float(start_room_radius_m)))
     passages=[(*map(float,points[a]),*map(float,points[b]),float(rng.uniform(1.25,1.4))) for a,b in mother['edges']]
     result=dict(generator_version=VERSION,
         mother_graph_id=mother['mother_graph_id'],structure_signature=mother['structure_signature'],
@@ -221,6 +229,9 @@ def build_geometry(mother,seed,extent_m):
         rooms=rooms,passages=passages,anchor_node=0,anchor_xy=list(rooms[0][:2]),
         abstract_summary=deepcopy(mother['abstract_summary']),geometry_validation='analytic_nonincident_clearance_passed',
         decorative_unreachable_rooms=[])
+    if start_room_radius_m:
+        result.update(start_region_generation_version='reserved_start_region_v1',
+            reserved_start_room=0,reserved_start_room_radius_m=rooms[0][2])
     validate_geometry(result)
     return result
 

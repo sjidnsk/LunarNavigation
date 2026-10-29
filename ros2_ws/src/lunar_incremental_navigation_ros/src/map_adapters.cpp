@@ -308,4 +308,35 @@ AdapterResult<OwnedElevationEvidence> AdaptLocalElevation(
   return AdaptElevationMessage(*input.local_map, std::move(*transform.value));
 }
 
+
+AdapterResult<OwnedElevationEvidence> AdaptExplorationElevation(const InputSnapshot& input) {
+  if(!input.local_map||!input.map_from_odom) return Invalid<OwnedElevationEvidence>();
+  const auto outer=AdaptCurrentMapFromOdomWithoutStamp(*input.map_from_odom);
+  const auto pose_rotation=NormalizedQuaternion(input.local_map->info.pose.orientation);
+  if(!outer.value||!pose_rotation||outer.value->child_frame!=input.local_map->header.frame_id) return Invalid<OwnedElevationEvidence>();
+  const auto& pose=input.local_map->info.pose;
+  if(!Finite(pose.position.x)||!Finite(pose.position.y)||!Finite(pose.position.z)) return Invalid<OwnedElevationEvidence>();
+  auto message=*input.local_map;
+  message.info.pose=geometry_msgs::msg::Pose{};message.info.pose.orientation.w=1.;
+  auto adapted=AdaptElevationMessage(message,{.parent_frame=message.header.frame_id,.child_frame=message.header.frame_id});
+  if(!adapted.value) return adapted;
+  const auto a=outer.value->rotation,b=*pose_rotation;
+  const lunar::incremental_navigation::Quaternion combined{
+    .w=a.w*b.w-a.x*b.x-a.y*b.y-a.z*b.z,
+    .x=a.w*b.x+a.x*b.w+a.y*b.z-a.z*b.y,
+    .y=a.w*b.y-a.x*b.z+a.y*b.w+a.z*b.x,
+    .z=a.w*b.z+a.x*b.y-a.y*b.x+a.z*b.w};
+  const lunar::incremental_navigation::Vec3 p{pose.position.x,pose.position.y,pose.position.z};
+  const lunar::incremental_navigation::Vec3 c{2*(a.y*p.z-a.z*p.y),2*(a.z*p.x-a.x*p.z),2*(a.x*p.y-a.y*p.x)};
+  auto transform=*outer.value;
+  transform.rotation=combined;
+  transform.translation_m={transform.translation_m.x+p.x+a.w*c.x+a.y*c.z-a.z*c.y,
+    transform.translation_m.y+p.y+a.w*c.y+a.z*c.x-a.x*c.z,
+    transform.translation_m.z+p.z+a.w*c.z+a.x*c.y-a.y*c.x};
+  adapted.value->geometry.frame_id=message.header.frame_id+"/grid_lattice";
+  transform.child_frame=adapted.value->geometry.frame_id;
+  adapted.value->map_from_source=std::move(transform);
+  return adapted;
+}
+
 }  // namespace lunar::incremental_navigation_ros

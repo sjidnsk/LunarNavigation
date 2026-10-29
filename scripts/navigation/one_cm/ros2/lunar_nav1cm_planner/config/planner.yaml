@@ -1,0 +1,20 @@
+lunar_nav1cm_planner:
+  ros__parameters:
+    map_frame: map
+    map_topic: /Car/T3/mapping/grid_map
+    odometry_topic: /Car/T3/localization/odometry
+    goal_topic: /Car/T4/navigation/goal
+    tf_topic: /tf
+    tf_static_topic: /tf_static
+    global_route_topic: /Car/T4/planning/global_route
+    local_path_topic: /Car/T4/planning/local_path
+    allow_unknown: false
+    planning_period_s: 0.1
+    execution_period_s: 0.05
+    global_period_s: 1.0
+    global_budget_s: 1.0
+    clearance_radius_m: 0.9
+    goal_tolerance_m: 0.1
+    goal_yaw_tolerance_rad: 0.05
+    stopped_linear_mps: 0.01
+    stopped_angular_rps: 0.01

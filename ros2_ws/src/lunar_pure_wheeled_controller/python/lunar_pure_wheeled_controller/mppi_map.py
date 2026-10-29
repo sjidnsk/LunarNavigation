@@ -36,6 +36,7 @@ class GridMap:
     assumed: np.ndarray | None = None
     epoch: str = ''
     stationary_anchor: tuple | None = None
+    eligible: np.ndarray | None = None
 
     def __post_init__(self):
         if self.stationary_anchor is not None:
@@ -50,8 +51,12 @@ class GridMap:
         assumed=np.zeros_like(s,dtype=bool) if self.assumed is None else np.array(self.assumed,dtype=bool,copy=True)
         if c.shape!=s.shape or assumed.shape!=s.shape or np.any(~np.isfinite(c)) or np.any(c<0) or np.any(assumed & (s!=0)):
             raise ValueError('invalid fine map costs/start connections')
-        for name,val in [('states',s),('costs',c),('assumed',assumed)]:
-            val.flags.writeable=False;object.__setattr__(self,name,val)
+        eligible=np.zeros_like(s,dtype=bool) if self.eligible is None else np.array(self.eligible,dtype=bool,copy=True)
+        if eligible.shape!=s.shape or np.any(eligible & (s==2)):
+            raise ValueError('invalid independent support eligibility')
+        for name,val in [('states',s),('costs',c),('assumed',assumed),('eligible',eligible)]:
+            frozen=np.frombuffer(np.ascontiguousarray(val).tobytes(),dtype=val.dtype).reshape(val.shape)
+            object.__setattr__(self,name,frozen)
 
     def _indices(self, points):
         return np.floor((np.asarray(points)-self.origin)/self.resolution).astype(np.int64)
@@ -73,7 +78,7 @@ class GridMap:
         ix,iy=cells[...,0],cells[...,1];h,w=self.states.shape
         inside=(ix>=0)&(ix<w)&(iy>=0)&(iy<h)
         x=np.clip(ix,0,w-1);y=np.clip(iy,0,h-1)
-        free=inside&((self.states[y,x]==1)|self.assumed[y,x])
+        free=inside&((self.states[y,x]==1)|self.assumed[y,x]|self.eligible[y,x])
         lo=cells*self.resolution+self.origin
         delta=np.maximum(np.maximum(lo-p[:,None,:],p[:,None,:]-lo-self.resolution),0.)
         distance=np.sum(delta*delta,axis=-1)
@@ -104,7 +109,7 @@ class GridMap:
             ix,iy=cells[...,0],cells[...,1]
             inside=(ix>=0)&(ix<w)&(iy>=0)&(iy<h)
             x=np.clip(ix,0,w-1);y=np.clip(iy,0,h-1)
-            free=inside&((self.states[y,x]==1)|self.assumed[y,x])
+            free=inside&((self.states[y,x]==1)|self.assumed[y,x]|self.eligible[y,x])
             row,col=np.nonzero(valid[:,None]&~free)
             if len(row):
                 lo=cells[row,col]*self.resolution+self.origin

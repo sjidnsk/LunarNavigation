@@ -253,6 +253,8 @@ class TrainingConfig:
     course_two_task_scope: str = ''
     course_two_sampling: str = ''
     course_two_scene_profile: str = ''
+    safe_start_radius_m: float = 0.
+    safe_start_profile_sha256: str = ''
     course_two_scene_tasks: tuple = ('moon_outside', 'moon_inside', 'cave_inside')
     moon_entry_curriculum: str = ''
     ordered_rehearsal_fraction: float = .2
@@ -301,6 +303,18 @@ class TrainingConfig:
     def __post_init__(self):
         if bool(self.cave_generator_version) != bool(self.cave_split_manifest_hash):
             raise ValueError('cave generator version and split manifest hash required together')
+        if (type(self.safe_start_radius_m) not in (int, float)
+                or not math.isfinite(self.safe_start_radius_m) or self.safe_start_radius_m < 0):
+            raise ValueError('safe start radius must be finite and nonnegative')
+        if self.safe_start_radius_m:
+            import hashlib,re
+            if not self.safe_start_profile_sha256:
+                object.__setattr__(self,'safe_start_profile_sha256',hashlib.sha256(
+                    Path(self.platform.capability_path).read_bytes()).hexdigest())
+            if not re.fullmatch(r'[0-9a-f]{64}',self.safe_start_profile_sha256):
+                raise ValueError('safe start profile requires a frozen sha256')
+        elif self.safe_start_profile_sha256:
+            raise ValueError('safe start profile identity requires enabled safe start')
         if self.cave_generator_version:
             import re
             if self.cave_generator_version != 'cave_topology_v2':
@@ -453,6 +467,12 @@ def resume_semantics(config):
         schedule=dict(warmup=config.warmup, ratio=config.update_ratio),
         curriculum_budgets=record['curriculum_budgets'],
         curriculum_extents_m=record['curriculum_extents_m'])
+    if config.safe_start_radius_m:
+        result['safe_start_region'] = dict(version='native_navigation_disk_v1',
+            navigation_radius_m=config.safe_start_radius_m,
+            profile_sha256=config.safe_start_profile_sha256,
+            generation_mode='reserved_start_region_v1',
+            selection='certified_native_FREE_cell_areas')
     if config.model.architecture_version == 'candidate_geometry_v3':
         result['candidate_geometry'] = dict(version='candidate_geometry_v3',
             coordinates='frozen_robot_frame_v1', relation='nearest_closed_region_vector_v1',

@@ -264,6 +264,7 @@ class IncrementalExplorationNodeTest : public ::testing::Test {
  protected:
   virtual double MapWaitTimeoutSeconds() const { return -1.0; }
   virtual bool UseSimTime() const { return false; }
+  virtual bool StaticOnlyBeforeFrontendStart() const { return false; }
   virtual void ConfigureParameters(IncrementalExplorationNodeParameters&) {}
 
   void SetUp() override {
@@ -281,6 +282,14 @@ class IncrementalExplorationNodeTest : public ::testing::Test {
     if (MapWaitTimeoutSeconds() >= 0.0) {
       node_parameters.emplace_back("navigation_map_wait_timeout_s",
                                    MapWaitTimeoutSeconds());
+    }
+    node_parameters.emplace_back("tf_static_topic", parameters_.tf_topic + "_static");
+    if (StaticOnlyBeforeFrontendStart()) {
+      static_publisher_ = observer_->create_publisher<tf2_msgs::msg::TFMessage>(
+          parameters_.tf_topic + "_static", rclcpp::QoS{1}.reliable().transient_local());
+      auto transforms = MapFromOdom();
+      for (auto& tf : transforms.transforms) tf.header.stamp = builtin_interfaces::msg::Time{};
+      static_publisher_->publish(transforms);  // 只在前沿节点创建前发布一次。
     }
     node_ = std::make_shared<IncrementalExplorationNode>(
         parameters_, rclcpp::NodeOptions{}.parameter_overrides(node_parameters));
@@ -439,7 +448,7 @@ class IncrementalExplorationNodeTest : public ::testing::Test {
   void PublishPoseAndMap(bool broad_frontier = true) {
     map_publisher_->publish(ExplorationMap(broad_frontier));
     odometry_publisher_->publish(Odometry());
-    tf_publisher_->publish(MapFromOdom());
+    if (!StaticOnlyBeforeFrontendStart()) tf_publisher_->publish(MapFromOdom());
   }
 
   void Start(bool broad_frontier = true) {
@@ -503,6 +512,7 @@ class IncrementalExplorationNodeTest : public ::testing::Test {
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_publisher_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometry_publisher_;
   rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr tf_publisher_;
+  rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr static_publisher_;
   rclcpp::Subscription<Status>::SharedPtr status_subscription_;
   rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr
       diagnostics_subscription_;
@@ -1408,5 +1418,44 @@ TEST_F(IncrementalExplorationNodeTest, OnlyInternalNavigationErrorEntersError) {
   }));
 }
 
+}  // namespace
+}  // namespace lunar::pure_exploration_ros
+
+namespace lunar::pure_exploration_ros {
+namespace {
+TEST_F(IncrementalExplorationMapWaitTest,
+       PathWaitingUsesSameBoundedCancellationAndCurrentTerminalPolicy) {
+  Start(false);
+  const auto first = server_->goal(0U);
+  server_->PublishFeedback(Action::Feedback::PLANNING, "WAITING_FOR_PATH");
+  ASSERT_TRUE(WaitFor([this] {
+    return LastStatus()->reason_code == "NAVIGATION_WAITING_FOR_PATH";
+  }));
+  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
+  SetClock(145);
+  ASSERT_TRUE(WaitFor([this] { return server_->cancel_count() == 1U; }));
+  EXPECT_EQ(server_->goal_count(), 1U);
+  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
+  server_->Finish(Action::Result::CANCELED, "CANCELED_STOPPED");
+  ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 2U; }));
+  EXPECT_FALSE(SameNavigationPose(first, server_->goal(1U)));
+  EXPECT_EQ(LastStatus()->failed_candidate_count, 1U);
+  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
+}
+}  // namespace
+}  // namespace lunar::pure_exploration_ros
+
+namespace lunar::pure_exploration_ros {
+namespace {
+class IncrementalExplorationStaticOnlyTest : public IncrementalExplorationNodeTest {
+ protected:
+  bool StaticOnlyBeforeFrontendStart() const override { return true; }
+};
+TEST_F(IncrementalExplorationStaticOnlyTest, LatchedZeroStampStaticPublishedBeforeFrontendSelectsGoal) {
+  Start(false);
+  EXPECT_EQ(server_->goal_count(), 1U);
+  EXPECT_EQ(static_publisher_->get_subscription_count(), 1U);
+  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
+}
 }  // namespace
 }  // namespace lunar::pure_exploration_ros

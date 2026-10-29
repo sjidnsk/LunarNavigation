@@ -142,7 +142,11 @@ class MppiExecutor:
         positions[:,1:,1]=np.where(turning,v/denom*(np.cos(yaw)-np.cos(yaw+theta)),v*dt*np.sin(yaw))
         np.cumsum(positions[:,:,0],axis=1,out=positions[:,:,0])
         np.cumsum(positions[:,:,1],axis=1,out=positions[:,:,1])
+        self._rollout_kinematic_valid=self._continuous_kinematics(state,tv,tw,actual,dt)
         return positions,actual
+
+    def _continuous_kinematics(self,state,tv,tw,actual,dt):
+        return np.ones(len(actual),dtype=bool)
 
     def _stationary_supported(self,state,poses,velocity):
         """Reuse native stationary authority without certifying translation.
@@ -182,6 +186,7 @@ class MppiExecutor:
         remaining=~valid
         if np.any(remaining):
             valid[remaining]=self.map.valid_motion(poses[remaining],actual[remaining],dt,p.execution_clearance_m)
+        valid &= self._rollout_kinematic_valid
         valid &= (abs(actual[:,-1,0])<=p.stopped_linear_mps) & (abs(actual[:,-1,1])<=p.stopped_angular_radps)
         return valid.reshape(len(scenarios),len(first)).all(axis=0)
 
@@ -263,12 +268,15 @@ class MppiExecutor:
     def _certify_sequences(self,state,sequences,step,*,costs=None):
         p=self.policy;c=self.config
         poses,velocity=self._rollout(state,sequences,c.model_dt)
+        # 先保存整条候选的连续有效性；后续首指令停车认证会覆盖 rollout 状态。
+        continuous_valid=self._rollout_kinematic_valid.copy()
         valid=self._stationary_supported(state,poses,velocity)
         remaining=~valid
         if np.any(remaining):
             valid[remaining]=self.map.valid_motion(poses[remaining],velocity[remaining],c.model_dt,p.execution_clearance_m)
         moving=abs(velocity[:,:,0])>p.stopped_linear_mps
         valid &= np.all(~moving|((abs(velocity[:,:,1])<=abs(velocity[:,:,0])*p.max_curvature_per_m+1e-9)&(abs(velocity[:,:,0]*velocity[:,:,1])<=p.max_lateral_accel_mps2+1e-9)),axis=1)
+        valid &= continuous_valid
         indices=np.flatnonzero(valid)
         if costs is not None:
             # Fallback selection needs only the least-cost certified candidate.
@@ -301,6 +309,14 @@ class MppiExecutor:
         noise=self.rng.normal(size=(c.batch_size,blocks,2))*[c.linear_std,c.angular_std]
         return np.repeat(noise,8,axis=1)[:,:c.time_steps]
 
+    def _travel_direction(self,state,desired):
+        p=self.policy
+        return -1 if p.allow_reverse and abs(angle(desired-state.yaw_rad))>math.pi*.5 else 1
+
+    def _recover_failure(self,state):
+        # 旧接口保留锁存故障语义；有恢复策略的执行模式显式覆盖。
+        pass
+
     def update(self,state,dt,now_s=None,state_age_s=0.):
         started=time.perf_counter();p=self.policy;c=self.config
         self.diagnostics={'valid_samples':0,'weighted_updates':0}
@@ -312,6 +328,7 @@ class MppiExecutor:
         # knots retain the fixed model interval. Publication uses the same cap.
         self._first_target_step=min(dt,c.model_dt)
         if self.path is None:return self._result()
+        if self.failure:self._recover_failure(state)
         if self.failure:
             self.phase='FAILED' if self._stopped(state) else 'BRAKING';return self._result()
         if self.requires_map and self.map is None:self.phase='WAITING';return self._result()
@@ -355,7 +372,7 @@ class MppiExecutor:
             self.failure='TRACKING_STALLED';self.phase='FAILED' if self._stopped(state) else 'BRAKING';return self._result()
         target=np.array(self.path.point_at(min(self.path.length,self.progress_m+.35)))
         desired=math.atan2(target[1]-state.y_m,target[0]-state.x_m)
-        self.direction=-1 if p.allow_reverse and abs(angle(desired-state.yaw_rad))>math.pi*.5 else 1
+        self.direction=self._travel_direction(state,desired)
         travel_yaw=desired-(math.pi if self.direction<0 else 0.)
         self.heading_error=angle(travel_yaw-state.yaw_rad)
         near=distance<=p.goal_position_tolerance_m*.5 or position_retained
@@ -415,6 +432,7 @@ class MppiExecutor:
             if not self.requires_map or self._brake_safe(state,np.zeros((1,2)),c.model_dt)[0]:
                 self.phase='BRAKING'
                 return self._result()
+            self.diagnostics.update(stop_certified=False,measured_stopped=self._stopped(state))
             self.failure='MPPI_STOPPING_UNSAFE';self.phase='FAILED' if self._stopped(state) else 'BRAKING';return self._result()
         # _certify_sequences already certified this exact projected first target
         # with the same state, map, history and interval. No mutation of those

@@ -148,21 +148,20 @@ def test_exploration_start_script_launches_only_exploration(tmp_path: Path) -> N
     assert "start_exploration:=true" in command
 
 
-def test_build_script_uses_the_fixed_workspace_outputs(tmp_path: Path) -> None:
+def test_build_script_discovers_planner_and_keeps_default_workspace_outputs(tmp_path: Path) -> None:
     """Catch temporary or alternate build/install/log locations in the Orin build path."""
     _run(tmp_path, "build.sh")
     command = _command(tmp_path / "logs", "colcon")
 
     assert command[0] == f"PWD={ROOT / 'ros2_ws'}"
-    assert command[1:4] == ["build", "--merge-install", "--packages-up-to"]
-    assert command[4:6] == [
-        "lunar_incremental_navigation_ros",
-        "lunar_pure_exploration_ros",
-    ]
-    assert "--build-base" not in command
-    assert "--install-base" not in command
-    assert "--log-base" not in command
+    assert command[1:3] == ["build", "--merge-install"]
+    assert command[command.index("--base-paths")+1:command.index("--build-base")] == [
+        str(ROOT / "ros2_ws/src"),str(ROOT / "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner")]
+    assert command[command.index("--build-base")+1] == str(ROOT / "ros2_ws/build")
+    assert command[command.index("--install-base")+1] == str(ROOT / "ros2_ws/install")
+    assert "lunar_nav1cm_planner" in command
     assert "mktemp" not in command
+
 
 
 @pytest.mark.parametrize(
@@ -201,16 +200,16 @@ def test_fixed_workspace_outputs_are_gitignored() -> None:
 
 def test_navigation_goal_script_sends_navigate_to_pose_goal(tmp_path: Path) -> None:
     """Catch publishing to the legacy action or dropping an explicit terminal yaw."""
-    _run(tmp_path, "publish_navigation_goal.sh", "12.5", "-4.0", "1.57")
+    _run(tmp_path, "publish_navigation_goal.sh", "12.5", "-4.0", "1.57", "--mode", "incremental_v2")
     command = _command(tmp_path / "logs", "ros2")
     payload = "\n".join(command)
 
     assert command[1:5] == ["action", "send_goal", "--feedback", "/Car/T4/navigation/navigate_to_pose"]
     assert "lunar_planning_msgs/action/NavigateToPose" in command
-    assert "target_x_m: 12.5" in payload
-    assert "target_y_m: -4.0" in payload
-    assert "has_target_yaw: true" in payload
-    assert "target_yaw_rad: 1.57" in payload
+    assert '"target_x_m": 12.5' in payload
+    assert '"target_y_m": -4.0' in payload
+    assert '"has_target_yaw": true' in payload
+    assert '"target_yaw_rad": 1.57' in payload
 
 
 def test_exploration_task_script_publishes_a_map_rectangle(tmp_path: Path) -> None:
@@ -243,14 +242,15 @@ def test_navigation_can_enable_rviz_with_same_config(tmp_path):
     _run(tmp_path, "start_navigation.sh", "wheel", "true", "/tmp/custom.yaml", "true")
     command = _command(tmp_path / "logs", "ros2")
     assert "start_rviz:=true" in command
-    assert "config_file:=/tmp/custom.yaml" in command
-    assert "start_exploration:=false" in command
+    assert "params_file:=/tmp/custom.yaml" in command
+    assert "start_controller:=false" in command
+    assert "nav1cm_wheel.launch.py" in command
 
 
 def test_demo_build_includes_transitive_runtime_packages(tmp_path):
     _run(tmp_path, "build.sh", "demos")
     command = _command(tmp_path / "logs", "colcon")
-    assert command[4] == "lunar_integrated_exploration_demo"
+    assert command[command.index("--packages-up-to")+1] == "lunar_integrated_exploration_demo"
 
 
 def test_simple_demo_isolates_inherited_production_domain(tmp_path, monkeypatch):
