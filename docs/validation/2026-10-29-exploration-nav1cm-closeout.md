@@ -1,6 +1,6 @@
 # 前沿与DRL接入新导航：交付汇总
 
-任务NAV-1CM-AUTO-20261029。当前状态：共用任务层、地图接口、前沿探索、DRL可选后端和C1均已通过任务级独立审查；源码已提交待归属线合入，最后跨分支审查的两项 Important 已作单次协调修复，待同一 reviewer scoped 复审。主工作区已有改动保持独立。未切换默认应用入口或正式训练任务。
+任务NAV-1CM-AUTO-20261029。当前状态：共用任务层、地图接口、前沿探索、DRL可选后端及C1已完成；最终跨分支审查的两项Important经单次协调修复、同一审查员限定复审全部关闭，0新增C/I/M。源码已提交待归属线合入；主工作区已有改动保持独立，默认应用入口和正式训练任务未切换。此结论限源码集成资格。
 
 ## 职责与接口
 
@@ -55,9 +55,20 @@ window03未及时捕获每个子进程现场/proc/maps，资格依赖预检实�
 8. Ruling: add ONE separately predeclared blocked_obstacle_update case of fixed60s, reusing qualified blocked-v2 geometry/support, source/50Hz cadence, .2 clearance/.15 response/body/limits and ordinary8s cleanup; inject the same0.6m-square/2m-high actual synthetic obstacle immediately after the first logically accepted CURRENT frontier goal satisfying measured body-to-goal distance>=1.6m, instead of the old v2 t>=5s condition — all v2selectedgoals stayedleftofunknownslit andOBSTACLE_ADDED neverfired, so that result proves taskwaiting/reselection but cannot supply the planned actualobstacle/map-update evidence — cost if wrong: an extra60s simulation/log cost and possibly exposing a realmap-update defect; preserve the four qualified runs, require explicitevent→source/mapupdate→matchinggoalWAIT→CANCELED_STOPPED→differentXYgoal and actualsafe motion, never weaken physics or manipulatefrontendgoalselection.
 9. Ruling: permit one minimal structured internal Runtime notice TASK_ACCEPTED containing task_id (actual managed Action UUID hex), accepted_generation and fully adapted map goal [x,y,yaw], captured by the existing single Runtime owner immediately after logical acceptance and delivered through the existing notice mechanism outside input locks — current_goal has no UUID and cross-topic callback order cannot establish identity; the owner already possesses both request ID and immutable accepted goal, so an internal notice closes the test-observation gap without rebuilding the public interface — cost if wrong: diagnostic identity drift, lock reentry regression or incorrect binding; test rejected/replaced/new-generation and notice reentry/default behavior, bind by exactID, reject conflicting/missing bindings, and record actual installed notice/source identity.
 10. Ruling: Task4 reuses canonical pure v5/v4 observed policy preparation across RosEnv and deployed InferenceRuntime and refreshes OWN development-source-manifest/test exact file expectations, while preserving frozen manifest raw00bf7066/79files/portableprofile/historical observed_active_runtime/default serialization and all live source/weights/ledger — runtime rawv4 vs loaderacceptedv5 is a genuine connection gap and strict83filedevSHA would otherwise become false — cost if wrong: candidate/schema/default drift or frozen identity corruption; exact regressions and before/after raw hashes required. No policy/network/reward/training redesign or heldout access. New validations docs/validation/2026-10-29-drl-nav1cm-backend.md. Full rationale/interfaces/qualified paths appended task4brief before any code.
+11. Ruling: final-review D1/M1-M2: defer existing pytest pythonpath/shared duplicate mixin warnings; no mixin chosen and no wrong artifact evidence; do not change shared environment — cost if wrong: a hidden environment influence could remain; actual selected source/native SHA and raw warnings remain auditable.
+12. Ruling: final-review D2/legacy-timeout: keep initial OutsideToInside5s failure and later scoped/full16pass separately; no cause assertion or unchanged full rerun — cost if wrong: a rare old legacy defect may remain; owner sees original failure and no production readiness claim.
+13. Ruling: final-review D3/Windows-POSIX: defer known Windows2POSIX path fixture issues; Linux native qualification stated separately — cost if wrong: Windows test portability remains limited; not misrepresented as WindowsROS success.
+14. Ruling: final-review D4/unknown-detour: unknown shortcut versus known detour priority remains NOT_TRIGGERED; do not manufacture a passing case in this fix wave — cost if wrong: priority interaction unqualified; future scenario task may discover a defect.
+15. Ruling: final-review D5/long-map: long-term rolling-map resource bounds and100m source1cm driving deferred; receive-only250000frame and shortwindows cannot prove them — cost if wrong: memory growth or sustained timing could remain; limit delivery to current short synthetic qualification.
+16. Ruling: final-review D6/receipt-gaps: preserve missing window03 live child mappings and oldargv as evidence limits; no retrospective fill or successful motion repeats — cost if wrong: runtime attribution/reproducibility weaker than full live capture; rawprefix/source/install/precheck are explicit.
+17. Ruling: final-review D7/old-T5: retain earliest domain92/local-only defaultT5 zeroTwist attempt, deliveryUNKNOWN; do not infer historical no-delivery or vehicle movement — cost if wrong: potential delivery uncertainty remains, private later graphs cannot erase incident.
+18. Ruling: final-review D8/test-incident: preserve111/227 temporaryreplay/learner/dummytraining/domain205 incident and47MB/guardcost, accept current product fixes as separate code qualification; no formal job switched — cost if wrong: historical boundary violation cannot be undone; if hidden side effect exists it requires separate audit, no blanket no-training-object claim.
+19. Ruling: final-review D9/frozen-ledger: use independent frozenactor/config/manifestSHA audits; ledger not read and no byte-beforeafter assertion — cost if wrong: ledger integrity is outside this task proof; do not expose/read it solely to claim clean audit.
+20. Ruling: final-review D10/policy-deploy: defer policy efficacy/new-old performance/Orin-realvehicle; windows differ and new45sNOARRIVAL — cost if wrong: policy/physical deployment may still fail; only source integration can be delivered.
+21. Ruling: retain pre-read targeted Runtime/helper/caller/default tests instead of broad DRL/fullsuite repetition during finalfix/finish — broad collection previously constructed forbidden temporary training objects, while selected29Humblecases cover amendedcontracts and defaultidentity — cost if wrong: unrelated regression could remain; disclose source-integration/NOT_RUN boundary and require suitable owner/deployment qualification.
+22. Ruling: finish with both topic branches committed and resources preserved pending owner integration/recycle authorization, without owner merge/push/PR/upstream or skill-recursive deletion — explicit project/user authorization boundaries override generic finishing menus and workspace cleanup — cost if wrong: owner delivery and disk reclamation remain manual follow-up; record exact topics/commits/artifacts rather than silently claiming integrated/fully recycled.
 
-
-### NAV-1CM-AUTO-20261029 最终协调修复波（待 scoped 复审）
+### NAV-1CM-AUTO-20261029 最终协调修复波（限定复审通过）
 
 最终跨分支审查提出 I1/I2 两项 Important，本轮唯一实现者 auto_nav_final_fix 在原专题处理。MAIN FIX_BASE eae70febe3b58ba03cc6a72de9df4387b9ae5bea；测试 c8ba920、产品 a1e4c46920ab7e4b7485d4b6270ae87c47d78c1b。提交前若收到新 odom/TF，唯一 tick owner 在相同输入锁内只重做最新位姿转换及纯任务观察，再提交状态；越界/运动重置到达保持，等价高频更新仍可反馈/结束。求解与外部 event/notice 不在该临界区，goal/cancel 原有顺序门禁保持。
 
@@ -65,4 +76,14 @@ Windows 确定性 RED4失败/11通过，GREEN15通过；Humble独立planner构�
 
 新安装位于远端 exploration-integration-20261029/final-fix-wave/{main,drl}/install；MAIN38/DRL87安装Python与各Gitblob一致，开发87清单吻合，5个native装载实际core仍b63079f3。旧安装目标文件等于FIX_BASE，正式79清单/portable配置和Actor/config SHA保持；ledger未打开。完整raw/XML/身份在本地同任务ART/final-fix-wave/receipts.tar.gz与identity.json（归档SHA8435241a1599f3185e003a1db6ab9dc2c41196b3deecdd75396163bd7c445ed3）。
 
-状态：已提交待同一final reviewer单次scoped复审/待owner合入，不提前宣布最终通过。原NOARRIVAL、console/完整RosEnv episode NOT_RUN、误选训练构造历史、M1/M2和旧失败保持；本轮新源不回填旧物理窗。专题及全部安装/证据保留待授权回收，无merge/push/PR/upstream/delete。
+状态：同一final reviewer限定复审已通过，I1/I2均关闭；已提交待owner合入。原NOARRIVAL、console/完整RosEnv episode NOT_RUN、误选训练构造历史、M1/M2和旧失败保持；本轮新源不回填旧物理窗。专题及全部安装/证据保留待授权回收，无merge/push/PR/upstream/delete。
+
+## 最终验收与后续边界
+
+同一原审查员完整限定复审MAIN eae70feb..6e21fdf6和DRL b16c8ca8..6678837f，I1最新odom/TF终态与I2 owned三方到达容差均ADDRESSED，0新增Critical/Important/Minor；[原始总审查与最终复审](2026-10-29-exploration-nav1cm-review.md)保留两阶段完整结论。没有把曾经提出问题的报告改写为从未有问题。
+
+ROOT独立核对300远端源码文件/Git对象、125实际安装Python、87开发清单、5 native与实际core b630、21+8定向Humble XML无失败、旧安装3个目标文件及旧运动归档、冻结权重/配置/正式manifest；旧owned启动分支AST和配置源码与BASE相同。本轮最终修复仅纯测试与独立构建，没有新运动、Actor推理或训练对象。早期Task4误选训练单测事件与原失败成本保持，不能升级为全程没有训练构造。
+
+公共产品最终a1e4c46920ab7e4b7485d4b6270ae87c47d78c1b，DRL产品最终072f75d6fdd482495567212af20503ed81dd3f3a；后续收尾提交仅文档。本机Windows无ROS，Humble证据来自获准x86_64台式。真实P3/Orin/实车、console main/public task topic真实生命周期、完整新RosEnv episode和策略效果仍按表中NOT_RUN；DRL45s未到达保持，不把旧运动窗口记作新修复提交运行。
+
+归属线integration/pure-planner-orin与dev/drl-exploration未由本任务移动。两个专题工作树及D盘/测试台式安装与原始证据保留待授权合入或回收；没有合并、推送、PR、upstream或删除操作。后续集成须按已记录underlay/source身份验证，不直接切换正式训练。
