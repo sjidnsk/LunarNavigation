@@ -12,6 +12,21 @@ import numpy as np
 from tools.isaac_viper.viewport_paths import SCHEMA,validate_payload,validate_points
 
 
+def configure_grid_info(info,bounds,resolution):
+    """NPZ/JSON 数值进入生成的 ROS double setter 前必须转原生 float。"""
+    x0,x1,y0,y1=(float(value) for value in bounds)
+    info.resolution=float(resolution)
+    info.length_x=float(x1-x0); info.length_y=float(y1-y0)
+    info.pose.position.x=float((x0+x1)/2); info.pose.position.y=float((y0+y1)/2)
+    info.pose.position.z=0.0
+    info.pose.orientation.x=0.0; info.pose.orientation.y=0.0; info.pose.orientation.z=0.0; info.pose.orientation.w=1.0
+
+
+def configure_goal(goal,target_xy,yaw):
+    goal.target_x_m=float(target_xy[0]); goal.target_y_m=float(target_xy[1])
+    goal.has_target_yaw=True; goal.target_yaw_rad=float(yaw)
+
+
 def grid_encoding(elevation):
     grid=np.asarray(elevation,dtype=np.float32)
     if grid.ndim!=2 or min(grid.shape)==0 or np.isinf(grid).any(): raise ValueError('invalid elevation grid')
@@ -258,8 +273,7 @@ def main():
             ns=state['clock_ns']
             if ns is not None and state['map_publish_count']<2 and now-last_map>=1:
                 msg=GridMap(); msg.header.frame_id='odom'; stamp_message(msg.header.stamp,ns)
-                msg.info.resolution=resolution; msg.info.length_x=bounds[1]-bounds[0]; msg.info.length_y=bounds[3]-bounds[2]
-                msg.info.pose.position.x=(bounds[0]+bounds[1])/2; msg.info.pose.position.y=(bounds[2]+bounds[3])/2; msg.info.pose.orientation.w=1.
+                configure_grid_info(msg.info,bounds,resolution)
                 msg.layers=['elevation']; msg.basic_layers=['elevation']; layer=Float32MultiArray(); layer.data=data
                 layer.layout.dim=[MultiArrayDimension(label=label,size=size,stride=stride) for label,size,stride in dims]
                 msg.data=[layer]; msg.outer_start_index=0; msg.inner_start_index=0
@@ -269,7 +283,7 @@ def main():
                 and 0<=ns-latest.get('odom_stamp',-10**18)<=500000000
                 and math.dist(trace.points[-1]['xyz'][:2],scene['start_xy_m'])<=.5)
             if args.send_goal and not state['goal_sent'] and healthy and action.server_is_ready():
-                goal=NavigateToPose.Goal(); goal.target_x_m,goal.target_y_m=scene['goal_xy_m']; goal.has_target_yaw=True; goal.target_yaw_rad=scene['goal_yaw_rad']
+                goal=NavigateToPose.Goal(); configure_goal(goal,scene['goal_xy_m'],scene['goal_yaw_rad'])
                 state['goal_sent']=True; record('goal_request',target_xy_m=scene['goal_xy_m'],target_yaw_rad=scene['goal_yaw_rad'],health=dict(latest),map_count=state['map_publish_count'])
                 session_id=uuid.uuid4().hex; display.begin_goal(session_id,time.time_ns()); trace.reset(); paths.clear()
                 state['action_session_id']=session_id
@@ -293,7 +307,7 @@ def main():
                     path=RosPath(); path.header.frame_id='map'; stamp_message(path.header.stamp,trace.highwater)
                     for item in trace.points:
                         pose=PoseStamped(); pose.header.frame_id='map'; stamp_message(pose.header.stamp,item['stamp_ns'])
-                        pose.pose.position.x,pose.pose.position.y,pose.pose.position.z=item['xyz']; pose.pose.orientation.w=1.; path.poses.append(pose)
+                        pose.pose.position.x,pose.pose.position.y,pose.pose.position.z=(float(value) for value in item['xyz']); pose.pose.orientation.w=1.0; path.poses.append(pose)
                     trace_pub.publish(path)
                 write_overlay()
                 last_overlay=now; save()

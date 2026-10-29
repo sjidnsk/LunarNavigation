@@ -17,6 +17,33 @@ class NavigationContracts(unittest.TestCase):
         np.testing.assert_allclose(data, [6, 5, 4, 3, np.nan, 1], equal_nan=True)
         self.assertEqual(dims, [('column_index', 2, 6), ('row_index', 3, 3)])
 
+    def test_integer_npz_bounds_cross_strict_ros_double_setters(self):
+        from types import SimpleNamespace
+        class StrictDoubles:
+            def __setattr__(self,name,value):
+                if type(value) is not float:
+                    raise AssertionError(name+' must be a Python float')
+                object.__setattr__(self,name,value)
+        info=StrictDoubles()
+        object.__setattr__(info,'pose',SimpleNamespace(position=StrictDoubles(),orientation=StrictDoubles()))
+        self.assertTrue(hasattr(nav,'configure_grid_info'),'strict GridMap double adapter missing')
+        nav.configure_grid_info(info,np.array([277,293,-273,-257],dtype=np.int64),np.float32(.2))
+        self.assertEqual((info.length_x,info.length_y),(16.,16.))
+        self.assertEqual((info.pose.position.x,info.pose.position.y,info.pose.position.z),(285.,-265.,0.))
+        self.assertEqual(info.pose.orientation.w,1.)
+        self.assertTrue(hasattr(nav,'configure_goal'),'strict goal double adapter missing')
+        # bool is a separate generated field; double setters remain strict.
+        class Goal(StrictDoubles):
+            def __setattr__(self,name,value):
+                if name=='has_target_yaw':
+                    if type(value) is not bool: raise AssertionError('goal bool type')
+                    object.__setattr__(self,name,value)
+                else: super().__setattr__(name,value)
+        goal=Goal()
+        nav.configure_goal(goal,np.array([285,-261],dtype=np.int64),np.float32(0))
+        self.assertEqual((goal.target_x_m,goal.target_y_m,goal.target_yaw_rad),(285.,-261.,0.))
+        self.assertTrue(goal.has_target_yaw)
+
     def test_trace_uses_original_stamp_and_transform(self):
         trace = nav.ActualTrace(3)
         self.assertTrue(trace.append(10, [1, 2, 3], [0, 0, math.sqrt(.5), math.sqrt(.5)], [4, 5, 6]))
