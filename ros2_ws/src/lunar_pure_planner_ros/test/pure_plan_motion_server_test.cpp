@@ -352,6 +352,12 @@ class RunningSystem final {
     executor->add_node(server);
     executor->add_node(client);
     spin_thread = std::jthread([this] { executor->spin(); });
+    // graph 已可见并不保证 spin 已进入；否则立即析构的 cancel 会被丢失。
+    if (!WaitFor([this] { return executor->is_spinning(); })) {
+      rclcpp::shutdown();
+      spin_thread.join();
+      throw std::runtime_error("test executor did not start spinning");
+    }
     EXPECT_TRUE(action_client->wait_for_action_server(3s));
   }
 

@@ -117,8 +117,18 @@ class RosExplorationEnv:
               course_two_case=None,task_scope='',outside_distance_max_m=None,
               outside_distance_min_m=None,context_margin_m=12.,sensor=None,scene_profile='',
               cave_generator_version='',mother_graph_id=None,dataset_split='train',
-              cave_split_manifest_hash=None):
+              cave_split_manifest_hash=None,safe_start_radius_m=None):
         self.close()
+        from .scene import validate_safe_start_radius, safe_start_record
+        if safe_start_radius_m is None:safe_start_radius_m=self.config.safe_start_radius_m
+        safe_start_radius_m=validate_safe_start_radius(safe_start_radius_m)
+        if safe_start_radius_m!=self.config.safe_start_radius_m:
+            raise ValueError('safe start radius differs from frozen configuration')
+        if safe_start_radius_m:
+            if course_two_case is not None:
+                raise ValueError('safe start cannot modify a frozen course-two case')
+            if safe_start_radius_m < self.config.platform.footprint_radius_m:
+                raise ValueError('safe start radius must cover the vehicle footprint radius')
         if cave_generator_version and (family!='cave' or task_scope!='whole_cave_v1'
                                       or course_two_case is not None):
             raise ValueError('cave generator identity requires ordinary whole-cave scene')
@@ -177,13 +187,15 @@ class RosExplorationEnv:
             from .course_two_task_scope import build_rehearsal
             terrain,pose,task,descriptor=build_rehearsal(seed,extent,start_mode,self.config.platform,
                 cave_generator_version=cave_generator_version,mother_graph_id=mother_graph_id,
-                dataset_split=dataset_split,cave_split_manifest_hash=cave_split_manifest_hash)
+                dataset_split=dataset_split,cave_split_manifest_hash=cave_split_manifest_hash,
+                safe_start_radius_m=safe_start_radius_m)
             descriptor=dict(descriptor,**extra)
             terrain.generator_descriptor=MappingProxyType(dict(terrain.generator_descriptor,**extra))
             self.episode_budget=int(episode_budget or self.config.curriculum_budgets[0])
             if self.episode_budget<=0:raise ValueError('positive episode budget required')
             return self.reset_scene(terrain,pose,task,descriptor=descriptor,sensor=sensor)
-        scene=Scene(seed,family,extent,platform=self.config.platform,context_margin_m=context_margin_m)
+        scene=Scene(seed,family,extent,platform=self.config.platform,context_margin_m=context_margin_m,
+            safe_start_radius_m=safe_start_radius_m)
         terrain=TerrainGrid.from_scene(scene)
         self.episode_budget=int(episode_budget) if episode_budget is not None else self.config.curriculum_budgets[0 if extent<=80 else 1 if extent<=150 else 2]
         if self.episode_budget<=0:raise ValueError("positive episode budget required")
@@ -196,7 +208,8 @@ class RosExplorationEnv:
         if curriculum_task is not None:
             start_descriptor['curriculum_task']=curriculum_task
         pose=scene.initial_pose(terrain,start_mode=start_mode,outside_distance_max_m=outside_distance_max_m,
-            outside_distance_min_m=outside_distance_min_m)
+            outside_distance_min_m=outside_distance_min_m,safe_start_radius_m=safe_start_radius_m)
+        start_descriptor.update(safe_start_record(terrain,pose,safe_start_radius_m))
         if outside_distance_min_m is not None:
             from .scene import polygon_boundary_distance
             start_descriptor['start_boundary_distance_m']=float(polygon_boundary_distance(pose.x,pose.y,scene.task.polygon))
@@ -209,6 +222,17 @@ class RosExplorationEnv:
     def reset_scene(self,terrain,pose,task,*,descriptor=None,sensor=None):
         """Explicit deterministic fixture entry; identical sensor/navigation path."""
         self.close()
+        from .scene import safe_start_record, validate_safe_start_radius
+        assumption=(descriptor or {}).get('safe_start_region',{})
+        self._safe_start_radius_m=validate_safe_start_radius(assumption.get('navigation_radius_m',0.))
+        if self._safe_start_radius_m!=self.config.safe_start_radius_m:
+            raise ValueError('scene lacks the configured safe start region')
+        if self._safe_start_radius_m:
+            if self._safe_start_radius_m < self.config.platform.footprint_radius_m:
+                raise ValueError('safe start radius must cover the vehicle footprint radius')
+            canonical=safe_start_record(terrain,pose,self._safe_start_radius_m)
+            if assumption!=canonical['safe_start_region']:
+                raise ValueError('safe start certificate differs from actual geometry')
         from .reference import CoverageReference
         from .privileged import build_truth, PrivilegedBuilder
         from .sensor import validate_sensor
@@ -365,7 +389,7 @@ class RosExplorationEnv:
             except Exception as exc:self._spin_error=exc
         self._spin_thread=threading.Thread(target=spin,daemon=True);self._spin_thread.start()
         env=dict(os.environ,ROS_DOMAIN_ID=str(self.domain_id),ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST')
-        common={'platform_config':self.config.platform.capability_path,'use_sim_time':True,
+        common={'platform_config':self._runtime_platform_config(),'use_sim_time':True,
                 'goal_position_tolerance_m':self.config.goal_position_tolerance_m,
                 'goal_yaw_tolerance_rad':self.config.goal_yaw_tolerance_rad,
                 'odometry_topic':ns+'/odom','tf_topic':ns+'/tf'}
@@ -379,6 +403,40 @@ class RosExplorationEnv:
                 tracking_status_topic=ns+'/tracking',reference_topic=ns+'/wheeled_reference',path_topic=ns+'/path',
                 command_topic=ns+'/cmd_vel',execution_cancel_topic=ns+'/cancel',
                 max_linear_mps=.2,max_angular_radps=1.,control_rate_hz=20.,**self._controller_parameters()),env)
+
+    def _runtime_platform_config(self):
+        """Freeze unchanged native settings and check the certified disk covers them."""
+        radius=getattr(self,'_safe_start_radius_m',0.)
+        if not radius:return self.config.platform.capability_path
+        import hashlib
+        from pathlib import Path
+        import yaml
+        source=Path(self.config.platform.capability_path).read_bytes()
+        profile=yaml.safe_load(source)
+        if profile.get('capability')!=dict(self.config.platform.capability):
+            raise ValueError('runtime capability differs from frozen configuration')
+        if hashlib.sha256(source).hexdigest()!=self.config.safe_start_profile_sha256:
+            raise ValueError('runtime profile differs from frozen configuration')
+        # LoadPlatformConfig's native default is 0.2m when the field is absent.
+        patch_radius=self.config.platform.footprint_radius_m+float(profile.get('start_blind_zone_margin_m',.2))
+        if radius < patch_radius:
+            raise ValueError('safe start radius must cover the configured native start patch')
+        content=yaml.safe_dump(profile,sort_keys=True).encode('utf-8')
+        digest=hashlib.sha256(content).hexdigest()
+        folder=Path(self.config.artifact_root or self.config.output_dir)/'safe-start-profiles'
+        folder.mkdir(parents=True,exist_ok=True)
+        path=folder/(digest+'.yaml')
+        # Identical workers may create the same immutable content-addressed file.
+        # Publish atomically so another worker never observes a partial YAML.
+        import tempfile,os
+        with tempfile.NamedTemporaryFile(dir=folder,delete=False) as stream:
+            temporary=Path(stream.name);stream.write(content)
+        try:
+            os.link(temporary,path)
+        except FileExistsError:
+            if path.read_bytes()!=content:raise ValueError('safe start profile identity changed')
+        finally:temporary.unlink()
+        return str(path.resolve())
 
     def _controller_parameters(self):
         if self._controller_backend=='pure_pursuit':return {}

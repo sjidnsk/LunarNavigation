@@ -20,6 +20,8 @@ find_package(visualization_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 set(LUNAR_INCREMENTAL_NAVIGATION_ROS_SOURCES
+  src/exploration_map.cpp
+  src/exploration_map_node.cpp
   src/elevation_pipeline.cpp
   src/exploration_map_projector.cpp
   src/demo_motion_follower.cpp
@@ -63,6 +65,11 @@ if(LUNAR_INCREMENTAL_NAVIGATION_BUILD_DEBUG)
   target_compile_definitions(${PROJECT_NAME} PRIVATE LUNAR_BUILD_DEMO=1)
 endif()
 
+add_executable(lunar_exploration_map_node src/exploration_map_main.cpp)
+target_compile_features(lunar_exploration_map_node PUBLIC cxx_std_20)
+target_link_libraries(lunar_exploration_map_node ${PROJECT_NAME})
+ament_target_dependencies(lunar_exploration_map_node rclcpp)
+
 add_executable(lunar_incremental_navigation_node
   src/incremental_navigation_main.cpp)
 target_compile_features(lunar_incremental_navigation_node PUBLIC cxx_std_20)
@@ -98,7 +105,7 @@ install(
   RUNTIME DESTINATION bin
   INCLUDES DESTINATION include)
 install(
-  TARGETS lunar_incremental_navigation_node
+  TARGETS lunar_exploration_map_node lunar_incremental_navigation_node
     lunar_incremental_rviz_goal_bridge
     incremental_demo_scenario_node
     incremental_demo_motion_emulator_node
@@ -154,6 +161,7 @@ if(BUILD_TESTING)
 
   lunar_add_ros_gtest(elevation_pipeline_test
     test/elevation_pipeline_test.cpp)
+  lunar_add_ros_gtest(exploration_map_node_test test/exploration_map_node_test.cpp)
   lunar_add_ros_gtest(policy_map_exporter_test
     test/policy_map_exporter_test.cpp)
   lunar_add_ros_gtest(exploration_map_projector_test

@@ -621,3 +621,16 @@ Action Result 不提供分阶段耗时或调用次数；不能把其中的 `elap
 | `jetson_agx` | `NOT_RUN` | 未执行 Jetson AGX Orin 原生构建、性能、功耗或稳定性验收。 |
 | `historical_missing_global_bag` | `HISTORICAL_SUBSET_ONLY` | 历史记录中的 bag 缺少 `/Car/T3/mapping/global_overview`，仅可作为 `LAVA_TUBE` 局部输入子集；本轮未找到其 metadata，未实际回放。 |
 | `synthetic_global` | `FORBIDDEN` | 禁止生成或使用假全局图；不得用合成、零填充或局部图替代真实 `/Car/T3/mapping/global_overview`；月表验收仍需实机在线全局总览，或重新录制并核验包含该 Topic 的 rosbag。 |
+
+
+## 轮式标准 Path 入口（NAV-1CM-20261026 Task4）
+
+轮式 `bash scripts/orin/start_navigation.sh wheel false` 选择 `nav1cm_wheel.launch.py`，默认仅启动规划器。第三个位置参数是新规划器 ROS 参数文件（不要传旧 exploration 配置）；第四个为 RViz，直接 PoseStamped，不启动旧 Action bridge。第五个 `incremental_v2` 显式恢复旧导航；足式默认保持旧导航。
+
+预先配置外部 acados SDK 环境及 `NAV1CM_BUILD_DIR` 缓存目录，入口不自动下载。`ROS_SETUP` 可指定 Humble 环境脚本，`LUNAR_INSTALL_ROOT` 可指向独立安装目录，构建脚本另支持 `LUNAR_BUILD_ROOT`。`bash scripts/orin/build.sh runtime` 明确发现 ros2_ws/src 与仓库外层 one_cm planner 包；demos 模式保留。
+
+新目标：`bash scripts/orin/publish_navigation_goal.sh 1 2 0.5`，省略 yaw 为 0；旧入口/足式用 `--mode incremental_v2`/`--mode legged`，省略 yaw 保留旧 Action 的无朝向语义。`--frame`/`--topic` 显式覆盖目标帧及主题；数值参数不作为 shell 代码求值。
+
+显式控制器入口：`ros2 launch lunar_pure_wheeled_controller nav1cm_wheel.launch.py start_controller:=true command_topic:=/nav1cm_integration/cmd_vel`。共享 wheel_config、地图、里程计、TF、Path、unknown 策略及终点阈值；组合入口把请求上限限制到能力文件上限，保持生产 nominal response 0.15s。旧 pure_wheeled_controller launch 不变。
+
+2026-10-29：净空统一为0.2 m，标准Path跟踪及自适应P3地图接入已通过最终复审并合入远程主线和轮式应用线。MAIN最终467包检查、639源码测试通过/1跳过；APP最终923包检查及完整1 cm缓坡短程闭环通过。原Windows主工作区其他任务的未提交改动保留；Orin/实车仍NOT_RUN。身份、净空短例与边界见[集成收尾](docs/validation/2026-10-29-nav1cm-final-integration.md)。

@@ -23,4 +23,7 @@
   <export>
     <build_type>ament_cmake</build_type>
   </export>
+  <exec_depend>lunar_nav1cm_planner</exec_depend>
+  <exec_depend>grid_map_msgs</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
 </package>

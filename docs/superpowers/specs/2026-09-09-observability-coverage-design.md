@@ -1,3 +1,7 @@
+> 历史沿革补记（2026-10-17）：`fix/observability-coverage` @ `a73d561903d145c08769b639076d0e0b3e175481` 曾在独立工作树实施早期 C/O/K 在线估计并记录本机 Jazzy 构建与验证，随后同一来源切换为高程可见性与固定 `CoverageReference` 方案。下文“尚未实现”及原任务状态描述的是 `c6473ae70eb4` 当时阶段；原正文保留用于追溯，不作为当前待执行计划。
+>
+> 当前开发与运行身份以 [统一 DRL 开发入口](../../DRL开发入口.md) 为准；现行入口为 `lunar_drl_exploration/reference.py` 的 `CoverageReference.build` 与 `coverage.py` 的 `CoverageHistory`。a73 中的 `MODEL_VERSION = 4` 仅为该历史实现版本，不代表当前运行版本。本轮仅补充来源沿革，未重跑历史实验、切换训练或新增 Jazzy、Humble/Orin、实车及策略效果验收。
+
 > 历史分支记录：`feat/drl-exploration-training` @ `c6473ae70eb4`。本文运行状态、接口和实验结论是当时快照；当前开发以 [统一入口](../../DRL开发入口.md) 为准。
 
 # 可观测覆盖评估与全局目标候选设计

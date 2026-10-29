@@ -482,24 +482,29 @@ def test_calibrated_nominal_delay_does_not_shrink_braking_delay_envelope(monkeyp
     assert np.max(calls[-1]['delay_ticks'])==5
 
 
-def test_path_follower_requires_no_map_or_geometric_certificates(monkeypatch):
+def test_path_follower_requires_map_and_geometric_certificates(monkeypatch):
     from lunar_pure_wheeled_controller.mppi_path_follower import MppiPathFollower
     e=MppiPathFollower(TrackingPolicy(),module.MppiPolicy(nominal_response_time_s=0.))
     e.set_path(((0.,0.,0.),(2.,0.,0.)),identity=(b'follow',1))
-    def forbidden(*a,**kw):raise AssertionError('map/braking certificate in path follower')
-    monkeypatch.setattr(e,'_brake_safe',forbidden)
-    monkeypatch.setattr(e,'_stationary_supported',forbidden)
+    assert e.requires_map and e.map is None
+    assert e.update(TrackingState(0,0,0),.05).phase=='WAITING'
+    e.set_map(grid())
+    calls=[];original=e._brake_safe
+    def certify(state,first,dt):
+        calls.append(first.copy());return original(state,first,dt)
+    monkeypatch.setattr(e,'_brake_safe',certify)
     r=e.update(TrackingState(0,0,0),.05)
-    assert not e.requires_map and e.map is None
     assert r.phase=='TRACKING' and r.command.linear_x_mps>0
     assert abs(r.command.linear_x_mps)<=e.policy.max_linear_accel_mps2*.05
     assert e.diagnostics['weighted_updates']==1
     assert np.all(np.isfinite(e.predicted_trajectory))
+    assert any(np.array_equal(first,[[r.command.linear_x_mps,r.command.angular_z_radps]]) for first in calls)
 
 
 def test_path_follower_arrival_stop_and_reference_cancellation():
     from lunar_pure_wheeled_controller.mppi_path_follower import MppiPathFollower
     e=MppiPathFollower(TrackingPolicy(goal_position_tolerance_m=.1,goal_yaw_tolerance_rad=.05))
+    e.set_map(grid())
     e.set_path(((0.,0.,0.),(1.,0.,0.)),identity=(b'follow',1))
     assert e.update(TrackingState(1.,0.,0.,.1,0.),.05).phase=='BRAKING'
     assert e.update(TrackingState(1.,0.,0.),.05).phase=='COMPLETED'
@@ -572,6 +577,7 @@ def test_follower_prefers_small_progress_loss_over_centimeter_lateral_error():
 def test_follower_corner_does_not_replace_external_reference_or_complete_route():
     from lunar_pure_wheeled_controller.mppi_path_follower import MppiPathFollower
     e=MppiPathFollower(TrackingPolicy(goal_position_tolerance_m=.1))
+    e.set_map(grid())
     points=((0.,0.,0.),(1.,0.,0.),(1.,1.,np.pi/2))
     e.set_path(points,identity=(b'route',1))
     r=e.update(TrackingState(1.,0.,np.pi/2),.05)
@@ -582,6 +588,7 @@ def test_follower_corner_does_not_replace_external_reference_or_complete_route()
 def test_follower_corner_turn_keeps_travel_direction_when_heading_crosses_ninety_degrees():
     from lunar_pure_wheeled_controller.mppi_path_follower import MppiPathFollower
     e=MppiPathFollower(TrackingPolicy());e.set_path(((0.,0.,0.),(1.,0.,0.),(1.,1.,np.pi/2)),identity=(b'route',1))
+    e.set_map(grid())
     e.update(TrackingState(1.,0.,0.),.05)
     result=e.update(TrackingState(1.,0.,np.pi/2+.01),.05)
     assert e._passed_corner==(1.,0.) and result.phase=='TRACKING'
@@ -591,6 +598,7 @@ def test_follower_corner_turn_keeps_travel_direction_when_heading_crosses_ninety
 def test_follower_exact_straight_reference_does_not_generate_lateral_drift(seed):
     from lunar_pure_wheeled_controller.mppi_path_follower import MppiPathFollower
     e=MppiPathFollower(TrackingPolicy(),module.MppiPolicy(seed=seed,nominal_response_time_s=0.))
+    e.set_map(grid())
     e.set_path(((0.,0.,0.),(2.,0.,0.)));state=TrackingState(0,0,0)
     for _ in range(80):
         result=e.update(state,.05);v=result.command.linear_x_mps;w=result.command.angular_z_radps
@@ -612,6 +620,7 @@ def test_follower_speed_coordination_reduces_speed_for_heading_and_stopping_dist
 def test_follower_terminal_projection_keeps_endpoint_correction_speed_available():
     from lunar_pure_wheeled_controller.mppi_path_follower import MppiPathFollower
     e=MppiPathFollower(TrackingPolicy(goal_position_tolerance_m=.1));e.set_path(((0.,0.,0.),(1.,0.,0.)))
+    e.set_map(grid())
     e.update(TrackingState(1.,.2,-np.pi/2),.05)
     assert e.diagnostics['speed_limit_mps']>0.
 
@@ -619,6 +628,7 @@ def test_follower_terminal_projection_keeps_endpoint_correction_speed_available(
 def test_follower_active_corner_is_not_skipped_by_projection_overshoot():
     from lunar_pure_wheeled_controller.mppi_path_follower import MppiPathFollower
     e=MppiPathFollower(TrackingPolicy(goal_position_tolerance_m=.1));e.set_path(((0.,0.,0.),(1.,0.,0.),(1.,1.,np.pi/2)),identity=(b'route',1))
+    e.set_map(grid())
     e._corner_target=((1.,0.),np.pi/2);e.progress_m=1.
     e.update(TrackingState(1.,.02,0.),.05)
     assert e.diagnostics['distance_m']<.03

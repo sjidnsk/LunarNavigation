@@ -80,5 +80,6 @@ def test_deployed_manifest_remains_immutable_and_distinct_from_development():
     assert development['based_on_deployed_runtime'] == deployed['deployed_runtime']
     assert 'deployed_runtime' not in development
     changed={name for name in deployed['files'] if deployed['files'][name]!=development['files'][name]}
-    assert changed == {'course_two_eval.py', 'course_two_parallel.py', 'course_two_trial.py', 'plant.py', 'ros_messages.py', 'ros_env.py'}
+    assert changed == {'course_two_eval.py', 'course_two_parallel.py', 'course_two_trial.py', 'plant.py', 'ros_messages.py', 'ros_env.py',
+        'cave_topology.py', 'config.py', 'course_two_simple.py', 'course_two_task_scope.py', 'region_relation_prepare.py', 'scene.py'}
     assert development['observed_active_runtime'] == 'c8a6f92a56a2613ef23deff72ea34185f3264ce4968d4e8720be1659044f4a50'

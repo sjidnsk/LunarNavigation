@@ -1,7 +1,7 @@
-"""MPPI reference-path following, independent of map/planner authority.
+"""MPPI reference tracking with swept motion and full-stop map certificates.
 
-Obstacle routing and reference invalidation belong to navigation. This backend
-predicts and constrains vehicle motion; it does not certify obstacle avoidance.
+Navigation owns obstacle routing and reference invalidation. Tracking proposals
+retain their path objective; published motion requires known-free map support.
 """
 import math
 from dataclasses import replace
@@ -11,7 +11,34 @@ from .mppi import MppiExecutor
 
 
 class MppiPathFollower(MppiExecutor):
-    requires_map = False
+    requires_map = True
+
+    def set_map(self,grid):
+        # StartAssumedFree is planner start-connection authority, not permission
+        # to translate into UNKNOWN. Strip it even from the clearance halo.
+        # Keep native stationary_anchor support for exact pure rotation only.
+        if np.any(grid.assumed):
+            grid=replace(grid,assumed=np.zeros_like(grid.assumed))
+        super().set_map(grid)
+
+    def _continuous_kinematics(self,state,tv,tw,actual,dt):
+        # 每轴限加速度响应是分段线性速度；检查所有折点及 v=0。
+        p=self.policy
+        v=np.concatenate((np.full((len(actual),1),state.linear_mps),actual[:,:-1,0]),axis=1)
+        w=np.concatenate((np.full((len(actual),1),state.angular_radps),actual[:,:-1,1]),axis=1)
+        av=np.where(abs(tv)>abs(v),p.max_linear_accel_mps2,p.max_linear_decel_mps2)*np.sign(tv-v)
+        aw=p.max_angular_accel_radps2*np.sign(tw-w)
+        safe_av=np.where(av==0,1.,av);safe_aw=np.where(aw==0,1.,aw)
+        times=np.stack((np.zeros_like(v),np.full_like(v,dt),
+            (tv-v)/safe_av,(tw-w)/safe_aw,-v/safe_av),axis=-1)
+        times=np.clip(times,0.,dt)
+        vv=v[:,:,None]+np.sign(tv-v)[:,:,None]*np.minimum(abs(tv-v)[:,:,None],abs(av)[:,:,None]*times)
+        ww=w[:,:,None]+np.sign(tw-w)[:,:,None]*np.minimum(abs(tw-w)[:,:,None],abs(aw)[:,:,None]*times)
+        # 停稳容差用于完成判定，不能豁免非零平移的曲率。
+        curvature=abs(ww)<=abs(vv)*p.max_curvature_per_m+1e-9
+        pure=(abs(v)[:,:,None]<=1e-12)&(abs(tv)[:,:,None]<=1e-12)
+        lateral=np.maximum(abs(v),abs(actual[:,:,0]))*np.maximum(abs(w),abs(actual[:,:,1]))
+        return np.all(curvature|pure,axis=(1,2)) & np.all(lateral<=p.max_lateral_accel_mps2+1e-9,axis=1)
 
     def _kinematically_valid(self,velocity):
         p=self.policy
@@ -21,15 +48,13 @@ class MppiPathFollower(MppiExecutor):
 
     def _score(self,state,controls,target,target_yaw,dt):
         poses,velocity=self._rollout(state,controls,dt)
-        valid=self._kinematically_valid(velocity)
+        valid=self._kinematically_valid(velocity) & self._rollout_kinematic_valid
         cost=self._tracking_cost(state,controls,target,target_yaw,poses)
         return np.where(valid,cost,np.inf),poses
 
-    def _certify_sequences(self,state,sequences,step,*,costs=None):
-        # Weighted controls define a new nonlinear trajectory. Recompute its
-        # motion constraints rather than averaging sampled poses.
-        poses,velocity=self._rollout(state,sequences,self.config.model_dt)
-        return self._kinematically_valid(velocity),poses
+    # Weighted output and sampled fallback both use MppiExecutor's continuous
+    # arc/closed-segment certificate and complete delayed braking tail. The
+    # point-free proposal score above is an objective, never safety authority.
 
     def _project_targets(self,raw,step):
         """Batch time-independent intent limits; retain slew recurrence order."""

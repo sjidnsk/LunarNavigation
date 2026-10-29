@@ -389,15 +389,41 @@ FineTraversabilityBuilder::Derive(
     const TraversabilityProfile& profile,
     std::shared_ptr<const FineTraversabilitySnapshot> previous,
     std::optional<FineElevationChangeSet> merged_changes) const {
+  return DeriveImpl(std::move(raw),capability,profile,std::move(previous),merged_changes,
+      MakePlatformElevationEvaluator(capability),false);
+}
+
+std::shared_ptr<const FineTraversabilitySnapshot>
+FineTraversabilityBuilder::DeriveProjected(
+    std::shared_ptr<const ElevationSnapshot> raw,const PlatformCapability& capability,
+    const TraversabilityProfile& profile,
+    std::unique_ptr<const PlatformElevationEvaluator> intrinsic,
+    std::shared_ptr<const FineTraversabilitySnapshot> previous) const {
+  if (!intrinsic) throw std::invalid_argument("projected derivation requires intrinsic evidence");
+  if (previous && (!raw || !raw->SharesLineageWith(*previous->elevation()) ||
+      !SameCanonicalLattice(previous->geometry(),raw->geometry()))) {
+    throw std::invalid_argument("projected derivation must preserve raw lineage and lattice");
+  }
+  return DeriveImpl(std::move(raw),capability,profile,std::move(previous),std::nullopt,
+      std::move(intrinsic),true);
+}
+
+std::shared_ptr<const FineTraversabilitySnapshot>
+FineTraversabilityBuilder::DeriveImpl(
+    std::shared_ptr<const ElevationSnapshot> raw,const PlatformCapability& capability,
+    const TraversabilityProfile& profile,
+    std::shared_ptr<const FineTraversabilitySnapshot> previous,
+    std::optional<FineElevationChangeSet> merged_changes,
+    std::unique_ptr<const PlatformElevationEvaluator> intrinsic,const bool projected) const {
   const Clock::time_point started = Clock::now();
   if (!raw || !raw->valid()) {
     throw std::invalid_argument(
         "fine traversability requires a valid elevation snapshot");
   }
   ValidateProfile(profile);
-  FineCellEvaluator cell_evaluator(*raw, capability, profile);
+  FineCellEvaluator cell_evaluator(*raw, capability, profile, std::move(intrinsic));
   const double hard_radius_m = cell_evaluator.hard_inflation_radius_m();
-  const std::string profile_hash = PlatformProfileHash(capability, profile);
+  const std::string profile_hash = PlatformProfileHash(capability, profile) + (projected ? ":projected-v1" : "");
   if (merged_changes) {
     if (!previous) {
       throw std::invalid_argument(
@@ -405,11 +431,11 @@ FineTraversabilityBuilder::Derive(
     }
     ValidateMergedChanges(*raw, *previous, *merged_changes, profile_hash);
   }
-  if (previous && previous->elevation() == raw &&
+  if (!projected && previous && previous->elevation() == raw &&
       previous->platform_profile_hash() == profile_hash) {
     return previous;
   }
-  const bool incremental = previous &&
+  const bool incremental = !projected && previous &&
       previous->platform_profile_hash() == profile_hash &&
       (raw->IsDirectSuccessorOf(*previous->elevation()) ||
        merged_changes.has_value());

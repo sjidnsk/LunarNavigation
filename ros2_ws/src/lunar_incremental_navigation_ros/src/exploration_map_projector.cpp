@@ -25,11 +25,51 @@ namespace core = lunar::incremental_navigation;
                       std::max(first_min, second_min));
 }
 
-}  // namespace
+// 旧出口只需找到任意 FREE；保留对内外两层细格遍历的提前退出。
+struct AnyFreeAggregation {
+  bool has_free{};
+  double blocked_area{};
 
-ExplorationMapProjection ExplorationMapProjector::Project(
+  void Add(const core::FineCellState state, const double area) {
+    if (state == core::FineCellState::kFree) {
+      has_free = true;
+    } else if (state == core::FineCellState::kBlocked) {
+      blocked_area += area;
+    }
+  }
+  [[nodiscard]] bool Done() const { return has_free; }
+  [[nodiscard]] std::int8_t Occupancy(const double coarse_area,
+                                    const double tolerance) const {
+    if (has_free) return 0;
+    return blocked_area + tolerance >= coarse_area ? 100 : -1;
+  }
+};
+
+// 保守出口累计全部交叠面积，只有完整自由覆盖才可发布 FREE。
+struct ConservativeAggregation {
+  double free_area{};
+  double blocked_area{};
+
+  void Add(const core::FineCellState state, const double area) {
+    if (state == core::FineCellState::kFree) {
+      free_area += area;
+    } else if (state == core::FineCellState::kBlocked) {
+      blocked_area += area;
+    }
+  }
+  [[nodiscard]] bool Done() const { return false; }
+  [[nodiscard]] std::int8_t Occupancy(const double coarse_area,
+                                    const double tolerance) const {
+    if (blocked_area > tolerance) return 100;
+    return free_area + tolerance >= coarse_area ? 0 : -1;
+  }
+};
+
+// 几何验证、索引裁剪和交叠遍历只维护此处；聚合器只决定状态语义。
+template <typename Aggregation>
+ExplorationMapProjection ProjectImpl(
     const core::FineTraversabilitySnapshot& fine,
-    const core::SparseGridGeometry& coarse_geometry) const {
+    const core::SparseGridGeometry& coarse_geometry) {
   const core::SparseGridGeometry& fine_geometry = fine.geometry();
   if (!coarse_geometry.valid() ||
       coarse_geometry.frame_id() != fine_geometry.frame_id()) {
@@ -80,10 +120,9 @@ ExplorationMapProjection ExplorationMapProjector::Project(
           static_cast<std::int64_t>(
               std::ceil((coarse_x_max - fine_origin.x) / fine_resolution)));
 
-      bool has_free = false;
-      double blocked_area = 0.0;
+      Aggregation aggregation;
       for (std::int64_t fine_y = fine_y_begin;
-           fine_y < fine_y_end && !has_free; ++fine_y) {
+           fine_y < fine_y_end && !aggregation.Done(); ++fine_y) {
         const double fine_y_min =
             CellMinimum(fine_origin.y, fine_resolution, fine_y);
         const double overlap_y = OverlapLength(
@@ -102,29 +141,32 @@ ExplorationMapProjection ExplorationMapProjector::Project(
           if (overlap_x <= 0.0) {
             continue;
           }
-          switch (fine.State({.x = fine_x, .y = fine_y})) {
-            case core::FineCellState::kFree:
-              has_free = true;
-              break;
-            case core::FineCellState::kBlocked:
-              blocked_area += overlap_x * overlap_y;
-              break;
-            case core::FineCellState::kUnknown:
-              break;
-          }
-          if (has_free) {
+          aggregation.Add(fine.State({.x = fine_x, .y = fine_y}),
+                          overlap_x * overlap_y);
+          if (aggregation.Done()) {
             break;
           }
         }
       }
-      if (has_free) {
-        result.data[output_index] = 0;
-      } else if (blocked_area + area_tolerance >= coarse_area) {
-        result.data[output_index] = 100;
-      }
+      result.data[output_index] =
+          aggregation.Occupancy(coarse_area, area_tolerance);
     }
   }
   return result;
+}
+
+}  // namespace
+
+ExplorationMapProjection ExplorationMapProjector::Project(
+    const core::FineTraversabilitySnapshot& fine,
+    const core::SparseGridGeometry& coarse_geometry) const {
+  return ProjectImpl<AnyFreeAggregation>(fine, coarse_geometry);
+}
+
+ExplorationMapProjection ExplorationMapProjector::ProjectConservative(
+    const core::FineTraversabilitySnapshot& fine,
+    const core::SparseGridGeometry& coarse_geometry) const {
+  return ProjectImpl<ConservativeAggregation>(fine, coarse_geometry);
 }
 
 }  // namespace lunar::incremental_navigation_ros

@@ -27,7 +27,8 @@ def test_mppi_cannot_silently_run_without_a_map_contract():
 
 @pytest.mark.parametrize("stale,clock_mode",[(False,"real"),(True,"real"),("during","real"),("unsafe_after","real"),(False,"paused"),(False,"recert_slow")])
 @pytest.mark.parametrize("map_age_s",[0.,2.])
-def test_performance_overrun_does_not_stop_valid_state_or_clear_prediction(monkeypatch,stale,map_age_s,clock_mode):
+@pytest.mark.parametrize("backend",['mppi','mppi_path_follower'])
+def test_performance_overrun_does_not_stop_valid_state_or_clear_prediction(monkeypatch,stale,map_age_s,clock_mode,backend):
     import time
     from types import SimpleNamespace as S
     from nav_msgs.msg import Odometry
@@ -38,7 +39,7 @@ def test_performance_overrun_does_not_stop_valid_state_or_clear_prediction(monke
     from lunar_pure_wheeled_controller.tracking import TrackingCommand
     from lunar_pure_wheeled_controller.mppi_map import GridMap
     import numpy as np
-    rclpy.init(args=['--ros-args','-p','controller_backend:=mppi','-p','input_mode:=incremental_reference'])
+    rclpy.init(args=['--ros-args','-p','controller_backend:='+backend,'-p','input_mode:=incremental_reference'])
     node=None
     try:
         node=PureWheeledControllerNode()
@@ -296,15 +297,68 @@ def test_native_ready_map_is_valid_without_inventing_observation_age_gate(future
         rclpy.shutdown()
 
 
-def test_path_follower_backend_does_not_create_map_client():
+def test_path_follower_backend_requires_revisioned_map_client():
     from lunar_pure_wheeled_controller.mppi_path_follower import MppiPathFollower
     rclpy.init(args=['--ros-args','-p','controller_backend:=mppi_path_follower','-p','input_mode:=incremental_reference'])
     node=None
     try:
         node=PureWheeledControllerNode()
         assert isinstance(node._executor,MppiPathFollower)
-        assert node._map_client is None
-        assert not node._executor.requires_map
+        assert node._map_client is not None
+        assert node._executor.requires_map
+    finally:
+        if node is not None:node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_standard_path_backend_startup_and_volatile_qos():
+    from rclpy.qos import DurabilityPolicy,ReliabilityPolicy
+    rclpy.init(args=['--ros-args','-p','controller_backend:=mppi_path_follower','-p','input_mode:=incremental_path'])
+    node=None
+    try:
+        node=PureWheeledControllerNode()
+        assert hasattr(node._executor,'set_standard_path')
+        subscriptions=[s for s in node.subscriptions if s.topic_name=='/Car/T4/planning/local_path']
+        assert len(subscriptions)==1
+        qos=subscriptions[0].qos_profile
+        assert qos.depth==1 and qos.durability==DurabilityPolicy.VOLATILE
+        assert qos.reliability==ReliabilityPolicy.RELIABLE
+        assert node.get_parameter('path_timeout_s').value==.35
+    finally:
+        if node is not None:node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_standard_path_receipt_liveness_and_empty_stop_preserve_history(monkeypatch):
+    from nav_msgs.msg import Path
+    from geometry_msgs.msg import PoseStamped
+    from lunar_pure_wheeled_controller import node as module
+    rclpy.init(args=['--ros-args','-p','controller_backend:=mppi_path_follower','-p','input_mode:=incremental_path'])
+    node=None
+    try:
+        node=PureWheeledControllerNode();clock=[10.]
+        monkeypatch.setattr(module,'monotonic',lambda:clock[0])
+        path=Path();path.header.frame_id='map';path.header.stamp.sec=1
+        for x in (0.,1.):
+            pose=PoseStamped();pose.pose.position.x=x;pose.pose.orientation.w=1.;path.poses.append(pose)
+        node._on_path(path);node._executor.note_command(.2,0.)
+        active=node._active
+        assert node._path_received_at==10.
+        clock[0]=11.;path.header.stamp.sec=2;node._on_path(path)
+        assert node._path_received_at==11. and len(node._executor._command_history)==1
+        from nav_msgs.msg import Odometry
+        odom=Odometry();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.
+        node._on_odometry(odom)
+        monkeypatch.setattr(node,'_standard_grid',lambda state:node._executor.map)
+        monkeypatch.setattr(node,'_standard_unavailable',lambda reason:None)
+        clock[0]=11.36;node._tick()
+        assert node._executor._stop_reason=='STALE_PATH'
+        assert node._executor._last_command[0]==.2
+        node._on_path(path)
+        assert node._executor._stop_reason is None
+        node._on_path(Path())
+        assert node._active is not None and len(node._executor._command_history)==1
+        assert node._executor._last_command[0]==.2
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()

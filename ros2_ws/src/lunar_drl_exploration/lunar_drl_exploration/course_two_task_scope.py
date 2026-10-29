@@ -56,11 +56,13 @@ def scene_requests():
 
 
 def build_rehearsal(seed, extent, start_mode, platform, *, cave_generator_version='',
-                    mother_graph_id=None, dataset_split='train', cave_split_manifest_hash=None):
-    from .scene import Scene, TerrainGrid
+                    mother_graph_id=None, dataset_split='train', cave_split_manifest_hash=None,
+                    safe_start_radius_m=0.):
+    from .scene import Scene, TerrainGrid, safe_start_mask, safe_start_record, validate_safe_start_radius
     from .contracts import Pose, TaskSpec
     from .geometry import polygon_mask
     from .course_two_scene import _identity
+    safe_start_radius_m=validate_safe_start_radius(safe_start_radius_m)
     if start_mode not in ('inside','outside'):raise ValueError('whole cave requires explicit start')
     if cave_generator_version:
         from .cave_topology import VERSION, manifest_hash
@@ -69,7 +71,8 @@ def build_rehearsal(seed, extent, start_mode, platform, *, cave_generator_versio
         if cave_split_manifest_hash is not None and cave_split_manifest_hash!=manifest_hash():
             raise ValueError('cave split manifest identity changed')
     scene=Scene(seed,'cave',extent,platform=platform,cave_generator_version=cave_generator_version,
-        mother_graph_id=mother_graph_id,dataset_split=dataset_split)
+        mother_graph_id=mother_graph_id,dataset_split=dataset_split,
+        safe_start_radius_m=safe_start_radius_m)
     original=TerrainGrid.from_scene(scene)
     heights=original.heights.copy();rows,cols=np.nonzero(heights==0.)
     resolution=original.resolution_m
@@ -85,13 +88,20 @@ def build_rehearsal(seed, extent, start_mode, platform, *, cave_generator_versio
     # Outside geometry remains solely for the versioned historical diagnostic.
     if start_mode=='outside':heights[np.broadcast_to(apron,heights.shape)|entrance]=0.
     terrain=original if scene.cave_geometry is not None else TerrainGrid.from_heights(heights,resolution,original.origin,platform)
-    task=TaskSpec(_identity(dict(scope=SCOPE,seed=seed,extent=extent)),'map',polygon)
+    task_identity=dict(scope=SCOPE,seed=seed,extent=extent)
+    if safe_start_radius_m:
+        task_identity['safe_start_region']=dict(version='reserved_start_region_v1',
+            navigation_radius_m=safe_start_radius_m)
+    task=TaskSpec(_identity(task_identity),'map',polygon)
     anchor=Pose(mouth_x,mouth_y,scene._yaw)
     reachable=terrain.reachable(anchor)!=0
     roi=polygon_mask(terrain.shape,terrain.origin,resolution,polygon)
     candidates=reachable & (roi if start_mode=='inside' else ~roi)
     if start_mode=='outside':
         candidates&=(x[None,:]>=low[0]-5)&(np.abs(y[:,None]-mouth_y)<2.)
+    if validate_safe_start_radius(safe_start_radius_m):
+        candidates &= safe_start_mask(terrain, safe_start_radius_m)
+        if not np.any(candidates):raise ValueError('whole cave has no safe start in the requested region')
     ys,xs=np.nonzero(candidates)
     if not len(xs):raise ValueError('whole cave has no legal requested start')
     pick=int(np.random.default_rng(np.random.SeedSequence([seed,302])).integers(len(xs)))
@@ -107,6 +117,7 @@ def build_rehearsal(seed, extent, start_mode, platform, *, cave_generator_versio
         descriptor['reference_reachable_task_cells']=int(np.count_nonzero(reachable&roi))
         if not descriptor['reference_reachable_task_cells']:
             raise ValueError('v2 cave task has no reachable reference cells')
+    descriptor.update(safe_start_record(terrain, pose, safe_start_radius_m))
     terrain.generator_descriptor=MappingProxyType(descriptor)
     return terrain,pose,task,descriptor
 
