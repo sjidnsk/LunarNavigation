@@ -48,6 +48,7 @@ class NavigationTaskCoordinator:
 
     def _reset_execution_feedback(self, now_s):
         self._references = OrderedDict()
+        self._execution_accepted_reference = None
         self._execution_status = None
         self._execution_received = None
         self._execution_last_accepted = None
@@ -71,6 +72,9 @@ class NavigationTaskCoordinator:
         self._references[ref.revision] = ref
         while len(self._references) > 128:
             retired, _ = self._references.popitem(last=False)
+            pinned = self._execution_accepted_reference
+            if pinned is not None and retired == pinned.revision:
+                continue
             self._execution_accepted.discard(retired)
             self._execution_terminal.discard(retired)
             self._execution_failed_revisions.discard(retired)
@@ -80,6 +84,9 @@ class NavigationTaskCoordinator:
         if not isinstance(status, ExecutionStatus) or self.active is None or self.active.outcome is not None:
             return False
         ref = self._references.get(status.revision)
+        pinned = self._execution_accepted_reference
+        if ref is None and pinned is not None and status.revision == pinned.revision:
+            ref = pinned
         accepted_failure = status.state == 6 and status.revision in self._execution_accepted
         if (ref is None or status.session_id != ref.session_id or status.path_digest != ref.path_digest or
                 status.intent != ref.intent or status.stamp_ns < ref.stamp_ns or (status.revision < self._execution_revision and not accepted_failure) or
@@ -96,6 +103,12 @@ class NavigationTaskCoordinator:
                 # 已接受旧参考的延迟故障只锁存故障，不回退正常反馈门禁。
                 return True
         if status.accepted:
+            # 发布窗口不能退休仍在执行的精确身份；真实接管后仅保留一个新pin。
+            if pinned is not None and pinned.revision != ref.revision and pinned.revision not in self._references:
+                self._execution_accepted.discard(pinned.revision)
+                self._execution_terminal.discard(pinned.revision)
+                self._execution_failed_revisions.discard(pinned.revision)
+            self._execution_accepted_reference = ref
             self._execution_last_accepted = now_s
             self._execution_accepted.add(status.revision)
         if status.state in (5,6):

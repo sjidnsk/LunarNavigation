@@ -211,7 +211,10 @@ class MppiExecutor:
         # 全部延迟场景仍已独立积分；仅完全相同的物理轨迹共享几何证明。
         # 不按延迟大小推断包含关系，不近似合并，也不跨地图/状态缓存。
         keys=np.concatenate((poses.reshape(len(poses),-1),actual.reshape(len(actual),-1)),axis=1)
-        _,keep,inverse=np.unique(keys,axis=0,return_index=True,return_inverse=True)
+        # 逐位相同的完整轨迹仅证明一次；避免长零速前缀的逐字段排序比较。
+        bits=np.ascontiguousarray(keys).view(np.dtype((np.void,keys.dtype.itemsize*keys.shape[1]))).reshape(-1)
+        _,keep,inverse=np.unique(bits,return_index=True,return_inverse=True)
+        inverse=inverse.reshape(-1)
         kinematic_valid=self._rollout_kinematic_valid
         poses,actual=poses[keep],actual[keep]
         valid=self._stationary_supported(state,poses,actual)

@@ -115,6 +115,7 @@ class PureWheeledControllerNode(Node):
             "body_width_m": 0.0,
             "minimum_clearance_m": 0.0,
             "mppi_compute_budget_s": 0.04,
+            "mppi_compute_envelope_s": 0.05,
             "mppi_nominal_response_time_s": TrackingPolicy().control_response_time_s,
             "mppi_trace_diagnostics": False,
             "execution_contract_enabled":False,
@@ -267,6 +268,7 @@ class PureWheeledControllerNode(Node):
                 temperature=self.get_parameter("mppi_temperature").value,
                 seed=self.get_parameter("mppi_seed").value,
                 nominal_response_time_s=self.get_parameter("mppi_nominal_response_time_s").value,
+                compute_budget_s=float(self.get_parameter('mppi_compute_envelope_s').value),
                 state_age_budget_s=float(self.get_parameter('odometry_timeout_s').value) if self._standard_mode else .05))
             self._mppi_diagnostics = self.create_publisher(String,self._absolute_topic_name("mppi_diagnostics_topic",self.get_parameter("mppi_diagnostics_topic").value),10)
             self._map_client = None
@@ -313,7 +315,7 @@ class PureWheeledControllerNode(Node):
             from .execution_pairing import ExecutionInbox
             self._execution_inbox=ExecutionInbox()
             self._execution_offered=None
-            self.create_subscription(PathExecutionReference,topics['execution_reference_topic'],self._on_execution_reference,10)
+
         control_rate_hz = float(self.get_parameter("control_rate_hz").value)
         if not isfinite(control_rate_hz) or control_rate_hz <= 0.0:
             raise ValueError("control_rate_hz must be finite and greater than zero")
@@ -340,6 +342,12 @@ class PureWheeledControllerNode(Node):
         self._feedback_group=MutuallyExclusiveCallbackGroup() if self._standard_mode else None
         self._feedback_pending=None
         self._feedback_transforms=None
+        self._execution_inputs=deque()
+        self._execution_input_capacity=128
+        self._execution_ingress_overflow=False
+        if self._execution_enabled:
+            self.create_subscription(PathExecutionReference,topics['execution_reference_topic'],
+                self._receive_execution_reference,10,callback_group=self._feedback_group)
         if self._standard_mode:self._feedback_tf_cache=self._latest_transforms.copy()
         self._commands = self.create_publisher(Twist, topics["command_topic"], 10)
         self.create_subscription(
@@ -371,8 +379,9 @@ class PureWheeledControllerNode(Node):
                 )
             else:
                 self.create_subscription(
-                    Path, topics["path_topic"], self._on_path,
-                    QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.VOLATILE) if self._standard_mode else incremental_path_qos()
+                    Path, topics["path_topic"], self._receive_execution_path if self._standard_mode else self._on_path,
+                    QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.VOLATILE) if self._standard_mode else incremental_path_qos(),
+                    callback_group=self._feedback_group
                 )
             self.create_subscription(
                 TFMessage,
@@ -406,7 +415,7 @@ class PureWheeledControllerNode(Node):
             self._p3_source=create_p3_source(capability,body,minimum_clearance_m=self._minimum_clearance_m,
                 allow_unknown=self.get_parameter('allow_unknown').value,map_frame=self._map_frame)
             try:
-                self.create_subscription(P3GridMap,topic,self._p3_source.submit_map,source_qos)
+                self.create_subscription(P3GridMap,topic,self._p3_source.submit_map,source_qos,callback_group=self._feedback_group)
             except Exception:
                 self._p3_source.close()
                 raise
@@ -445,7 +454,34 @@ class PureWheeledControllerNode(Node):
         ):
             self._clear_active_and_stop()
 
-    def _on_path(self, path: Path) -> None:
+    def _receive_execution_input(self, kind, message):
+        # 接收组仅保存有界、有序快照；执行器仍由控制组单写入。
+        received=monotonic()
+        with self._feedback_lock:
+            if self._execution_ingress_overflow:return False
+            if len(self._execution_inputs)>=self._execution_input_capacity:
+                self._execution_ingress_overflow=True
+                return False
+            self._execution_inputs.append((kind,message,received))
+        return True
+
+    def _receive_execution_path(self, message):
+        return self._receive_execution_input('path',message)
+
+    def _receive_execution_reference(self, message):
+        return self._receive_execution_input('reference',message)
+
+    def _drain_standard_execution(self):
+        with self._feedback_lock:
+            if self._execution_ingress_overflow:return False
+            pending=list(self._execution_inputs)
+            self._execution_inputs.clear()
+        for kind,message,received in pending:
+            if kind=='path':self._on_path(message,received_at=received)
+            else:self._on_execution_reference(message,received_at=received)
+        return True
+
+    def _on_path(self, path: Path, *, received_at=None) -> None:
         parsed = parse_incremental_path(path, self._map_frame)
         if self._standard_mode:
             if self._execution_enabled:
@@ -453,13 +489,14 @@ class PureWheeledControllerNode(Node):
                 from nav1cm.execution_ros import stamp_ns
                 if parsed.reason is not None:
                     self.request_controlled_stop(parsed.reason);return
-                self._execution_inbox.add_path(stamp_ns(path.header),path_fingerprint(path),parsed,monotonic())
+                self._execution_inbox.add_path(stamp_ns(path.header),path_fingerprint(path),parsed,
+                    monotonic() if received_at is None else received_at)
                 self._try_execution_pair()
                 return
             if parsed.clear or parsed.reason is not None:
                 self.request_controlled_stop(parsed.reason or "EMPTY_PATH")
                 return
-            self._path_received_at=monotonic()
+            self._path_received_at=monotonic() if received_at is None else received_at
             self._active=parsed
             self._path_sequence+=1
             self._executor.set_standard_path(parsed.path_xy_yaw,identity=self._path_sequence)
@@ -473,14 +510,14 @@ class PureWheeledControllerNode(Node):
             parsed.path_xy_yaw, identity=("plain", self._path_sequence)
         )
 
-    def _on_execution_reference(self,message):
+    def _on_execution_reference(self,message,*,received_at=None):
         from nav1cm.execution_ros import reference_from_message
         try:
             reference=reference_from_message(message)
             now=self.get_clock().now().nanoseconds
             if message.header.frame_id!=self._map_frame or reference.stamp_ns>now or now-reference.stamp_ns>self._path_timeout_s*1e9:
                 return
-            if not self._execution_inbox.add_reference(reference,monotonic()):return
+            if not self._execution_inbox.add_reference(reference,monotonic() if received_at is None else received_at):return
             actual=self._executor.execution_reference
             if (actual is None or actual.session_id!=reference.session_id or reference.intent in (1,2,4)
                     or (reference.intent==3 and actual.intent!=3)):
@@ -736,6 +773,8 @@ class PureWheeledControllerNode(Node):
         now_ns=self.get_clock().now().nanoseconds
         source_ns=self._standard_state_ns
         if now_ns<source_ns:return self._standard_unavailable('future_feedback')
+        if (now_ns-source_ns)/1e9>self._odometry_timeout_s:
+            return self._standard_unavailable('stale_source_feedback')
         dt=.05 if self._last_control_ns is None else (now_ns-self._last_control_ns)/1e9
         self._last_control_ns=now_ns
         if dt<=0:return self._standard_unavailable('nonpositive_dt')
@@ -772,7 +811,10 @@ class PureWheeledControllerNode(Node):
             return self._standard_unavailable('map_changed_during_certification',retryable=True)
         if publication_ns>covered_ns:
             return self._standard_unavailable('publication_certificate_expired',retryable=True)
-        self._publish_twist(result.command.linear_x_mps,result.command.angular_z_radps)
+        with self._feedback_lock:
+            if self._execution_ingress_overflow:
+                return self._standard_unavailable('execution_ingress_overflow')
+            self._publish_twist(result.command.linear_x_mps,result.command.angular_z_radps)
         self._publish_execution_status()
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(self._executor.diagnostics,
             event='solve_result',phase=result.phase,compute_ms=(monotonic()-started)*1000,
@@ -797,6 +839,8 @@ class PureWheeledControllerNode(Node):
     def _tick(self) -> None:
         if self._standard_mode:
             self._drain_standard_feedback()
+            if not self._drain_standard_execution():
+                return self._standard_unavailable('execution_ingress_overflow')
             return self._tick_standard_path()
         if self._is_mppi:
             self._mppi_observe("tick")
