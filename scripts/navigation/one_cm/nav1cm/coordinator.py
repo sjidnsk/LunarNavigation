@@ -151,11 +151,13 @@ class NavigationCoordinator:
             return self._raw_route
         return self.route
 
-    def _adopt_route(self, route, events):
+    def _adopt_route(self, route, events, *, raw_verified=False):
         shaped=None
         if self.reference_smoothing:
             from .reference_smoothing import shape_route
-            shaped=shape_route(route,self._blocked_boxes)
+            if not raw_verified and not self._route_clear(route):
+                raise ValueError("raw route collision")
+            shaped=shape_route(route,self._blocked_boxes,raw_verified=True)
         self._raw_route,self._shaped_route=route,shaped
         self.route=route if shaped is None else shaped.route
         self.progress=None
@@ -263,7 +265,7 @@ class NavigationCoordinator:
                             ((self.revalidate_current_map and self._same_route_geometry(self.raw_route, route)) or
                              (not self.revalidate_current_map and self.route.map_epoch == route.map_epoch and global_result.get('request_reason') == 'PERIODIC')))
                     if route is not None and not keep:
-                        self._adopt_route(route,events)
+                        self._adopt_route(route,events,raw_verified=True)
                         events.append({'kind': 'ROUTE_ACCEPTED', 'version': route.version, 'map_epoch': route.map_epoch, 'points': route.points.tolist()})
                     elif route is not None:
                         events.append({'kind': 'ROUTE_CONTINUITY_RETAINED', 'version': self.route.version, 'computed_version': route.version})

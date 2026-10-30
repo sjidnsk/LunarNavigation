@@ -112,3 +112,12 @@ def test_smoothing_requires_current_map_revalidation():
     import pytest
     with pytest.raises(ValueError,match='revalidation'):
         NavigationCoordinator(None,runner=Runner(),reference_smoothing=True)
+
+
+def test_direct_adoption_cannot_claim_unverified_raw_geometry():
+    import pytest
+    c,runner,w,state=build()
+    c._observe_world(WorldSnapshot(2,(CellRect(180,-10,190,10),),w.known_free))
+    with pytest.raises(ValueError,match='raw route collision'):
+        c._adopt_route(Route(1,2,[[0,0],[4,0],[4,4]],(4,4)),[])
+    assert c.route is None
