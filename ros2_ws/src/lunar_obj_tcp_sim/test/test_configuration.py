@@ -122,10 +122,14 @@ def test_rolling_defaults_and_disable_are_validated():
 
 
 @pytest.mark.parametrize('period', [0., .5])
-def test_launch_derives_controller_rolling_mode_from_period(tmp_path, monkeypatch, period):
+def test_launch_uses_shared_navigation_without_legacy_rolling_overrides(tmp_path, monkeypatch, period):
     import importlib.util
     import yaml
+    launch = pytest.importorskip("launch")
+    if not hasattr(launch, 'LaunchContext'):
+        pytest.skip('ROS launch runtime unavailable')
     from launch import LaunchContext
+    from launch.actions import IncludeLaunchDescription
     package = Path(__file__).parents[1]
     spec = importlib.util.spec_from_file_location('tcp_rolling_launch', package / 'launch/obj_tcp.launch.py')
     module = importlib.util.module_from_spec(spec)
@@ -137,9 +141,9 @@ def test_launch_derives_controller_rolling_mode_from_period(tmp_path, monkeypatc
     path = tmp_path / 'simulation.yaml'
     path.write_text(yaml.safe_dump(config))
     context = LaunchContext()
-    context.launch_configurations.update(config=str(path), host='', port='', map_directory='', mode='', prefix='', start_rviz='', start_local_rviz='', platform_config='')
+    context.launch_configurations.update(config=str(path), host='', port='', map_directory='', mode='', prefix='', start_rviz='', start_local_rviz='', platform_config='', build_dir=str(tmp_path/'solver'))
     nodes = module.compose(context)
-    nav = next(n for n in nodes if n.get('name') == 'obj_tcp_navigation')['parameters'][0]
-    controller = next(n for n in nodes if n.get('name') == 'obj_tcp_executor')['parameters'][0]
-    assert nav['rolling_replan_period_s'] == period
-    assert controller['enable_rolling_updates'] == (period > 0)
+    shared = next(n for n in nodes if isinstance(n, IncludeLaunchDescription))
+    arguments = dict(shared.launch_arguments)
+    assert 'rolling_replan_period_s' not in arguments
+    assert not any(isinstance(n, dict) and n.get('name') in ('obj_tcp_navigation', 'obj_tcp_executor') for n in nodes)

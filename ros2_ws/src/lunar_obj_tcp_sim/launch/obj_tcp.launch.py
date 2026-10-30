@@ -2,15 +2,17 @@
 
 from pathlib import Path
 import json
+import os
 import tempfile
 import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, RegisterEventHandler
 from launch.event_handlers import OnShutdown
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
 from lunar_obj_tcp_sim.configuration import load_simulation_config
@@ -63,52 +65,27 @@ def compose(context):
         observation_rate_hz=config.observation_rate_hz,
         local_window_size_m=config.local_window_size_m,
     )
-    navigator = dict(
-        common, platform_type="wheel", platform_config=platform_config,
-        goal_position_tolerance_m=config.goal_position_tolerance_m,
-        goal_yaw_tolerance_rad=config.goal_yaw_tolerance_rad,
-        coarse_resolution_m=config.coarse_resolution_m,
-        local_window_size_m=config.local_window_size_m,
-        rolling_replan_period_s=config.rolling_replan_period_s,
-        rolling_replan_distance_m=config.rolling_replan_distance_m,
-        local_map_topic=prefix + "/grid_map", odometry_topic=prefix + "/odometry", tf_topic="/tf",
-        action_name=prefix + "/navigate_to_pose", path_reference_topic=prefix + "/path_reference",
-        local_path_topic=prefix + "/local_path", global_route_topic=prefix + "/global_route",
-        diagnostics_topic=prefix + "/planning/diagnostics",
-        exploration_map_topic=prefix + "/exploration_map", enable_tracking_feedback=True,
-        tracking_status_topic=prefix + "/tracking_status", enable_debug_visualization=True,
-        debug_topic_prefix=prefix + "/planning", debug_fine_window_m=config.observation_window_m,
-    )
-    controller = dict(
-        common, input_mode="incremental_reference", platform_config=platform_config,
-        enable_rolling_updates=config.rolling_replan_period_s > 0,
-        path_reference_topic=prefix + "/path_reference", tracking_status_topic=prefix + "/tracking_status",
-        odometry_topic=prefix + "/odometry", tf_topic="/tf", command_topic=prefix + "/cmd_vel",
-        execution_cancel_topic=prefix + "/execution_cancel",
-        goal_position_tolerance_m=config.goal_position_tolerance_m,
-        max_linear_mps=config.max_linear_mps,
-        goal_yaw_tolerance_rad=config.goal_yaw_tolerance_rad,
-        max_angular_radps=config.max_angular_radps,
-        max_angular_accel_radps2=config.max_angular_accel_radps2,
-        scan_profile_enabled=config.mode=="explore" and config.auto_start and config.initial_scan,
-        scan_max_angular_radps=config.scan_max_angular_radps,
-        scan_max_angular_accel_radps2=config.scan_max_angular_accel_radps2,
-        observation_status_topic=prefix+"/observation_status",
-    )
-    explorer = dict(
-        common, sensor_range_m=config.sensor_range_m, sensor_fov_deg=config.sensor_fov_deg,
-        platform_selector="wheel", platform_config=platform_config,
-        coverage_target=config.coverage_target,
-        navigation_map_wait_timeout_s=config.navigation_map_wait_timeout_s,
-        exploration_map_topic=prefix + "/exploration_map", odometry_topic=prefix + "/odometry",
-        tf_topic="/tf", task_topic=prefix + "/exploration/task",
-        navigation_action=prefix + "/navigate_to_pose", status_topic=prefix + "/exploration/status",
-        task_boundary_topic=prefix + "/exploration/task_boundary",
-        task_map_markers_topic=prefix + "/exploration/task_map_markers",
-        current_goal_topic=prefix + "/exploration/current_goal",
-        frontiers_topic=prefix + "/exploration/frontiers",
-        diagnostics_topic=prefix + "/exploration/diagnostics",
-    )
+    build_dir = value("build_dir") or os.environ.get("NAV1CM_BUILD_DIR", "")
+    if not build_dir:
+        raise ValueError("build_dir or NAV1CM_BUILD_DIR is required for the shared MPCC solver")
+    # TCP/OBJ只映射输入输出；算法节点与参数由主线同一个组合负责。
+    shared_arguments = dict(
+        exploration_strategy="frontier" if config.mode == "explore" else "none",
+        enable_controller="true", build_dir=build_dir, platform_config=platform_config,
+        map_topic=prefix+"/grid_map", odometry_topic=prefix+"/odometry",
+        action_name=prefix+"/navigate_to_pose", goal_topic=prefix+"/goal",
+        global_route_topic=prefix+"/global_route", local_path_topic=prefix+"/local_path",
+        execution_reference_topic=prefix+"/execution_reference", tracking_status_topic=prefix+"/tracking_status",
+        exploration_map_topic=prefix+"/exploration_map", policy_map_service=prefix+"/get_policy_map",
+        task_topic=prefix+"/exploration/task", status_topic=prefix+"/exploration/status",
+        current_goal_topic=prefix+"/exploration/current_goal", frontiers_topic=prefix+"/exploration/frontiers",
+        task_boundary_topic=prefix+"/exploration/task_boundary", task_map_markers_topic=prefix+"/exploration/task_map_markers",
+        exploration_diagnostics_topic=prefix+"/exploration/diagnostics", command_topic=prefix+"/cmd_vel",
+        diagnostics_topic=prefix+"/control/mppi_diagnostics", map_qos_durability="transient_local")
+    shared_navigation = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(str(Path(get_package_share_directory("lunar_pure_exploration_ros"))
+                                         / "launch/nav1cm_exploration.launch.py")),
+        launch_arguments=shared_arguments.items())
     nodes = [
         Node(package="lunar_obj_tcp_sim", executable="tcp_vehicle_bridge", name="tcp_vehicle_bridge",
              parameters=[dict(common, host=config.host, port=config.port,
@@ -125,15 +102,9 @@ def compose(context):
                               steering_tolerance_rad=config.steering_tolerance_rad)], output="screen"),
         Node(package="lunar_obj_tcp_sim", executable="obj_virtual_sensor", name="obj_virtual_sensor",
              parameters=[sensor], output="screen"),
-        Node(package="lunar_incremental_navigation_ros", executable="lunar_incremental_navigation_node",
-             name="obj_tcp_navigation", parameters=[navigator], output="screen"),
-        Node(package="lunar_obj_tcp_sim", executable="obj_scan_controller",
-             name="obj_tcp_executor", parameters=[controller], output="screen"),
+        shared_navigation,
     ]
-    if config.mode == "explore":
-        nodes.append(Node(package="lunar_pure_exploration_ros", executable="incremental_exploration_node",
-                          name="obj_tcp_explorer", parameters=[explorer], output="screen"))
-    else:
+    if config.mode == "nav":
         nodes.append(Node(package="lunar_incremental_navigation_ros",
                           executable="lunar_incremental_rviz_goal_bridge", name="obj_tcp_goal_bridge",
                           parameters=[dict(common, goal_topic=prefix + "/goal_pose",
@@ -174,6 +145,7 @@ def generate_launch_description():
         DeclareLaunchArgument("host", default_value=""), DeclareLaunchArgument("port", default_value=""),
         DeclareLaunchArgument("map_directory", default_value=""), DeclareLaunchArgument("mode", default_value=""),
         DeclareLaunchArgument("prefix", default_value=""), DeclareLaunchArgument("platform_config", default_value=""),
+        DeclareLaunchArgument("build_dir", default_value=""),
         DeclareLaunchArgument("start_rviz", default_value=""),
         DeclareLaunchArgument("start_local_rviz", default_value=""), OpaqueFunction(function=compose),
     ])

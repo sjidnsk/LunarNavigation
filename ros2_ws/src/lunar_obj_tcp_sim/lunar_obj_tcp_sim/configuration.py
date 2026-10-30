@@ -43,9 +43,9 @@ class SimulationConfig:
     steering_tolerance_rad: float = .1
     goal_position_tolerance_m: float = .1
     goal_yaw_tolerance_rad: float = .05
-    max_angular_accel_radps2: float = .1
-    scan_max_angular_radps: float = .1
-    scan_max_angular_accel_radps2: float = .1
+    max_angular_accel_radps2: float = .5
+    scan_max_angular_radps: float = 1.
+    scan_max_angular_accel_radps2: float = .5
     scan_step_deg: float = 30.
     scan_reanchor_distance_m: float = .1
     bootstrap_timeout_s: float = 45.

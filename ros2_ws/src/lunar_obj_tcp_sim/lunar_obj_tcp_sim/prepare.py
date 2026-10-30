@@ -41,6 +41,8 @@ def _intersects(triangles, bounds):
 
 
 def _rasterize(triangles, output, shape, origin, resolution):
+    # npy头必须使用Python整数；NumPy标量的repr在不同版本间并不兼容。
+    shape = tuple(int(value) for value in shape)
     height = np.lib.format.open_memmap(output / 'elevation.npy', mode='w+', dtype='float32', shape=shape)
     # XY samples preserve real boundary/vertical-face points rather than inventing cell-center surfaces.
     sample_xy = np.lib.format.open_memmap(output / 'sample_xy.npy', mode='w+', dtype='float32', shape=(*shape, 2))

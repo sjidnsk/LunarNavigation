@@ -47,6 +47,12 @@ class EvidenceCoverage:
         return added
 
 
+def policy_map_covers_input(response, stamp_ns):
+    """公共地图服务确认已处理指定OBJ输入；发布时刻不能代替输入时刻。"""
+    processed = int(response.processed_stamp.sec)*1000000000 + int(response.processed_stamp.nanosec)
+    return bool(response.ready and stamp_ns > 0 and processed >= stamp_ns)
+
+
 class MapReceipt:
     """Pace known-map chunks from mapper diagnostics, without a demo ACK protocol."""
 

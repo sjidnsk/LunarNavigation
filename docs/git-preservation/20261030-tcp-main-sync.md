@@ -62,3 +62,7 @@ TCP车辆接口是控制/反馈报文转换与连接层；OBJ虚拟观测是可�
 5. 先在TCP机完成Humble构建和本机回环TCP+OBJ+新算法调试，核对规划正式成功/动作/跟踪/停稳；不连接外部UE发送运动指令。外部真实TCP联调必须先确认对应端口/协议和输入新鲜度。
 
 旧车辆C++接口/目标路径显示功能保留为必要协议适配源码；与Python直连桥不能争用同一车辆控制连接。目标机器只存必要代码/配置及真实调试产物，设计/报告保留本地仓库。
+
+入口切片进展：共享Include代替旧导航及扫描执行器；OBJ已改用现有GetPolicyMap的processed_stamp确认真实输入处理，不再依赖旧诊断计数。入口与回执先3/4项RED，后15项GREEN；核心OBJ/协议组52通过2缺ROS跳过。Windows扩展组曾4项ROS/POSIX收集错误、22项失败，原证据保留；其中7项为真实NumPy标量shape写入npy头的兼容问题，已转Python整数并覆盖回归，其余留Humble核对，不称Windows全绿。
+
+新P4隔离CasADi3.6.7、acados_v0.4.0及ARM原生Tera renderer已构建完成；官方三个子模块按v0.4.0精确提交获取。Git smart协议两次TLS失败保留，改用官方固定归档获取。Rust工具链无profile修改，Python/Rust/SDK/缓存都在新P4；尚未运行车辆/新导航闭环。

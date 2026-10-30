@@ -17,7 +17,6 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from rclpy.signals import SignalHandlerOptions
-from diagnostic_msgs.msg import DiagnosticArray
 from geometry_msgs.msg import Point, PoseStamped, Twist
 from grid_map_msgs.msg import GridMap
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
@@ -25,10 +24,11 @@ from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 from lunar_planning_msgs.action import NavigateToPose
 from lunar_planning_msgs.msg import TrackingStatus
+from lunar_planning_msgs.srv import GetPolicyMap
 from lunar_pure_exploration_msgs.msg import PureExplorationTask, PureExplorationStatus
 
 from .geometry import TerrainMap
-from .observation_state import EvidenceCoverage, MapReceipt, exploration_bounds
+from .observation_state import EvidenceCoverage, exploration_bounds, policy_map_covers_input
 from .ros_support import observation_grid_map, exploration_task
 from .visualization import marker, scene_markers, truth_preview
 from .scan_sequence import ScanSequence
@@ -87,7 +87,7 @@ class ObjVirtualSensorNode(Node):
         self.client = ActionClient(self, NavigateToPose, self.prefix+'/navigate_to_pose')
         self.create_subscription(Odometry, self.prefix+'/odometry', self.on_pose, STATE)
         self.create_subscription(OccupancyGrid, self.prefix+'/exploration_map', self.on_map, LATCHED)
-        self.create_subscription(DiagnosticArray, self.prefix+'/planning/diagnostics', self.on_diagnostics, 10)
+        self.map_client = self.create_client(GetPolicyMap, self.prefix+'/get_policy_map')
         self.create_subscription(TrackingStatus, self.prefix+'/tracking_status', self.on_tracking, 10)
         self.create_subscription(PureExplorationStatus, self.prefix+'/exploration/status', self.on_exploration, 10)
         self.create_subscription(PureExplorationTask, self.prefix+'/exploration/task', self.on_task_command, 10)
@@ -98,7 +98,10 @@ class ObjVirtualSensorNode(Node):
         self.last_query_ms = 0.
         self.phase = 'WAITING_FOR_STATE'
         self.map_seen = False
-        self.receipt = MapReceipt()
+        self.map_future = None
+        self.map_input_stamp_ns = 0
+        self.map_processed_stamp_ns = 0
+        self.map_revision = 0
         self.known_chunks = None
         self.known_started = None
         self.known_done = False
@@ -157,17 +160,6 @@ class ObjVirtualSensorNode(Node):
             if self.scan_cancellation is not None:
                 self.scan_cancellation.cancel()
 
-    def on_diagnostics(self, message):
-        for status in message.status:
-            fields = {entry.key: entry.value for entry in status.values}
-            if 'received_map_count' in fields:
-                self.receipt.update(int(fields['received_map_count']), int(fields['derivation_lag']),
-                                    int(fields['fine_traversability_revision']),
-                                    int(fields['global_guidance_revision']), int(fields['duplicate_map_count']))
-                if int(fields['rejected_map_count']):
-                    self.phase = 'MAP_INPUT_REJECTED'
-                    self.get_logger().error('Formal mapper rejected an elevation input; inspect planning diagnostics')
-
     def fresh_pose(self):
         return self.latest is not None and time.monotonic()-self.latest_received <= self.settings['odometry_timeout_s']
 
@@ -205,6 +197,7 @@ class ObjVirtualSensorNode(Node):
 
     def publish_observation(self, observation, stamp):
         self.map_pub.publish(observation_grid_map(observation, stamp))
+        self.map_input_stamp_ns = int(stamp.sec)*1000000000 + int(stamp.nanosec)
         self.samples += 1
         if self.mode == 'explore':
             self.coverage.add(observation)
@@ -228,13 +221,25 @@ class ObjVirtualSensorNode(Node):
             self.known_chunks = iter(self.terrain.iter_known_chunks(
                 int(self.settings['known_chunk_cells']), (p.x,p.y)))
             self.known_started = time.monotonic()
-        if not self.receipt.ready:
+        if self.map_processed_stamp_ns < self.map_input_stamp_ns:
             self.phase = 'WAITING_FOR_KNOWN_MAP_DERIVATION'
-            # Re-send only if no input receipt arrived, never race a slow derivation.
-            if (time.monotonic()-self.last_known_sent > 2.
-                    and self.receipt.current[0] == self.receipt.waiting[0]):
-                self.map_pub.publish(observation_grid_map(self.pending_chunk, self.latest.header.stamp))
-                self.last_known_sent = time.monotonic()
+            if self.map_future is not None and self.map_future.done():
+                future, self.map_future = self.map_future, None
+                try:
+                    response = future.result()
+                    if policy_map_covers_input(response, self.map_input_stamp_ns):
+                        stamp = response.processed_stamp
+                        self.map_processed_stamp_ns = int(stamp.sec)*1000000000 + int(stamp.nanosec)
+                        self.map_revision = int(response.fine_revision)
+                except Exception as error:
+                    self.phase = 'OBSERVATION_ERROR'
+                    self.get_logger().error(f'公共地图处理回执失败: {error}')
+                return
+            if self.map_future is None and self.map_client.service_is_ready():
+                request = GetPolicyMap.Request()
+                request.minimum_map_stamp_ns = self.map_input_stamp_ns
+                request.since_revision = self.map_revision
+                self.map_future = self.map_client.call_async(request)
             return
         try:
             self.pending_chunk = next(self.known_chunks)
@@ -243,7 +248,6 @@ class ObjVirtualSensorNode(Node):
             self.phase = 'KNOWN_MAP_READY'
             self.get_logger().info(f'Known-map loading finished: {self.known_count} chunks accepted and derived in {time.monotonic()-self.known_started:.2f}s')
             return
-        self.receipt.sent()
         self.publish_observation(self.pending_chunk, self.latest.header.stamp)
         self.known_count += 1
         self.last_known_sent = time.monotonic()

@@ -62,6 +62,7 @@ unset PYTHONPATH LD_LIBRARY_PATH
 source "/opt/ros/${ros_distro}/setup.bash"
 overlay="${LUNAR_OBJ_TCP_SIM_OVERLAY:-${XDG_CACHE_HOME:-${HOME}/.cache}/lunar_obj_tcp_sim/${ros_distro}/install}"
 if [[ -r "${overlay}/setup.bash" ]]; then source "${overlay}/setup.bash"; fi
+source "${script_dir}/p4_environment.sh"
 set -u
 export ROS_DOMAIN_ID="$domain_id"
 exec "${operator_args[@]}" "${launch_args[@]}"
