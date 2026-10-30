@@ -75,6 +75,7 @@ def _compose(context):
         node("lunar_nav1cm_planner", "navigation_task_node", {
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
             "execution_contract_enabled":values["enable_controller"]=="true",
+            "odometry_timeout_s":values["odometry_timeout_s"],
             "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
             **{k: values[k] for k in ("action_name","goal_topic","global_route_topic","local_path_topic","build_dir")},
             "allow_unknown": values["allow_unknown"] == "true"}),

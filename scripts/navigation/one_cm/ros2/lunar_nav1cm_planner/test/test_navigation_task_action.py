@@ -45,6 +45,7 @@ def test_action_client_goal_feedback_cancel_replace_and_shutdown():
     measured = [0., 0., 0., 0., 0.]
     def publish_state():
         message = Odometry(); message.header.frame_id = 'map'; message.child_frame_id = 'base_link'
+        message.header.stamp = client_node.get_clock().now().to_msg()
         message.pose.pose.position.x, message.pose.pose.position.y = measured[:2]
         message.pose.pose.orientation.z = math.sin(measured[2]/2)
         message.pose.pose.orientation.w = math.cos(measured[2]/2)

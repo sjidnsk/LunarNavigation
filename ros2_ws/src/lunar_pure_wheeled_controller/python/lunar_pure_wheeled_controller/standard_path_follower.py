@@ -31,7 +31,12 @@ class StandardPathFollower(MppiPathFollower):
 
     def request_stop(self, reason):
         # 停车是意图，不能伪造实际执行过零指令或清除延迟历史。
-        self._stop_reason=str(reason);self._pending=None
+        reason=str(reason)
+        ordinary=('EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH')
+        # 传输/路径等待不能覆盖恢复停车屏障或人工停止。
+        if self._stop_reason is None or reason not in ordinary or self._stop_reason in ordinary:
+            self._stop_reason=reason
+        self._pending=None
         self._execution_pending=None
         self.discard_prediction()
 
@@ -238,6 +243,16 @@ class StandardPathFollower(MppiPathFollower):
         self._execution_pending=(geometry,reference)
         return True
 
+    def wait_for_pose(self):
+        # 退休几何但保留参考身份、真实命令历史和故障/进展账本。
+        previous=self._stop_reason
+        self.request_stop('WAITING_FOR_POSE')
+        if previous is not None and previous not in (
+                'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH','WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+            self._stop_reason=previous
+        self._retire_execution_geometry()
+        self.phase='WAITING';self.last_execution_state=0
+
     def _execution_policy(self, reference):
         return replace(self.policy,goal_position_tolerance_m=reference.position_tolerance_m,
             goal_yaw_tolerance_rad=reference.yaw_tolerance_rad,
@@ -322,11 +337,12 @@ class StandardPathFollower(MppiPathFollower):
                 new_session=active is None or active.session_id!=requested.session_id
                 extension=self._alignment_extension(state,geometry,active,requested)
                 continuous_align=extension is not None
-                needs_stop=new_session or requested.intent!=0
+                recovering=self._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE')
+                needs_stop=new_session or requested.intent!=0 or recovering
                 certified=(self._execution_certified(state,dt,now_s,state_age_s)
                     if needs_stop else True)
                 if needs_stop and (not certified or
-                        ((new_session or (requested.intent==3 and not continuous_align))
+                        ((new_session or recovering or (requested.intent==3 and not continuous_align))
                             and not self._stopped(state))):
                     result=self._stop(state,dt,now_s,state_age_s)
                     if result.phase=='WAITING':self.phase='BRAKING'
@@ -342,7 +358,9 @@ class StandardPathFollower(MppiPathFollower):
                     self.no_progress_s=0.;self._last_pose=None;self._translation_credit_m=0.
                 if requested.intent!=0 and not continuous_align:
                     self._retire_execution_geometry()
-                    self._stop_reason=None
+                    if self._stop_reason in (None,'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH',
+                                             'WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+                        self._stop_reason=None
                 if requested.intent==3 and not continuous_align:
                     # 退休旧平移屏障，保留新终端参考中的有序旋转和跨界方向。
                     x,y=geometry.points[-1][:2]
@@ -362,7 +380,7 @@ class StandardPathFollower(MppiPathFollower):
                 self._execution_pending=None
                 # 只有配对参考实际接管才结束传输等待；手动停止与任务故障另行保留。
                 if requested.intent==0 and self._stop_reason in (
-                        'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH'):
+                        'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH','WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
                     self._stop_reason=None
             if self.failure is not None:
                 result=self._stop(state,dt,now_s,state_age_s)

@@ -5,6 +5,7 @@
 """
 from collections import deque
 import json
+import math
 import threading
 import time
 
@@ -40,7 +41,80 @@ class PlannerRuntime:
         self._reported_grid_geometry = None
         self.execution_contract_enabled=False
         self.execution_context=None
+        self._odometry_received_s=None
+        self._pose_timeout_s=None
+        self._pose_source_high_water=self._pose_clock_high_water=None
+        self._pose_integrity_fault=None
+        self._pose_waiting=False
+        self._pose_ready_since=self._pose_ready_stamp=None
         self._tracking_inputs=deque(maxlen=128)
+
+    def configure_pose_input(self,timeout_s):
+        if isinstance(timeout_s,bool) or not math.isfinite(timeout_s) or timeout_s<=0:
+            raise ValueError('odometry_timeout_s must be finite and positive')
+        self._pose_timeout_s=float(timeout_s)
+        self._pose_waiting=True
+        self._pose_ready_since=self._pose_ready_stamp=None
+
+    def _pose_source_current(self,message,received_s,now_s):
+        if self._pose_timeout_s is None:return True,None
+        try:
+            stamp=message.header.stamp
+            source_ns=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
+            clock=self.ros_now_ns()
+            age=(clock-source_ns)/1e9
+            valid=(source_ns>0 and received_s is not None and
+                   (self._pose_clock_high_water is None or clock>=self._pose_clock_high_water) and
+                   (self._pose_source_high_water is None or source_ns>=self._pose_source_high_water) and
+                   0<=now_s-received_s<=self._pose_timeout_s and
+                   0<=age<=self._pose_timeout_s)
+            return valid,source_ns
+        except (ValueError,TypeError,AttributeError,OverflowError):return False,None
+
+    def _enter_pose_wait(self,*,reset=True):
+        if reset or not self._pose_waiting:
+            self._pose_ready_since=self._pose_ready_stamp=None
+        self._pose_waiting=True
+        self.session.offer_state(None)
+
+    def _apply_pose_input(self,message,received_s,now_s,transforms):
+        valid,stamp=self._pose_source_current(message,received_s,now_s)
+        if self._pose_timeout_s is not None:
+            clock=self.ros_now_ns()
+            fault=('POSE_CLOCK_ROLLBACK' if self._pose_clock_high_water is not None and clock<self._pose_clock_high_water else
+                   'POSE_SOURCE_ROLLBACK' if stamp is not None and self._pose_source_high_water is not None and stamp<self._pose_source_high_water else
+                   'POSE_FUTURE_FEEDBACK' if stamp is not None and stamp>clock else None)
+            self._pose_clock_high_water=max(clock,self._pose_clock_high_water or clock)
+            if fault:
+                self._pose_integrity_fault=self._pose_integrity_fault or fault
+                valid=False
+            if valid:self._pose_source_high_water=max(stamp,self._pose_source_high_water or stamp)
+        if not valid:
+            self._enter_pose_wait()
+            self._notice('ODOMETRY_WAITING','missing_or_stale_pose')
+            return
+        if message is None:return
+        try:value=state_from_odometry(message,transforms,self.map_frame)
+        except MissingTransform:
+            if self._pose_timeout_s is not None:self._enter_pose_wait()
+            else:self.session.offer_state(None)
+            raise
+        except (ValueError,AttributeError,TypeError):
+            if self._pose_timeout_s is not None:
+                self._pose_integrity_fault=self._pose_integrity_fault or 'INVALID_POSE_FEEDBACK'
+                self._enter_pose_wait()
+            else:self.session.offer_state(None)
+            raise
+        if self._pose_timeout_s is not None and self._pose_waiting:
+            if self._pose_ready_since is None:
+                self._pose_ready_since,self._pose_ready_stamp=now_s,stamp
+            # 沿用TCP稳定预检2秒，并要求真实源时间推进；不重标或插值定位。
+            if now_s-self._pose_ready_since<2. or stamp<=self._pose_ready_stamp:
+                self.session.offer_state(None)
+                return
+            self._pose_waiting=False
+            self._notice('ODOMETRY_RECOVERED','stable_pose_replanning')
+        self.session.offer_state(value)
 
     def enable_execution_contract(self,timeout_s=2.):
         self.execution_contract_enabled=True
@@ -72,6 +146,7 @@ class PlannerRuntime:
     def offer_odometry(self, message):
         with self._condition:
             self._odometry = message
+            self._odometry_received_s=time.monotonic()
             self._odometry_sequence += 1
             self._condition.notify_all()
 
@@ -144,18 +219,17 @@ class PlannerRuntime:
     def _tick_once(self, now_s):
         with self._condition:
             world, odometry = self._world, self._odometry
+            pose_received_s=self._odometry_received_s
             input_sequence, odometry_sequence = self._goal_sequence, self._odometry_sequence
             transforms = self._transforms.copy()
             tf_sequence = self._tf_sequence
             goals, self._goals = self._goals, deque()
         if world is not None:
             self.session.set_world(world)
-        if odometry is not None:
-            try:
-                self.session.offer_state(state_from_odometry(odometry, transforms, self.map_frame))
-            except (ValueError, AttributeError, TypeError) as exc:
-                self.session.offer_state(None)
-                self._notice('ODOMETRY_WAITING', exc)
+        if odometry is not None or self._pose_timeout_s is not None:
+            try:self._apply_pose_input(odometry,pose_received_s,now_s,transforms)
+            except (ValueError,AttributeError,TypeError) as exc:
+                self._notice('ODOMETRY_WAITING',exc)
         unresolved = []
         for sequence, kind, task_id, message in goals:
             if kind == 'cancel':
@@ -200,12 +274,18 @@ class PlannerRuntime:
         with self._condition:
             self._goals.extendleft(reversed(remaining))
         self._deliver_task_events()
+        if self._pose_integrity_fault is not None:
+            self.tasks.fail_tracking(self._pose_integrity_fault,now_s)
         if self.execution_contract_enabled:
             with self._condition:
                 tracking_inputs,self._tracking_inputs=self._tracking_inputs,deque(maxlen=128)
             for status,received_s in tracking_inputs:
-                self.tasks.offer_execution_status(status,received_s)
-            fault=self.tasks.check_execution_fault(now_s)
+                offered=self.tasks.offer_execution_status(status,received_s)
+                if (offered and self._pose_timeout_s is not None and status.state==0 and
+                        not status.accepted and status.reason=='WAITING_FOR_POSE' and
+                        0<=now_s-received_s<=self.tasks._feedback_timeout):
+                    self._enter_pose_wait(reset=False)
+            fault=self.tasks.check_execution_fault(now_s,pose_waiting=self._pose_waiting)
             if fault:self.tasks.fail_tracking(fault,now_s)
         packet = self.session.tick(now_s)
         proposal = self.tasks.observe(packet, now_s,
@@ -215,14 +295,20 @@ class PlannerRuntime:
         with self._condition:
             # 目标、最新测量和内部事件提交共享线性化点；不执行规划或外部回调。
             if not self._stopping and input_sequence == self._goal_sequence:
+                if self._pose_timeout_s is not None:
+                    try:self._apply_pose_input(self._odometry,self._odometry_received_s,time.monotonic(),self._transforms)
+                    except (ValueError,AttributeError,TypeError) as exc:odometry_error=exc
+                    if self.session.state is None:
+                        packet=self.session.tick(now_s)
+                        proposal=self.tasks.observe(packet,now_s,state_updated=False,defer_commit=True)
                 if proposal is not None and (odometry_sequence != self._odometry_sequence or
                                              tf_sequence != self._tf_sequence):
                     # 仅重做轻量位姿转换/纯观测，不因持续等价odom/TF而饿死反馈或终态。
                     # 越界/运动的新测量也须提交非终态提案，以清除旧的到达保持计时。
                     if self._odometry is not None:
                         try:
-                            self.session.offer_state(state_from_odometry(
-                                self._odometry, self._transforms, self.map_frame))
+                            self._apply_pose_input(self._odometry,self._odometry_received_s,
+                                                   time.monotonic(),self._transforms)
                         except (ValueError, AttributeError, TypeError) as exc:
                             self.session.offer_state(None)
                             odometry_error = exc
@@ -264,6 +350,11 @@ class PlannerRuntime:
         data = paths(packet.route, packet.candidate, self.ros_now_ns(), self.map_frame)
         # ROS 时间仅给本次 Path 定 t0；调度/轨迹年龄始终使用单调时钟。
         with self._condition:
+            if (self._pose_timeout_s is not None and not self._pose_source_current(
+                    self._odometry,self._odometry_received_s,time.monotonic())[0]):
+                self._enter_pose_wait()
+                packet=self.session.tick(now_s)
+                data=paths(None,None,self.ros_now_ns(),self.map_frame)
             if (not self._stopping and input_sequence == self._goal_sequence and
                     packet.generation == self.session.accepted_generation and
                     (packet.waiting or self.session.publication_current(packet))):

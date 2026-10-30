@@ -267,3 +267,29 @@ def test_pinned_terminal_reference_cannot_resume_after_catalog_rollover():
     assert not task.offer_execution_status(replace(status, stamp_ns=142), 6.8)
     assert task.offer_execution_status(replace(status, state=6, stamp_ns=143, reason='TERMINAL_FAILURE'), 6.9)
     assert task.check_execution_fault(6.9) == 'TERMINAL_FAILURE'
+
+
+def test_matched_pose_wait_heartbeat_preserves_goal_without_faking_acceptance():
+    session,Goal=make_session();task=NavigationTaskCoordinator(session)
+    task.configure_execution_feedback(required=True,timeout_s=2.)
+    task.submit('a',Goal(0,3,0),0.)
+    r=ref(task);task.register_execution_reference(r,0.)
+    waiting=ExecutionStatus(r.session_id,r.revision,r.path_digest,FOLLOW,0,False,1,'WAITING_FOR_POSE')
+    assert task.offer_execution_status(waiting,3.)
+    assert task.check_execution_fault(3.1) is None
+    assert task._execution_last_accepted is None
+    assert task.active.outcome is None and session.goal.y==3
+    assert task.check_execution_fault(5.1)=='EXECUTION_FEEDBACK_TIMEOUT'
+    assert task.offer_execution_status(replace(waiting,stamp_ns=2),6.)
+    assert task.offer_execution_status(replace(waiting,stamp_ns=3,reason='WAITING_FOR_FRESH_REFERENCE'),6.1)
+    assert task.check_execution_fault(7.9) is None
+    assert task.check_execution_fault(8.1)=='EXECUTION_FEEDBACK_TIMEOUT'
+
+
+def test_pose_wait_does_not_mask_real_failed_reference():
+    session,Goal=make_session();task=NavigationTaskCoordinator(session)
+    task.configure_execution_feedback(required=True);task.submit('a',Goal(0,3,0),0.)
+    r=ref(task);task.register_execution_reference(r,0.)
+    assert task.offer_execution_status(ExecutionStatus(r.session_id,1,r.path_digest,FOLLOW,6,False,1,'UNSAFE'),.1)
+    assert not task.offer_execution_status(ExecutionStatus(r.session_id,1,r.path_digest,FOLLOW,0,False,2,'WAITING_FOR_POSE'),.2)
+    assert task.check_execution_fault(.2)=='UNSAFE'
