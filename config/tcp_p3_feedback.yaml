@@ -7,3 +7,6 @@ odometry_timeout_s: 4.5
 p3_map_timeout_s: 6.0
 # 140*0.05=7s，覆盖4.5s历史前缀后仍留2.5s预测，不改变模型步长。
 mppi_time_steps: 140
+
+# 完整制动模型计入200ms计算包络；定位/地图/反馈超时保持原值。
+mppi_compute_envelope_s: 0.2
