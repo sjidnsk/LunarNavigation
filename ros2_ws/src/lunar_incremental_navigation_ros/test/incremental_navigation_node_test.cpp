@@ -1038,9 +1038,11 @@ TEST(IncrementalNavigationNode,
   auto handle = system.Send(5.5, 0.5);
   ASSERT_TRUE(handle);
   ASSERT_TRUE(WaitFor([&] {
+    const auto diagnostics = system.Diagnostics();
     return !system.FineStates().empty() && !system.GuidanceStates().empty() &&
            !system.StartPatches().empty() && !system.Diagnostics().empty() &&
-           !system.Paths().empty();
+           !system.Paths().empty() && !diagnostics.empty() &&
+           FindDiagnosticValue(diagnostics.back(), "reason_code") == "EXECUTING";
   }));
 
   const auto fine_states = system.FineStates();
