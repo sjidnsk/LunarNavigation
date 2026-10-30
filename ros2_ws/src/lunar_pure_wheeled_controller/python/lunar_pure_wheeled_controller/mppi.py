@@ -208,12 +208,18 @@ class MppiExecutor:
         holds=np.repeat([l+q for l,q in scenarios],len(first))
         transport=np.repeat([l for l,q in scenarios],len(first))
         poses,actual=self._rollout(state,controls,dt,delay_ticks=holds,history_delay_ticks=transport,project=False)
+        # 全部延迟场景仍已独立积分；仅完全相同的物理轨迹共享几何证明。
+        # 不按延迟大小推断包含关系，不近似合并，也不跨地图/状态缓存。
+        keys=np.concatenate((poses.reshape(len(poses),-1),actual.reshape(len(actual),-1)),axis=1)
+        _,keep,inverse=np.unique(keys,axis=0,return_index=True,return_inverse=True)
+        kinematic_valid=self._rollout_kinematic_valid
+        poses,actual=poses[keep],actual[keep]
         valid=self._stationary_supported(state,poses,actual)
         remaining=~valid
         if np.any(remaining):
             valid[remaining]=self.map.valid_motion(poses[remaining],actual[remaining],dt,p.execution_clearance_m)
-        valid &= self._rollout_kinematic_valid
         valid &= (abs(actual[:,-1,0])<=p.stopped_linear_mps) & (abs(actual[:,-1,1])<=p.stopped_angular_radps)
+        valid=valid[inverse] & kinematic_valid
         return valid.reshape(len(scenarios),len(first)).all(axis=0)
 
     def certify_publication(self,state,linear,angular,state_age_s):

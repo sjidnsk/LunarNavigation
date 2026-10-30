@@ -84,7 +84,7 @@ def test_worker_pending_tf_sameepoch_and_malformed_liveness():
             message.info.pose.orientation.z=np.sin(.1*index)
             message.info.pose.orientation.w=np.cos(.1*index)
             source.submit_map(message,4.+index);assert source.wait_idle()
-            assert source._store.source_resolution_m==pytest.approx(resolution)
+            assert source._source_resolution_m==pytest.approx(resolution)
             assert source.snapshot().received_at==4.+index
             assert source.snapshot().grid.states.shape==(500,500)
     finally:source.close()
@@ -193,7 +193,7 @@ def test_full_body_map_delayed_braking_tail_reaches_intrinsic_wall():
     assert not follower.certify_publication(state,0.,0.,.1)
 
 
-def test_slow_publication_recertification_covers_current_ros_age(monkeypatch):
+def test_slow_publication_recertification_expires_without_chasing_current_ros_age(monkeypatch):
     from types import SimpleNamespace as S
     from nav_msgs.msg import Odometry,Path
     from geometry_msgs.msg import PoseStamped
@@ -223,8 +223,12 @@ def test_slow_publication_recertification_covers_current_ros_age(monkeypatch):
             if len(ages)==1:clock[0]+=100_000_000
             return True
         monkeypatch.setattr(node._executor,'certify_publication',certify)
+        rejected=[];published=[]
+        monkeypatch.setattr(node,'_standard_unavailable',lambda reason,**kw:rejected.append(reason))
+        monkeypatch.setattr(node,'_publish_twist',lambda *a:published.append(a))
         node._tick()
-        assert len(ages)==2 and ages[-1]>=.2
+        assert len(ages)==1 and ages[0]>=.1
+        assert rejected==['publication_certificate_expired'] and not published
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()
@@ -326,7 +330,17 @@ def test_r7_fractional_p3_native_map_and_zero_history_stop():
         message.data[0].data=h.ravel(order='F').tolist()
         source.set_center(x,y);source.submit_map(message,1.);assert source.wait_idle()
         assert source.error is None
-        grid=source.snapshot().grid;world=source._world
+        grid=source.snapshot().grid
+        # 原生地图已由子进程独占；独立重建参考，不从生产源导出累计私有状态。
+        from ament_index_python.packages import get_package_prefix
+        from nav1cm.p3_map import P3MapStore
+        from nav1cm.terrain_native import WheelTerrainCapability
+        import hashlib
+        native_prefix=Path(get_package_prefix('lunar_nav1cm_planner'))/'lib'
+        reference_store=P3MapStore(library_path=native_prefix/'libnav1cm_terrain.so',
+            capability=WheelTerrainCapability.from_mapping(capability))
+        try:world=reference_store.apply(message)
+        finally:reference_store._terrain.close()
         reference=center_support(world,x,y,body_length_m=1.182,body_width_m=.818,
                                  minimum_clearance_m=capability["minimum_clearance_m"])
         np.testing.assert_array_equal(grid.states,reference.cells+1)
@@ -344,8 +358,8 @@ def test_r7_fractional_p3_native_map_and_zero_history_stop():
             planner_digest=planner.digest(),free_rectangles=len(world.known_free),
             states=dict(zip(*[a.tolist() for a in np.unique(grid.states,return_counts=True)])),
             eligible=int(grid.eligible.sum()),center_state=int(grid.states[250,250]),
-            certified_stop=bool(certified),terrain_sha=source._store._terrain.library_sha256,
-            field_sha=source._backend.library_sha256)))
+            certified_stop=bool(certified),terrain_sha=hashlib.sha256((native_prefix/'libnav1cm_terrain.so').read_bytes()).hexdigest(),
+            field_sha=hashlib.sha256((native_prefix/'libnav1cm_distance_field.so').read_bytes()).hexdigest())))
         assert grid.origin==(x-2.5,y-2.5)
         assert grid.states[250,250]==1
         assert certified
