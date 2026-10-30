@@ -32,7 +32,8 @@ def test_open_corner_preserves_identity_endpoints_and_immutable_arrays():
     np.testing.assert_array_equal(result.route.points[[0, -1]], raw.points[[0, -1]])
     np.testing.assert_array_equal(raw.points, ((0, 0), (2, 0), (2, 2)))
     assert np.all(np.linalg.norm(np.diff(result.route.points, axis=0), axis=1) > 0)
-    assert np.max(np.linalg.norm(np.diff(result.route.points, axis=0), axis=1)) <= .05 + 1e-12
+    curved = result.route.points[1:-1]
+    assert np.max(np.linalg.norm(np.diff(curved, axis=0), axis=1)) <= .05 + 1e-12
     for array in (result.route.points, result.proof_boxes):
         with pytest.raises(ValueError):
             array.setflags(write=True)
@@ -187,3 +188,16 @@ def test_unrepresentable_trim_at_large_origin_keeps_original_route():
     raw = route(((1e16, 0), (1e16 + 4, 0), (1e16 + 4, 4)))
     result = shape(raw)
     assert result.route is raw and not result.changed and not len(result.proof_boxes)
+
+
+def test_long_straight_connectors_do_not_consume_curve_point_budget():
+    raw = route(((0, 0), (750, 0), (750, 2)))
+    result = shape(raw)
+    assert result.changed
+    assert len(result.route.points) < 100
+    np.testing.assert_array_equal(result.route.points[[0, -1]], raw.points[[0, -1]])
+    np.testing.assert_array_equal(result.route.points[1], (749.5, 0))
+    np.testing.assert_array_equal(result.route.points[-2], (750, .5))
+    curved = result.route.points[1:-1]
+    assert np.max(np.linalg.norm(np.diff(curved, axis=0), axis=1)) <= .05 + 1e-12
+    assert api().reference_clear(result, np.empty((0, 4)))

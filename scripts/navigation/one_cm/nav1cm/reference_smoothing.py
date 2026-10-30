@@ -92,16 +92,8 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
         output.append(point)
 
     def line_to(point):
-        check()
-        start = output[-1]
-        distance = np.linalg.norm(point - start)
-        if not np.isfinite(distance):
-            raise _Exhausted("NUMERICAL_LIMIT")
-        count = max(1, int(np.ceil(distance / step_m)))
-        if len(output) + count > max_points:
-            raise _Exhausted("POINT_LIMIT")
-        for k in range(1, count + 1):
-            append(point if k == count else start + (point - start) * (k / count))
+        # 直线单边就是精确连续表示；仅曲线叶受 step_m 采样长度限制。
+        append(point)
 
     def certify(a, control, b, depth=0):
         nonlocal subdivisions
