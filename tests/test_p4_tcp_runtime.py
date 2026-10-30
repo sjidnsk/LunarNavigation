@@ -30,13 +30,10 @@ def test_input_bridge_preserves_messages_stamps_and_latched_tf():
     assert subscriptions[-1][0]=='/tf_static' and subscriptions[-1][2]=='latched-static'
 
 
-@pytest.mark.parametrize('command_age,telemetry_age,status_age,accepted,state,expected',[
-    (.1,.1,.1,True,1,True),(.51,.1,.1,True,1,False),
-    (.1,.51,.1,True,1,False),(.1,.1,1.01,True,1,False),
-    (.1,.1,.1,False,0,False),(.1,.1,.1,True,6,False),
-    (-.1,.1,.1,True,1,False)])
-def test_relay_does_not_accept_stale_or_failed_input(command_age,telemetry_age,status_age,accepted,state,expected):
-    assert command_ready(command_age,telemetry_age,status_age,accepted,state)==expected
+@pytest.mark.parametrize('command_age,telemetry_age,expected',[
+    (.1,.1,True),(.51,.1,False),(.1,.51,False),(-.1,.1,False)])
+def test_relay_rejects_transport_gaps(command_age,telemetry_age,expected):
+    assert command_ready(command_age,telemetry_age)==expected
 
 
 def test_tf_output_accepts_reliable_rviz_without_changing_source_subscription():

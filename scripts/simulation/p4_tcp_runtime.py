@@ -35,9 +35,9 @@ def input_bridge(source,target,classes,qos):
     return handles
 
 
-def command_ready(command_age,telemetry_age,status_age,accepted,state):
-    return (0<=command_age<=.5 and 0<=telemetry_age<=.5 and
-            0<=status_age<=1. and accepted and state!=6)
+def command_ready(command_age,telemetry_age):
+    # 平台只检查传输活性，不重新解释规划参考的接管状态。
+    return 0<=command_age<=.5 and 0<=telemetry_age<=.5
 
 
 def main():
@@ -60,7 +60,6 @@ def main():
     from grid_map_msgs.msg import GridMap
     from tf2_msgs.msg import TFMessage
     from std_msgs.msg import Bool,String
-    from lunar_planning_msgs.msg import TrackingStatus
     from lunar_car_ctrl.msg import VehicleTelemetry
     contexts=[];nodes=[];executors=[];children=[];logs=[];stopping=[False]
     for domain,name in [(P3_SOURCE_DOMAIN,'p4_p3_input_reader'),(CONTROL_DOMAIN,'p4_tcp_runtime')]:
@@ -113,7 +112,6 @@ def main():
             lease=target.create_publisher(Bool,'/car/external_control_lease',10)
             mode=target.create_publisher(String,'/car/set_mode',10)
             def store(key,msg):latest[key]=(time.monotonic(),msg)
-            handles.append(target.create_subscription(TrackingStatus,PREFIX+'/tracking_status',lambda msg:store('tracking',msg),qos['odom']))
             handles.append(target.create_subscription(VehicleTelemetry,'/car/telemetry',lambda msg:store('telemetry',msg),qos['odom']))
             def command(msg):
                 nonlocal armed,forwarded
@@ -122,8 +120,8 @@ def main():
                     park();raise RuntimeError('invalid_or_over_limit_controller_command')
                 store('command',msg)
                 if abs(v)+abs(w)<1e-7:vel.publish(msg);return
-                telemetry=latest.get('telemetry');status=latest.get('tracking')
-                if not telemetry or not status or not command_ready(0.,now-telemetry[0],now-status[0],status[1].reference_accepted,status[1].state):
+                telemetry=latest.get('telemetry')
+                if not telemetry or not command_ready(0.,now-telemetry[0]):
                     park();return
                 if not armed:mode.publish(String(data='auto'));armed=True
                 vel.publish(msg);forwarded+=1
@@ -137,8 +135,8 @@ def main():
                 raise RuntimeError('navigation_group_exited')
             if lease is not None:
                 lease.publish(Bool(data=True));now=time.monotonic()
-                cmd=latest.get('command');tel=latest.get('telemetry');status=latest.get('tracking')
-                if not (cmd and tel and status and command_ready(now-cmd[0],now-tel[0],now-status[0],status[1].reference_accepted,status[1].state)):
+                cmd=latest.get('command');tel=latest.get('telemetry')
+                if not (cmd and tel and command_ready(now-cmd[0],now-tel[0])):
                     park()
             if time.monotonic()-last_report>=5.:
                 last_report=time.monotonic()

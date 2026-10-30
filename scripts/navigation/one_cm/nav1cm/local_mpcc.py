@@ -370,7 +370,6 @@ class MpccPlanner:
             sign=-1 if mode=='reverse' else 1
             if np.min(sign*xs[:,3]) < -1e-9: return 'MODE'
             if l.motion_model=='curvature_limited' and np.any(np.abs(xs[:,4])>l.curvature_inv_m*np.abs(xs[:,3])+1e-9): return 'CURVATURE'
-            if xs[-1,5]-xs[0,5]<.005: return 'NO_PROGRESS'
         if np.any(xs[:,5]+xs[:,3]**2/(2*l.linear_accel_mps2)>end+1e-6): return 'REFERENCE_BRAKING_BOUND'
         for z in xs:
             for offset in self.offsets:

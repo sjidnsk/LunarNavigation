@@ -67,7 +67,7 @@ def test_new_feedback_cannot_renew_the_state_used_by_this_calculation():
 
 @pytest.mark.parametrize('reason,retryable,expected_state',[
     ('publication_certificate_expired',True,1),('map_changed_during_certification',True,1),
-    ('missing_or_stale_feedback',False,0),('latest_map_or_aged_motion_unsafe',False,6)])
+    ('missing_or_stale_feedback',False,0),('missing_or_stale_map',False,0),('latest_map_or_aged_motion_unsafe',False,6)])
 def test_candidate_invalidation_is_not_a_permanent_tracking_failure(reason,retryable,expected_state):
     import json
     emitted=[];statuses=[];diagnostics=[];discarded=[]
@@ -209,15 +209,17 @@ def test_input_fault_uses_current_offered_identity_but_execution_failure_keeps_a
     statuses=[];active=object();offered=object()
     n=S(_execution_offered=offered,
         _executor=S(failure='UNSAFE' if hard_failure else None,last_execution_state=0,
-                    execution_reference=active,discard_prediction=lambda:None),
+                    execution_reference=active,discard_prediction=lambda:None,
+                    _stop_reason='WAITING_FOR_POSE',wait_for_pose=lambda:None),
         _mppi_diagnostics=S(publish=lambda msg:None),_publish_twist=lambda:None,
         _publish_execution_status=lambda **kw:statuses.append(kw))
+    n._standard_pose_wait=lambda reason='WAITING_FOR_POSE':PureWheeledControllerNode._standard_pose_wait(n,reason)
     PureWheeledControllerNode._standard_unavailable(n,'missing_or_stale_map')
     status=statuses[-1]
-    assert status['state_code']==6
     if hard_failure:
-        assert status.get('reference',active) is active and status['reason'].endswith('UNSAFE')
+        assert status['state_code']==6 and status.get('reference',active) is active and status['reason'].endswith('UNSAFE')
     else:
+        assert status['state_code']==0 and status['reason']=='WAITING_FOR_MAP'
         assert status['reference'] is offered and status['accepted'] is False
 
 

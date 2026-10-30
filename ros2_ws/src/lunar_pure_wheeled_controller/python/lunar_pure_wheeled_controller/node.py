@@ -27,7 +27,7 @@ from .incremental_path import ParsedIncrementalPath, parse_incremental_path
 from .reference import ParsedReference, parse_reference
 from .tracking import TrackingPolicy, TrackingState, track_trajectory
 from .execution import PathExecutor
-from .motion_configuration import p3_map_receipt_expired
+from .motion_configuration import p3_map_receipt_expired,input_disposition
 
 
 def map_input_qos(reliability, durability):
@@ -544,7 +544,7 @@ class PureWheeledControllerNode(Node):
         if not getattr(self,'_execution_enabled',False):return
         if reference is None:
             waiting=(self._executor.failure is None and
-                     self._executor._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'))
+                     self._executor._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'))
             reference=(self._execution_offered if waiting else None) or self._executor.execution_reference or self._execution_offered
             if waiting and accepted is None:accepted=False
         if reference is None:return
@@ -761,7 +761,7 @@ class PureWheeledControllerNode(Node):
             return self._standard_unavailable(self._executor.failure)
         reference=getattr(self,'_execution_offered',None) or self._executor.execution_reference
         self._executor.wait_for_pose()
-        if self._executor._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+        if self._executor._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'):
             self._executor._stop_reason=reason
         self._active=None;self._path_received_at=None;self._last_control_ns=None
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(event='input_wait',
@@ -771,13 +771,11 @@ class PureWheeledControllerNode(Node):
 
     def _standard_unavailable(self,reason,*,retryable=False):
         failure=getattr(self._executor,'failure',None)
-        if failure is None and reason in (
-                'missing_or_stale_feedback','stale_source_feedback',
-                'stale_feedback_after_optimization','stale_feedback_during_recertification',
-                'stale_feedback_after_certification'):
-            return self._standard_pose_wait()
-        retryable=(retryable and failure is None and
-                   getattr(self._executor,'last_execution_state',0)!=6)
+        disposition=input_disposition(reason,
+            hard_failure=failure is not None or getattr(self._executor,'last_execution_state',0)==6)
+        if disposition in ('WAITING_FOR_POSE','WAITING_FOR_MAP'):
+            return self._standard_pose_wait(disposition)
+        retryable=disposition=='RECOMPUTE'
         if failure is not None:reason=failure
         # 零目标是未知运动时的保底请求，不能当作有界制动认证或实测停车。
         self._executor.discard_prediction()
@@ -813,7 +811,7 @@ class PureWheeledControllerNode(Node):
         source_ns=self._standard_state_ns
         if now_ns<source_ns:return self._standard_unavailable('future_feedback')
         if self._active is None and getattr(self._executor,'_stop_reason',None) in (
-                'WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+                'WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'):
             return self._standard_pose_wait('WAITING_FOR_FRESH_REFERENCE')
         dt=.05 if self._last_control_ns is None else (now_ns-self._last_control_ns)/1e9
         self._last_control_ns=now_ns

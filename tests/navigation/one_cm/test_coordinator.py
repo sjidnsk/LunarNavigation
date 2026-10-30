@@ -109,16 +109,15 @@ def test_goal_later_blocked_brakes_real_motion(setup):
     assert result.candidate.states[-1, 3] == pytest.approx(0.)
 
 
-def test_stall_triggers_once_but_yaw_progress_does_not(setup):
-    world, runner, _, c = setup
-    c.local_period_s = .05
-    c.stall_timeout_s = .2
-    c.tick(world, VehicleState(0, 0, 0, 0, 0), (3, 0), 0)
-    runner.ready = True
-    c.tick(world, VehicleState(0, 0, 0, 0, 0), (3, 0), .05)
-    r = c.tick(world, VehicleState(0, 0, 0, 0, 0), (3, 0), .3)
-    assert 'NO_PROGRESS' in [e.get('reason') for e in r.events]
-    assert c.tick(world, VehicleState(0, 0, .03, 0, .1), (3, 0), .6).status != 'NO_CERTIFIED_ACTION'
+def test_stationary_robot_uses_periodic_replanning_without_stall_clock(setup):
+    world,runner,_,c=setup;c.local_period_s=.05;c.global_period_s=10.
+    c.tick(world,VehicleState(0,0,0,0,0),(3,0),0.)
+    runner.ready=True;c.tick(world,VehicleState(0,0,0,0,0),(3,0),.05)
+    r=c.tick(world,VehicleState(0,0,0,0,0),(3,0),5.)
+    assert 'NO_PROGRESS' not in [e.get('reason') for e in r.events]
+    assert len(runner.requests)==1
+    c.tick(world,VehicleState(0,0,0,0,0),(3,0),10.1)
+    assert runner.requests[-1]['request_reason']=='PERIODIC'
 
 
 def test_worker_restores_immutable_route(setup):

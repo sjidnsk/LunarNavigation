@@ -244,7 +244,7 @@ class StandardPathFollower(MppiPathFollower):
         previous=self._stop_reason
         self.request_stop('WAITING_FOR_POSE')
         if previous is not None and previous not in (
-                'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH','WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+                'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH','WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'):
             self._stop_reason=previous
         self._retire_execution_geometry()
         self.phase='WAITING';self.last_execution_state=0
@@ -333,7 +333,7 @@ class StandardPathFollower(MppiPathFollower):
                 new_session=active is None or active.session_id!=requested.session_id
                 extension=self._alignment_extension(state,geometry,active,requested)
                 continuous_align=extension is not None
-                recovering=self._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE')
+                recovering=self._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE')
                 needs_stop=new_session or requested.intent!=0 or recovering
                 certified=(self._execution_certified(state,dt,now_s,state_age_s)
                     if needs_stop else True)
@@ -355,7 +355,7 @@ class StandardPathFollower(MppiPathFollower):
                 if requested.intent!=0 and not continuous_align:
                     self._retire_execution_geometry()
                     if self._stop_reason in (None,'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH',
-                                             'WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+                                             'WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'):
                         self._stop_reason=None
                 if requested.intent==3 and not continuous_align:
                     # 退休旧平移屏障，保留新终端参考中的有序旋转和跨界方向。
@@ -372,7 +372,7 @@ class StandardPathFollower(MppiPathFollower):
                 self._execution_pending=None
                 # 只有配对参考实际接管才结束传输等待；手动停止与任务故障另行保留。
                 if requested.intent==0 and self._stop_reason in (
-                        'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH','WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+                        'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH','WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'):
                     self._stop_reason=None
             if self.failure is not None:
                 result=self._stop(state,dt,now_s,state_age_s)

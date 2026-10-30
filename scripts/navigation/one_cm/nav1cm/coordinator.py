@@ -32,7 +32,7 @@ class CycleResult:
 class NavigationCoordinator:
     def __init__(self, planner, *, runner=None, limits=None, backend=None,
                  allow_unknown=False, local_period_s=.05, global_period_s=1.,
-                 global_budget_s=1., clearance_radius_m=.9, stall_timeout_s=4., field_backend=None,
+                 global_budget_s=1., clearance_radius_m=.9, field_backend=None,
                  revalidate_current_map=False):
         self.planner = planner
         self.runner = GlobalWorker() if runner is None else runner
@@ -42,7 +42,6 @@ class NavigationCoordinator:
         self.local_period_s, self.global_period_s = local_period_s, global_period_s
         self.global_budget_s = global_budget_s
         self.clearance_radius_m = self.limits.global_clearance_radius(clearance_radius_m)
-        self.stall_timeout_s = stall_timeout_s
         self.goal_tolerance_m = .1
         self.goal_position_target_m = None
         self.goal_yaw_tolerance_rad = .05
@@ -55,9 +54,6 @@ class NavigationCoordinator:
         self._next_local = self._next_global = -float('inf')
         self._version = 0
         self._pending_reason = 'INITIAL'
-        self._motion = None
-        self._motion_s = 0.
-        self._stalled = False
         self._field_cache = DistanceFieldCache(backend=field_backend)
         self._goal_checker = AdaptiveGlobalPlanner(self.limits, self.clearance_radius_m)
         # 原型默认严格 epoch 身份；P3 持续更新地图时显式开启当前图重验。
@@ -120,7 +116,6 @@ class NavigationCoordinator:
             self._goal, self._goal_yaw = goal, yaw
             self.route = self.progress = None
             self._pending_reason = 'GOAL_CHANGED'
-            self._motion = None
         if generation is not None:
             self._accepted_goal_generation = generation
 
@@ -198,11 +193,6 @@ class NavigationCoordinator:
             events.append({'kind': 'UNKNOWN_POLICY_CHANGED', 'allow_unknown': self.allow_unknown})
         self._epoch, self._policy = world.epoch, self.allow_unknown
         motion = np.array([state.x, state.y, state.yaw, state.v, state.w])
-        if self._motion is None or np.linalg.norm(motion[:2]-self._motion[:2]) > .015 or abs(motion[2]-self._motion[2]) > .015 or np.linalg.norm(motion[3:]-self._motion[3:]) > .015:
-            self._motion, self._motion_s, self._stalled = motion, now_s, False
-        elif self.route is not None and now_s-self._motion_s >= self.stall_timeout_s and not self._stalled:
-            self._pending_reason, self._stalled = 'NO_PROGRESS', True
-            events.append({'kind': 'REPLAN_REQUIRED', 'reason': 'NO_PROGRESS'})
         global_result = None
         try:
             raw = self.runner.poll()
