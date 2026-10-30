@@ -1,4 +1,4 @@
-"""P3 GridMap/Odometry/TF/PoseStamped → 两条标准 nav_msgs/Path。"""
+"""P3 GridMap/Odometry/TF/PoseStamped → 原始路线、几何参考和局部轨迹三条标准 nav_msgs/Path。"""
 from dataclasses import fields
 import math
 import os

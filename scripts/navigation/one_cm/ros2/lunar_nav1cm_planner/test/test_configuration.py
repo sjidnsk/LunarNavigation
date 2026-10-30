@@ -22,7 +22,7 @@ def test_wheel_yaml_drives_full_limits_then_explicit_overrides():
     assert same_terrain == capability
 
 
-def test_package_installs_core_native_config_and_uses_only_two_path_outputs():
+def test_package_installs_core_native_config_and_three_path_outputs():
     assert (PACKAGE / 'CMakeLists.txt').exists(), '独立 ament 安装包尚未实现'
     cmake = (PACKAGE / 'CMakeLists.txt').read_text(encoding='utf-8')
     assert 'ament_python_install_package(nav1cm' in cmake
@@ -32,5 +32,5 @@ def test_package_installs_core_native_config_and_uses_only_two_path_outputs():
     assert (PACKAGE / 'launch/planner.launch.py').exists()
     node = (PACKAGE / 'lunar_nav1cm_planner/node.py').read_text(encoding='utf-8')
     assert 'Car_Cmd_Vel' not in node and 'verification_plant' not in node
-    assert node.count('create_publisher(') == 3
+    assert node.count('create_publisher(') == 4
     assert 'execution_contract_enabled' in node
