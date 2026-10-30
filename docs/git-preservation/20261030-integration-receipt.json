@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-30",
+  "public_acceptance_commit": "773828f9ad0271436a97fc741ffdc3792a3dce75",
+  "drl_owner_and_main_product_acceptance_commit": "f5e8e9a68b395a30810fd7f2df0872715dba9316",
+  "accepted_source": "04f6b129c5815d69093f986dc73b06b7125d8382",
+  "product_tree_exact_to_source": true,
+  "unchanged_refs": {
+    "app/orin-legged-vehicle": "ff75f527d4a45c424f9b1e624f143e3668000ec6",
+    "app/orin-real-vehicle": "a86b9cbf2125337de54d99193f1f1b383fe383a8",
+    "app/orin-unreal-simulation": "2d9a8ce1620d951f110c36ab13e59d3bb478df16",
+    "dev/terrain-confidence": "44acb7bff4aaca6a18b3ba8b686226a56b00e743",
+    "hk/paper-five-methods-20261028": "6803781cc02fe725d7b19e0d4cde187de1cd724b",
+    "hk/protected-main-working-20261029": "1532cf0981a2665b70d8c0f2a8ff2eb420d54e73",
+    "hk/drl-integration-20261029": "04f6b129c5815d69093f986dc73b06b7125d8382"
+  },
+  "protected_status_sha256": "1737eb952c8d8b0ecc730e8ecf4bbc0e265f3fbc26605dac6dc3885dc0f31838",
+  "formal_manifest_blob": "64754fd7833be6e837d05f90465d12d48f83ad17",
+  "tests_build_runtime_this_integration": "NOT_RUN per user request; existing evidence reused",
+  "source_branch_disposition": "adopted; retained pending ignored-resource audit and explicit cleanup authorization",
+  "remote_push_deployment": "NOT_RUN"
+}

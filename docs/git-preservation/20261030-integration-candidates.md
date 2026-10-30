@@ -1,5 +1,7 @@
 # 2026-10-30 围绕主集成线的合入候选
 
+> 当前续办：用户已批准①②并完成本地落地，公共提交773828f，DRL owner合并与main晋级提交f5e8e9a；见[落地记录](20261030-integration-landing.md)。以下保留合入前资格审查快照与当时计数，不再表示①②待合入。
+
 任务沿用GIT-PRESERVE-20261029，owner integration/pure-planner-orin；单写入者，复用治理工作树。本文是本次合入资格与批次审查，不移动产品分支，不启动新测试、导航、Actor、训练或Isaac。
 
 ## 当前基线
