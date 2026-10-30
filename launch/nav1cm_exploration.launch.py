@@ -17,6 +17,7 @@ DEFAULTS = {
     "action_name": "/Car/T4/navigation/navigate_to_pose",
     "goal_topic": "/Car/T4/navigation/goal",
     "global_route_topic": "/Car/T4/planning/global_route", "local_path_topic": "/Car/T4/planning/local_path",
+    "execution_reference_topic":"/Car/T4/control/path_execution_reference", "tracking_status_topic":"/Car/T4/control/tracking_status",
     "exploration_map_topic": "/Car/T4/mapping/exploration_map",
     "policy_map_service": "/Car/T4/mapping/get_policy_map",
     "task_topic": "/Car/T4/exploration/task", "status_topic": "/Car/T4/exploration/status",
@@ -55,6 +56,8 @@ def _compose(context):
             "coarse_resolution_m": float(values["coarse_resolution_m"])}),
         node("lunar_nav1cm_planner", "navigation_task_node", {
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
+            "execution_contract_enabled":values["enable_controller"]=="true",
+            "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
             **{k: values[k] for k in ("action_name","goal_topic","global_route_topic","local_path_topic","build_dir")},
             "allow_unknown": False}),
     ]
@@ -74,6 +77,8 @@ def _compose(context):
         actions.append(node("lunar_pure_wheeled_controller", "lunar_pure_wheeled_controller_node.py", {
             **frames, **qos, **{k: values[k] for k in ("odometry_topic","tf_topic","tf_static_topic","command_topic")},
             "platform_config": config, "input_mode": "incremental_path", "controller_backend": "mppi_path_follower",
+            "execution_contract_enabled":True,
+            "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
             "standard_map_source": "direct_p3", "p3_map_topic": values["map_topic"],
             "path_topic": values["local_path_topic"], "mppi_diagnostics_topic": values["diagnostics_topic"],
             "mppi_nominal_response_time_s": .15, "allow_unknown": False}))

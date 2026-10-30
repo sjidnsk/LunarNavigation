@@ -48,6 +48,7 @@ class TrackingPolicy:
     stopped_angular_radps: float = 0.03
     no_progress_timeout_s: float = 15.0
     allow_reverse: bool = True
+    motion_model: str = "curvature_limited"
 
 
 @dataclass(frozen=True)
@@ -89,8 +90,9 @@ def _finite_state(state: TrackingState) -> bool:
 
 def _valid_policy(policy: TrackingPolicy) -> bool:
     try:
-        values = [getattr(policy, f.name) for f in fields(TrackingPolicy) if f.name != "allow_reverse"]
-        return (all(math.isfinite(float(value)) and float(value) > 0.0 for value in values)
+        values = [getattr(policy, f.name) for f in fields(TrackingPolicy) if f.name not in ("allow_reverse", "motion_model")]
+        return (all(not isinstance(value, (str, bool)) and math.isfinite(float(value)) and float(value) > 0.0 for value in values)
+                and policy.motion_model in ("curvature_limited", "differential_drive")
                 and isinstance(policy.allow_reverse, bool)
                 and policy.alignment_tolerance_rad < policy.rotate_enter_rad < math.pi
                 and policy.reverse_heading_threshold_rad <= math.pi

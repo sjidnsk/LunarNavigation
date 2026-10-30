@@ -25,6 +25,7 @@ def test_navigation_only_and_shared_limits():
     assert planner['map_topic']==follower['p3_map_topic']=='/private/map'
     assert planner['local_path_topic']==follower['path_topic']=='/private/path'
     assert planner['angular_speed_rps']==follower['max_angular_radps']==1.0
+    assert planner['motion_model']==follower['motion_model']=='differential_drive'
     assert planner['goal_yaw_tolerance_rad']==follower['goal_yaw_tolerance_rad']==0.05
     for key in ('tf_topic','tf_static_topic','map_frame','allow_unknown','odometry_topic'): assert planner[key]==follower[key]
     assert follower['mppi_nominal_response_time_s']==0.15

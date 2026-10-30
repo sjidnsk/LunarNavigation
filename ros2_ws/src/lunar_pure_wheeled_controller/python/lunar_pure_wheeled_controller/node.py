@@ -114,6 +114,8 @@ class PureWheeledControllerNode(Node):
             "mppi_compute_budget_s": 0.04,
             "mppi_nominal_response_time_s": TrackingPolicy().control_response_time_s,
             "mppi_trace_diagnostics": False,
+            "execution_contract_enabled":False,
+            "execution_reference_topic":"/Car/T4/control/path_execution_reference",
             "mppi_simulation_step_sync": False,
             "mppi_step_ack_topic": "/Car/T4/control/mppi_step_ack",
             "enable_rolling_updates": True,
@@ -164,6 +166,9 @@ class PureWheeledControllerNode(Node):
         if self._backend not in {"pure_pursuit", "mppi", "mppi_path_follower"}:
             raise ValueError("controller_backend must be pure_pursuit, mppi or mppi_path_follower")
         self._standard_mode = self._backend == "mppi_path_follower" and input_mode == "incremental_path"
+        self._execution_enabled=self.get_parameter('execution_contract_enabled').value
+        if type(self._execution_enabled) is not bool or (self._execution_enabled and not self._standard_mode):
+            raise ValueError('execution contract requires standard Path MPPI')
         if self._is_mppi and input_mode != "incremental_reference" and not self._standard_mode:
             raise ValueError("mppi requires incremental_reference")
         self._map_frame = self.get_parameter("map_frame").value
@@ -181,6 +186,8 @@ class PureWheeledControllerNode(Node):
                 topic_parameters.extend(
                     ["path_reference_topic", "tracking_status_topic"]
                 )
+        if self._execution_enabled:
+            topic_parameters.extend(['execution_reference_topic','tracking_status_topic'])
         topics = {
             name: self._absolute_topic_name(name, self.get_parameter(name).value)
             for name in topic_parameters
@@ -199,6 +206,7 @@ class PureWheeledControllerNode(Node):
             if not platform_path:
                 from ament_index_python.packages import get_package_share_directory
                 platform_path=str(FilePath(get_package_share_directory('lunar_nav1cm_planner'))/'config/wheel.yaml')
+        capability = {}
         if platform_path:
             capability = yaml.safe_load(
                 FilePath(platform_path).read_text(encoding="utf-8")
@@ -221,6 +229,9 @@ class PureWheeledControllerNode(Node):
             for name,value in dict(max_angular_radps=1.,goal_position_tolerance_m=.1,goal_yaw_tolerance_rad=.05,stopped_angular_radps=.01).items():
                 if name not in self._parameter_overrides:
                     policy_values[name]=min(value,float(capability[names[name]])) if platform_path and name in names else value
+        from lunar_pure_wheeled_controller.motion_configuration import resolve_motion_model
+        policy_values['motion_model']=resolve_motion_model(capability,policy_values['motion_model'],
+            standard_path=self._standard_mode,explicit='motion_model' in self._parameter_overrides)
         self._policy = TrackingPolicy(**policy_values)
         if self._standard_mode:
             from nav1cm.contracts import resolve_minimum_clearance
@@ -291,9 +302,15 @@ class PureWheeledControllerNode(Node):
         self._last_control_ns = None
         self._tracking_status = (
             self.create_publisher(TrackingStatus, topics["tracking_status_topic"], 10)
-            if self._input_mode == "incremental_reference"
+            if self._input_mode == "incremental_reference" or self._execution_enabled
             else None
         )
+        if self._execution_enabled:
+            from lunar_planning_msgs.msg import PathExecutionReference
+            from .execution_pairing import ExecutionInbox
+            self._execution_inbox=ExecutionInbox()
+            self._execution_offered=None
+            self.create_subscription(PathExecutionReference,topics['execution_reference_topic'],self._on_execution_reference,10)
         control_rate_hz = float(self.get_parameter("control_rate_hz").value)
         if not isfinite(control_rate_hz) or control_rate_hz <= 0.0:
             raise ValueError("control_rate_hz must be finite and greater than zero")
@@ -421,6 +438,14 @@ class PureWheeledControllerNode(Node):
     def _on_path(self, path: Path) -> None:
         parsed = parse_incremental_path(path, self._map_frame)
         if self._standard_mode:
+            if self._execution_enabled:
+                from nav1cm.execution_contract import path_fingerprint
+                from nav1cm.execution_ros import stamp_ns
+                if parsed.reason is not None:
+                    self.request_controlled_stop(parsed.reason);return
+                self._execution_inbox.add_path(stamp_ns(path.header),path_fingerprint(path),parsed,monotonic())
+                self._try_execution_pair()
+                return
             if parsed.clear or parsed.reason is not None:
                 self.request_controlled_stop(parsed.reason or "EMPTY_PATH")
                 return
@@ -437,6 +462,51 @@ class PureWheeledControllerNode(Node):
         self._executor.set_path(
             parsed.path_xy_yaw, identity=("plain", self._path_sequence)
         )
+
+    def _on_execution_reference(self,message):
+        from nav1cm.execution_ros import reference_from_message
+        try:
+            reference=reference_from_message(message)
+            now=self.get_clock().now().nanoseconds
+            if message.header.frame_id!=self._map_frame or reference.stamp_ns>now or now-reference.stamp_ns>self._path_timeout_s*1e9:
+                return
+            if not self._execution_inbox.add_reference(reference,monotonic()):return
+            actual=self._executor.execution_reference
+            if (actual is None or actual.session_id!=reference.session_id or reference.intent in (1,2,4)
+                    or (reference.intent==3 and actual.intent!=3)):
+                # 安全停车意图可先执行；几何接管仍必须等严格配对。
+                self.request_controlled_stop('EXECUTION_PAIR_WAIT')
+            self._try_execution_pair()
+        except (ValueError,TypeError,AttributeError,OverflowError):
+            self.request_controlled_stop('INVALID_EXECUTION_REFERENCE')
+
+    def _try_execution_pair(self):
+        matched=self._execution_inbox.pop_ready(monotonic())
+        if matched is None:return
+        reference,parsed,received=matched
+        self._execution_offered=reference
+        if not self._executor.offer_execution_reference(parsed.path_xy_yaw,reference):
+            self.request_controlled_stop('EXECUTION_REFERENCE_REJECTED')
+            self._publish_execution_status(reference=reference,state_code=6,accepted=False,reason='EXECUTION_REFERENCE_REJECTED')
+            return
+        self._path_received_at=received;self._active=parsed;self._path_sequence=reference.revision
+
+    def _publish_execution_status(self,*,reference=None,state_code=None,accepted=None,reason=None):
+        if not getattr(self,'_execution_enabled',False):return
+        reference=reference or self._executor.execution_reference or self._execution_offered
+        if reference is None:return
+        status=TrackingStatus();status.header.frame_id=self._map_frame
+        status.header.stamp=self.get_clock().now().to_msg()
+        status.session_id.uuid=list(bytes.fromhex(reference.session_id))
+        status.segment_revision=reference.revision;status.reference_digest=reference.path_digest
+        status.reference_intent=reference.intent
+        status.reference_accepted=(self._executor.reference_accepted and self._executor.execution_reference==reference) if accepted is None else accepted
+        status.state=int(self._executor.last_execution_state if state_code is None else state_code)
+        status.reason=(self._executor.failure or self._executor._stop_reason or '') if reason is None else reason
+        state=getattr(self,'_standard_state',None)
+        if state is not None:
+            status.linear_speed_mps=state.linear_mps;status.angular_speed_radps=state.angular_radps
+        self._tracking_status.publish(status)
 
     def request_controlled_stop(self, reason="STOP_REQUESTED") -> None:
         if self._standard_mode:
@@ -603,6 +673,7 @@ class PureWheeledControllerNode(Node):
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(event='certificate_unavailable',
             reason=reason,measured_stopped=None,certified_stop=False))))
         self._publish_twist()
+        self._publish_execution_status(state_code=6,reason='EXECUTION_INPUT_UNAVAILABLE:'+str(reason))
 
     def _standard_grid(self,state):
         if self._p3_source is not None:
@@ -654,6 +725,7 @@ class PureWheeledControllerNode(Node):
             event='solve_result',phase=result.phase,compute_ms=(monotonic()-started)*1000,
             map_revision=latest.revision,measured_stopped=self._executor._stopped(state)))))
         self._publish_twist(result.command.linear_x_mps,result.command.angular_z_radps)
+        self._publish_execution_status()
 
     def _publish_mppi_step(self, stamp_ns):
         self._mppi_step_ack.publish(String(data=json.dumps(dict(event="control_step",

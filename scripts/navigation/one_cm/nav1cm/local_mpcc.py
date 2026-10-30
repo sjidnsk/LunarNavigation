@@ -68,11 +68,24 @@ def _continuing_approach(state, reference, travel_yaw, approach_distance_m):
     return in_turn and np.cos(actual) > 1e-8
 
 
-def travel_target_yaw(state, reference, mode, approach_distance_m):
-    """行进对准spin只对准路线，已开始的末段转向只制动残余角速度。"""
+def _travel_direction(state, reference, approach_distance_m):
+    """同一方向决策供模式选择及对准使用；末段兼顾最终车体姿态。"""
     delta = reference.points[1] - reference.points[0]
     heading = float(np.arctan2(delta[1], delta[0]))
-    if mode == 'reverse' or (mode == 'spin' and abs(_wrap(heading-state.yaw)) > np.pi*.75):
+    reverse = abs(_wrap(heading-state.yaw)) > np.pi*.75
+    remaining = max(0., float(reference.s[-1])-reference.progress_s)
+    if reference.terminal_yaw is not None and 0. < remaining <= approach_distance_m:
+        projection = float(np.cos(angle_error(reference.terminal_yaw, heading)))
+        # 正交时两方向等价，保留原偏好，避免浮点正负决定换向。
+        if abs(projection) > 1e-8:
+            reverse = projection < 0.
+    return heading, 'reverse' if reverse else 'forward'
+
+
+def travel_target_yaw(state, reference, mode, approach_distance_m):
+    """行进对准spin只对准路线，已开始的末段转向只制动残余角速度。"""
+    heading, desired = _travel_direction(state, reference, approach_distance_m)
+    if mode == 'reverse' or (mode == 'spin' and desired == 'reverse'):
         heading += np.pi
     yaw = state.yaw + _wrap(heading-state.yaw)
     if mode == 'spin' and (abs(_wrap(yaw-state.yaw)) <= .3 or
@@ -86,9 +99,8 @@ def select_mode(state, reference, *, approach_distance_m=.8):
         if reference.terminal_yaw is not None and abs(state.v) <= 1e-10:
             return 'spin' if abs(angle_error(reference.terminal_yaw, state.yaw)) > .05 or abs(state.w) > 1e-10 else 'brake'
         return 'brake'
-    delta=reference.points[1]-reference.points[0]
-    error=_wrap(np.arctan2(delta[1],delta[0])-state.yaw)
-    desired='reverse' if abs(error)>np.pi*.75 else 'forward'
+    heading, desired = _travel_direction(state, reference, approach_distance_m)
+    error = _wrap(heading-state.yaw)
     if abs(state.v)>1e-8:
         current='forward' if state.v>0 else 'reverse'
         return current if current==desired else 'brake'
@@ -156,7 +168,7 @@ class MpccPlanner:
                 q=p[9+4*j:13+4*j]
                 hs.append(q[0]*x[0]+q[1]*x[1]+q[2]*x[2]+q[3])
             sign=-1 if mode=='reverse' else 1
-            if mode!='spin':
+            if mode!='spin' and limits.motion_model=='curvature_limited':
                 hs += [sign*limits.curvature_inv_m*x[3]-x[4],sign*limits.curvature_inv_m*x[3]+x[4]]
             # 刹停距离不超过有效参考余量，终点自然减速。
             # 在 |v|<=vmax 内，vmax*|v|/(2a) 保守上界 v²/(2a)，且 RTI 不再低估凸制动项。
@@ -324,7 +336,8 @@ class MpccPlanner:
             or np.min(us[:,2]) < -1e-9): return 'LIMIT'
         if mode!='spin':
             sign=-1 if mode=='reverse' else 1
-            if np.min(sign*xs[:,3]) < -1e-9 or np.any(np.abs(xs[:,4])>l.curvature_inv_m*np.abs(xs[:,3])+1e-9): return 'CURVATURE'
+            if np.min(sign*xs[:,3]) < -1e-9: return 'MODE'
+            if l.motion_model=='curvature_limited' and np.any(np.abs(xs[:,4])>l.curvature_inv_m*np.abs(xs[:,3])+1e-9): return 'CURVATURE'
             if xs[-1,5]-xs[0,5]<.005: return 'NO_PROGRESS'
         if np.any(xs[:,5]+xs[:,3]**2/(2*l.linear_accel_mps2)>end+1e-6): return 'REFERENCE_BRAKING_BOUND'
         for z in xs:

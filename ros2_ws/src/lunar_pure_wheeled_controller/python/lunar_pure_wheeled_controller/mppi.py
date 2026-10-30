@@ -49,7 +49,7 @@ class MppiExecutor:
         self.phase='WAITING';self.failure=None;self.progress_m=0.;self.error=0.;self.heading_error=0.;self.direction=1
         self._last_command=np.zeros(2);self._model_time=0.;self._state_age_s=0.;self._command_history=[];self._nominal=np.zeros((self.config.time_steps,2))
         self._first_target_step=self.config.model_dt
-        self._best_progress=0.;self.no_progress_s=0.;self._last_pose=None
+        self._translation_credit_m=0.;self.no_progress_s=0.;self._last_pose=None
         self.diagnostics={};self.predicted_trajectory=np.empty((0,3))
 
     def note_command(self,v,w,stamp_s=None):
@@ -65,7 +65,7 @@ class MppiExecutor:
 
     def clear(self):
         self.path=None;self.phase='WAITING';self.failure=None
-        self._nominal[:]=0.;self.note_command(0.,0.);self.no_progress_s=0.;self._last_pose=None;self._command_history=[]
+        self._nominal[:]=0.;self.note_command(0.,0.);self.no_progress_s=0.;self._last_pose=None;self._translation_credit_m=0.;self._command_history=[]
 
     def set_map(self,grid):
         if self.map is None or grid.epoch!=self.map.epoch:self._nominal[:]=0.
@@ -83,7 +83,7 @@ class MppiExecutor:
                 return True
             # Keep physical net-progress time across rolling revisions.
         else:self.no_progress_s=0.;self._last_pose=None
-        self.path=path;self.identity=identity;self.final=final;self.progress_m=0.;self._best_progress=0.
+        self.path=path;self.identity=identity;self.final=final;self.progress_m=0.;self._translation_credit_m=0.
         self.failure=None;self.phase='BRAKING';self._nominal[:]=0.
         return True
 
@@ -93,6 +93,32 @@ class MppiExecutor:
 
     def _stopped(self,state):
         return math.hypot(state.linear_mps,state.lateral_mps)<=self.policy.stopped_linear_mps and abs(state.angular_radps)<=self.policy.stopped_angular_radps
+
+    def _bind_progress_anchor(self,state,*,progress_m=None,retain_translation=False):
+        """绑定实际位姿；参考换向前结转尚未达门槛的有向物理位移。"""
+        if retain_translation and self._last_pose is not None:
+            anchor,travel,_=self._last_pose
+            self._translation_credit_m+=float(np.dot(np.array([state.x_m,state.y_m])-anchor,travel))
+        else:self._translation_credit_m=0.
+        progress=self.progress_m if progress_m is None else progress_m
+        ahead=self.path.point_at(min(self.path.length,progress+.35))
+        vector=np.array(ahead)-[state.x_m,state.y_m]
+        vector=vector/max(float(np.linalg.norm(vector)),1e-12)
+        self._last_pose=(np.array([state.x_m,state.y_m]),vector,
+            abs(angle(self.path.final_yaw-state.yaw_rad)))
+
+    def _observe_progress(self,state,distance,yaw_error,dt):
+        """唯一物理进展/行进停滞计算；滚动参考刷新本身不产生进展。"""
+        if self._last_pose is None:self._bind_progress_anchor(state)
+        anchor,travel,best_angle=self._last_pose
+        advance=self._translation_credit_m+float(np.dot(np.array([state.x_m,state.y_m])-anchor,travel))
+        progressed=(advance>.03 or (distance<=self.policy.goal_position_tolerance_m
+            and abs(yaw_error)<best_angle-.01))
+        if progressed:
+            self._bind_progress_anchor(state)
+            self.no_progress_s=0.
+        else:self.no_progress_s+=min(dt,.2)
+        return self.no_progress_s>self.policy.no_progress_timeout_s
 
     def _rollout(self,state,controls,dt,*,delay=True,delay_ticks=None,history_delay_ticks=None,project=True):
         p=self.policy;n,h,_=controls.shape
@@ -211,6 +237,14 @@ class MppiExecutor:
         # measurement of the actuator. The rollout models physical slew below.
         p=self.policy
         pv,pw=previous[:,0],previous[:,1]
+        if p.motion_model == 'differential_drive':
+            # 指令各轴独立限幅；测量原值仅交由物理预测和停车认证处理。
+            target_v=np.clip(raw[:,0],-p.max_reverse_mps if p.allow_reverse else 0.,p.max_linear_mps)
+            target_w=np.clip(raw[:,1],-p.max_angular_radps,p.max_angular_radps)
+            v=pv+np.clip(target_v-pv,-p.max_linear_decel_mps2*step,p.max_linear_accel_mps2*step)
+            w=pw+np.clip(target_w-pw,-p.max_angular_accel_radps2*step,p.max_angular_accel_radps2*step)
+            return np.stack((np.clip(v,-p.max_reverse_mps if p.allow_reverse else 0.,p.max_linear_mps),
+                             np.clip(w,-p.max_angular_radps,p.max_angular_radps)),axis=1)
         v=pv+np.clip(raw[:,0]-pv,-p.max_linear_decel_mps2*step,p.max_linear_accel_mps2*step)
         tw=np.where(abs(raw[:,0])>p.stopped_linear_mps,np.clip(raw[:,1],-abs(raw[:,0])*p.max_curvature_per_m,abs(raw[:,0])*p.max_curvature_per_m),raw[:,1])
         tw=np.where((abs(raw[:,0])<=p.stopped_linear_mps)&(abs(pv)>p.stopped_linear_mps),0.,tw)
@@ -246,7 +280,8 @@ class MppiExecutor:
         # Curvature/lateral acceleration constraints apply to moving states;
         # stationary spin remains supported, including its acceleration phase.
         moving=abs(actual[:,:,0])>p.stopped_linear_mps
-        valid &= np.all(~moving | ((abs(actual[:,:,1])<=abs(actual[:,:,0])*p.max_curvature_per_m+1e-9)&(abs(actual[:,:,0]*actual[:,:,1])<=p.max_lateral_accel_mps2+1e-9)),axis=1)
+        if p.motion_model == "curvature_limited":
+            valid &= np.all(~moving | ((abs(actual[:,:,1])<=abs(actual[:,:,0])*p.max_curvature_per_m+1e-9)&(abs(actual[:,:,0]*actual[:,:,1])<=p.max_lateral_accel_mps2+1e-9)),axis=1)
         _,terrain,_=self.map.sample(xy[:,:,:2])
         cost=self._tracking_cost(state,controls,target,target_yaw,xy,terrain.mean(axis=1)*.2)
         return np.where(valid,cost,np.inf),xy
@@ -275,7 +310,8 @@ class MppiExecutor:
         if np.any(remaining):
             valid[remaining]=self.map.valid_motion(poses[remaining],velocity[remaining],c.model_dt,p.execution_clearance_m)
         moving=abs(velocity[:,:,0])>p.stopped_linear_mps
-        valid &= np.all(~moving|((abs(velocity[:,:,1])<=abs(velocity[:,:,0])*p.max_curvature_per_m+1e-9)&(abs(velocity[:,:,0]*velocity[:,:,1])<=p.max_lateral_accel_mps2+1e-9)),axis=1)
+        if p.motion_model == "curvature_limited":
+            valid &= np.all(~moving|((abs(velocity[:,:,1])<=abs(velocity[:,:,0])*p.max_curvature_per_m+1e-9)&(abs(velocity[:,:,0]*velocity[:,:,1])<=p.max_lateral_accel_mps2+1e-9)),axis=1)
         valid &= continuous_valid
         indices=np.flatnonzero(valid)
         if costs is not None:
@@ -308,6 +344,9 @@ class MppiExecutor:
         blocks=int(math.ceil(c.time_steps/8))
         noise=self.rng.normal(size=(c.batch_size,blocks,2))*[c.linear_std,c.angular_std]
         return np.repeat(noise,8,axis=1)[:,:c.time_steps]
+
+    def _seed_sequence(self,state,seed,near):
+        return np.tile(seed,(self.config.time_steps,1))
 
     def _travel_direction(self,state,desired):
         p=self.policy
@@ -353,22 +392,7 @@ class MppiExecutor:
         if distance<=p.goal_position_tolerance_m and pose_safe and (not self.final or abs(yaw_error)<=p.goal_yaw_tolerance_rad):
             self.phase='COMPLETED' if self._stopped(state) else 'BRAKING'
             return self._result()
-        # A fixed physical anchor and path-travel direction survive rolling
-        # revisions. Crossing a corner need not hit a particular waypoint.
-        if self._last_pose is None:
-            ahead=self.path.point_at(min(self.path.length,self.progress_m+.35))
-            vector=np.array(ahead)-[state.x_m,state.y_m]
-            vector=vector/max(float(np.linalg.norm(vector)),1e-12)
-            self._last_pose=(np.array([state.x_m,state.y_m]),vector,abs(yaw_error))
-        anchor,travel,best_angle=self._last_pose
-        advance=float(np.dot(np.array([state.x_m,state.y_m])-anchor,travel))
-        if advance>.03 or (distance<=p.goal_position_tolerance_m and abs(yaw_error)<best_angle-.01):
-            ahead=self.path.point_at(min(self.path.length,self.progress_m+.35))
-            vector=np.array(ahead)-[state.x_m,state.y_m]
-            vector=vector/max(float(np.linalg.norm(vector)),1e-12)
-            self._last_pose=(np.array([state.x_m,state.y_m]),vector,abs(yaw_error));self.no_progress_s=0.
-        else:self.no_progress_s+=min(dt,.2)
-        if self.no_progress_s>p.no_progress_timeout_s:
+        if self._observe_progress(state,distance,yaw_error,dt):
             self.failure='TRACKING_STALLED';self.phase='FAILED' if self._stopped(state) else 'BRAKING';return self._result()
         target=np.array(self.path.point_at(min(self.path.length,self.progress_m+.35)))
         desired=math.atan2(target[1]-state.y_m,target[0]-state.x_m)
@@ -383,7 +407,8 @@ class MppiExecutor:
         # Seed controls accelerate exploration; optimization still considers both
         # signs and time-varying sequences and uses a genuine weighted update.
         seed=np.array([0. if near or abs(error)>.2 else self.direction*min(p.max_linear_mps,p.max_reverse_mps),np.clip(1.5*error,-p.max_angular_radps,p.max_angular_radps)])
-        if abs(seed[0])>0:seed[1]=np.clip(seed[1],-abs(seed[0])*p.max_curvature_per_m,abs(seed[0])*p.max_curvature_per_m)
+        if p.motion_model == "curvature_limited" and abs(seed[0])>0:seed[1]=np.clip(seed[1],-abs(seed[0])*p.max_curvature_per_m,abs(seed[0])*p.max_curvature_per_m)
+        seed=self._seed_sequence(state,seed,near)
         if not np.any(self._nominal):self._nominal[:]=seed
         best=None;best_xy=None;fallback=None;fallback_costs=None
         for _ in range(c.iterations):

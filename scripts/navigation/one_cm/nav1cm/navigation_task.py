@@ -1,6 +1,8 @@
 """无 ROS 的导航任务合同；仅 Runtime 的 tick 线程可调用写入方法。"""
 from dataclasses import dataclass, replace
 import math
+from collections import OrderedDict
+from .execution_contract import ExecutionReference, ExecutionStatus, execution_session_id, FOLLOW, BRAKE, HOLD, FINAL_ALIGN
 
 from .pose_goal import angle_error
 from .ros_conversion import PoseGoal, finite
@@ -35,6 +37,100 @@ class NavigationTaskCoordinator:
         self.active = None
         self._arrived_since = None
         self._cycle = 0
+        self.configure_execution_feedback()
+        self._reset_execution_feedback(0.)
+
+    def configure_execution_feedback(self, required=False, timeout_s=2.):
+        timeout_s = finite(timeout_s)
+        if type(required) is not bool or timeout_s <= 0:
+            raise ValueError('invalid execution feedback configuration')
+        self._feedback_required, self._feedback_timeout = required, timeout_s
+
+    def _reset_execution_feedback(self, now_s):
+        self._references = OrderedDict()
+        self._execution_status = None
+        self._execution_received = None
+        self._execution_last_accepted = None
+        self._execution_started = now_s
+        self._execution_revision = -1
+        self._execution_stamp = -1
+        self._execution_failure = None
+        self._execution_accepted = set()
+        self._execution_terminal = set()
+        self._execution_failed_revisions = set()
+
+    def register_execution_reference(self, ref, now_s):
+        if not isinstance(ref, ExecutionReference) or self.active is None or self.active.outcome is not None:
+            return False
+        if ref.session_id != execution_session_id(self.active.task_id, self.active.generation):
+            return False
+        if ref.revision in self._references:
+            return self._references[ref.revision] == ref
+        if self._references and ref.revision <= next(reversed(self._references)):
+            return False
+        self._references[ref.revision] = ref
+        while len(self._references) > 128:
+            retired, _ = self._references.popitem(last=False)
+            self._execution_accepted.discard(retired)
+            self._execution_terminal.discard(retired)
+            self._execution_failed_revisions.discard(retired)
+        return True
+
+    def offer_execution_status(self, status, now_s):
+        if not isinstance(status, ExecutionStatus) or self.active is None or self.active.outcome is not None:
+            return False
+        ref = self._references.get(status.revision)
+        accepted_failure = status.state == 6 and status.revision in self._execution_accepted
+        if (ref is None or status.session_id != ref.session_id or status.path_digest != ref.path_digest or
+                status.intent != ref.intent or status.stamp_ns < ref.stamp_ns or (status.revision < self._execution_revision and not accepted_failure) or
+                (status.revision in self._execution_terminal and status.state not in (5,6)) or
+                (status.revision in self._execution_failed_revisions and status.state != 6) or
+                (status.stamp_ns <= self._execution_stamp and not accepted_failure) or now_s < self._execution_started or
+                (self._execution_received is not None and now_s < self._execution_received)):
+            return False
+        if status.state == 6:
+            self._execution_failed_revisions.add(status.revision)
+            if self._execution_failure is None:
+                self._execution_failure = status.reason or 'TRACKING_FAILED'
+            if status.revision < self._execution_revision or status.stamp_ns <= self._execution_stamp:
+                # 已接受旧参考的延迟故障只锁存故障，不回退正常反馈门禁。
+                return True
+        if status.accepted:
+            self._execution_last_accepted = now_s
+            self._execution_accepted.add(status.revision)
+        if status.state in (5,6):
+            self._execution_terminal.add(status.revision)
+        self._execution_status, self._execution_received = status, now_s
+        self._execution_revision, self._execution_stamp = max(self._execution_revision, status.revision), status.stamp_ns
+        return True
+
+    def check_execution_fault(self, now_s):
+        if not self._feedback_required or self.active is None or self.active.outcome is not None or self.active.phase in ('CANCELING','ERROR_STOPPING'):
+            return None
+        status = self._execution_status
+        if self._execution_failure is not None:
+            return self._execution_failure
+        last = self._execution_started if self._execution_last_accepted is None else self._execution_last_accepted
+        if now_s - last > self._feedback_timeout:
+            return 'EXECUTION_FEEDBACK_TIMEOUT'
+        return None
+
+    def _execution_arrived(self, now_s):
+        if not self._feedback_required:
+            return True
+        status = self._execution_status
+        return (status is not None and status.accepted and status.state in (0,5) and status.intent in (BRAKE,HOLD,FINAL_ALIGN) and
+                self._execution_failure is None and
+                0 <= now_s-self._execution_received <= self._feedback_timeout)
+
+    def fail_tracking(self, reason, now_s):
+        if self.active is None or self.active.outcome is not None or self.active.phase in ('CANCELING','ERROR_STOPPING'):
+            return False
+        self.session.cancel_goal()
+        self._arrived_since = None
+        self.active = replace(self.active, phase='ERROR_STOPPING', reason_code=reason)
+        self._emit(self.active)
+        return True
 
     def _emit(self, snapshot):
         self.event_sink(snapshot)
@@ -65,6 +161,7 @@ class NavigationTaskCoordinator:
         if self.active is not None and self.active.outcome is None:
             self._emit(replace(self.active, phase='FINISHED', outcome='CANCELED', reason_code='GOAL_REPLACED'))
         self._arrived_since = None
+        self._reset_execution_feedback(now_s)
         self.active = (None if task_id is None else
                        TaskSnapshot(task_id, self.session.accepted_generation, 'PLANNING', reason_code='GOAL_ACCEPTED'))
         return None if self.active is None else self._emit(self.active)
@@ -86,12 +183,15 @@ class NavigationTaskCoordinator:
         before, arrived_since = current, self._arrived_since
         state, goal, limits = self.session.state, self.session.goal, self.session.coordinator
         stopped = state is not None and abs(state.v) <= limits.stopped_linear_mps and abs(state.w) <= limits.stopped_angular_rps
-        if current.phase == 'CANCELING':
+        if current.phase == 'ERROR_STOPPING':
+            if stopped and state_updated:
+                current = replace(current, phase='FINISHED', outcome='INTERNAL_ERROR')
+        elif current.phase == 'CANCELING':
             if stopped and state_updated:
                 current = replace(current, phase='FINISHED', outcome='CANCELED', reason_code='CANCELED_STOPPED')
         else:
-            arrived = (packet.generation == current.generation and not packet.waiting and stopped and goal is not None and
-                       math.hypot(state.x-goal.x, state.y-goal.y) <= limits.goal_tolerance_m and
+            arrived = (self._execution_arrived(now_s) and packet.generation == current.generation and not packet.waiting and stopped and goal is not None and
+                       math.hypot(state.x-goal.x, state.y-goal.y) <= limits.position_target_tolerance_m and
                        abs(angle_error(goal.yaw, state.yaw)) <= limits.goal_yaw_tolerance_rad)
             if not arrived:
                 arrived_since = None

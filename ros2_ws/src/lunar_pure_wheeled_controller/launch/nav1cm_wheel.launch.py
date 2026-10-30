@@ -15,7 +15,9 @@ DEFAULTS = {
     'odometry_topic':'/Car/T3/localization/odometry', 'tf_topic':'/tf', 'tf_static_topic':'/tf_static',
     'local_path_topic':'/Car/T4/planning/local_path', 'global_route_topic':'/Car/T4/planning/global_route',
     'goal_topic':'/Car/T4/navigation/goal', 'command_topic':'/Car/T5/Car_Cmd_Vel',
-    'allow_unknown':'false', 'linear_speed_mps':'0.2', 'angular_speed_rps':'1.0',
+    'execution_reference_topic':'/Car/T4/control/path_execution_reference',
+    'tracking_status_topic':'/Car/T4/control/tracking_status',
+    'motion_model':'', 'allow_unknown':'false', 'linear_speed_mps':'0.2', 'angular_speed_rps':'1.0',
     'linear_accel_mps2':'0.5', 'angular_accel_rps2':'0.5', 'curvature_inv_m':'1.0',
     'goal_tolerance_m':'0.1', 'goal_yaw_tolerance_rad':'0.05',
     'stopped_linear_mps':'0.01', 'stopped_angular_rps':'0.01',
@@ -27,7 +29,8 @@ FOLLOWER_MAP = {
     'max_linear_mps':'linear_speed_mps', 'max_reverse_mps':'linear_speed_mps',
     'max_angular_radps':'angular_speed_rps', 'max_linear_accel_mps2':'linear_accel_mps2',
     'max_linear_decel_mps2':'linear_accel_mps2', 'max_angular_accel_radps2':'angular_accel_rps2',
-    'max_curvature_per_m':'curvature_inv_m', 'goal_position_tolerance_m':'goal_tolerance_m',
+    'execution_reference_topic':'execution_reference_topic', 'tracking_status_topic':'tracking_status_topic',
+    'motion_model':'motion_model', 'max_curvature_per_m':'curvature_inv_m', 'goal_position_tolerance_m':'goal_tolerance_m',
     'stopped_angular_radps':'stopped_angular_rps',
 }
 
@@ -39,6 +42,9 @@ def compose(context):
         if text not in ('true','false'): raise ValueError(f'{name} must be true or false')
         values[name]=text=='true'
     baseline,_=load_configuration(values['wheel_config'])
+    values['motion_model']=(values['motion_model'] or baseline.motion_model)
+    # 两消费者使用完全相同的枚举值；非法值在构造WheelLimits时拒绝。
+    load_configuration(values['wheel_config'],{'motion_model':values['motion_model']})
     values['minimum_clearance_m']=resolve_minimum_clearance(baseline.minimum_clearance_m,
         None if values['minimum_clearance_m']=='' else values['minimum_clearance_m'])
     for name in ('linear_speed_mps','angular_speed_rps','linear_accel_mps2','angular_accel_rps2','curvature_inv_m',
@@ -50,12 +56,13 @@ def compose(context):
     planner={name:value for name,value in values.items() if name not in
              ('start_controller','start_rviz','params_file','command_topic','mppi_nominal_response_time_s')}
     # 参数文件提供规划器专用设置；共享接口及能力约束由此组合入口最后统一覆盖。
+    planner['execution_contract_enabled']=values['start_controller']
     params=([values['params_file']] if values['params_file'] else [])+[planner]
     actions=[Node(package='lunar_nav1cm_planner', executable='planner_node',output='screen',parameters=params)]
     if values['start_controller']:
         follower={name:values[name] for name in SHARED}
         follower.update({name:values[shared] for name,shared in FOLLOWER_MAP.items()})
-        follower.update(input_mode='incremental_path',controller_backend='mppi_path_follower',standard_map_source='direct_p3',
+        follower.update(execution_contract_enabled=True,input_mode='incremental_path',controller_backend='mppi_path_follower',standard_map_source='direct_p3',
                         command_topic=values['command_topic'],mppi_nominal_response_time_s=values['mppi_nominal_response_time_s'])
         actions.append(Node(package='lunar_pure_wheeled_controller',executable='lunar_pure_wheeled_controller_node.py',output='screen',parameters=[follower]))
     if values['start_rviz']:

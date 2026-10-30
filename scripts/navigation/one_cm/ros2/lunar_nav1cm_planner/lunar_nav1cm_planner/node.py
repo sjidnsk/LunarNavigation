@@ -53,8 +53,13 @@ def create_resources(limits, capability, settings):
     except Exception:
         terrain._terrain.close()
         raise
-    for key in ('goal_tolerance_m', 'goal_yaw_tolerance_rad', 'stopped_linear_mps', 'stopped_angular_rps'):
-        value = float(settings[key])
+    for key in ('goal_tolerance_m', 'goal_yaw_tolerance_rad', 'stopped_linear_mps', 'stopped_angular_rps', 'goal_position_target_m'):
+        try:
+            value = float(settings.get(key,coordinator.goal_tolerance_m) if key=='goal_position_target_m' else settings[key])
+        except (TypeError,ValueError) as exc:
+            coordinator.close()
+            terrain._terrain.close()
+            raise ValueError(f'{key} must be finite and positive') from exc
         if not math.isfinite(value) or value <= 0:
             coordinator.close()
             terrain._terrain.close()
@@ -91,7 +96,7 @@ class PlannerNode(Node):
             'allow_unknown': False, 'planning_period_s': .1, 'execution_period_s': .05,
             'global_period_s': 1., 'global_budget_s': 1., 'clearance_radius_m': limits.global_clearance_radius(.9),
             'horizon_steps': 20, 'horizon_dt_s': .2,
-            'goal_tolerance_m': .1, 'goal_yaw_tolerance_rad': .05,
+            'goal_tolerance_m': .1, 'goal_position_target_m': .02, 'goal_yaw_tolerance_rad': .05,
             'stopped_linear_mps': .01, 'stopped_angular_rps': .01,
             'map_topic': '/Car/T3/mapping/grid_map',
             'map_qos_reliability': 'best_effort', 'map_qos_durability': 'volatile',
@@ -100,6 +105,9 @@ class PlannerNode(Node):
             'tf_topic': '/tf', 'tf_static_topic': '/tf_static',
             'global_route_topic': '/Car/T4/planning/global_route',
             'local_path_topic': '/Car/T4/planning/local_path',
+            'execution_contract_enabled':False,'execution_feedback_timeout_s':2.,
+            'execution_reference_topic':'/Car/T4/control/path_execution_reference',
+            'tracking_status_topic':'/Car/T4/control/tracking_status',
         }
         settings = {name: self.declare_parameter(name, default).value for name, default in defaults.items()}
         settings['clearance_radius_m']=limits.global_clearance_radius(settings['clearance_radius_m'])
@@ -128,6 +136,15 @@ class PlannerNode(Node):
         self.create_subscription(TFMessage, settings['tf_topic'], self._tf_input, dynamic_tf)
         self.create_subscription(TFMessage, settings['tf_static_topic'], self._tf_input, static_tf)
         self.get_logger().info(f'wheel={capability_file}; limits={limits}; local=0.01m/500x500; build={settings["build_dir"]}')
+        self._execution_contract_enabled=settings['execution_contract_enabled']
+        self._execution_revision=0
+        if self._execution_contract_enabled:
+            from lunar_planning_msgs.msg import PathExecutionReference,TrackingStatus
+            timeout=float(settings['execution_feedback_timeout_s'])
+            self._execution_feedback_timeout_s=timeout
+            self.runtime.enable_execution_contract(timeout)
+            self._execution_publisher=self.create_publisher(PathExecutionReference,settings['execution_reference_topic'],10)
+            self.create_subscription(TrackingStatus,settings['tracking_status_topic'],self._on_execution_status,10)
         self.runtime.start()
 
     def _tf_input(self, message):
@@ -136,9 +153,31 @@ class PlannerNode(Node):
         except (ValueError, AttributeError, TypeError) as exc:
             self.get_logger().warning(f'TF_REJECTED: {exc}')
 
+    def _on_execution_status(self,message):
+        from nav1cm.execution_ros import status_from_message
+        try:
+            status=status_from_message(message)
+            now=self.get_clock().now().nanoseconds
+            if message.header.frame_id!=self.runtime.map_frame or status.stamp_ns>now or now-status.stamp_ns>self._execution_feedback_timeout_s*1e9:return
+            self.runtime.offer_tracking_status(status)
+        except (ValueError,TypeError,AttributeError,OverflowError):
+            self.get_logger().warning('EXECUTION_STATUS_REJECTED')
+
     def _publish(self, data):
+        local=path_message(data.local)
+        if getattr(self,'_execution_contract_enabled',False) and self.runtime.execution_context is not None:
+            from nav1cm.execution_contract import ExecutionReference,execution_session_id,path_fingerprint
+            from nav1cm.execution_ros import reference_message,stamp_ns
+            task_id,generation,intent=self.runtime.execution_context
+            self._execution_revision+=1
+            coordinator=self.runtime.session.coordinator
+            reference=ExecutionReference(execution_session_id(task_id,generation),self._execution_revision,
+                path_fingerprint(local),intent,stamp_ns(local.header),coordinator.position_target_tolerance_m,
+                coordinator.goal_yaw_tolerance_rad,coordinator.stopped_linear_mps,coordinator.stopped_angular_rps)
+            self.runtime.register_execution_reference(reference)
+            self._execution_publisher.publish(reference_message(reference,self.runtime.map_frame))
         self._global_publisher.publish(path_message(data.global_route))
-        self._local_publisher.publish(path_message(data.local))
+        self._local_publisher.publish(local)
 
     def stop_runtime(self):
         result = self.runtime.close(timeout_s=2.)

@@ -137,7 +137,7 @@ def _state_limit_reason(state, limits, mode):
         return CertificationReason.MODE
     if mode == "reverse" and v > eps:
         return CertificationReason.MODE
-    if abs(w) > limits.curvature_inv_m * abs(v) + eps:
+    if limits.motion_model == "curvature_limited" and abs(w) > limits.curvature_inv_m * abs(v) + eps:
         return CertificationReason.LIMIT
     return None
 
@@ -179,7 +179,7 @@ def _brake_tail(last, context, limits, mode):
     elapsed = 0.0
     while abs(current[3]) > 1e-10 or abs(current[4]) > 1e-10:
         a_capacity = limits.linear_accel_mps2
-        if abs(current[3]) > 1e-10 and abs(current[4]) > 1e-10:
+        if limits.motion_model == "curvature_limited" and abs(current[3]) > 1e-10 and abs(current[4]) > 1e-10:
             # 行进时角速度不能在线速度归零后继续存在；限制线制动使 w/v 不增。
             a_capacity = min(a_capacity, limits.angular_accel_rps2 * abs(current[3]) / abs(current[4]))
         v_time = abs(current[3]) / a_capacity if abs(current[3]) > 1e-10 else math.inf
@@ -243,7 +243,7 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
             return _reject(CertificationReason.DYNAMICS, checked)
         # v(t) 过零处仍有 w 会违反行进曲率；端点检查不足以发现。
         a = controls[index, 0]
-        if trajectory.mode != "spin" and abs(a) > 1e-12:
+        if limits.motion_model == "curvature_limited" and trajectory.mode != "spin" and abs(a) > 1e-12:
             crossing = -state[3] / a
             if 0 < crossing < dt and abs(state[4] + controls[index, 1] * crossing) > 1e-9:
                 return _reject(CertificationReason.LIMIT, checked)
