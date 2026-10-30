@@ -56,6 +56,37 @@ def original_valid_segments(self, a, b, margin, allow_assumed=True):
     return valid.reshape(shape)
 
 
+def original_brake_safe(self,state,first,dt):
+    p=self.policy
+    latency=int(math.ceil(p.control_response_time_s/dt))
+    wait=int(math.ceil((self._state_age_s+self.config.compute_budget_s)/dt))
+    hold=latency+wait+1
+    stop=int(math.ceil(max(p.max_linear_mps,p.max_reverse_mps,abs(state.linear_mps))/p.max_linear_decel_mps2/dt))+int(math.ceil(max(p.max_angular_radps,abs(state.angular_radps))/p.max_angular_accel_radps2/dt))+2
+    # The delayed prefix consumes rollout steps too; retain the complete
+    # commanded hold and braking tail after the longest prefix.
+    u=np.zeros((len(first),latency+wait+hold+stop,2));u[:,:hold]=first[:,None,:]
+    # Evaluate latency and computation/source-age independently. Batching
+    # scenarios preserves the finite model set without repeated Python loops.
+    scenarios=[(l,q) for l in range(latency+1) for q in range(wait+1)]
+    controls=np.tile(u,(len(scenarios),1,1))
+    holds=np.repeat([l+q for l,q in scenarios],len(first))
+    transport=np.repeat([l for l,q in scenarios],len(first))
+    poses,actual=self._rollout(state,controls,dt,delay_ticks=holds,history_delay_ticks=transport,project=False)
+    # 全部延迟场景仍已独立积分；仅完全相同的物理轨迹共享几何证明。
+    # 不按延迟大小推断包含关系，不近似合并，也不跨地图/状态缓存。
+    keys=np.concatenate((poses.reshape(len(poses),-1),actual.reshape(len(actual),-1)),axis=1)
+    _,keep,inverse=np.unique(keys,axis=0,return_index=True,return_inverse=True)
+    kinematic_valid=self._rollout_kinematic_valid
+    poses,actual=poses[keep],actual[keep]
+    valid=self._stationary_supported(state,poses,actual)
+    remaining=~valid
+    if np.any(remaining):
+        valid[remaining]=self.map.valid_motion(poses[remaining],actual[remaining],dt,p.execution_clearance_m)
+    valid &= (abs(actual[:,-1,0])<=p.stopped_linear_mps) & (abs(actual[:,-1,1])<=p.stopped_angular_radps)
+    valid=valid[inverse] & kinematic_valid
+    return valid.reshape(len(scenarios),len(first)).all(axis=0)
+
+
 def test_identical_edges_share_box_proof_once(monkeypatch):
     grid=GridMap(np.zeros((6,6),np.uint8),.1,(0.,0.))
     a=np.tile([.25,.25],(200,1));b=np.tile([.26,.25],(200,1))
@@ -125,7 +156,7 @@ def test_complete_braking_delays_and_nonzero_history_match_original(monkeypatch,
     monkeypatch.setattr(executor,'_rollout',record)
     optimized=executor._brake_safe(state,first,.05)
     monkeypatch.setattr(GridMap,'valid_segments',original_valid_segments)
-    reference=executor._brake_safe(state,first,.05)
+    reference=original_brake_safe(executor,state,first,.05)
     np.testing.assert_array_equal(optimized,reference)
     latency=math.ceil(policy.control_response_time_s/.05)
     wait=math.ceil((age+executor.config.compute_budget_s)/.05)
@@ -155,3 +186,43 @@ def test_signed_zero_invalid_inputs_and_bounds_preserve_original():
     for certify in (grid.valid_segments,lambda *args: original_valid_segments(grid,*args)):
         with pytest.raises(ValueError,match='bounded local range'):
             certify(np.zeros((1,2)),np.array([[1000.,0.]]),0.)
+
+
+def test_full_trajectory_sharing_keeps_bitwise_distinct_zero_signs(monkeypatch):
+    executor=MppiExecutor(TrackingPolicy())
+    executor.set_map(GridMap(np.ones((8,8),np.uint8),.1,(-.4,-.4)))
+    observed=[]
+    def rollout(state,controls,dt,**kwargs):
+        n,h,_=controls.shape
+        poses=np.zeros((n,h+1,3));actual=np.zeros_like(controls)
+        poses[::3,0,0]=-0.
+        poses[1::3,0,0]=np.nextafter(0.,1.)
+        executor._rollout_kinematic_valid=np.ones(n,dtype=bool)
+        return poses,actual
+    def support(state,poses,actual):
+        observed.extend(poses[:,0,0].view(np.uint64).tolist())
+        return np.ones(len(poses),dtype=bool)
+    monkeypatch.setattr(executor,'_rollout',rollout)
+    monkeypatch.setattr(executor,'_stationary_supported',support)
+    assert executor._brake_safe(TrackingState(0.,0.,0.),np.zeros((1,2)),.05)[0]
+    # 完整逐位记录不同即分别证明，不依赖数值排序将不同表示合并。
+    assert sorted(observed)==[0,1,1<<63]
+
+
+def test_trajectory_inverse_restores_original_delay_and_candidate_order(monkeypatch):
+    executor=MppiExecutor(TrackingPolicy())
+    executor.set_map(GridMap(np.ones((8,8),np.uint8),.1,(-.4,-.4)))
+    def rollout(state,controls,dt,**kwargs):
+        n,h,_=controls.shape
+        poses=np.zeros((n,h+1,3));actual=np.zeros_like(controls)
+        poses[:,:,0]=(np.arange(n)%3)[:,None]
+        executor._rollout_kinematic_valid=np.ones(n,dtype=bool)
+        executor._rollout_kinematic_valid[0]=False
+        return poses,actual
+    monkeypatch.setattr(executor,'_rollout',rollout)
+    monkeypatch.setattr(executor,'_stationary_supported',lambda state,poses,actual:np.zeros(len(poses),dtype=bool))
+    monkeypatch.setattr(GridMap,'valid_motion',lambda self,poses,actual,dt,margin:poses[:,0,0]!=1.)
+    state=TrackingState(0.,0.,0.);first=np.zeros((3,2))
+    expected=np.array([False,False,True])
+    np.testing.assert_array_equal(original_brake_safe(executor,state,first,.05),expected)
+    np.testing.assert_array_equal(executor._brake_safe(state,first,.05),expected)
