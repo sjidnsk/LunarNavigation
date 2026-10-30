@@ -1,5 +1,6 @@
 """显式新导航组合；默认仅规划，策略与控制均由操作者选择。"""
 import os
+from math import isfinite
 from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -26,11 +27,15 @@ DEFAULTS = {
     "exploration_diagnostics_topic": "/Car/T4/exploration/diagnostics",
     "command_topic": "/Car/T5/Car_Cmd_Vel", "diagnostics_topic": "/Car/T4/control/mppi_diagnostics",
     "map_qos_reliability": "reliable", "map_qos_durability": "volatile",
+    "p3_map_timeout_s": "3.0",
     "coarse_resolution_m": "1.0", "navigation_map_wait_timeout_s": "30.0",
 }
 
 def _compose(context):
     values = {k: LaunchConfiguration(k).perform(context).strip() or v for k,v in DEFAULTS.items()}
+    values["p3_map_timeout_s"] = float(values["p3_map_timeout_s"])
+    if not isfinite(values["p3_map_timeout_s"]) or values["p3_map_timeout_s"] < 0:
+        raise ValueError("p3_map_timeout_s must be finite and nonnegative")
     strategy = values["exploration_strategy"]
     if strategy not in {"none", "frontier", "drl"}:
         raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
@@ -80,6 +85,7 @@ def _compose(context):
             "execution_contract_enabled":True,
             "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
             "standard_map_source": "direct_p3", "p3_map_topic": values["map_topic"],
+            "p3_map_timeout_s": values["p3_map_timeout_s"],
             "path_topic": values["local_path_topic"], "mppi_diagnostics_topic": values["diagnostics_topic"],
             "mppi_nominal_response_time_s": .15, "allow_unknown": False}))
     return actions

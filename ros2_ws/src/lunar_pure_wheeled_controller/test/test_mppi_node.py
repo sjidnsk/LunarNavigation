@@ -362,3 +362,32 @@ def test_standard_path_receipt_liveness_and_empty_stop_preserve_history(monkeypa
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()
+
+
+@pytest.mark.parametrize('timeout,old_map_valid',[(0.,True),(3.,False)])
+def test_direct_p3_node_static_map_age_policy_keeps_missing_map_gate(monkeypatch,timeout,old_map_valid):
+    from types import SimpleNamespace as S
+    from lunar_pure_wheeled_controller import node as module
+    rclpy.init(args=['--ros-args','-p','controller_backend:=mppi_path_follower',
+        '-p','input_mode:=incremental_path','-p',f'p3_map_timeout_s:={timeout}'])
+    node=None
+    try:
+        node=PureWheeledControllerNode()
+        monkeypatch.setattr(module,'monotonic',lambda:10000.)
+        grid=object()
+        receipt=[S(received_at=1.,grid=grid)]
+        # 保留真实节点worker生命周期；仅替换外部快照输入。
+        monkeypatch.setattr(node._p3_source,'snapshot',lambda:receipt[0])
+        assert (node._standard_grid(None) is grid)==old_map_valid
+        receipt[0]=None
+        assert node._standard_grid(None) is None
+        receipt[0]=S(received_at=None,grid=grid)
+        assert node._standard_grid(None) is None
+        receipt[0]=S(received_at=9999.,grid=grid)
+        assert node._standard_grid(None) is grid
+        assert node._input_is_stale(1.,.5) is True
+        assert node._input_is_stale(None,.5) is True
+        assert node._input_is_stale(9999.9,.5) is False
+    finally:
+        if node is not None:node.destroy_node()
+        rclpy.shutdown()

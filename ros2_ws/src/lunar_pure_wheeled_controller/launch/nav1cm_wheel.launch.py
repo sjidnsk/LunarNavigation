@@ -21,7 +21,7 @@ DEFAULTS = {
     'linear_accel_mps2':'0.5', 'angular_accel_rps2':'0.5', 'curvature_inv_m':'1.0',
     'goal_tolerance_m':'0.1', 'goal_yaw_tolerance_rad':'0.05',
     'stopped_linear_mps':'0.01', 'stopped_angular_rps':'0.01',
-    'mppi_nominal_response_time_s':'0.15',
+    'mppi_nominal_response_time_s':'0.15', 'p3_map_timeout_s':'3.0',
 }
 SHARED = ('minimum_clearance_m','map_frame','odometry_topic','tf_topic','tf_static_topic','allow_unknown','use_sim_time','goal_yaw_tolerance_rad','stopped_linear_mps')
 FOLLOWER_MAP = {
@@ -31,7 +31,7 @@ FOLLOWER_MAP = {
     'max_linear_decel_mps2':'linear_accel_mps2', 'max_angular_accel_radps2':'angular_accel_rps2',
     'execution_reference_topic':'execution_reference_topic', 'tracking_status_topic':'tracking_status_topic',
     'motion_model':'motion_model', 'max_curvature_per_m':'curvature_inv_m', 'goal_position_tolerance_m':'goal_tolerance_m',
-    'stopped_angular_radps':'stopped_angular_rps',
+    'stopped_angular_radps':'stopped_angular_rps', 'p3_map_timeout_s':'p3_map_timeout_s',
 }
 
 
@@ -48,13 +48,13 @@ def compose(context):
     values['minimum_clearance_m']=resolve_minimum_clearance(baseline.minimum_clearance_m,
         None if values['minimum_clearance_m']=='' else values['minimum_clearance_m'])
     for name in ('linear_speed_mps','angular_speed_rps','linear_accel_mps2','angular_accel_rps2','curvature_inv_m',
-                 'goal_tolerance_m','goal_yaw_tolerance_rad','stopped_linear_mps','stopped_angular_rps','mppi_nominal_response_time_s'):
+                 'goal_tolerance_m','goal_yaw_tolerance_rad','stopped_linear_mps','stopped_angular_rps','mppi_nominal_response_time_s','p3_map_timeout_s'):
         values[name]=float(values[name])
-        if not math.isfinite(values[name]) or values[name]<0 or (name!='mppi_nominal_response_time_s' and values[name]==0):
+        if not math.isfinite(values[name]) or values[name]<0 or (name not in ('mppi_nominal_response_time_s','p3_map_timeout_s') and values[name]==0):
             raise ValueError(f'invalid {name}')
         if hasattr(baseline,name): values[name]=min(values[name],getattr(baseline,name))
     planner={name:value for name,value in values.items() if name not in
-             ('start_controller','start_rviz','params_file','command_topic','mppi_nominal_response_time_s')}
+             ('start_controller','start_rviz','params_file','command_topic','mppi_nominal_response_time_s','p3_map_timeout_s')}
     # 参数文件提供规划器专用设置；共享接口及能力约束由此组合入口最后统一覆盖。
     planner['execution_contract_enabled']=values['start_controller']
     params=([values['params_file']] if values['params_file'] else [])+[planner]

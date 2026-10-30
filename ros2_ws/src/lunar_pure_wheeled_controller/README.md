@@ -35,7 +35,14 @@ Path 输入为 reliable/volatile/depth1。TF 使用最新图，订阅 `/tf` 与
 拒收非有限值；停稳按纵向/横向速度合量与角速率共同判断。只做必要结构/有限数检查。
 
 活性用 monotonic：`path_timeout_s=.35`、`odometry_timeout_s=.5`、
-`p3_map_timeout_s=3.0`。成功处理的同 epoch 新观测也刷新有效地图接收时间；
+`p3_map_timeout_s=3.0`。对于已准备好的静态 OBJ 地图，可在两个共享入口
+`nav1cm_exploration.launch.py`、`nav1cm_wheel.launch.py` 显式传入
+`p3_map_timeout_s:=0.0`，仅关闭 direct_p3 地图接收年龄门禁。
+参数必须有限且非负；默认仍为3秒，动态地图继续使用正值。
+0 不允许缺少地图或有效接收记录，也不取消覆盖、碰撞、revision/epoch/origin
+变更后的重新认证、反馈/速度或路径检查；TF仍沿用原有处理。
+`policy_map_timeout_s` 同时承担服务请求 deadline，仍要求正值，不受此开关影响。
+成功处理的同 epoch 新观测也刷新有效地图接收时间；
 坏消息、未转换消息不能续命。地图接收和处理时间分开记录。模型时间与实际发布
 命令历史统一使用 ROS clock；缺 stamp 用当次 ROS 接收时刻，不能伪造旧 source age。
 标准反馈年龄预算使用配置的 Odometry timeout；实际 source age 仍进入延迟制动证明。
