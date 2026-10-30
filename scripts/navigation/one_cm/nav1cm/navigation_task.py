@@ -191,7 +191,7 @@ class NavigationTaskCoordinator:
                 current = replace(current, phase='FINISHED', outcome='CANCELED', reason_code='CANCELED_STOPPED')
         else:
             arrived = (self._execution_arrived(now_s) and packet.generation == current.generation and not packet.waiting and stopped and goal is not None and
-                       math.hypot(state.x-goal.x, state.y-goal.y) <= limits.goal_tolerance_m and
+                       math.hypot(state.x-goal.x, state.y-goal.y) <= limits.position_target_tolerance_m and
                        abs(angle_error(goal.yaw, state.yaw)) <= limits.goal_yaw_tolerance_rad)
             if not arrived:
                 arrived_since = None

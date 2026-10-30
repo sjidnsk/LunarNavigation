@@ -68,11 +68,24 @@ def _continuing_approach(state, reference, travel_yaw, approach_distance_m):
     return in_turn and np.cos(actual) > 1e-8
 
 
-def travel_target_yaw(state, reference, mode, approach_distance_m):
-    """行进对准spin只对准路线，已开始的末段转向只制动残余角速度。"""
+def _travel_direction(state, reference, approach_distance_m):
+    """同一方向决策供模式选择及对准使用；末段兼顾最终车体姿态。"""
     delta = reference.points[1] - reference.points[0]
     heading = float(np.arctan2(delta[1], delta[0]))
-    if mode == 'reverse' or (mode == 'spin' and abs(_wrap(heading-state.yaw)) > np.pi*.75):
+    reverse = abs(_wrap(heading-state.yaw)) > np.pi*.75
+    remaining = max(0., float(reference.s[-1])-reference.progress_s)
+    if reference.terminal_yaw is not None and 0. < remaining <= approach_distance_m:
+        projection = float(np.cos(angle_error(reference.terminal_yaw, heading)))
+        # 正交时两方向等价，保留原偏好，避免浮点正负决定换向。
+        if abs(projection) > 1e-8:
+            reverse = projection < 0.
+    return heading, 'reverse' if reverse else 'forward'
+
+
+def travel_target_yaw(state, reference, mode, approach_distance_m):
+    """行进对准spin只对准路线，已开始的末段转向只制动残余角速度。"""
+    heading, desired = _travel_direction(state, reference, approach_distance_m)
+    if mode == 'reverse' or (mode == 'spin' and desired == 'reverse'):
         heading += np.pi
     yaw = state.yaw + _wrap(heading-state.yaw)
     if mode == 'spin' and (abs(_wrap(yaw-state.yaw)) <= .3 or
@@ -86,9 +99,8 @@ def select_mode(state, reference, *, approach_distance_m=.8):
         if reference.terminal_yaw is not None and abs(state.v) <= 1e-10:
             return 'spin' if abs(angle_error(reference.terminal_yaw, state.yaw)) > .05 or abs(state.w) > 1e-10 else 'brake'
         return 'brake'
-    delta=reference.points[1]-reference.points[0]
-    error=_wrap(np.arctan2(delta[1],delta[0])-state.yaw)
-    desired='reverse' if abs(error)>np.pi*.75 else 'forward'
+    heading, desired = _travel_direction(state, reference, approach_distance_m)
+    error = _wrap(heading-state.yaw)
     if abs(state.v)>1e-8:
         current='forward' if state.v>0 else 'reverse'
         return current if current==desired else 'brake'

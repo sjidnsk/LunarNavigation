@@ -33,6 +33,28 @@ def apply_motion_model(specs,model):
     return result
 
 
+def apply_position_target(specs,target):
+    """隔离验证只覆盖导航owner的位置目标，不改公共验收或跟踪配置。"""
+    if target is None:return list(specs)
+    if not math.isfinite(target) or not 0<target<=.1:raise ValueError('invalid position target')
+    return [(package,entry,dict(parameters,goal_position_target_m=target)
+             if package=='lunar_nav1cm_planner' else dict(parameters))
+            for package,entry,parameters in specs]
+
+
+def position_target_errors(events,rows,target):
+    if target is None:return []
+    completed=[e for e in events if e['kind']=='finish' and e['outcome']==0]
+    errors=[]
+    valid=lambda v:isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) and 0<=v<=target
+    for event in completed:
+        if not valid(event.get('position_error_m')):errors.append('arrival outside declared position target')
+        references=[r for r in rows if r['kind']=='reference' and r['session_id']==event['session_id']]
+        if not references or any(not valid(r.get('position_tolerance_m')) or r['position_tolerance_m']<=0 for r in references):
+            errors.append('missing or wider owner position target evidence')
+    return errors
+
+
 def execution_evidence(rows,events=()):
     key=lambda row:(row['session_id'],row['revision'],row['path_digest'],row['intent'])
     refs={key(row):row for row in rows if row['kind']=='reference'}
@@ -136,6 +158,7 @@ def run(args,d):
         finally:pre.destroy_node()
         specs=owned_nav1cm_specs(ns,platform_config=d['platform'],build_dir=str(art/'planner-cache'),use_sim_time=False)
         specs=apply_motion_model(specs,d.get('motion_model_override'))
+        specs=apply_position_target(specs,d.get('position_target_m'))
         commands=[]
         for i,(package,entry,params) in enumerate(specs):
             command=[str(Path(get_package_prefix(package))/'lib'/package/entry),*inference_ros_arguments(ns,params)]
@@ -283,6 +306,9 @@ def run(args,d):
             completed_sessions={row['session_id'] for row in events if row['kind']=='finish' and row['outcome']==0}
             if not matched or not completed_sessions.issubset(terminal):
                 verdict['ok']=False;verdict.setdefault('errors',[]).append('missing identity-bound execution acceptance or fresh terminal evidence')
+        quality_errors=position_target_errors(events,execution_rows,d.get('position_target_m'))
+        if quality_errors:
+            verdict['ok']=False;verdict.setdefault('errors',[]).extend(quality_errors)
         if error:verdict['ok']=False;verdict.setdefault('errors',[]).append(error)
         base.write_json(art/'verdict.json',verdict)
     print(json.dumps(verdict))
@@ -292,13 +318,18 @@ def run(args,d):
 def main():
     p=base.parser();p.set_defaults(duration=90.)
     p.add_argument('--minimum-completed',type=int,default=2)
+    p.add_argument('--position-target-m',type=float)
     p.add_argument('--motion-model',choices=('differential_drive','curvature_limited'))
     p.add_argument('--require-execution-contract',action='store_true')
     args=p.parse_args()
     install(args.artifact/'guard')
     if args.plant:return base.plant_worker(args.artifact)
     if args.backend!='nav1cm' or args.minimum_completed<2:raise ValueError('nav1cm and >=2 completed goals required')
+    if args.position_target_m is not None and not args.require_execution_contract:
+        raise ValueError('position target requires execution contract evidence')
+    apply_position_target([],args.position_target_m)
     d=base.declaration(args,maximum_duration_s=900.);d['namespace']='/lunar_inference/nav1cm_closure'
+    if args.position_target_m is not None:d['position_target_m']=args.position_target_m
     if args.motion_model is not None:d['motion_model_override']=args.motion_model
     d['execution_contract_required']=args.require_execution_contract
     d['closure_script_sha256']=base.digest(__file__);d['grade_sha256']=base.digest(Path(__file__).with_name('inference_closure_grade.py'))

@@ -102,3 +102,24 @@ def test_extended_declaration_changes_only_explicit_duration_bound(monkeypatch,t
     for duration in (0.,-1.,900.01,float('inf'),float('nan')):
         args.duration=duration
         with pytest.raises(ValueError):base.declaration(args,maximum_duration_s=900.)
+
+def test_position_target_override_belongs_only_to_navigation_owner(monkeypatch):
+    globals_=load(monkeypatch).__globals__
+    apply=globals_['apply_position_target']
+    specs=[('lunar_nav1cm_planner','node',dict(goal_tolerance_m=.1)),('lunar_pure_wheeled_controller','node',dict(goal_position_tolerance_m=.1))]
+    result=apply(specs,.02)
+    assert result[0][2]==dict(goal_tolerance_m=.1,goal_position_target_m=.02)
+    assert result[1][2]==specs[1][2] and 'goal_position_target_m' not in specs[0][2]
+    for bad in (0.,-.01,.11,float('nan'),float('inf')):
+        with pytest.raises(ValueError):apply(specs,bad)
+
+
+def test_position_quality_rejects_outer_band_success_and_wrong_owner_metadata(monkeypatch):
+    check=load(monkeypatch).__globals__['position_target_errors']
+    event=dict(kind='finish',outcome=0,session_id='a',position_error_m=.019)
+    row=dict(kind='reference',session_id='a',position_tolerance_m=.02)
+    assert check([event],[row],.02)==[]
+    assert check([dict(event,position_error_m=.08)],[row],.02)
+    assert check([event],[dict(row,position_tolerance_m=.1)],.02)
+    assert check([event],[],.02)
+    assert check([event],[row],None)==[]

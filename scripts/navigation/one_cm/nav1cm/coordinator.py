@@ -44,6 +44,7 @@ class NavigationCoordinator:
         self.clearance_radius_m = self.limits.global_clearance_radius(clearance_radius_m)
         self.stall_timeout_s = stall_timeout_s
         self.goal_tolerance_m = .1
+        self.goal_position_target_m = None
         self.goal_yaw_tolerance_rad = .05
         self.stopped_linear_mps = self.stopped_angular_rps = .01
         self.route = self.progress = None
@@ -65,6 +66,14 @@ class NavigationCoordinator:
         self._observed_world = self._blocked = None
         self._blocked_boxes = np.empty((0, 4))
         self._goal_check_key = self._cached_goal_check = None
+
+    @property
+    def position_target_tolerance_m(self):
+        """位置收敛目标由导航owner统一定义，不能宽于公共验收上限。"""
+        target=self.goal_tolerance_m if self.goal_position_target_m is None else self.goal_position_target_m
+        if not np.isfinite(target) or target<=0:
+            raise ValueError('goal_position_target_m must be finite and positive')
+        return min(self.goal_tolerance_m,float(target))
 
     def close(self):
         if hasattr(self.runner, 'close'): self.runner.close()
@@ -161,7 +170,7 @@ class NavigationCoordinator:
             candidate = brake_candidate(state, grid, reference, self.limits)
             last = candidate.states[-1]
             final_pose_satisfied = (
-                np.linalg.norm(last[:2] - self._goal) <= self.goal_tolerance_m and
+                np.linalg.norm(last[:2] - self._goal) <= self.position_target_tolerance_m and
                 (self._goal_yaw is None or
                  abs(angle_error(self._goal_yaw, last[2])) <= self.goal_yaw_tolerance_rad))
             return candidate, 'ARRIVED' if stopped and final_pose_satisfied else 'GOAL_BRAKING'
@@ -240,7 +249,7 @@ class NavigationCoordinator:
             goal_check = (self._goal_checker.check_goal(world, goal) if self._goal_yaw is None else
                           check_pose_goal(world, goal, self._goal_yaw, self.limits))
             self._goal_check_key, self._cached_goal_check = self.goal_revision, goal_check
-        arrived_xy = np.linalg.norm(np.array(goal)-motion[:2]) <= self.goal_tolerance_m
+        arrived_xy = np.linalg.norm(np.array(goal)-motion[:2]) <= self.position_target_tolerance_m
         global_due = now_s + 1e-9 >= self._next_global
         coalesced_map_update = (self.revalidate_current_map and self.route is not None and
                                 self._pending_reason == 'MAP_CHANGED' and not global_due)

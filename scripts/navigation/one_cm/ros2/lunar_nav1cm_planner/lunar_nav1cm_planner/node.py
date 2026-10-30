@@ -53,8 +53,13 @@ def create_resources(limits, capability, settings):
     except Exception:
         terrain._terrain.close()
         raise
-    for key in ('goal_tolerance_m', 'goal_yaw_tolerance_rad', 'stopped_linear_mps', 'stopped_angular_rps'):
-        value = float(settings[key])
+    for key in ('goal_tolerance_m', 'goal_yaw_tolerance_rad', 'stopped_linear_mps', 'stopped_angular_rps', 'goal_position_target_m'):
+        try:
+            value = float(settings.get(key,coordinator.goal_tolerance_m) if key=='goal_position_target_m' else settings[key])
+        except (TypeError,ValueError) as exc:
+            coordinator.close()
+            terrain._terrain.close()
+            raise ValueError(f'{key} must be finite and positive') from exc
         if not math.isfinite(value) or value <= 0:
             coordinator.close()
             terrain._terrain.close()
@@ -91,7 +96,7 @@ class PlannerNode(Node):
             'allow_unknown': False, 'planning_period_s': .1, 'execution_period_s': .05,
             'global_period_s': 1., 'global_budget_s': 1., 'clearance_radius_m': limits.global_clearance_radius(.9),
             'horizon_steps': 20, 'horizon_dt_s': .2,
-            'goal_tolerance_m': .1, 'goal_yaw_tolerance_rad': .05,
+            'goal_tolerance_m': .1, 'goal_position_target_m': .02, 'goal_yaw_tolerance_rad': .05,
             'stopped_linear_mps': .01, 'stopped_angular_rps': .01,
             'map_topic': '/Car/T3/mapping/grid_map',
             'map_qos_reliability': 'best_effort', 'map_qos_durability': 'volatile',
@@ -167,7 +172,7 @@ class PlannerNode(Node):
             self._execution_revision+=1
             coordinator=self.runtime.session.coordinator
             reference=ExecutionReference(execution_session_id(task_id,generation),self._execution_revision,
-                path_fingerprint(local),intent,stamp_ns(local.header),coordinator.goal_tolerance_m,
+                path_fingerprint(local),intent,stamp_ns(local.header),coordinator.position_target_tolerance_m,
                 coordinator.goal_yaw_tolerance_rad,coordinator.stopped_linear_mps,coordinator.stopped_angular_rps)
             self.runtime.register_execution_reference(reference)
             self._execution_publisher.publish(reference_message(reference,self.runtime.map_frame))
