@@ -86,3 +86,13 @@ TCP车辆接口是控制/反馈报文转换与连接层；OBJ虚拟观测是可�
 当前处置：TCP专题已保存源码待应用接收，应用owner仍2d9a8ce；公共main e9b37bb已落地。未push、不删除分支/工作树。剩余跟踪器认证计算与回调时序应作为公共问题继续定位，不能以TCP私有算法绕过。
 
 最终来源：TCP输入修复1992e17，消费公共main e9b37bb的双亲合并dd51a81。共享launch、controller node/motion_configuration和三个parser与main逐项diff为空，TTL全链限定复审确认接线阻断关闭。应用owner保持不变；分支/工作树待运行阻塞解决后接收与回收审计。
+
+## 用户授权源码合入收尾（2026-10-30）
+
+用户在跟踪器修复后明确“可以合入”，覆盖此前源码待合入及应用owner不移动的处置；不改变闭环验收结果。公共修复426fbcb及来源切片已由main接收，公共收尾eabbfc48dca8b7f2320c8ecf4e272b795ac1fb50；TCP消费合并8f71c125795bf754992b48df78fbf7f1b3a952f9双亲保留主线和原TCP候选谱系。
+
+本收尾提交由app/orin-unreal-simulation快进接收，包含此前16b3f0c算法/轮式参数统一、2ae576f新算法入口适配、1992e17真实观测/静态地图策略及本次公共跟踪修复。共享跟踪器、P3厘米投影、共享launch与main逐项diff为空；共同核心路径仅保留旧应用独有历史辅助文件（未进入当前主线CMake），没有M/D类型算法分叉。
+
+验证复用已完成的目标机包测576 tests/0 errors/failures/skipped及独立审查；合并后产品代码与相应验收候选一致，本轮没有新跑/新部署/新闭环。r12仍TRACKING_STALLED，距目标.672m、角误差2.427rad，tick p95约94ms，不能宣称20Hz或完整TCP/外部UE/实车验收通过。源码接收与运行资格分别保留。
+
+复用工作树D:/CodexDownloads/lunar_navigation/git-preservation-20261029/worktree转回TCP应用owner，公共main-worktree转回main。hk/tracker-bounded-publication-20261030与hk/tcp-main-sync-20261030保留可靠恢复来源，待资源回收审计；未获删除授权，不清理。保护原目录不改，不push、不设upstream、不创建PR。下一运行问题仍为实际跟踪/车辆执行停滞，未先验指定责任模块。
