@@ -38,3 +38,5 @@ TCP deployment/p4_unreal_target、deployment/p4_vehicle_gui及OBJ仿真包共90�
 本轮仅保存主线同步源码候选，测试/构建/ROS/TCP仿真/部署/闭环均NOT_RUN；不沿用主线测试冒充应用组合通过。应用owner和main保持原指针，待后续P4必要代码集整理及适用构建后再决定owner接收。专题工作树保留，禁止自动清理。
 
 三项修正的独立限定复审已通过，无剩余源码阻断；九项冲突及未解决索引均清空，差异空白检查通过。处置：本地提交保存，待应用构建/适配与owner接收，不部署、不push。
+
+源码合并提交：ffdad931fe459a2ddb25c246f11a272dafb37a1e（双亲TCP基线2d9a8ce、主线90b233c），专题hk/tcp-main-sync-20261030；后续收尾提交仅记录本SHA，不扩大验证资格。
