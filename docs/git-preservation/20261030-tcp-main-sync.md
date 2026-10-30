@@ -84,3 +84,5 @@ TCP车辆接口是控制/反馈报文转换与连接层；OBJ虚拟观测是可�
 - 四轮均非完整闭环PASS；r4车辆位置未变、退出速度零、无TCP错误、launch返回0。原始日志P4/run/tcp-nav1cm-r1至r4与P4/log保留，不把ARM回环当外部UE物理/实车证据。
 
 当前处置：TCP专题已保存源码待应用接收，应用owner仍2d9a8ce；公共main e9b37bb已落地。未push、不删除分支/工作树。剩余跟踪器认证计算与回调时序应作为公共问题继续定位，不能以TCP私有算法绕过。
+
+最终来源：TCP输入修复1992e17，消费公共main e9b37bb的双亲合并dd51a81。共享launch、controller node/motion_configuration和三个parser与main逐项diff为空，TTL全链限定复审确认接线阻断关闭。应用owner保持不变；分支/工作树待运行阻塞解决后接收与回收审计。
