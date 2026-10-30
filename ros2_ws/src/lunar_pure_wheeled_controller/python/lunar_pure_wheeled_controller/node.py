@@ -705,28 +705,33 @@ class PureWheeledControllerNode(Node):
         result=self._executor.update(state,dt,now_s=source_ns/1e9,state_age_s=(now_ns-source_ns)/1e9)
         if self._input_is_stale(self._odometry_received_at,self._odometry_timeout_s):
             return self._standard_unavailable('stale_feedback_after_optimization')
-        # 重新取 worker 最新不可变快照；认证自身耗时也必须被下一次证明覆盖。
+        # 每周期最多追加一次证明，截止时刻从证明开始计算，绝不追赶自身耗时。
         covered_ns=now_ns+int(self._executor.config.compute_budget_s*1e9)
-        certified_grid=grid
-        while True:
-            latest=self._standard_grid(state)
-            if latest is None:return self._standard_unavailable('stale_map_after_optimization')
-            if self._input_is_stale(self._odometry_received_at,self._odometry_timeout_s):
-                return self._standard_unavailable('stale_feedback_during_recertification')
-            changed=(latest.revision,latest.epoch,latest.origin)!=(certified_grid.revision,certified_grid.epoch,certified_grid.origin)
+        latest=self._standard_grid(state)
+        if latest is None:return self._standard_unavailable('stale_map_after_optimization')
+        if self._input_is_stale(self._odometry_received_at,self._odometry_timeout_s):
+            return self._standard_unavailable('stale_feedback_during_recertification')
+        identity=lambda value:(value.revision,value.epoch,value.origin)
+        certificate_ns=self.get_clock().now().nanoseconds
+        if identity(latest)!=identity(grid) or certificate_ns>covered_ns:
             self._executor.set_map(latest)
-            certificate_ns=self.get_clock().now().nanoseconds
-            if not changed and certificate_ns<=covered_ns:break
             if not self._executor.certify_publication(state,result.command.linear_x_mps,
                     result.command.angular_z_radps,(certificate_ns-source_ns)/1e9):
                 return self._standard_unavailable('latest_map_or_aged_motion_unsafe')
             covered_ns=certificate_ns+int(self._executor.config.compute_budget_s*1e9)
-            certified_grid=latest
+        final_grid=self._standard_grid(state)
+        publication_ns=self.get_clock().now().nanoseconds
+        if final_grid is None or identity(final_grid)!=identity(latest):
+            return self._standard_unavailable('map_changed_during_certification')
+        if publication_ns<certificate_ns or publication_ns>covered_ns:
+            return self._standard_unavailable('publication_certificate_expired')
+        if self._input_is_stale(self._odometry_received_at,self._odometry_timeout_s):
+            return self._standard_unavailable('stale_feedback_after_certification')
+        self._publish_twist(result.command.linear_x_mps,result.command.angular_z_radps)
+        self._publish_execution_status()
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(self._executor.diagnostics,
             event='solve_result',phase=result.phase,compute_ms=(monotonic()-started)*1000,
             map_revision=latest.revision,measured_stopped=self._executor._stopped(state)))))
-        self._publish_twist(result.command.linear_x_mps,result.command.angular_z_radps)
-        self._publish_execution_status()
 
     def _publish_mppi_step(self, stamp_ns):
         self._mppi_step_ack.publish(String(data=json.dumps(dict(event="control_step",
