@@ -665,3 +665,24 @@ def test_follower_endpoint_recovery_heading_points_back_to_goal():
     poses=np.zeros((2,41,3));poses[:,:,0]=1.;poses[:,:,1]=.2;poses[0,:,2]=-np.pi/2
     cost=e._tracking_cost(TrackingState(1.,.2,-np.pi/2),np.zeros((2,40,2)),np.array([1.,0.]),-np.pi/2,poses)
     assert cost[0]<cost[1]
+
+
+def test_command_history_covers_delayed_feedback_and_boundary_command():
+    e = executor(mppi_policy=module.MppiPolicy(state_age_budget_s=4.5))
+    for i in range(1000):
+        e.note_command(.03 if i < 600 else .05, 0., stamp_s=i*.01)
+    cutoff = 9.99 - 4.5 - e.policy.control_response_time_s - e.config.compute_budget_s - e.config.model_dt
+    assert e._command_history[0][0] <= cutoff
+    assert e._command_history[1][0] > cutoff
+    assert len(e._command_history) < 600
+    e._model_time = 6.0
+    e._state_age_s = 2.0
+    _, actual = e._rollout(TrackingState(0,0,0), np.zeros((1,1,2)), .05)
+    assert actual[0,0,0] > 0., "实际历史运动不能被当作零命令"
+
+
+@pytest.mark.parametrize("budget,age,invalid",[(.5,2.,True),(4.5,2.,False),(4.5,4.6,True)])
+def test_delayed_feedback_budget_still_rejects_expired_state(budget,age,invalid):
+    e = executor(mppi_policy=module.MppiPolicy(state_age_budget_s=budget))
+    e.update(TrackingState(0,0,0),.05,state_age_s=age)
+    assert (e.failure == "INVALID_STATE") is invalid

@@ -58,7 +58,14 @@ class MppiExecutor:
         record=(stamp,self._last_command.copy())
         if self._command_history and stamp==self._command_history[-1][0]:self._command_history[-1]=record
         else:self._command_history.append(record)
-        self._command_history=self._command_history[-64:]
+        # 保留原64条下限，同时覆盖允许的真实反馈年龄和执行响应；
+        # 必须保留cutoff之前一条，才能重放窗口起点仍在生效的指令。
+        cutoff=stamp-(self.config.state_age_budget_s+self.policy.control_response_time_s+
+                      self.config.compute_budget_s+self.config.model_dt)
+        keep=max(0,len(self._command_history)-64)
+        while keep>0 and self._command_history[keep][0]>cutoff:
+            keep-=1
+        self._command_history=self._command_history[keep:]
     def note_angular_command(self,w):self.note_command(self._last_command[0],w)
 
     def discard_prediction(self):self._nominal[:]=0.

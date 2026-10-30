@@ -28,7 +28,7 @@ DEFAULTS = {
     "exploration_diagnostics_topic": "/Car/T4/exploration/diagnostics",
     "command_topic": "/Car/T5/Car_Cmd_Vel", "diagnostics_topic": "/Car/T4/control/mppi_diagnostics",
     "map_qos_reliability": "reliable", "map_qos_durability": "volatile",
-    "p3_map_timeout_s": "3.0",
+    "p3_map_timeout_s": "3.0", "odometry_timeout_s": "0.5", "mppi_time_steps": "40",
     "coarse_resolution_m": "1.0", "navigation_map_wait_timeout_s": "30.0",
 }
 
@@ -37,6 +37,12 @@ def _compose(context):
     values["p3_map_timeout_s"] = float(values["p3_map_timeout_s"])
     if not isfinite(values["p3_map_timeout_s"]) or values["p3_map_timeout_s"] < 0:
         raise ValueError("p3_map_timeout_s must be finite and nonnegative")
+    values["odometry_timeout_s"] = float(values["odometry_timeout_s"])
+    if not isfinite(values["odometry_timeout_s"]) or values["odometry_timeout_s"] <= 0:
+        raise ValueError("odometry_timeout_s must be finite and positive")
+    values["mppi_time_steps"] = int(values["mppi_time_steps"])
+    if values["mppi_time_steps"] <= 0:
+        raise ValueError("mppi_time_steps must be positive")
     strategy = values["exploration_strategy"]
     if strategy not in {"none", "frontier", "drl"}:
         raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
@@ -87,6 +93,7 @@ def _compose(context):
             "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
             "standard_map_source": "direct_p3", "p3_map_topic": values["map_topic"],
             "p3_map_timeout_s": values["p3_map_timeout_s"],
+            "odometry_timeout_s": values["odometry_timeout_s"], "mppi_time_steps": values["mppi_time_steps"],
             "path_topic": values["local_path_topic"], "mppi_diagnostics_topic": values["diagnostics_topic"],
             "mppi_nominal_response_time_s": .15, "allow_unknown": values["allow_unknown"] == "true"}))
     return actions
