@@ -1,0 +1,126 @@
+Panels:
+- Class: rviz_common/Displays
+  Name: Displays
+Visualization Manager:
+  Class: ''
+  Global Options:
+    Background Color: 24; 27; 32
+    Fixed Frame: map
+    Frame Rate: 10
+  Displays:
+  - Class: rviz_default_plugins/Grid
+    Name: Ground grid
+    Enabled: true
+    Cell Size: 1.0
+    Plane Cell Count: 100
+  - Class: rviz_default_plugins/PointCloud2
+    Name: P3 elevation map
+    Enabled: true
+    Topic:
+      Value: /T3/mapping/elevation_cloud
+      Reliability Policy: Best Effort
+      Durability Policy: Volatile
+      Depth: 1
+    Style: Points
+    Size (Pixels): 3
+    Size (m): 0.05
+    Position Transformer: XYZ
+    Color Transformer: AxisColor
+    Axis: Z
+    Decay Time: 0.0
+    Use Fixed Frame: true
+  - Class: rviz_default_plugins/Odometry
+    Name: P3 odometry
+    Enabled: true
+    Topic:
+      Value: /Car/T3/localization/odometry
+      Reliability Policy: Best Effort
+      Durability Policy: Volatile
+      Depth: 1
+    Keep: 20
+  - Class: rviz_default_plugins/TF
+    Name: TF
+    Enabled: true
+    Show Names: true
+    Show Axes: true
+    Show Arrows: true
+    Frame Timeout: 10.0
+  - Class: rviz_default_plugins/Map
+    Name: P4 exploration grid
+    Enabled: false
+    Topic:
+      Value: /p4_p3_debug/exploration_map
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+    Alpha: 0.35
+  - Class: rviz_default_plugins/MarkerArray
+    Name: P4 frontiers
+    Enabled: true
+    Topic:
+      Value: /p4_p3_debug/exploration/frontiers
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/MarkerArray
+    Name: P4 task boundary
+    Enabled: true
+    Topic:
+      Value: /p4_p3_debug/exploration/task_boundary
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/MarkerArray
+    Name: P3 input timing - NO CONTROL
+    Enabled: true
+    Topic:
+      Value: /p4_p3_debug/input_status_markers
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      Depth: 1
+  - Class: rviz_default_plugins/Path
+    Name: P4 global route
+    Enabled: true
+    Topic:
+      Value: /p4_p3_debug/global_route
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      Depth: 1
+  - Class: rviz_default_plugins/Path
+    Name: P4 local reference
+    Enabled: true
+    Topic:
+      Value: /p4_p3_debug/local_path
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      Depth: 1
+  - Class: rviz_default_plugins/MarkerArray
+    Name: P4 task grid evidence
+    Enabled: true
+    Topic:
+      Value: /p4_p3_debug/exploration/task_map_markers
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  Tools:
+  - Class: rviz_default_plugins/Interact
+  - Class: rviz_default_plugins/MoveCamera
+  - Class: rviz_default_plugins/Select
+  - Class: rviz_default_plugins/Measure
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 25.0
+      Pitch: 1.1
+      Yaw: 0.8
+      Target Frame: base_link
+      Focal Point:
+        X: 0.0
+        Y: 0.0
+        Z: 0.0
+Window Geometry:
+  Width: 1580
+  Height: 960
+  X: 0
+  Y: 0

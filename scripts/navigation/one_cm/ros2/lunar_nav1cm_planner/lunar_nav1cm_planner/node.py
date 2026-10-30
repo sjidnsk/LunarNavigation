@@ -128,7 +128,8 @@ class PlannerNode(Node):
                             durability=DurabilityPolicy.VOLATILE)
         dynamic_tf = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
                                 durability=DurabilityPolicy.VOLATILE)
-        static_tf = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+        # 晚加入需保留同一发布端分批发送的多条静态边，不能只留最后一帧。
+        static_tf = QoSProfile(depth=100, reliability=ReliabilityPolicy.RELIABLE,
                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(GridMap, settings['map_topic'], self.runtime.offer_map, source_qos)
         self.create_subscription(Odometry, settings['odometry_topic'], self.runtime.offer_odometry, latest)
