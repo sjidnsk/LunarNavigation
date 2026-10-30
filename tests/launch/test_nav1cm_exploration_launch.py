@@ -87,3 +87,16 @@ def test_exploration_passes_map_age_policy_only_to_follower(monkeypatch,timeout)
 @pytest.mark.parametrize('timeout',['-1.0','nan','inf'])
 def test_exploration_rejects_invalid_map_age_policy(monkeypatch,timeout):
     with pytest.raises(ValueError):graph(monkeypatch,enable_controller='true',p3_map_timeout_s=timeout)
+
+
+@pytest.mark.parametrize("enabled", ["true", "false"])
+def test_unknown_policy_is_shared_by_planner_and_controller(monkeypatch, enabled):
+    g = nodes(graph(monkeypatch, enable_controller="true", allow_unknown=enabled))
+    planner, follower = [n["parameters"][0] for n in g if n["package"] in {"lunar_nav1cm_planner", "lunar_pure_wheeled_controller"}]
+    assert planner["allow_unknown"] is (enabled == "true")
+    assert follower["allow_unknown"] is planner["allow_unknown"]
+
+
+def test_unknown_policy_rejects_non_boolean(monkeypatch):
+    with pytest.raises(RuntimeError, match="allow_unknown"):
+        graph(monkeypatch, allow_unknown="perhaps")

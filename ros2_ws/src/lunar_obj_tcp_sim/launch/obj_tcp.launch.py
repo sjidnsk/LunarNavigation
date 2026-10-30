@@ -71,7 +71,7 @@ def compose(context):
     # TCP/OBJ只映射输入输出；算法节点与参数由主线同一个组合负责。
     shared_arguments = dict(
         exploration_strategy="frontier" if config.mode == "explore" else "none",
-        enable_controller="true", build_dir=build_dir, platform_config=platform_config,
+        enable_controller="true", allow_unknown="true", build_dir=build_dir, platform_config=platform_config,
         map_topic=prefix+"/grid_map", odometry_topic=prefix+"/odometry",
         action_name=prefix+"/navigate_to_pose", goal_topic=prefix+"/goal",
         global_route_topic=prefix+"/global_route", local_path_topic=prefix+"/local_path",

@@ -11,6 +11,7 @@ from launch_ros.actions import Node
 # 这些值只属于新入口；既有 exploration_navigation 和训练默认保持原样。
 DEFAULTS = {
     "exploration_strategy": "none", "enable_controller": "false", "drl_actor": "",
+    "allow_unknown": "false",
     "build_dir": "", "platform_config": "", "use_sim_time": "false",
     "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
     "map_topic": "/Car/T3/mapping/grid_map", "odometry_topic": "/Car/T3/localization/odometry",
@@ -39,7 +40,7 @@ def _compose(context):
     strategy = values["exploration_strategy"]
     if strategy not in {"none", "frontier", "drl"}:
         raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
-    for key in ("enable_controller", "use_sim_time"):
+    for key in ("enable_controller", "use_sim_time", "allow_unknown"):
         if values[key] not in {"true", "false"}: raise RuntimeError(key+" 必须为 true/false")
     if strategy == "drl" and not values["drl_actor"]:
         raise RuntimeError("drl 策略需要显式 drl_actor；权重加载与校验由可选 DRL 包负责")
@@ -64,7 +65,7 @@ def _compose(context):
             "execution_contract_enabled":values["enable_controller"]=="true",
             "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
             **{k: values[k] for k in ("action_name","goal_topic","global_route_topic","local_path_topic","build_dir")},
-            "allow_unknown": False}),
+            "allow_unknown": values["allow_unknown"] == "true"}),
     ]
     shared_policy = {**{k: values[k] for k in ("task_topic","status_topic","odometry_topic","tf_topic","tf_static_topic")},
                      **frames, "platform_config": config}
@@ -87,7 +88,7 @@ def _compose(context):
             "standard_map_source": "direct_p3", "p3_map_topic": values["map_topic"],
             "p3_map_timeout_s": values["p3_map_timeout_s"],
             "path_topic": values["local_path_topic"], "mppi_diagnostics_topic": values["diagnostics_topic"],
-            "mppi_nominal_response_time_s": .15, "allow_unknown": False}))
+            "mppi_nominal_response_time_s": .15, "allow_unknown": values["allow_unknown"] == "true"}))
     return actions
 
 def generate_launch_description():
