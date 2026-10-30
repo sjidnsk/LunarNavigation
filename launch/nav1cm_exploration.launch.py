@@ -11,6 +11,7 @@ from launch_ros.actions import Node
 # 这些值只属于新入口；既有 exploration_navigation 和训练默认保持原样。
 DEFAULTS = {
     "exploration_strategy": "none", "enable_controller": "false", "drl_actor": "",
+    "allow_unknown": "false",
     "build_dir": "", "platform_config": "", "use_sim_time": "false",
     "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
     "map_topic": "/Car/T3/mapping/grid_map", "odometry_topic": "/Car/T3/localization/odometry",
@@ -27,7 +28,8 @@ DEFAULTS = {
     "exploration_diagnostics_topic": "/Car/T4/exploration/diagnostics",
     "command_topic": "/Car/T5/Car_Cmd_Vel", "diagnostics_topic": "/Car/T4/control/mppi_diagnostics",
     "map_qos_reliability": "reliable", "map_qos_durability": "volatile",
-    "p3_map_timeout_s": "3.0", "mppi_compute_envelope_s": "0.05",
+    "p3_map_timeout_s": "3.0", "odometry_timeout_s": "0.5", "mppi_time_steps": "40",
+    "mppi_compute_envelope_s": "0.05",
     "coarse_resolution_m": "0.2", "navigation_map_wait_timeout_s": "30.0",
 }
 
@@ -36,13 +38,21 @@ def _compose(context):
     values["p3_map_timeout_s"] = float(values["p3_map_timeout_s"])
     if not isfinite(values["p3_map_timeout_s"]) or values["p3_map_timeout_s"] < 0:
         raise ValueError("p3_map_timeout_s must be finite and nonnegative")
+    values["odometry_timeout_s"] = float(values["odometry_timeout_s"])
+    if not isfinite(values["odometry_timeout_s"]) or values["odometry_timeout_s"] <= 0:
+        raise ValueError("odometry_timeout_s must be finite and positive")
+    values["mppi_time_steps"] = int(values["mppi_time_steps"])
+    if values["mppi_time_steps"] <= 0:
+        raise ValueError("mppi_time_steps must be positive")
+
+
     values['mppi_compute_envelope_s'] = float(values['mppi_compute_envelope_s'])
     if not isfinite(values['mppi_compute_envelope_s']) or values['mppi_compute_envelope_s'] <= 0:
         raise ValueError('mppi_compute_envelope_s must be finite and positive')
     strategy = values["exploration_strategy"]
     if strategy not in {"none", "frontier", "drl"}:
         raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
-    for key in ("enable_controller", "use_sim_time"):
+    for key in ("enable_controller", "use_sim_time", "allow_unknown"):
         if values[key] not in {"true", "false"}: raise RuntimeError(key+" 必须为 true/false")
     if strategy == "drl" and not values["drl_actor"]:
         raise RuntimeError("drl 策略需要显式 drl_actor；权重加载与校验由可选 DRL 包负责")
@@ -67,7 +77,7 @@ def _compose(context):
             "execution_contract_enabled":values["enable_controller"]=="true",
             "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
             **{k: values[k] for k in ("action_name","goal_topic","global_route_topic","local_path_topic","build_dir")},
-            "allow_unknown": False}),
+            "allow_unknown": values["allow_unknown"] == "true"}),
     ]
     shared_policy = {**{k: values[k] for k in ("task_topic","status_topic","odometry_topic","tf_topic","tf_static_topic")},
                      **frames, "platform_config": config}
@@ -89,9 +99,12 @@ def _compose(context):
             "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
             "standard_map_source": "direct_p3", "p3_map_topic": values["map_topic"],
             "p3_map_timeout_s": values["p3_map_timeout_s"],
+            "odometry_timeout_s": values["odometry_timeout_s"], "mppi_time_steps": values["mppi_time_steps"],
+
+
             "mppi_compute_envelope_s": values["mppi_compute_envelope_s"],
             "path_topic": values["local_path_topic"], "mppi_diagnostics_topic": values["diagnostics_topic"],
-            "mppi_nominal_response_time_s": .15, "allow_unknown": False}))
+            "mppi_nominal_response_time_s": .15, "allow_unknown": values["allow_unknown"] == "true"}))
     return actions
 
 def generate_launch_description():

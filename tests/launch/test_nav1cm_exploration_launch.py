@@ -89,6 +89,36 @@ def test_exploration_rejects_invalid_map_age_policy(monkeypatch,timeout):
     with pytest.raises(ValueError):graph(monkeypatch,enable_controller='true',p3_map_timeout_s=timeout)
 
 
+@pytest.mark.parametrize("enabled", ["true", "false"])
+def test_unknown_policy_is_shared_by_planner_and_controller(monkeypatch, enabled):
+    g = nodes(graph(monkeypatch, enable_controller="true", allow_unknown=enabled))
+    planner, follower = [n["parameters"][0] for n in g if n["package"] in {"lunar_nav1cm_planner", "lunar_pure_wheeled_controller"}]
+    assert planner["allow_unknown"] is (enabled == "true")
+    assert follower["allow_unknown"] is planner["allow_unknown"]
+
+
+def test_unknown_policy_rejects_non_boolean(monkeypatch):
+    with pytest.raises(RuntimeError, match="allow_unknown"):
+        graph(monkeypatch, allow_unknown="perhaps")
+
+
+@pytest.mark.parametrize("budget", ["0.5", "4.5"])
+def test_p3_feedback_budget_reaches_only_controller(monkeypatch, budget):
+    g = nodes(graph(monkeypatch, enable_controller="true", odometry_timeout_s=budget))
+    assert g[-1]["parameters"][0]["odometry_timeout_s"] == float(budget)
+    assert all("odometry_timeout_s" not in n["parameters"][0] for n in g[:-1])
+
+
+@pytest.mark.parametrize("budget", ["0", "-1", "nan", "inf"])
+def test_p3_feedback_budget_must_be_finite_positive(monkeypatch, budget):
+    with pytest.raises(ValueError, match="odometry_timeout_s"):
+        graph(monkeypatch, odometry_timeout_s=budget)
+
+
+def test_p3_prediction_window_only_reaches_controller(monkeypatch):
+    g = nodes(graph(monkeypatch, enable_controller="true", mppi_time_steps="140"))
+    assert g[-1]["parameters"][0]["mppi_time_steps"] == 140
+    assert all("mppi_time_steps" not in n["parameters"][0] for n in g[:-1])
 
 
 @pytest.mark.parametrize('budget',[.05,.2])
@@ -101,3 +131,16 @@ def test_publication_envelope_reaches_only_controller(monkeypatch,budget):
 @pytest.mark.parametrize('budget',['0','-.1','nan','inf'])
 def test_invalid_publication_envelope_is_rejected(monkeypatch,budget):
     with pytest.raises(ValueError):graph(monkeypatch,enable_controller='true',mppi_compute_envelope_s=budget)
+
+
+def test_current_exploration_default_matches_twenty_centimeter_p3(monkeypatch):
+    maps=nodes(graph(monkeypatch,exploration_strategy='frontier'))[0]['parameters'][0]
+    assert maps['coarse_resolution_m']==.2
+
+
+def test_owned_nav1cm_map_uses_same_twenty_centimeter_exploration_default():
+    path=ROOT/'ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/navigation_backend.py'
+    spec=importlib.util.spec_from_file_location('owned_nav1cm_resolution',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    maps=module.owned_nav1cm_specs('/private',platform_config='/wheel.yaml',build_dir='/cache',use_sim_time=False)[0][2]
+    assert maps['coarse_resolution_m']==.2
