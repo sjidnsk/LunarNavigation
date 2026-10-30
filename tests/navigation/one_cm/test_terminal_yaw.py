@@ -47,9 +47,11 @@ def test_residual_translation_brakes_from_actual_feedback_before_spin(v, w):
     state = VehicleState(0, 0, .2, v, w)
     grid, ref, limits = terminal_scene(state, .7)
     tr = api().terminal_candidate(state, grid, ref, limits)
-    assert tr.source == 'brake' and tr.mode == ('reverse' if v < 0 else 'forward')
+    assert tr.source.startswith('terminal-yaw:bounded') and tr.mode=='spin'
     assert np.array_equal(tr.states[0, :5], [0, 0, .2, v, w])
-    assert np.allclose(tr.states[-1, 3:5], 0, atol=1e-12)
+    zero=int(np.flatnonzero(abs(tr.states[:,3])<=1e-10)[0])
+    assert zero>0 and np.all(abs(tr.states[zero:,3])<=1e-10)
+    assert tr.states[-1,2]>.3  # 制动后应在同一候选内继续目标转向。
     assert certify(tr, grid, limits, 1).valid
 
 
@@ -58,7 +60,8 @@ def test_opposing_or_overshooting_angular_motion_brakes_physically(w):
     state = VehicleState(0, 0, 0, 0, w)
     grid, ref, limits = terminal_scene(state, .002)
     tr = api().terminal_candidate(state, grid, ref, limits)
-    assert tr.source == 'brake'
+    assert tr.source.startswith('terminal-yaw:bounded')
+    assert tr.states[-1,2]==pytest.approx(.002)
     assert tr.states[0, 4] == w and abs(tr.states[-1, 4]) < 1e-12
     assert np.sign(tr.controls[0, 1]) == -np.sign(w)
     assert certify(tr, grid, limits, 1).valid

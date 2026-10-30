@@ -157,19 +157,18 @@ class StandardPathFollower(MppiPathFollower):
         return sequence
 
     def _reference_errors(self, poses):
-        distance,heading=super()._reference_errors(poses)
-        # MPPI 基类按行进方向评分；在此保留标准 Path 的中间车体 yaw。
-        if self.path.lengths:
-            points=self.path.original;xy=poses[:,:,:2]
-            a=np.array([p[:2] for p in points[:-1]]);b=np.array([p[:2] for p in points[1:]])
-            vec=b-a;length=np.sum(vec*vec,axis=1)
-            fraction=np.clip(np.sum((xy[:,:,None,:]-a)*vec,axis=-1)/length,0.,1.)
-            d=np.sum((xy[:,:,None,:]-a-fraction[:,:,:,None]*vec)**2,axis=-1)
-            index=np.argmin(d,axis=-1)
-            yaw=np.array([p[2] for p in points]);delta=np.arctan2(np.sin(np.diff(yaw)),np.cos(np.diff(yaw)))
-            body=yaw[:-1]+fraction*delta
-            heading=np.take_along_axis(body,index[:,:,None],axis=-1)[:,:,0]
-            heading=heading+(math.pi if self.direction<0 else 0.)
+        distance,index,fraction=self._reference_projection(poses)
+        if index is None:return distance,np.full(distance.shape,self.path.final_yaw)
+        # 标准Path的车体yaw与位置共用同一有序局部投影，不再搜索远期邻近路段。
+        cache=getattr(self,'_reference_body_geometry',None)
+        if cache is None or cache[0] is not self.path:
+            yaw=np.asarray([p[2] for p in self.path.original])
+            delta=np.arctan2(np.sin(np.diff(yaw)),np.cos(np.diff(yaw)))
+            yaw.setflags(write=False);delta.setflags(write=False)
+            cache=(self.path,yaw,delta)
+            self._reference_body_geometry=cache
+        _,yaw,delta=cache
+        heading=yaw[index]+fraction*delta[index]+(math.pi if self.direction<0 else 0.)
         return distance,heading
 
     def _continuous_spin_target(self,state):
@@ -185,13 +184,16 @@ class StandardPathFollower(MppiPathFollower):
         sign=1. if current.spin_delta>0 else -1.
         at_center=math.dist((state.x_m,state.y_m),current.path.points[-1])<=self.policy.goal_position_tolerance_m
         while self._stage_index<end and at_center:
-            remaining=sign*angle(current.path.final_yaw-state.yaw_rad)
-            if remaining>1e-9:break
+            start=current.path.final_yaw-current.spin_delta
+            offset=sign*angle(state.yaw_rad-start)
+            # 起点后方的反向偏差不是已经执行的旋转，不能由末端wrap符号跳段。
+            if offset<abs(current.spin_delta)-1e-9:break
             self._stage_index+=1
             current=self._stages[self._stage_index]
             self.path=current.path
         if self._stage_index==end:return self.path
-        remaining=(sign*angle(current.path.final_yaw-state.yaw_rad)+
+        start=current.path.final_yaw-current.spin_delta
+        remaining=(abs(current.spin_delta)-sign*angle(state.yaw_rad-start)+
             sum(abs(stage.spin_delta) for stage in self._stages[self._stage_index+1:end+1]))
         # 沿既有有序参考前视，最多四分之一圈，避免最短角目标反转或丢圈。
         x,y=current.path.points[-1]

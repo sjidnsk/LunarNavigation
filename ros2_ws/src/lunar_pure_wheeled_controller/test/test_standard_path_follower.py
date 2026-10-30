@@ -496,3 +496,59 @@ def test_sparse_half_turn_with_small_initial_error_preserves_order(sign,start):
     assert e._stage_index==0
     assert all(abs(stage.spin_delta)<=math.pi/2+1e-12 for stage in e._stages)
     assert r.command.linear_x_mps==0. and sign*r.command.angular_z_radps>0.
+
+
+@pytest.mark.parametrize('reverse',[False,True])
+def test_position_and_body_yaw_use_same_local_leg_on_nearby_return_path(reverse):
+    from lunar_pure_wheeled_controller.path_geometry import angle
+    e=follower(motion_model='differential_drive')
+    offset=math.pi if reverse else 0.
+    points=[(0.,0.,offset),(2.,0.,offset)]
+    points.extend((2.+.04*math.cos(t),.04+.04*math.sin(t),t+math.pi/2+offset)
+                  for t in np.linspace(-math.pi/2,math.pi/2,19)[1:])
+    points.append((0.,.08,math.pi+offset))
+    e.set_standard_path(points);e._accept_pending(TrackingState(0.,0.,offset))
+    assert len(e._stages)==1
+    e.progress_m=.3;e.direction=-1 if reverse else 1
+    distance,heading=e._reference_errors(np.array([[[.3,.06,offset]]]))
+    assert distance.item()==pytest.approx(.06**2)
+    # 不能为yaw跳到更近的未来返程腿。
+    assert abs(angle(heading.item()-offset-(math.pi if reverse else 0.)))<1e-12
+
+
+def test_body_yaw_interpolation_uses_clipped_fraction_across_pi():
+    from lunar_pure_wheeled_controller.path_geometry import Polyline,angle
+    e=follower(motion_model='differential_drive')
+    e.path=Polyline(((0.,0.,math.pi-.1),(2.,0.,-math.pi+.1)))
+    e.progress_m=.5;e.direction=1
+    distance,heading=e._reference_errors(np.array([[[.1,.02,0.]]]))
+    assert distance.item()==pytest.approx(.3**2+.02**2)
+    assert abs(angle(heading.item()-(math.pi-.06)))<1e-12
+
+
+
+def test_body_yaw_cache_replaces_rolling_geometry_and_survives_temporary_path():
+    from lunar_pure_wheeled_controller.path_geometry import Polyline
+    e=follower(motion_model='differential_drive')
+    e.path=Polyline(((0.,0.,0.),(2.,0.,0.)));original=e.path
+    poses=np.array([[[.3,.1,0.]]])
+    assert e._reference_errors(poses)[1].item()==0.
+    first=e._reference_body_geometry
+    e._reference_errors(poses)
+    assert e._reference_body_geometry is first
+    assert all(not a.flags.writeable for a in first[1:])
+    e.path=Polyline(((0.,0.,.2),(2.,0.,.2)))
+    assert e._reference_errors(poses)[1].item()==pytest.approx(.2)
+    assert e._reference_body_geometry is not first
+    e.path=original
+    assert e._reference_errors(poses)[1].item()==0.
+
+
+@pytest.mark.parametrize('sign',[1.,-1.])
+@pytest.mark.parametrize('offset',[math.pi/2+.01,math.pi-.01])
+def test_initial_yaw_behind_ordered_spin_start_is_not_executed_progress(sign,offset):
+    e=follower(motion_model='differential_drive')
+    e.set_standard_path(tuple((0.,0.,sign*y) for y in (0.,math.pi,1.5*math.pi)))
+    r=tick(e,TrackingState(0.,0.,-sign*offset))
+    assert e._stage_index==0 and r.phase=='FINAL_ALIGN'
+    assert sign*r.command.angular_z_radps>0.

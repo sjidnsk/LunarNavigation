@@ -6,9 +6,8 @@ import hashlib
 import numpy as np
 from .contracts import CellState, Trajectory, VehicleState
 from .maps import build_distance_field
-from .seeds import braking_prefix, join_trajectories, initial_seed, rollout, brake_candidate
+from .seeds import braking_prefix, join_trajectories, initial_seed, rollout
 from .pose_goal import angle_error, terminal_candidate
-from .dynamics import step
 
 
 # 固定 SDK acados-get-stats-source.txt 实际支持；时间值保留 SDK 原始秒单位。

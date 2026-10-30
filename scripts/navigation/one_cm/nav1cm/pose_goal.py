@@ -45,7 +45,7 @@ def check_pose_goal(world, goal_xy, goal_yaw, limits):
 def terminal_candidate(state, grid, reference, limits, *, horizon_s=4.):
     """解析角速度梯形/三角形候选，不把辅助转向冒充 acados 求解成功。
 
-    平移尚未精确停稳时先用实际初态制动。纯转向允许超过滚动时域，
+    从真实初态制动接续转向，前缀计入本次时域；时域不足时保留必要停车。
     每段保留真实角速度与角加速度；调用方必须认证整段及停车尾段。
     """
     if reference.terminal_yaw is None:

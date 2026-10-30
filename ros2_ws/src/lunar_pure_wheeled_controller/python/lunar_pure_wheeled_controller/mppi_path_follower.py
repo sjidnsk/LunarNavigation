@@ -89,13 +89,12 @@ class MppiPathFollower(MppiExecutor):
     lateral_error_scale_m = .01
     heading_error_scale_rad = .05
 
-    def _reference_errors(self,poses):
-        """Exact projection onto a bounded local portion of the polyline."""
+    def _reference_projection(self,poses):
+        """一次局部投影返回距离、原路段索引和完整路段上的插值比例。"""
         xy=poses[:,:,:2]
         if not self.path.lengths:
             distance=np.sum((xy-self.path.points[0])**2,axis=-1)
-            heading=np.full(distance.shape,self.path.final_yaw)
-            return distance,heading
+            return distance,None,None
         lo=max(0.,self.progress_m-.1);hi=min(self.path.length,self.progress_m+.8)
         # Polyline geometry is immutable. Keep one bounded cache, keyed by
         # object identity so rolling revisions and temporary corner prefixes
@@ -115,7 +114,9 @@ class MppiPathFollower(MppiExecutor):
         first=np.searchsorted(arc_end,lo,side='right')
         last=np.searchsorted(arc_start,hi,side='left')
         if first>=last:
-            return np.sum((xy-self.path.points[-1])**2,axis=-1),np.full(xy.shape[:-1],self.path.headings[-1])
+            return (np.sum((xy-self.path.points[-1])**2,axis=-1),
+                    np.full(xy.shape[:-1],len(self.path.lengths)-1,dtype=int),
+                    np.ones(xy.shape[:-1]))
         start=np.maximum(lo,arc_start[first:last]);end=np.minimum(hi,arc_end[first:last])
         fraction=(start-arc_start[first:last])/lengths[first:last]
         size=(end-start)/lengths[first:last]
@@ -128,7 +129,15 @@ class MppiPathFollower(MppiExecutor):
         t=np.clip((dx*vx+dy*vy)/(vx*vx+vy*vy),0.,1.)
         distance=(dx-t*vx)**2+(dy-t*vy)**2
         index=np.argmin(distance,axis=-1)
-        return np.take_along_axis(distance,index[:,:,None],axis=-1)[:,:,0],headings[first:last][index]
+        selected=index[:,:,None]
+        full_fraction=fraction[index]+size[index]*np.take_along_axis(t,selected,axis=-1)[:,:,0]
+        return np.take_along_axis(distance,selected,axis=-1)[:,:,0],first+index,full_fraction
+
+    def _reference_errors(self,poses):
+        distance,index,_=self._reference_projection(poses)
+        heading=(np.full(distance.shape,self.path.final_yaw) if index is None else
+                 self._reference_geometry[6][index])
+        return distance,heading
 
     def _tracking_cost(self,state,controls,target,target_yaw,xy,terrain_cost=0.):
         distance,heading=self._reference_errors(xy)
