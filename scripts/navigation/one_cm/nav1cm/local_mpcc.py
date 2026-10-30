@@ -6,7 +6,7 @@ import hashlib
 import numpy as np
 from .contracts import CellState, Trajectory, VehicleState
 from .maps import build_distance_field
-from .seeds import initial_seed, rollout, brake_candidate
+from .seeds import braking_prefix, join_trajectories, initial_seed, rollout, brake_candidate
 from .pose_goal import angle_error, terminal_candidate
 from .dynamics import step
 
@@ -256,15 +256,7 @@ class MpccPlanner:
         if grid.cell_at_world(*reference.points[-1])==CellState.BLOCKED: return finish(None,'KNOWN_BLOCKED_GOAL')
         if initial_travel_direction and abs(state.v)>1e-10:
             # 从真实测量推导制动终点，不把测量重标为零；保留转动连续性。
-            if self.limits.motion_model=='differential_drive':
-                initial=np.array([state.x,state.y,state.yaw,state.v,state.w,reference.progress_s])
-                duration=abs(state.v)/self.limits.linear_accel_mps2
-                control=np.array([-state.v/duration,0.,0.])
-                stopped=step(initial,control,duration)
-                prefix=Trajectory(grid.epoch,reference.route_version,[0.,duration],
-                    np.stack((initial,stopped)),control[None,:],
-                    'forward' if state.v>0 else 'reverse','brake')
-            else:prefix=brake_candidate(state,grid,reference,self.limits)
+            prefix=braking_prefix(state,grid,reference,self.limits,retain_angular=True)
             endpoint=prefix.states[-1]
             derived=VehicleState(*endpoint[:5])
             continuation=self.plan(derived,grid,reference,distance_field=distance_field,
@@ -273,10 +265,7 @@ class MpccPlanner:
             timing.update(continuation.timings_ms);attempts.extend(continuation.attempts)
             if continuation.candidate is None:return finish(None,continuation.reason)
             c=continuation.candidate
-            candidate=Trajectory(grid.epoch,reference.route_version,
-                np.concatenate((prefix.times[:-1],prefix.times[-1]+c.times)),
-                np.vstack((prefix.states[:-1],c.states)),np.vstack((prefix.controls,c.controls)),
-                c.mode,c.source+'+braking-entry')
+            candidate=join_trajectories(prefix,c)
             return finish(candidate,'CANDIDATE_UNCERTIFIED')
         mode=select_mode(state,reference,approach_distance_m=self.N*self.dt*self.limits.linear_speed_mps,
             initial_travel_direction=initial_travel_direction,initial_stopped_angular_rps=initial_stopped_angular_rps)

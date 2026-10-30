@@ -173,7 +173,7 @@ class NavigationCoordinator:
             arrived=self.goal_reached(state) and self.goal_reached(VehicleState(*last[:5]))
             return candidate, 'ARRIVED' if arrived else 'GOAL_BRAKING'
         candidate = terminal_candidate(state, grid, reference, self.limits)
-        return candidate, 'GOAL_TURNING' if candidate.source == 'terminal-yaw:bounded' else 'GOAL_BRAKING'
+        return candidate, 'GOAL_TURNING' if candidate.source.startswith('terminal-yaw:bounded') else 'GOAL_BRAKING'
 
     def _update_route(self, world, state, goal, now_s, events, *, goal_yaw=None):
         """共享全局身份、目标检查与非阻塞路线调度；不执行局部求解。"""
