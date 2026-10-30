@@ -1,9 +1,10 @@
 """标准Path发布必须有界，真实耗时不能靠重复认证追赶。"""
 from types import SimpleNamespace as S
 import pytest
+from threading import Lock
 from lunar_pure_wheeled_controller.node import PureWheeledControllerNode
 
-@pytest.mark.parametrize('case', ['slow_certificate', 'map_changes', 'map_missing', 'clock_regressed', 'unsafe', 'valid'])
+@pytest.mark.parametrize('case', ['slow_certificate', 'map_changes', 'map_missing', 'clock_regressed', 'unsafe', 'overflow', 'valid'])
 def test_publication_certification_is_single_pass_and_checks_completion(case):
     clock=[10_000_000_000]
     grid=S(revision=1,epoch='1',origin=(0.,0.))
@@ -11,6 +12,7 @@ def test_publication_certification_is_single_pass_and_checks_completion(case):
     calls=[];published=[];unavailable=[]
     def update(*args,**kwargs):
         clock[0]+=60_000_000
+        if case=='overflow':node._execution_ingress_overflow=True
         return S(command=S(linear_x_mps=.1,angular_z_radps=0.),phase='TRACKING')
     def certify(*args):
         calls.append(args)
@@ -25,7 +27,7 @@ def test_publication_certification_is_single_pass_and_checks_completion(case):
     executor=S(config=S(compute_budget_s=.05),request_stop=lambda *a:None,
         set_map=lambda *a:None,update=update,certify_publication=certify,
         diagnostics={},_stopped=lambda *a:False)
-    node=S(_odometry=object(),_odometry_received_at=0.,_odometry_timeout_s=.5,
+    node=S(_feedback_lock=Lock(),_execution_ingress_overflow=False,_odometry=object(),_odometry_received_at=0.,_odometry_timeout_s=.5,
         _active=object(),_path_received_at=0.,_path_timeout_s=.35,
         _standard_state=object(),_standard_state_ns=clock[0],_last_control_ns=None,
         _executor=executor,_input_is_stale=lambda *a:False,_standard_grid=latest,
@@ -38,6 +40,7 @@ def test_publication_certification_is_single_pass_and_checks_completion(case):
         assert published==[(.1,0.)] and not unavailable
     else:
         assert not published and unavailable
+        if case=='overflow':assert unavailable==[('execution_ingress_overflow',{})]
         if case=='map_missing':assert unavailable==[('stale_map_after_certification',{})]
         if case=='clock_regressed':assert unavailable==[('clock_regressed_during_certification',{})]
 
@@ -49,7 +52,7 @@ def test_new_feedback_cannot_renew_the_state_used_by_this_calculation():
         clock[0]+=600_000_000
         node._odometry_received_at=.6  # 模拟新消息；本轮state仍来自0秒。
         return S(command=S(linear_x_mps=.1,angular_z_radps=0.),phase='TRACKING')
-    node=S(_odometry=object(),_odometry_received_at=0.,_odometry_timeout_s=.5,
+    node=S(_feedback_lock=Lock(),_execution_ingress_overflow=False,_odometry=object(),_odometry_received_at=0.,_odometry_timeout_s=.5,
         _active=object(),_path_received_at=0.,_path_timeout_s=.35,
         _standard_state=object(),_standard_state_ns=clock[0],_last_control_ns=None,
         _executor=S(config=S(compute_budget_s=.05),set_map=lambda *a:None,update=update,
