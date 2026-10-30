@@ -1,0 +1,305 @@
+{
+  "date": "2026-10-30",
+  "main": "a740deeda271d4cfec3809e88b4d13f8a8be32e8",
+  "candidate": "04f6b129c5815d69093f986dc73b06b7125d8382",
+  "meaning": "main_only/branch_only are commit graph counts, not capability ranking",
+  "scope": "local read-only source audit; no new tests or runtime verification",
+  "remote_refresh": "failed: local proxy 127.0.0.1 could not connect; 20261029 remote snapshot retained",
+  "branches": [
+    {
+      "branch": "app/orin-legged-vehicle",
+      "sha": "ff75f527d4a45c424f9b1e624f143e3668000ec6",
+      "main_only": 163,
+      "branch_only": 39
+    },
+    {
+      "branch": "app/orin-real-vehicle",
+      "sha": "a86b9cbf2125337de54d99193f1f1b383fe383a8",
+      "main_only": 163,
+      "branch_only": 59
+    },
+    {
+      "branch": "app/orin-unreal-simulation",
+      "sha": "2d9a8ce1620d951f110c36ab13e59d3bb478df16",
+      "main_only": 163,
+      "branch_only": 34
+    },
+    {
+      "branch": "dev/drl-exploration",
+      "sha": "dfd422b7536173a96bd61de92fa4cb0d769014c4",
+      "main_only": 147,
+      "branch_only": 0
+    },
+    {
+      "branch": "dev/terrain-confidence",
+      "sha": "44acb7bff4aaca6a18b3ba8b686226a56b00e743",
+      "main_only": 162,
+      "branch_only": 18
+    },
+    {
+      "branch": "docs/paper-pre-results-20261023",
+      "sha": "946501c057a25e493dd561237d142bb098ccdb89",
+      "main_only": 147,
+      "branch_only": 1
+    },
+    {
+      "branch": "feat/paper-p4-baselines-20261022",
+      "sha": "cb8b0aa0fc1401a85db02528787e7dd76b2e017a",
+      "main_only": 146,
+      "branch_only": 1
+    },
+    {
+      "branch": "feat/paper-p4-external-training-20261022",
+      "sha": "d318b97a63063d370287b7dac82340c40c7550ed",
+      "main_only": 146,
+      "branch_only": 1
+    },
+    {
+      "branch": "feat/paper-p4-graph-baselines-20261022",
+      "sha": "1b5bfc69b72a6dad890c9a675ae5de9ea7deb4b4",
+      "main_only": 146,
+      "branch_only": 1
+    },
+    {
+      "branch": "feat/paper-p4-marvel-baseline-20261022",
+      "sha": "7ae3f9c71bdf485fe83ff4739acf0551b8240c09",
+      "main_only": 146,
+      "branch_only": 1
+    },
+    {
+      "branch": "feat/paper-p4-tare-adapter-20261022",
+      "sha": "e76745a6cc45b5ce8daa3001461c9d7a668e1e5a",
+      "main_only": 146,
+      "branch_only": 1
+    },
+    {
+      "branch": "feat/paper-p4-training-20261022",
+      "sha": "fb6434efd65e9ea7c0bc6e82d3a66a775878ddde",
+      "main_only": 146,
+      "branch_only": 1
+    },
+    {
+      "branch": "feat/paper-p4-training-campaign-20261022",
+      "sha": "0d586c46f7583718e99481c8b7cf8300710dc39a",
+      "main_only": 146,
+      "branch_only": 1
+    },
+    {
+      "branch": "feat/paper-p4-training-qualification-20261022",
+      "sha": "860500813a3447decff3b7baa6f99931ed660da4",
+      "main_only": 146,
+      "branch_only": 1
+    },
+    {
+      "branch": "feat/paper-single-seed-half-budget-20261024",
+      "sha": "b070a17caa1f30914e147d0ee1b92ebe470ebaed",
+      "main_only": 147,
+      "branch_only": 1
+    },
+    {
+      "branch": "hk/drl-integration-20261029",
+      "sha": "04f6b129c5815d69093f986dc73b06b7125d8382",
+      "main_only": 4,
+      "branch_only": 33
+    },
+    {
+      "branch": "hk/drl-nav1cm-adapter-20261029",
+      "sha": "5c895199c8e06077d40e6bc6b2c28ee391fc42ba",
+      "main_only": 146,
+      "branch_only": 13
+    },
+    {
+      "branch": "hk/follower-swept-map-20261024",
+      "sha": "83d6d10a41cfa743e4f10d796632472a8e3092a0",
+      "main_only": 135,
+      "branch_only": 0
+    },
+    {
+      "branch": "hk/git-preservation-20261029",
+      "sha": "a740deeda271d4cfec3809e88b4d13f8a8be32e8",
+      "main_only": 0,
+      "branch_only": 0
+    },
+    {
+      "branch": "hk/isaac-polar-midterm-20261028",
+      "sha": "c18fddd131d9936c699fe4ec618d02729b4c15c9",
+      "main_only": 134,
+      "branch_only": 0
+    },
+    {
+      "branch": "hk/isaac-viper-engineering-20261028",
+      "sha": "accf75baf3c82a6e1b4f91f099e2e9c546001135",
+      "main_only": 163,
+      "branch_only": 54
+    },
+    {
+      "branch": "hk/isaac-viper-showcase-20261029",
+      "sha": "0d19d3208e30089e175019c69e4da691d5301c3d",
+      "main_only": 107,
+      "branch_only": 3
+    },
+    {
+      "branch": "hk/nav-1cm-feasibility-20261026",
+      "sha": "eb10ff2670ed87dd1edfc4fcc22995a620fe66bb",
+      "main_only": 37,
+      "branch_only": 0
+    },
+    {
+      "branch": "hk/nav1cm-wheel-app-integration-20261028",
+      "sha": "a86b9cbf2125337de54d99193f1f1b383fe383a8",
+      "main_only": 163,
+      "branch_only": 59
+    },
+    {
+      "branch": "hk/paper-dashboard-20261020",
+      "sha": "90a136d918e8654d57f8277704b3a19387aebabc",
+      "main_only": 138,
+      "branch_only": 0
+    },
+    {
+      "branch": "hk/paper-five-methods-20261028",
+      "sha": "6803781cc02fe725d7b19e0d4cde187de1cd724b",
+      "main_only": 147,
+      "branch_only": 41
+    },
+    {
+      "branch": "hk/paper-safe-start-2m-20261021",
+      "sha": "ab563ca9636cc7ce1772b5e0d8f8165f466dc611",
+      "main_only": 146,
+      "branch_only": 1
+    },
+    {
+      "branch": "hk/preserve-paper-main-20261029",
+      "sha": "e15f3becd76e0f2e41922580e21ca4afa957eed7",
+      "main_only": 107,
+      "branch_only": 2
+    },
+    {
+      "branch": "hk/preserve-paper-polar-20261029",
+      "sha": "c791fb6a0e093a0af11cfd1dce44c780f70e5f11",
+      "main_only": 134,
+      "branch_only": 1
+    },
+    {
+      "branch": "hk/protected-main-working-20261029",
+      "sha": "1532cf0981a2665b70d8c0f2a8ff2eb420d54e73",
+      "main_only": 107,
+      "branch_only": 0
+    },
+    {
+      "branch": "integration/pure-planner-orin",
+      "sha": "a740deeda271d4cfec3809e88b4d13f8a8be32e8",
+      "main_only": 0,
+      "branch_only": 0
+    }
+  ],
+  "candidate_path_batches": {
+    "public_navigation": [
+      "config/wheel.yaml",
+      "config/wheel_orin.yaml",
+      "launch/nav1cm_exploration.launch.py",
+      "ros2_ws/src/lunar_planning_msgs/CMakeLists.txt",
+      "ros2_ws/src/lunar_planning_msgs/msg/PathExecutionReference.msg",
+      "ros2_ws/src/lunar_planning_msgs/msg/TrackingStatus.msg",
+      "ros2_ws/src/lunar_pure_wheeled_controller/CMakeLists.txt",
+      "ros2_ws/src/lunar_pure_wheeled_controller/launch/nav1cm_wheel.launch.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/execution_pairing.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/motion_configuration.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/mppi.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/mppi_path_follower.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/node.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/standard_path_follower.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/tracking.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/test/test_execution_contract_ros.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/test/test_motion_capability.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/test/test_motion_model_node.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/test/test_nav1cm_launch.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/test/test_progress_anchor_lifecycle.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/test/test_reference_seed.py",
+      "ros2_ws/src/lunar_pure_wheeled_controller/test/test_terminal_execution_contract.py",
+      "scripts/navigation/one_cm/nav1cm/certification.py",
+      "scripts/navigation/one_cm/nav1cm/contracts.py",
+      "scripts/navigation/one_cm/nav1cm/coordinator.py",
+      "scripts/navigation/one_cm/nav1cm/execution_contract.py",
+      "scripts/navigation/one_cm/nav1cm/execution_ros.py",
+      "scripts/navigation/one_cm/nav1cm/local_mpcc.py",
+      "scripts/navigation/one_cm/nav1cm/navigation_task.py",
+      "scripts/navigation/one_cm/nav1cm/seeds.py",
+      "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/CMakeLists.txt",
+      "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/config/planner.yaml",
+      "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/configuration.py",
+      "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/node.py",
+      "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/runtime.py",
+      "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/test/test_configuration.py",
+      "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/test/test_execution_failure_action.py",
+      "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/test/test_execution_feedback_runtime.py",
+      "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/test/test_position_settling_ros.py",
+      "tests/launch/test_nav1cm_exploration_launch.py",
+      "tests/navigation/one_cm/test_execution_contract.py",
+      "tests/navigation/one_cm/test_motion_capability.py",
+      "tests/navigation/one_cm/test_position_settling_target.py",
+      "tests/navigation/one_cm/test_terminal_direction.py",
+      "tests/test_execution_pairing.py",
+      "tests/test_motion_configuration.py"
+    ],
+    "drl_adapter_and_tools": [
+      "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/cli.py",
+      "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/config.py",
+      "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/evaluation.py",
+      "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/inference_node.py",
+      "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/nav1cm_navigation.py",
+      "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/navigation_backend.py",
+      "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/policy_preparation.py",
+      "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/ros_env.py",
+      "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/ros_messages.py",
+      "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/runtime.py",
+      "ros2_ws/src/lunar_drl_exploration/package.xml",
+      "ros2_ws/src/lunar_drl_exploration/setup.py",
+      "ros2_ws/src/lunar_drl_exploration/test/test_formal_source.py",
+      "ros2_ws/src/lunar_drl_exploration/test/test_infer_backend_cli.py",
+      "ros2_ws/src/lunar_drl_exploration/test/test_nav1cm_backend.py",
+      "ros2_ws/src/lunar_drl_exploration/test/test_navigation_backend_selection.py",
+      "ros2_ws/src/lunar_drl_exploration/test/test_owned_nav1cm_tolerances.py",
+      "scripts/drl/inference_closure_grade.py",
+      "scripts/drl/inference_only_guard.py",
+      "scripts/drl/inference_sitecustomize.py",
+      "scripts/drl/trace_standard_path_solver.py",
+      "scripts/drl/verify_nav1cm_backend.py",
+      "scripts/drl/verify_nav1cm_closed_loop.py",
+      "tests/test_inference_closure_grade.py",
+      "tests/test_inference_fresh_observation.py",
+      "tests/test_inference_launch_contract.py",
+      "tests/test_inference_only_guard.py",
+      "tests/test_standard_path_solver_trace.py"
+    ],
+    "evidence_and_governance": [
+      "docs/drl/2026-10-29-inference-closure-validation.md",
+      "docs/drl/development-source-manifest.json",
+      "docs/drl/nav1cm-backend.md",
+      "docs/git-preservation/20261029-drl-integration-hold.md",
+      "docs/superpowers/plans/2026-10-29-drl-inference-closure.md",
+      "docs/superpowers/plans/2026-10-29-existing-navigation-state-consolidation.md",
+      "docs/superpowers/plans/2026-10-29-inference-fresh-frame.md",
+      "docs/superpowers/plans/2026-10-29-motion-capability-contract.md",
+      "docs/superpowers/plans/2026-10-29-progress-and-reference-sampling.md",
+      "docs/superpowers/plans/2026-10-29-terminal-execution-contract.md",
+      "docs/superpowers/plans/2026-10-30-position-settling-target.md",
+      "docs/validation/2026-10-29-drl-45s-arrival-diagnosis.md",
+      "docs/validation/2026-10-29-drl-nav1cm-backend.md",
+      "docs/validation/2026-10-29-existing-navigation-state-audit.md",
+      "docs/validation/2026-10-29-expanded-inference-validation.md",
+      "docs/validation/2026-10-29-inference-fresh-frame.md",
+      "docs/validation/2026-10-29-motion-capability-contract.md",
+      "docs/validation/2026-10-29-navigation-execution-root-cause.md",
+      "docs/validation/2026-10-29-progress-anchor-lifecycle.md",
+      "docs/validation/2026-10-29-progress-reference-sampling.md",
+      "docs/validation/2026-10-29-terminal-execution-contract.md",
+      "docs/validation/2026-10-29-terminal-handoff-diagnosis.md",
+      "docs/validation/2026-10-29-terminal-sampling-progress-diagnosis.md",
+      "docs/validation/2026-10-30-position-settling-target.md",
+      "docs/任务登记.md"
+    ]
+  },
+  "candidate_files": 99,
+  "path_batch_note": "Path-level batches require review; mixed commits must not be cherry-picked wholesale into public-only batch."
+}
