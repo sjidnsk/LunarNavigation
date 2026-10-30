@@ -1,6 +1,7 @@
 """216/P4 低速有界 TCP 导航检查；--preflight-only 不获取车辆控制权。"""
 import argparse
 from p3_input_timing import record_sample,runtime_input_health,timing_statistics
+from p4_tcp_runtime import CONTROL_DOMAIN
 import os,json,time,math,signal,subprocess,importlib.util,collections
 from pathlib import Path
 import yaml
@@ -33,7 +34,7 @@ profile=yaml.safe_load((ROOT/'source/config/wheel.yaml').read_text());profile['c
 spec=importlib.util.spec_from_file_location('p3_original_launcher',ROOT/'source/scripts/simulation/debug_p3_planning.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 args=m.launch_arguments(ROOT/'source',ROOT/'.cache/nav1cm');args={k:(v.replace('/p4_p3_debug',PREFIX) if isinstance(v,str) else v) for k,v in args.items()};args.update(enable_controller='true',allow_unknown='true',exploration_strategy='none',platform_config=str(config),command_topic=PREFIX+'/cmd_vel')
 feedback_budget=yaml.safe_load((ROOT/'source/config/tcp_p3_feedback.yaml').read_text());args.update({k:str(v) for k,v in feedback_budget.items()});result['feedback_budget']=feedback_budget
-env=dict(os.environ,ROS_DOMAIN_ID='57',ROS_LOCALHOST_ONLY='0',RMW_IMPLEMENTATION='rmw_cyclonedds_cpp',ROS_HOME=str(ROOT/'run/ros-home'),ROS_LOG_DIR=str(OUT/'ros-log'),TMPDIR=str(ROOT/'tmp'),XDG_CACHE_HOME=str(ROOT/'.cache'),PYTHONDONTWRITEBYTECODE='1',ACADOS_SOURCE_DIR=str(ROOT/'deps/acados-v040'),NAV1CM_BUILD_DIR=str(ROOT/'.cache/nav1cm'),OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1')
+env=dict(os.environ,ROS_DOMAIN_ID=str(CONTROL_DOMAIN),ROS_LOCALHOST_ONLY='0',RMW_IMPLEMENTATION='rmw_cyclonedds_cpp',ROS_HOME=str(ROOT/'run/ros-home'),ROS_LOG_DIR=str(OUT/'ros-log'),TMPDIR=str(ROOT/'tmp'),XDG_CACHE_HOME=str(ROOT/'.cache'),PYTHONDONTWRITEBYTECODE='1',ACADOS_SOURCE_DIR=str(ROOT/'deps/acados-v040'),NAV1CM_BUILD_DIR=str(ROOT/'.cache/nav1cm'),OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1')
 env['PATH']=str(ROOT/'.venv/bin')+':'+env['PATH'];env['LD_LIBRARY_PATH']=str(ROOT/'deps/acados-v040/lib')+':'+env.get('LD_LIBRARY_PATH','')
 launch_source=(ROOT/'ros2-humble/install/lunar_pure_exploration_ros/share/lunar_pure_exploration_ros/launch/nav1cm_exploration.launch.py').read_text()
 needle='return Node(package=package, executable=executable, output="screen", parameters=[{**params,**clock}])'
@@ -42,9 +43,9 @@ launch_source=launch_source.replace(needle,'return Node(package=package, executa
 private_launch=OUT/'isolated.launch.py';private_launch.write_text(launch_source)
 command=['ros2','launch',str(private_launch)]+[k+':='+str(v) for k,v in args.items()]
 contexts=[];nodes=[];executors=[];subs=[];process=None;handle=None;terminal=None;armed=False;leased=False;forwarded_nonzero=0;nonzero=0;latest={};counts=collections.Counter();reasons=collections.Counter();positions=[];feedback=[];telemetry_positions=[];reference_accepted=False;initial_pose=None;goal=None;last_command=None
-for domain in (57,10):
+for domain in (CONTROL_DOMAIN,):
  c=rclpy.Context();rclpy.init(context=c,domain_id=domain);contexts.append(c);n=rclpy.create_node('p4_tcp_closedloop_'+str(domain),context=c);nodes.append(n);e=SingleThreadedExecutor(context=c);e.add_node(n);executors.append(e)
-n57,n10=nodes;vel=n10.create_publisher(Twist,'/car/cmd_vel',10);lease=n10.create_publisher(Bool,'/car/external_control_lease',10);mode=n10.create_publisher(String,'/car/set_mode',10)
+control_node=nodes[0];vel=control_node.create_publisher(Twist,'/car/cmd_vel',10);lease=control_node.create_publisher(Bool,'/car/external_control_lease',10);mode=control_node.create_publisher(String,'/car/set_mode',10)
 q=QoSProfile(depth=10,reliability=ReliabilityPolicy.BEST_EFFORT)
 map_qos=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
 def spin(duration):
@@ -56,7 +57,7 @@ def callback(kind,msg):
  counts[kind]+=1;latest[kind]=(time.monotonic(),msg)
  if kind in ('odom','map'):
   stamp=msg.header.stamp;source=stamp.sec*10**9+stamp.nanosec
-  samples[kind]=record_sample(samples.get(kind),source,n57.get_clock().now().nanoseconds,time.monotonic())
+  samples[kind]=record_sample(samples.get(kind),source,control_node.get_clock().now().nanoseconds,time.monotonic())
   event('input_timing',input=kind,source_ns=source,received_ros_ns=samples[kind]['received_ros_ns'],received_mono_s=samples[kind]['received_mono_s'])
  if kind=='odom':
   p=msg.pose.pose.position;positions.append((p.x,p.y,p.z));event(kind,position=[p.x,p.y,p.z],source_age=time.time()-(msg.header.stamp.sec+msg.header.stamp.nanosec*1e-9))
@@ -69,8 +70,8 @@ def callback(kind,msg):
  elif kind in ('local_path','global_path'):event(kind,poses=len(msg.poses));counts[kind+'_nonempty']+=int(bool(msg.poses))
  elif kind=='telemetry':telemetry_positions.append((msg.x,msg.y,msg.z));event(kind,vx=msg.vx,vy=msg.vy,wz=msg.wz,wheels=[msg.wheel_speed_fl,msg.wheel_speed_fr,msg.wheel_speed_rl,msg.wheel_speed_rr])
 for topic,cls,kind in [('/Car/T3/localization/odometry',Odometry,'odom'),('/Car/T3/mapping/grid_map',GridMap,'map'),(PREFIX+'/exploration_map',OccupancyGrid,'exploration_map'),(PREFIX+'/control/diagnostics',String,'diag'),(PREFIX+'/tracking_status',TrackingStatus,'tracking'),(PREFIX+'/local_path',RosPath,'local_path'),(PREFIX+'/global_route',RosPath,'global_path')]:
- subs.append(n57.create_subscription(cls,topic,lambda msg,k=kind:callback(k,msg),map_qos if kind=='map' else q))
-subs.append(n10.create_subscription(VehicleTelemetry,'/car/telemetry',lambda msg:callback('telemetry',msg),q))
+ subs.append(control_node.create_subscription(cls,topic,lambda msg,k=kind:callback(k,msg),map_qos if kind=='map' else q))
+subs.append(control_node.create_subscription(VehicleTelemetry,'/car/telemetry',lambda msg:callback('telemetry',msg),q))
 def command_input(msg):
  global armed,nonzero,forwarded_nonzero,last_command
  last_command=time.monotonic();counts['controller_commands']+=1;v=msg.linear.x;w=msg.angular.z;event('controller_command',v=v,w=w)
@@ -83,13 +84,13 @@ def command_input(msg):
  if 'telemetry' not in latest or time.monotonic()-latest['telemetry'][0]>.5:raise RuntimeError('telemetry stale before command')
  if 'odom' not in latest:return
  od=latest['odom'][1];age=time.time()-od.header.stamp.sec-od.header.stamp.nanosec*1e-9
- if not runtime_input_health('odom',samples.get('odom'),n57.get_clock().now().nanoseconds,time.monotonic(),odometry_timeout_s=float(feedback_budget['odometry_timeout_s']),p3_map_timeout_s=float(feedback_budget['p3_map_timeout_s']))['ready']:raise RuntimeError('odometry stream stopped advancing before motion')
+ if not runtime_input_health('odom',samples.get('odom'),control_node.get_clock().now().nanoseconds,time.monotonic(),odometry_timeout_s=float(feedback_budget['odometry_timeout_s']),p3_map_timeout_s=float(feedback_budget['p3_map_timeout_s']))['ready']:raise RuntimeError('odometry stream stopped advancing before motion')
  if not armed:mode.publish(String(data='auto'));armed=True;event('auto_mode_entered')
  vel.publish(msg);forwarded_nonzero+=1
-subs.append(n57.create_subscription(Twist,PREFIX+'/cmd_vel',command_input,q))
-client=ActionClient(n57,NavigateToPose,PREFIX+'/navigate_to_pose')
+subs.append(control_node.create_subscription(Twist,PREFIX+'/cmd_vel',command_input,q))
+client=ActionClient(control_node,NavigateToPose,PREFIX+'/navigate_to_pose')
 def params(name,keys):
- c=n57.create_client(GetParameters,PREFIX+'/'+name+'/get_parameters');assert c.wait_for_service(timeout_sec=10.),name;r=GetParameters.Request();r.names=keys;f=c.call_async(r);end=time.monotonic()+10
+ c=control_node.create_client(GetParameters,PREFIX+'/'+name+'/get_parameters');assert c.wait_for_service(timeout_sec=10.),name;r=GetParameters.Request();r.names=keys;f=c.call_async(r);end=time.monotonic()+10
  while not f.done() and time.monotonic()<end:spin(.05)
  assert f.done(),name;values={}
  for k,v in zip(keys,f.result().values):values[k]=v.bool_value if v.type==1 else v.integer_value if v.type==2 else v.double_value if v.type==3 else v.string_value
@@ -113,7 +114,7 @@ try:
  result['preflight_time_contract']=dict(measured_budget,map_source_age_gate=False,stable_interval_s=2.,requires_odometry_source_advance=True,odometry_source_age_gate=False)
  stable_since=None;stable_source=None;end=time.monotonic()+45;last_report=0.
  while time.monotonic()<end:
-  spin(.1);ros_now=n57.get_clock().now().nanoseconds;mono_now=time.monotonic()
+  spin(.1);ros_now=control_node.get_clock().now().nanoseconds;mono_now=time.monotonic()
   report={k:runtime_input_health(k,samples.get(k),ros_now,mono_now,**measured_budget) for k in ('odom','map')}
   result['final_preflight_health']=report
   if mono_now-last_report>=1.:
@@ -131,7 +132,7 @@ try:
  od=latest['odom'][1];p=od.pose.pose.position;initial_pose=(p.x,p.y,p.z)
  q0=od.pose.pose.orientation;yaw=math.atan2(2*(q0.w*q0.z+q0.x*q0.y),1-2*(q0.y*q0.y+q0.z*q0.z))
  goal=(p.x+.5*math.cos(yaw),p.y+.5*math.sin(yaw));result['goal']=goal;result['initial_pose']=initial_pose;result['goal_policy']='0.5m forward in explicitly authorized UNKNOWN; known BLOCKED still vetoed by planner/controller'
- gui_publishers=[i.node_name for i in n10.get_publishers_info_by_topic('/car/cmd_vel')];assert all(x in ('lunar_car_gui_node','p4_tcp_closedloop_10') for x in gui_publishers),gui_publishers;result['vehicle_command_publishers']=gui_publishers
+ gui_publishers=[i.node_name for i in control_node.get_publishers_info_by_topic('/car/cmd_vel')];assert all(x in ('lunar_car_gui_node','p4_tcp_closedloop_10') for x in gui_publishers),gui_publishers;result['vehicle_command_publishers']=gui_publishers
  lease.publish(Bool(data=True));leased=True;mode.publish(String(data='park'));vel.publish(Twist());spin(.3)
  assert client.wait_for_server(timeout_sec=5.);request=NavigateToPose.Goal();request.target_x_m=goal[0];request.target_y_m=goal[1];request.has_target_yaw=False
  f=client.send_goal_async(request,feedback_callback=lambda m:(feedback.append(m.feedback.reason_code),event('navigation_feedback',reason=m.feedback.reason_code)));end=time.monotonic()+8
@@ -173,7 +174,7 @@ finally:
   except subprocess.TimeoutExpired:result['launch_shutdown_timeout']=True
  result['launch_returncode']=None if process is None else process.poll()
  result['control_authority_acquired']=leased
- result['input_timing_statistics']={k:timing_statistics(samples.get(k),n57.get_clock().now().nanoseconds,time.monotonic()) for k in ('odom','map')}
+ result['input_timing_statistics']={k:timing_statistics(samples.get(k),control_node.get_clock().now().nanoseconds,time.monotonic()) for k in ('odom','map')}
  result.update(counts=dict(counts),diagnostic_reasons=dict(reasons),controller_nonzero_commands=nonzero,forwarded_nonzero_commands=forwarded_nonzero,auto_mode_entered=armed,reference_accepted=reference_accepted)
  if positions:result['p3_displacement_max_m']=max(math.dist(positions[0],p) for p in positions);result['final_p3_pose']=positions[-1]
  if telemetry_positions:result['tcp_displacement_max_m']=max(math.dist(telemetry_positions[0],p) for p in telemetry_positions)
