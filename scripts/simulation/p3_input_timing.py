@@ -103,4 +103,3 @@ def timing_health(sample, ros_now_ns, mono_now_s, *, max_source_age_s,
     else:
         result.update(ready=True, reason='READY')
     return result
-
