@@ -25,6 +25,7 @@ from .incremental_path import ParsedIncrementalPath, parse_incremental_path
 from .reference import ParsedReference, parse_reference
 from .tracking import TrackingPolicy, TrackingState, track_trajectory
 from .execution import PathExecutor
+from .motion_configuration import p3_map_receipt_expired
 
 
 def map_input_qos(reliability, durability):
@@ -269,8 +270,8 @@ class PureWheeledControllerNode(Node):
             self._map_client = None
             if self._standard_mode and self._standard_map_source=='direct_p3':
                 self._map_timeout_s=float(self.get_parameter('p3_map_timeout_s').value)
-                if not isfinite(self._map_timeout_s) or self._map_timeout_s<=0:
-                    raise ValueError('p3_map_timeout_s must be finite and positive')
+                if not isfinite(self._map_timeout_s) or self._map_timeout_s<0:
+                    raise ValueError('p3_map_timeout_s must be finite and nonnegative')
                 p3_setup=(capability,self._body_dimensions,
                     self._absolute_topic_name('p3_map_topic',self.get_parameter('p3_map_topic').value))
             elif self._executor.requires_map:
@@ -678,7 +679,7 @@ class PureWheeledControllerNode(Node):
     def _standard_grid(self,state):
         if self._p3_source is not None:
             receipt=self._p3_source.snapshot()
-            if receipt is None or self._input_is_stale(receipt.received_at,self._map_timeout_s):return None
+            if receipt is None or p3_map_receipt_expired(receipt.received_at,self._map_timeout_s,monotonic()):return None
             return receipt.grid
         if self._input_is_stale(self._map_received_at,self._map_timeout_s):return None
         return self._map_cache.local_grid(state.x_m,state.y_m,2.5)

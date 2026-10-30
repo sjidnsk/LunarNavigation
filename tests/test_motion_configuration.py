@@ -82,3 +82,29 @@ def test_launch_resolves_same_model_for_both_consumers(monkeypatch):
         assert planner['motion_model']==follower['motion_model']==expected
     context['motion_model']='typo'
     with pytest.raises(ValueError):module.compose(context)
+
+
+@pytest.mark.parametrize('received,timeout,now,expired',[
+    (1.,0.,10000.,False), (None,0.,10000.,True),
+    (1.,3.,4.,False), (1.,3.,4.001,True), (None,3.,4.,True),
+])
+def test_direct_p3_static_age_opt_out_still_requires_received_map(received,timeout,now,expired):
+    spec=importlib.util.spec_from_file_location('map_age_configuration',CONTROLLER/'python/lunar_pure_wheeled_controller/motion_configuration.py')
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    assert module.p3_map_receipt_expired(received,timeout,now)==expired
+
+
+@pytest.mark.parametrize('timeout',['0.0','3.0'])
+def test_wheel_launch_passes_map_age_policy_only_to_follower(monkeypatch,timeout):
+    module=launch(monkeypatch)
+    context={**module.DEFAULTS,'wheel_config':str(ROOT/'config/wheel.yaml'),'build_dir':'/outside/build','start_controller':'true','p3_map_timeout_s':timeout}
+    planner,follower=[n['parameters'][-1] for n in module.compose(context)]
+    assert follower['p3_map_timeout_s']==float(timeout)
+    assert 'p3_map_timeout_s' not in planner
+
+
+@pytest.mark.parametrize('timeout',['-1.0','nan','inf'])
+def test_wheel_launch_rejects_invalid_map_age_policy(monkeypatch,timeout):
+    module=launch(monkeypatch)
+    context={**module.DEFAULTS,'wheel_config':str(ROOT/'config/wheel.yaml'),'build_dir':'/outside/build','start_controller':'true','p3_map_timeout_s':timeout}
+    with pytest.raises(ValueError):module.compose(context)

@@ -75,3 +75,15 @@ def test_execution_contract_topics_only_reach_actual_execution_participants(monk
     for unrelated in (maps,frontier):
         assert 'execution_reference_topic' not in unrelated
         assert 'tracking_status_topic' not in unrelated
+
+
+@pytest.mark.parametrize('timeout',['0.0','3.0'])
+def test_exploration_passes_map_age_policy_only_to_follower(monkeypatch,timeout):
+    g=nodes(graph(monkeypatch,enable_controller='true',p3_map_timeout_s=timeout))
+    assert g[-1]['parameters'][0]['p3_map_timeout_s']==float(timeout)
+    assert all('p3_map_timeout_s' not in n['parameters'][0] for n in g[:-1])
+
+
+@pytest.mark.parametrize('timeout',['-1.0','nan','inf'])
+def test_exploration_rejects_invalid_map_age_policy(monkeypatch,timeout):
+    with pytest.raises(ValueError):graph(monkeypatch,enable_controller='true',p3_map_timeout_s=timeout)
