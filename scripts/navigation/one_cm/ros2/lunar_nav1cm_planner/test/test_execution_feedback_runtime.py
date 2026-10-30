@@ -38,7 +38,7 @@ def test_tracking_failure_retires_planning_then_independently_stops_and_finishes
     assert any(e.outcome=='INTERNAL_ERROR' for e in events)
 
 
-def test_pose_input_recovery_needs_two_seconds_and_source_time_progress(monkeypatch):
+def test_pose_input_recovers_on_valid_source_without_extra_delay(monkeypatch):
     runtime,session,published,logs=build_runtime()
     runtime.configure_pose_input(timeout_s=4.5)
     module=__import__('lunar_nav1cm_planner.runtime',fromlist=['state_from_odometry'])
@@ -47,9 +47,9 @@ def test_pose_input_recovery_needs_two_seconds_and_source_time_progress(monkeypa
     clock=[10_000_000_000];runtime.ros_now_ns=lambda:clock[0]
     message=S(header=S(stamp=S(sec=8,nanosec=0)))
     runtime._apply_pose_input(message,0.,0.,S())
-    assert session.state is None
+    assert session.state is state
     runtime._apply_pose_input(message,2.,2.,S())
-    assert session.state is None, '重复源时间不能作为定位恢复'
+    assert session.state is state
     clock[0]=12_000_000_000;message.header.stamp.sec=10
     runtime._apply_pose_input(message,2.1,2.1,S())
     assert session.state is state
@@ -59,6 +59,11 @@ def test_pose_input_recovery_needs_two_seconds_and_source_time_progress(monkeypa
     runtime._apply_pose_input(message,2.1,10.,S())
     assert session.state is None and session.goal.y==3. and session.accepted_generation==generation
     assert session.coordinator.goal_revision>revision
+    runtime._apply_pose_input(message,10.1,10.1,S())
+    assert session.state is None, '重复旧帧不能恢复已中断的定位'
+    message.header.stamp.sec=18
+    runtime._apply_pose_input(message,10.2,10.2,S())
+    assert session.state is state, '有效新帧不应再额外等2秒'
 
 
 @pytest.mark.parametrize('state',[0,1])
@@ -93,7 +98,7 @@ def test_pose_source_rollback_during_recovery_never_restores_motion(monkeypatch)
 
 
 @pytest.mark.parametrize("cancel_during_wait",[False,True])
-def test_actual_runtime_tick_preserves_target_across_loss_and_stable_recovery(monkeypatch,cancel_during_wait):
+def test_actual_runtime_tick_preserves_target_across_loss_and_immediate_valid_recovery(monkeypatch,cancel_during_wait):
     runtime,session,published,logs=build_runtime();runtime.configure_pose_input(4.5)
     module=__import__('lunar_nav1cm_planner.runtime',fromlist=['state_from_odometry'])
     state=VehicleState(0.,0.,0.,0.,0.)
@@ -107,7 +112,7 @@ def test_actual_runtime_tick_preserves_target_across_loss_and_stable_recovery(mo
     task='d'*32
     runtime.offer_managed_goal(task,S(target_x_m=0.,target_y_m=3.,has_target_yaw=True,target_yaw_rad=0.))
     feed(10.,98)
-    assert runtime.tasks.active.reason_code=='WAITING_FOR_POSE'
+    assert session.state is state and runtime.tasks.active.outcome is None
     feed(12.1,100)
     generation=session.accepted_generation;goal=session.goal
     assert session.state is state and runtime.tasks.active.outcome is None
@@ -118,7 +123,7 @@ def test_actual_runtime_tick_preserves_target_across_loss_and_stable_recovery(mo
         runtime.request_cancel(task)
         mono[0]=20.1;runtime._tick_once(20.1)
     feed(22.,110)
-    assert session.state is None
+    assert session.state is state
     feed(24.1,112)
     assert session.state is state and runtime.tasks.active.task_id==task
     if cancel_during_wait:

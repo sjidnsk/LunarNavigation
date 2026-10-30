@@ -111,20 +111,16 @@ try:
                       p3_map_timeout_s=result['controller_params']['p3_map_timeout_s'])
  result['planner_pose_budget']=params('lunar_nav1cm_planner',['odometry_timeout_s'])
  assert result['planner_pose_budget']['odometry_timeout_s']==measured_budget['odometry_timeout_s']
- result['preflight_time_contract']=dict(measured_budget,map_source_age_gate=False,stable_interval_s=2.,requires_odometry_source_advance=True,odometry_source_age_gate=False)
- stable_since=None;stable_source=None;end=time.monotonic()+45;last_report=0.
+ result['preflight_time_contract']=dict(measured_budget,map_source_age_gate=False,extra_recovery_wait_s=0.,odometry_continuity_check=True,odometry_source_age_gate=False)
+ end=time.monotonic()+45;last_report=0.
  while time.monotonic()<end:
   spin(.1);ros_now=control_node.get_clock().now().nanoseconds;mono_now=time.monotonic()
   report={k:runtime_input_health(k,samples.get(k),ros_now,mono_now,**measured_budget) for k in ('odom','map')}
   result['final_preflight_health']=report
   if mono_now-last_report>=1.:
    event('preflight_health',inputs=report);last_report=mono_now
-  if all(v['ready'] for v in report.values()):
-   if stable_since is None:
-    stable_since=mono_now;stable_source=samples['odom']['source_ns']
-   if mono_now-stable_since>=2. and samples['odom']['source_ns']>stable_source:break
-  else:stable_since=stable_source=None
- else:raise RuntimeError('P3_INPUTS_NOT_STABLE_WITHIN_RUNTIME_BUDGET')
+  if all(v['ready'] for v in report.values()):break
+ else:raise RuntimeError('P3_INPUTS_NOT_READY_WITHIN_RUNTIME_BUDGET')
  result['preflight_current_inputs']=True
  if options.preflight_only:raise PreflightOnlyComplete()
  tel=latest.get('telemetry',(None,None))[1]

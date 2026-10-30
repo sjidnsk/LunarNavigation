@@ -47,7 +47,6 @@ class PlannerRuntime:
         self._pose_source_high_water=self._pose_clock_high_water=None
         self._pose_integrity_fault=None
         self._pose_waiting=False
-        self._pose_ready_since=self._pose_ready_stamp=None
         self._tracking_inputs=deque(maxlen=128)
 
     def configure_pose_input(self,timeout_s):
@@ -55,7 +54,6 @@ class PlannerRuntime:
             raise ValueError('odometry_timeout_s must be finite and positive')
         self._pose_timeout_s=float(timeout_s)
         self._pose_waiting=True
-        self._pose_ready_since=self._pose_ready_stamp=None
 
     def _pose_source_current(self,message,received_s,now_s):
         if self._pose_timeout_s is None:return True,None
@@ -74,9 +72,7 @@ class PlannerRuntime:
             return valid,source_ns
         except (ValueError,TypeError,AttributeError,OverflowError):return False,None
 
-    def _enter_pose_wait(self,*,reset=True):
-        if reset or not self._pose_waiting:
-            self._pose_ready_since=self._pose_ready_stamp=None
+    def _enter_pose_wait(self):
         self._pose_waiting=True
         self.session.offer_state(None)
 
@@ -111,14 +107,8 @@ class PlannerRuntime:
             else:self.session.offer_state(None)
             raise
         if self._pose_timeout_s is not None and self._pose_waiting:
-            if self._pose_ready_since is None:
-                self._pose_ready_since,self._pose_ready_stamp=now_s,stamp
-            # 沿用TCP稳定预检2秒，并要求真实源时间推进；不重标或插值定位。
-            if now_s-self._pose_ready_since<2. or stamp<=self._pose_ready_stamp:
-                self.session.offer_state(None)
-                return
             self._pose_waiting=False
-            self._notice('ODOMETRY_RECOVERED','stable_pose_replanning')
+            self._notice('ODOMETRY_RECOVERED','valid_pose_replanning')
         self.session.offer_state(value)
 
     def enable_execution_contract(self,timeout_s=2.):
