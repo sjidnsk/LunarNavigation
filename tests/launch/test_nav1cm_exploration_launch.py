@@ -119,3 +119,15 @@ def test_p3_prediction_window_only_reaches_controller(monkeypatch):
     g = nodes(graph(monkeypatch, enable_controller="true", mppi_time_steps="140"))
     assert g[-1]["parameters"][0]["mppi_time_steps"] == 140
     assert all("mppi_time_steps" not in n["parameters"][0] for n in g[:-1])
+
+
+@pytest.mark.parametrize('budget',[.05,.2])
+def test_publication_envelope_reaches_only_controller(monkeypatch,budget):
+    g=nodes(graph(monkeypatch,enable_controller='true',mppi_compute_envelope_s=str(budget)))
+    assert g[-1]['parameters'][0]['mppi_compute_envelope_s']==budget
+    assert all('mppi_compute_envelope_s' not in n['parameters'][0] for n in g[:-1])
+
+
+@pytest.mark.parametrize('budget',['0','-.1','nan','inf'])
+def test_invalid_publication_envelope_is_rejected(monkeypatch,budget):
+    with pytest.raises(ValueError):graph(monkeypatch,enable_controller='true',mppi_compute_envelope_s=budget)
