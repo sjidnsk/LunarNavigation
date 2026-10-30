@@ -221,7 +221,8 @@ class PlannerRuntime:
         while self._task_events:
             snapshot=self._task_events.popleft()
             if snapshot.phase=='ERROR_STOPPING' or snapshot.outcome is not None:
-                self._notice('TASK_STATE',json.dumps(vars(snapshot),sort_keys=True))
+                self._notice('TASK_STATE',json.dumps({key:getattr(snapshot,key) for key in
+                    ('task_id','generation','phase','outcome','reason_code')},sort_keys=True))
             self.event_sink(snapshot)
 
     def _tick_once(self, now_s):
@@ -288,12 +289,9 @@ class PlannerRuntime:
             with self._condition:
                 tracking_inputs,self._tracking_inputs=self._tracking_inputs,deque(maxlen=128)
             for status,received_s in tracking_inputs:
-                offered=self.tasks.offer_execution_status(status,received_s)
-                if (offered and self._pose_timeout_s is not None and status.state==0 and
-                        not status.accepted and status.reason=='WAITING_FOR_POSE' and
-                        0<=now_s-received_s<=self.tasks._feedback_timeout):
-                    self._enter_pose_wait(reset=False)
-            fault=self.tasks.check_execution_fault(now_s,pose_waiting=self._pose_waiting)
+                self.tasks.offer_execution_status(status,received_s)
+            # 定位有效性由自身输入流判定；迟到的控制器等待不得覆盖恢复后的新定位。
+            fault=self.tasks.check_execution_fault(now_s)
             if fault:self.tasks.fail_tracking(fault,now_s)
         packet = self.session.tick(now_s)
         proposal = self.tasks.observe(packet, now_s,

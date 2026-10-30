@@ -45,3 +45,15 @@ def test_tf_output_accepts_reliable_rviz_without_changing_source_subscription():
     target=S(create_publisher=lambda cls,topic,qos:(publishers.append((topic,qos)) or S(publish=lambda msg:None)))
     input_bridge(source,target,dict(map=object,odom=object,tf=object),dict(map=1,odom=2,tf='best_effort',tf_output='reliable',tf_static=4))
     assert ('/tf','best_effort') in subscriptions and ('/tf','reliable') in publishers
+
+
+def test_p4_profile_has_no_map_time_expiry_and_preflight_uses_same_policy():
+    from pathlib import Path
+    import yaml
+    from scripts.simulation.p3_input_timing import record_sample,runtime_input_health
+    profile=yaml.safe_load((Path(__file__).resolve().parents[1]/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
+    assert profile['p3_map_timeout_s']==0.
+    args=launch_settings('/p4/source','/p4/cache','/p4/wheel.yaml',profile)
+    assert float(args['p3_map_timeout_s'])==0.
+    sample=record_sample(None,95_000_000_000,100_000_000_000,10.)
+    assert runtime_input_health('map',sample,1100_000_000_000,1010.,odometry_timeout_s=4.5,p3_map_timeout_s=profile['p3_map_timeout_s'])['ready']

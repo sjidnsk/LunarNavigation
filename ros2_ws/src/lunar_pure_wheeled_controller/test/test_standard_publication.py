@@ -219,3 +219,19 @@ def test_input_fault_uses_current_offered_identity_but_execution_failure_keeps_a
         assert status.get('reference',active) is active and status['reason'].endswith('UNSAFE')
     else:
         assert status['reference'] is offered and status['accepted'] is False
+
+
+@pytest.mark.parametrize('reason',['WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'])
+@pytest.mark.parametrize('previously_accepted',[False,True])
+def test_braking_recovery_heartbeat_belongs_to_current_offered_reference(reason,previously_accepted):
+    from test_terminal_execution_contract import ref
+    from builtin_interfaces.msg import Time
+    emitted=[];active=ref(session='a'*32);offered=ref(2,4,session='a'*32)
+    executor=S(execution_reference=active,_stop_reason=reason,failure=None,
+               reference_accepted=previously_accepted,last_execution_state=1)
+    n=S(_execution_enabled=True,_executor=executor,_execution_offered=offered,
+        _map_frame='map',get_clock=lambda:S(now=lambda:S(to_msg=lambda:Time(sec=1))),
+        _tracking_status=S(publish=emitted.append))
+    PureWheeledControllerNode._publish_execution_status(n)
+    assert emitted[0].segment_revision==offered.revision
+    assert emitted[0].state==1 and not emitted[0].reference_accepted

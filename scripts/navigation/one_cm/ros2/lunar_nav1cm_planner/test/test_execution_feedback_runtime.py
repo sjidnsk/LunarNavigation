@@ -61,7 +61,9 @@ def test_pose_input_recovery_needs_two_seconds_and_source_time_progress(monkeypa
     assert session.coordinator.goal_revision>revision
 
 
-def test_local_recovery_hold_keeps_only_fresh_matched_wait_heartbeat_alive():
+@pytest.mark.parametrize('state',[0,1])
+@pytest.mark.parametrize('reason',['WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'])
+def test_local_recovery_hold_keeps_only_fresh_matched_wait_heartbeat_alive(state,reason):
     from nav1cm.execution_contract import ExecutionStatus,ExecutionReference,FOLLOW,execution_session_id
     from nav1cm.ros_conversion import PoseGoal
     runtime,session,published,logs=build_runtime();task=runtime.tasks
@@ -69,12 +71,12 @@ def test_local_recovery_hold_keeps_only_fresh_matched_wait_heartbeat_alive():
     task.submit('a',PoseGoal(0.,3.,0.),0.)
     ref=ExecutionReference(execution_session_id('a',session.accepted_generation),1,'a'*64,FOLLOW,1)
     task.register_execution_reference(ref,0.)
-    wait=ExecutionStatus(ref.session_id,1,ref.path_digest,FOLLOW,0,False,1,'WAITING_FOR_FRESH_REFERENCE')
+    wait=ExecutionStatus(ref.session_id,1,ref.path_digest,FOLLOW,state,False,1,reason)
     assert task.offer_execution_status(wait,10.)
-    assert task.check_execution_fault(10.1,pose_waiting=True) is None
-    assert task.check_execution_fault(11.9,pose_waiting=False) is None
-    assert task.check_execution_fault(12.1,pose_waiting=True)=='EXECUTION_FEEDBACK_TIMEOUT'
-    assert task._execution_last_accepted is None
+    assert task.check_execution_fault(10.1) is None
+    assert task.check_execution_fault(11.9) is None
+    assert task.check_execution_fault(12.1)=='EXECUTION_FEEDBACK_TIMEOUT'
+    assert task._execution_accepted_reference is None
 
 
 def test_pose_source_rollback_during_recovery_never_restores_motion(monkeypatch):

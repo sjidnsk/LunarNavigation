@@ -542,7 +542,11 @@ class PureWheeledControllerNode(Node):
 
     def _publish_execution_status(self,*,reference=None,state_code=None,accepted=None,reason=None):
         if not getattr(self,'_execution_enabled',False):return
-        reference=reference or self._executor.execution_reference or self._execution_offered
+        if reference is None:
+            waiting=(self._executor.failure is None and
+                     self._executor._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'))
+            reference=(self._execution_offered if waiting else None) or self._executor.execution_reference or self._execution_offered
+            if waiting and accepted is None:accepted=False
         if reference is None:return
         status=TrackingStatus();status.header.frame_id=self._map_frame
         status.header.stamp=self.get_clock().now().to_msg()
