@@ -111,7 +111,8 @@ class InferenceRuntime:
             if pose is not None and any(np.any(t.observed) for t in snap.tiles.values()):
                 self.core.record_observation(pose,(1,))
         if self.state in ('PAUSING','CANCELING','RESTARTING'):
-            if not self.adapter.inflight and velocity_is_stopped(self.adapter.velocity):
+            if not self.adapter.inflight and (getattr(self.adapter,'terminal_stop_confirmed',False) or
+                                               velocity_is_stopped(self.adapter.velocity)):
                 if self.state=='RESTARTING':
                     task=self._pending_task;self._pending_task=None;self.start(task)
                 else:self.state='PAUSED' if self.state=='PAUSING' else 'CANCELED'

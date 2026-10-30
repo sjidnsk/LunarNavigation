@@ -22,6 +22,7 @@ class NavigationSession:
         self.accepted_generation = 0
         self.last_goal_rejection = None
         self.canceling = False
+        self._arrival_evidence = None
 
     def set_world(self, world):
         self.world = world
@@ -47,6 +48,7 @@ class NavigationSession:
         self.accepted_generation += 1
         self.goal, self.last_goal_rejection = goal, None
         self.canceling = False
+        self._arrival_evidence = None
         # 显式代际使两次 tick 之间 A→B→A 也能使最初的 A 全部失效。
         self.coordinator.replace_goal((goal.x, goal.y), goal_yaw=goal.yaw,
                                       generation=self.accepted_generation)
@@ -57,6 +59,19 @@ class NavigationSession:
         self.goal, self.canceling = None, True
         self.coordinator.invalidate_goal(generation=self.accepted_generation)
 
+    def arrival_current(self, packet):
+        # NOT_DUE不产生新证明；仅复用相同输入下上一份真实认证的终态。
+        evidence=self._arrival_evidence
+        if evidence is None or packet.waiting or packet.generation!=self.accepted_generation:return False
+        world,state,goal,generation,result=evidence
+        if (world is not self.world or state!=self.state or goal!=self.goal or
+                generation!=self.accepted_generation or
+                (packet.result is not result and getattr(packet.result,'status',None)!='NOT_DUE')):return False
+        return (self.coordinator.goal_reached(self.state) and result.status=='ARRIVED' and
+                result.candidate is not None and result.certificate is not None and
+                result.certificate.matches(result.candidate,result.grid,self.coordinator.limits,
+                                           result.candidate.route_version))
+
     def tick(self, now_s):
         if self.canceling and self.world is not None and self.state is not None:
             result = self.coordinator.cancel_tick(self.world, self.state, now_s)
@@ -64,6 +79,7 @@ class NavigationSession:
 
         waiting = tuple(name for name in ('world', 'state', 'goal') if getattr(self, name) is None)
         if waiting:
+            self._arrival_evidence=None
             return SessionPacket(self.accepted_generation, waiting=waiting)
         result = self.coordinator.tick(self.world, self.state, (self.goal.x, self.goal.y),
                                        now_s, goal_yaw=self.goal.yaw)
@@ -71,6 +87,9 @@ class NavigationSession:
         if (candidate is None or result.certificate is None or
                 not result.certificate.matches(candidate, result.grid, self.coordinator.limits, candidate.route_version)):
             candidate = None
+        if result.status!='NOT_DUE':
+            self._arrival_evidence=((self.world,self.state,self.goal,self.accepted_generation,result)
+                                    if result.status=='ARRIVED' and candidate is not None else None)
         return SessionPacket(self.accepted_generation, self.coordinator.route, result, candidate=candidate)
 
     def publication_current(self, packet):

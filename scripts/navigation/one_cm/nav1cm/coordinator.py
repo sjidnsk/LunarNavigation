@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from time import perf_counter
 import numpy as np
 
-from .contracts import LocalReference, WheelLimits
+from .contracts import LocalReference, WheelLimits, VehicleState
 from .maps import extract_window, DistanceFieldCache
 from .reference import extract_reference
 from .certification import certify, prepare_certification
@@ -156,19 +156,22 @@ class NavigationCoordinator:
                     abs(sum(np.linalg.norm(np.diff(incoming.points, axis=0), axis=1)) -
                         (projected[-1] - projected[0])) <= 1e-6)
 
+    def goal_reached(self, state):
+        """唯一位姿/停稳判据，同时用于实测状态与受限制动终点。"""
+        return (self._goal is not None and state is not None and
+                abs(state.v)<=self.stopped_linear_mps and abs(state.w)<=self.stopped_angular_rps and
+                np.hypot(state.x-self._goal[0],state.y-self._goal[1])<=self.position_target_tolerance_m and
+                (self._goal_yaw is None or abs(angle_error(self._goal_yaw,state.yaw))<=self.goal_yaw_tolerance_rad))
+
     def _terminal_plan(self, state, grid, reference):
         yaw_satisfied = (self._goal_yaw is None or
                          abs(angle_error(self._goal_yaw, state.yaw)) <= self.goal_yaw_tolerance_rad)
-        stopped = abs(state.v) <= self.stopped_linear_mps and abs(state.w) <= self.stopped_angular_rps
         if yaw_satisfied:
             # 低于停稳阈值仍有真实运动；到达状态不能紧接着被自身制动带出容差。
             candidate = brake_candidate(state, grid, reference, self.limits)
             last = candidate.states[-1]
-            final_pose_satisfied = (
-                np.linalg.norm(last[:2] - self._goal) <= self.position_target_tolerance_m and
-                (self._goal_yaw is None or
-                 abs(angle_error(self._goal_yaw, last[2])) <= self.goal_yaw_tolerance_rad))
-            return candidate, 'ARRIVED' if stopped and final_pose_satisfied else 'GOAL_BRAKING'
+            arrived=self.goal_reached(state) and self.goal_reached(VehicleState(*last[:5]))
+            return candidate, 'ARRIVED' if arrived else 'GOAL_BRAKING'
         candidate = terminal_candidate(state, grid, reference, self.limits)
         return candidate, 'GOAL_TURNING' if candidate.source == 'terminal-yaw:bounded' else 'GOAL_BRAKING'
 

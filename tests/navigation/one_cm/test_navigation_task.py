@@ -202,3 +202,43 @@ def test_missing_input_and_retired_route_take_priority_over_not_due_history():
     assert task.active.reason_code=='WAITING_FOR_MAP'
     task.observe(replace(absent,waiting=('state',)),.13)
     assert task.active.reason_code=='WAITING_FOR_POSE' and task.active.outcome is None
+
+
+
+def test_goal_blocked_after_acceptance_cannot_report_arrived():
+    from scripts.navigation.one_cm.nav1cm.contracts import CellRect, WorldSnapshot
+    session,Goal=make_session();task=task_api(session)
+    task.submit('a',Goal(0,0,0),0.)
+    session.set_world(WorldSnapshot(2,(CellRect(-20,-20,20,20),),(CellRect(-1000,-1000,1000,1000),)))
+    for now in (0.,.4):task.observe(session.tick(now),now)
+    assert task.active.outcome is None
+
+
+def test_task_uses_braking_endpoint_for_arrival():
+    session,Goal=make_session();task=task_api(session)
+    task.submit('a',Goal(0,0,0),0.)
+    session.offer_state(VehicleState(.09999,0,0,.009,0))
+    for now in (0.,.4):
+        packet=session.tick(now)
+        assert packet.result.status=='GOAL_BRAKING'
+        task.observe(packet,now)
+    assert task.active.outcome is None
+
+
+def test_certified_arrival_survives_not_due_but_not_new_world():
+    from scripts.navigation.one_cm.nav1cm.contracts import CellRect, WorldSnapshot
+    session,Goal=make_session();task=task_api(session)
+    session.coordinator.local_period_s=1.
+    task.submit('a',Goal(0,0,0),0.)
+    task.observe(session.tick(0.),0.)
+    packet=session.tick(.31)
+    assert packet.result.status=='NOT_DUE'
+    task.observe(packet,.31)
+    assert task.active.outcome=='GOAL_REACHED'
+    # 另一个任务期间，即使计算槽未到，新障碍也应使原证据失效。
+    session,Goal=make_session();task=task_api(session)
+    session.coordinator.local_period_s=1.
+    task.submit('b',Goal(0,0,0),0.);task.observe(session.tick(0.),0.)
+    session.set_world(WorldSnapshot(2,(CellRect(-20,-20,20,20),),(CellRect(-1000,-1000,1000,1000),)))
+    task.observe(session.tick(.31),.31)
+    assert task.active.outcome is None

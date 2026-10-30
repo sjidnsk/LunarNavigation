@@ -1,10 +1,8 @@
 """无 ROS 的导航任务合同；仅 Runtime 的 tick 线程可调用写入方法。"""
 from dataclasses import dataclass, replace
-import math
 from collections import OrderedDict
 from .execution_contract import ExecutionReference, ExecutionStatus, execution_session_id, FOLLOW, BRAKE, HOLD, FINAL_ALIGN
 
-from .pose_goal import angle_error
 from .ros_conversion import PoseGoal, finite
 
 
@@ -197,7 +195,7 @@ class NavigationTaskCoordinator:
         if current is None or current.outcome is not None:
             return None if defer_commit else current
         before, arrived_since = current, self._arrived_since
-        state, goal, limits = self.session.state, self.session.goal, self.session.coordinator
+        state, limits = self.session.state, self.session.coordinator
         stopped = state is not None and abs(state.v) <= limits.stopped_linear_mps and abs(state.w) <= limits.stopped_angular_rps
         if current.phase == 'ERROR_STOPPING':
             if stopped and state_updated:
@@ -206,9 +204,8 @@ class NavigationTaskCoordinator:
             if stopped and state_updated:
                 current = replace(current, phase='FINISHED', outcome='CANCELED', reason_code='CANCELED_STOPPED')
         else:
-            arrived = (self._execution_arrived(now_s) and packet.generation == current.generation and not packet.waiting and stopped and goal is not None and
-                       math.hypot(state.x-goal.x, state.y-goal.y) <= limits.position_target_tolerance_m and
-                       abs(angle_error(goal.yaw, state.yaw)) <= limits.goal_yaw_tolerance_rad)
+            arrived = (self._execution_arrived(now_s) and packet.generation==current.generation and
+                       self.session.arrival_current(packet))
             if not arrived:
                 arrived_since = None
             elif state_updated:
