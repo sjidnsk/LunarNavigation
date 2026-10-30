@@ -702,13 +702,19 @@ class PureWheeledControllerNode(Node):
         self._standard_state_ns=source_ns if source_ns>0 else receipt_ns
         if self._p3_source is not None:self._p3_source.set_center(value.x,value.y)
 
-    def _standard_unavailable(self,reason):
+    def _standard_unavailable(self,reason,*,retryable=False):
+        failure=getattr(self._executor,'failure',None)
+        retryable=(retryable and failure is None and
+                   getattr(self._executor,'last_execution_state',0)!=6)
+        if failure is not None:reason=failure
         # 零目标是未知运动时的保底请求，不能当作有界制动认证或实测停车。
         self._executor.discard_prediction()
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(event='certificate_unavailable',
-            reason=reason,measured_stopped=None,certified_stop=False))))
+            reason=reason,retryable=retryable,measured_stopped=None,certified_stop=False))))
         self._publish_twist()
-        self._publish_execution_status(state_code=6,reason='EXECUTION_INPUT_UNAVAILABLE:'+str(reason))
+        # 仅证明在发布前作废可重算；输入失效/不安全仍是终端故障。
+        self._publish_execution_status(state_code=1 if retryable else 6,
+            reason=('PUBLICATION_DEFERRED:' if retryable else 'EXECUTION_INPUT_UNAVAILABLE:')+str(reason))
 
     def _standard_grid(self,state):
         if self._p3_source is not None:
@@ -756,12 +762,16 @@ class PureWheeledControllerNode(Node):
             covered_ns=certificate_ns+int(self._executor.config.compute_budget_s*1e9)
         final_grid=self._standard_grid(state)
         publication_ns=self.get_clock().now().nanoseconds
-        if final_grid is None or identity(final_grid)!=identity(latest):
-            return self._standard_unavailable('map_changed_during_certification')
-        if publication_ns<certificate_ns or publication_ns>covered_ns:
-            return self._standard_unavailable('publication_certificate_expired')
+        if final_grid is None:
+            return self._standard_unavailable('stale_map_after_certification')
         if self._input_is_stale(received_at,self._odometry_timeout_s):
             return self._standard_unavailable('stale_feedback_after_certification')
+        if publication_ns<certificate_ns:
+            return self._standard_unavailable('clock_regressed_during_certification')
+        if identity(final_grid)!=identity(latest):
+            return self._standard_unavailable('map_changed_during_certification',retryable=True)
+        if publication_ns>covered_ns:
+            return self._standard_unavailable('publication_certificate_expired',retryable=True)
         self._publish_twist(result.command.linear_x_mps,result.command.angular_z_radps)
         self._publish_execution_status()
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(self._executor.diagnostics,
