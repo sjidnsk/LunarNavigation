@@ -103,10 +103,11 @@ def test_unknown_policy_rejects_non_boolean(monkeypatch):
 
 
 @pytest.mark.parametrize("budget", ["0.5", "4.5"])
-def test_p3_feedback_budget_reaches_only_controller(monkeypatch, budget):
+def test_p3_feedback_budget_reaches_both_pose_consumers(monkeypatch, budget):
     g = nodes(graph(monkeypatch, enable_controller="true", odometry_timeout_s=budget))
     assert g[-1]["parameters"][0]["odometry_timeout_s"] == float(budget)
-    assert all("odometry_timeout_s" not in n["parameters"][0] for n in g[:-1])
+    assert g[1]["parameters"][0]["odometry_timeout_s"] == float(budget)
+    assert "odometry_timeout_s" not in g[0]["parameters"][0]
 
 
 @pytest.mark.parametrize("budget", ["0", "-1", "nan", "inf"])

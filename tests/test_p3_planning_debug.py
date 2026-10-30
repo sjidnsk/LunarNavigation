@@ -87,3 +87,15 @@ def test_unknown_action_status_is_not_terminal_cleanup_proof():
     handle=S(accepted=True,get_result_async=lambda:done)
     result=cleanup_goal(None,handle,lambda:None)
     assert not result['ok'] and not result['terminal']
+
+
+def test_tcp_observation_reuses_profile_without_enabling_control():
+    args=launch_arguments('/p4/source','/p4/cache',profile={'odometry_timeout_s':4.5,
+        'p3_map_timeout_s':6.,'mppi_time_steps':140,'mppi_compute_envelope_s':.2},allow_unknown=True)
+    assert args['odometry_timeout_s']=='4.5' and args['allow_unknown']=='true'
+    assert args['enable_controller']=='false' and args['command_topic'].endswith('/disabled_cmd_vel')
+
+
+def test_tcp_observation_profile_cannot_enable_control():
+    import pytest
+    with pytest.raises(ValueError):launch_arguments('/p4/source','/cache',profile={'enable_controller':True})

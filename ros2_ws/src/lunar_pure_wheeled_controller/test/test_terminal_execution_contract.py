@@ -465,3 +465,54 @@ def test_plain_initial_path_waits_for_map_before_binding_physical_progress():
     e.update(TrackingState(.04,0.,0.),.05)
     assert abs(e.no_progress_s-.75)<1e-9
     assert abs(e._last_pose[0][0]-.04)<1e-9
+
+def test_pose_wait_retires_old_motion_and_recovery_requires_stop_and_new_proof():
+    e=follower();old=ref();path=((0.,0.,0.),(1.,0.,0.))
+    e.offer_execution_reference(path,old);tick(e,TrackingState(0.,0.,0.))
+    e.note_command(.1,0.);history=list(e._command_history)
+    e.wait_for_pose()
+    assert e.path is None and e._execution_pending is None and e.failure is None
+    assert e._command_history==history
+    assert not e.offer_execution_reference(path,old)
+    result=e.update(TrackingState(0.,0.,0.),.05)
+    assert result.command.linear_x_mps==0. and e._stop_reason=='WAITING_FOR_POSE'
+    fresh=ref(2);assert e.offer_execution_reference(path,fresh)
+    e._brake_safe=lambda *a:[False]
+    e.update(TrackingState(0.,0.,0.),.05)
+    assert e.execution_reference is old
+    e._brake_safe=lambda *a:[True]
+    e.update(TrackingState(0.,0.,0.,.1),.05)
+    assert e.execution_reference is old
+    e.update(TrackingState(0.,0.,0.),.05)
+    assert e.execution_reference is fresh and e._stop_reason is None
+
+
+def test_pose_wait_barrier_survives_intermediate_parking_reference():
+    e=follower();path=((0.,0.,0.),(1.,0.,0.));old=ref()
+    e.offer_execution_reference(path,old);tick(e,TrackingState(0.,0.,0.));e.wait_for_pose()
+    e.request_stop('EXECUTION_PAIR_WAIT')
+    assert e._stop_reason=='WAITING_FOR_POSE'
+    parked=ref(2,4);assert e.offer_execution_reference((),parked)
+    e._brake_safe=lambda *a:[True]
+    e.update(TrackingState(0.,0.,0.,.1),.05)
+    assert e.execution_reference is old
+    fresh=ref(3);e.offer_execution_reference(path,fresh)
+    e.update(TrackingState(0.,0.,0.,.1),.05)
+    assert e.execution_reference is old
+    e.update(TrackingState(0.,0.,0.),.05)
+    assert e.execution_reference is fresh
+
+
+def test_pose_wait_does_not_erase_manual_stop():
+    e=follower();e.request_stop('MANUAL_STOP');e.wait_for_pose();e.request_stop('NO_PATH')
+    assert e._stop_reason=='MANUAL_STOP'
+
+
+def test_manual_stop_survives_pose_wait_parking_and_same_session_follow():
+    e=follower();path=((0.,0.,0.),(1.,0.,0.))
+    e.offer_execution_reference(path,ref());tick(e,TrackingState(0.,0.,0.))
+    e.request_stop('MANUAL_STOP');e.wait_for_pose();e._brake_safe=lambda *a:[True]
+    e.offer_execution_reference((),ref(2,4));e.update(TrackingState(0.,0.,0.),.05)
+    e.offer_execution_reference(path,ref(3));result=e.update(TrackingState(0.,0.,0.),.05)
+    assert e._stop_reason=='MANUAL_STOP'
+    assert result.command.linear_x_mps==0. and result.command.angular_z_radps==0.

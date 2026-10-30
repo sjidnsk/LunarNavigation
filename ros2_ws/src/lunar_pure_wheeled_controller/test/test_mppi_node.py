@@ -349,6 +349,9 @@ def test_standard_path_receipt_liveness_and_empty_stop_preserve_history(monkeypa
         from nav_msgs.msg import Odometry
         odom=Odometry();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.
         node._on_odometry(odom)
+        from test_standard_path_follower import follower
+        node._executor.set_map(follower().map)
+        monkeypatch.setattr(node,'_publish_twist',lambda *a:None)
         monkeypatch.setattr(node,'_standard_grid',lambda state:node._executor.map)
         monkeypatch.setattr(node,'_standard_unavailable',lambda reason:None)
         clock[0]=11.36;node._tick()

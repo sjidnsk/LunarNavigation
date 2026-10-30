@@ -106,6 +106,7 @@ class PlannerNode(Node):
             'global_route_topic': '/Car/T4/planning/global_route',
             'local_path_topic': '/Car/T4/planning/local_path',
             'execution_contract_enabled':False,'execution_feedback_timeout_s':2.,
+            'odometry_timeout_s':.5,
             'execution_reference_topic':'/Car/T4/control/path_execution_reference',
             'tracking_status_topic':'/Car/T4/control/tracking_status',
         }
@@ -124,6 +125,7 @@ class PlannerNode(Node):
                                       ros_now_ns=lambda: self.get_clock().now().nanoseconds,
                                       notice=lambda kind, detail: self.get_logger().info(f'{kind}: {detail}'),
                                       map_frame=frame_name(settings['map_frame']) or 'map')
+        self.runtime.configure_pose_input(float(settings['odometry_timeout_s']))
         latest = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                             durability=DurabilityPolicy.VOLATILE)
         dynamic_tf = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,

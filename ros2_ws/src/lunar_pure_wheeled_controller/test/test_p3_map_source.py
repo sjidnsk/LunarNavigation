@@ -300,6 +300,7 @@ def test_nan_lateral_feedback_is_rejected_and_cannot_renew_liveness():
         diagnostics=[];node._mppi_diagnostics=S(publish=lambda msg:diagnostics.append(json.loads(msg.data)))
         node._tick()
         assert diagnostics[-1]['event']=='certificate_unavailable'
+        assert node._executor.failure=='INVALID_FEEDBACK'
         assert diagnostics[-1]['measured_stopped'] is None
         assert not diagnostics[-1]['certified_stop']
     finally:

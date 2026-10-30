@@ -27,6 +27,9 @@ class NavigationSession:
         self.world = world
 
     def offer_state(self, state):
+        if state is None and self.state is not None and self.goal is not None and not self.canceling:
+            # 保留任务及最终位姿，退休失去反馈前的计算和运动缓存。
+            self.coordinator.invalidate_goal(generation=self.accepted_generation)
         self.state = state
 
     def offer_goal(self, goal, *, force_new=False):

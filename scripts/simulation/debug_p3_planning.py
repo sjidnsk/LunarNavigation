@@ -10,19 +10,26 @@ import time
 
 PREFIX='/p4_p3_debug'
 
-def launch_arguments(source,build_dir):
+def launch_arguments(source,build_dir,*,profile=None,allow_unknown=False):
     topics=dict(action_name='navigate_to_pose',goal_topic='goal',global_route_topic='global_route',
         local_path_topic='local_path',execution_reference_topic='execution_reference',tracking_status_topic='tracking_status',
         exploration_map_topic='exploration_map',policy_map_service='get_policy_map',task_topic='exploration/task',
         status_topic='exploration/status',current_goal_topic='exploration/current_goal',frontiers_topic='exploration/frontiers',
         task_boundary_topic='exploration/task_boundary',task_map_markers_topic='exploration/task_map_markers',
         exploration_diagnostics_topic='exploration/diagnostics',diagnostics_topic='control/diagnostics')
-    return dict({k:PREFIX+'/'+v for k,v in topics.items()},
+    result=dict({k:PREFIX+'/'+v for k,v in topics.items()},
         exploration_strategy='frontier',enable_controller='false',use_sim_time='false',
         platform_config=str(Path(source)/'config/wheel.yaml'),build_dir=str(build_dir),
         map_topic='/Car/T3/mapping/grid_map',odometry_topic='/Car/T3/localization/odometry',
         tf_topic='/tf',tf_static_topic='/tf_static',map_qos_reliability='reliable',
-        map_qos_durability='transient_local',command_topic=PREFIX+'/disabled_cmd_vel')
+        map_qos_durability='transient_local',command_topic=PREFIX+'/disabled_cmd_vel',
+        allow_unknown='true' if allow_unknown else 'false')
+    if profile is not None:
+        allowed={'odometry_timeout_s','p3_map_timeout_s','mppi_time_steps','mppi_compute_envelope_s'}
+        if not isinstance(profile,dict) or set(profile)-allowed:
+            raise ValueError('调试profile只能覆盖既有输入/预测/计算预算')
+        result.update({k:str(v) for k,v in profile.items()})
+    return result
 
 def goal_candidates(grid,x,y):
     if grid is None:return []
@@ -86,7 +93,14 @@ def main():
     parser.add_argument('--source',type=Path,required=True);parser.add_argument('--artifact',type=Path,required=True)
     parser.add_argument('--duration',type=float,default=120.);parser.add_argument('--stay',action='store_true')
     parser.add_argument('--observe-frontiers',action='store_true',help='只观察前沿与规划输入，不要求自主选点通过')
+    parser.add_argument('--tcp-profile',type=Path,help='显式复用TCP输入预算配置，不启用控制')
+    parser.add_argument('--allow-unknown',action='store_true',help='与TCP入口相同的显式UNKNOWN策略')
     args=parser.parse_args();artifact=args.artifact.resolve();artifact.mkdir(parents=True,exist_ok=False)
+    profile=None
+    if args.tcp_profile is not None:
+        import yaml
+        profile=yaml.safe_load(args.tcp_profile.read_text(encoding='utf-8'))
+
     # 所有ROS导入放在main，纯入口/目标选择测试不需要ROS。
     import rclpy
     from rclpy.action import ActionClient
@@ -150,7 +164,7 @@ def main():
     maps=node.create_client(GetPolicyMap,PREFIX+'/get_policy_map')
     log_path=artifact/'launch.log';log=log_path.open('w')
     command=['ros2','launch','lunar_pure_exploration_ros','nav1cm_exploration.launch.py']
-    command += [k+':='+v for k,v in launch_arguments(args.source,os.environ['NAV1CM_BUILD_DIR']).items()]
+    command += [k+':='+v for k,v in launch_arguments(args.source,os.environ['NAV1CM_BUILD_DIR'],profile=profile,allow_unknown=args.allow_unknown).items()]
     process=subprocess.Popen(command,cwd=artifact,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
     (artifact/'pids.json').write_text(json.dumps(dict(observer=os.getpid(),launch=process.pid)))
     result=dict(ok=False,scope='P3 delayed observation planning only; no controller or vehicle bridge',budgets=budgets,manual_attempts=[])
