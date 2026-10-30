@@ -18,7 +18,9 @@ from .reference_buffer import ReferenceTrajectoryBuffer
 class AsyncNavigationCoordinator(NavigationCoordinator):
     def __init__(self, *, local_worker=None, global_runner=None, build_dir=None,
                  planning_period_s=.1, execution_period_s=.05, feedback_tolerance=None,
-                 planner_options=None, **kwargs):
+                 planner_options=None, initial_travel_direction="", **kwargs):
+        if initial_travel_direction not in ('','forward','reverse'):
+            raise ValueError('initial_travel_direction must be forward or reverse')
         if not all(np.isfinite(x) and x>0 for x in (planning_period_s,execution_period_s)):
             raise ValueError('periods must be finite and positive')
         super().__init__(None,runner=global_runner,local_period_s=execution_period_s,**kwargs)
@@ -27,6 +29,9 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         self.execution_period_s=execution_period_s
         self.buffer=(ReferenceTrajectoryBuffer(feedback_tolerance,reaction_s=execution_period_s)
                      if self.revalidate_current_map else TrajectoryBuffer(feedback_tolerance))
+        self.initial_travel_direction=initial_travel_direction
+        self._initial_direction_pending=bool(initial_travel_direction)
+        self._initial_direction_aligned=False
         self._next_plan=-float('inf')
         self._sequence=0
         self._inflight=None
@@ -45,6 +50,25 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         super().replace_goal(goal, goal_yaw=goal_yaw, generation=generation)
         if self.goal_revision != revision:
             self.buffer.clear()
+            self._initial_direction_pending=bool(self.initial_travel_direction)
+            self._initial_direction_aligned=False
+
+    def _initial_start_direction(self,state,reference):
+        # 起步偏好只属于当前目标；参考刷新/地图更新不重新激活。
+        if not self._initial_direction_pending or len(reference.points)<2:return ''
+        direction=self.initial_travel_direction
+        sign=1. if direction=='forward' else -1.
+        if self._initial_direction_aligned and sign*state.v>self.stopped_linear_mps:
+            self._initial_direction_pending=False
+            return ''
+        delta=reference.points[1]-reference.points[0]
+        target=float(np.arctan2(delta[1],delta[0]))+(np.pi if sign<0 else 0.)
+        error=float(np.arctan2(np.sin(target-state.yaw),np.cos(target-state.yaw)))
+        if abs(error)>.08 or abs(state.w)>self.stopped_angular_rps:
+            self._initial_direction_aligned=False
+        elif abs(state.v)<=self.stopped_linear_mps:
+            self._initial_direction_aligned=True
+        return direction
 
     def _buffer_minimum_s(self, state):
         if not self.revalidate_current_map:
@@ -66,6 +90,11 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         return {'local':local_result,'global':global_result}
 
     def _async_plan(self, state, grid, reference, now_s, events, timings, context):
+        pending=self._initial_direction_pending
+        initial_direction=self._initial_start_direction(state,reference)
+        if pending and not self._initial_direction_pending:
+            events.append({'kind':'INITIAL_START_COMPLETED','direction':self.initial_travel_direction,
+                           'goal_revision':self.goal_revision,'accepted_goal_generation':self._accepted_goal_generation})
         accepted_candidate = accepted_certificate = None
         identity=(grid.epoch,reference.route_version,self.goal_revision,self._goal,self._goal_yaw,self.allow_unknown)
         if self._buffer_identity is not None and self._buffer_identity[1:] != identity[1:]:
@@ -137,8 +166,10 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
                                 allow_unknown=self.allow_unknown,feedback_s=now_s,submitted_s=now_s,
                                 submitted_wall_s=perf_counter())
             try:
-                self.local_worker.submit(dict(identity=self._inflight,state=state,grid=grid,reference=reference))
-                events.append({'kind':'LOCAL_SUBMITTED',**self._inflight})
+                request=dict(identity=self._inflight,state=state,grid=grid,reference=reference)
+                if initial_direction:request['initial_travel_direction']=initial_direction
+                self.local_worker.submit(request)
+                events.append({'kind':'LOCAL_SUBMITTED',**self._inflight,'initial_travel_direction':initial_direction})
             except Exception as exc:
                 self._inflight=None
                 events.append({'kind':'LOCAL_SUBMIT_ERROR','reason':str(exc)})

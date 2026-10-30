@@ -43,7 +43,9 @@ def run_request(request):
     start,cpu=perf_counter(),process_time()
     grid=request['grid']
     field=_cache.get(grid)
-    result=_planner.plan(request['state'],grid,request['reference'],distance_field=field,field_grid_digest=grid.digest())
+    options={}
+    if request.get('initial_travel_direction'):options['initial_travel_direction']=request['initial_travel_direction']
+    result=_planner.plan(request['state'],grid,request['reference'],distance_field=field,field_grid_digest=grid.digest(),**options)
     return dict(request_identity=request['identity'],candidate=result.candidate,reason=result.reason,
                 timings_ms=result.timings_ms,attempts=result.attempts,worker_pid=os.getpid(),
                 worker_start_wall_s=start,worker_finish_wall_s=perf_counter(),

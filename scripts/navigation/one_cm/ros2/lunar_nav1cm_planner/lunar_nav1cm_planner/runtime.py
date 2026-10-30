@@ -346,7 +346,7 @@ class PlannerRuntime:
                 self._notice('GLOBAL_RESULT', json.dumps(record, sort_keys=True))
             for event in result.events:
                 if event['kind'] in ('GLOBAL_CURRENT_MAP_REVALIDATED', 'GLOBAL_CURRENT_MAP_REJECTED',
-                                      'LOCAL_CURRENT_MAP_REVALIDATED'):
+                                      'LOCAL_CURRENT_MAP_REVALIDATED', 'INITIAL_START_COMPLETED'):
                     self._notice(event['kind'], json.dumps(event, sort_keys=True))
         if packet.waiting:
             self._notice('WAITING_INPUT', ','.join(packet.waiting))

@@ -145,3 +145,14 @@ def test_owned_nav1cm_map_uses_same_twenty_centimeter_exploration_default():
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     maps=module.owned_nav1cm_specs('/private',platform_config='/wheel.yaml',build_dir='/cache',use_sim_time=False)[0][2]
     assert maps['coarse_resolution_m']==.2
+
+
+@pytest.mark.parametrize('direction',['forward','reverse'])
+def test_initial_direction_is_owned_only_by_navigator(monkeypatch,direction):
+    g=nodes(graph(monkeypatch,enable_controller='true',initial_travel_direction=direction))
+    assert g[1]['parameters'][0]['initial_travel_direction']==direction
+    assert all('initial_travel_direction' not in n['parameters'][0] for i,n in enumerate(g) if i!=1)
+
+
+def test_initial_direction_rejects_unsupported_choice(monkeypatch):
+    with pytest.raises(ValueError):graph(monkeypatch,initial_travel_direction='sideways')

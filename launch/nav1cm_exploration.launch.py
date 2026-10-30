@@ -29,7 +29,7 @@ DEFAULTS = {
     "command_topic": "/Car/T5/Car_Cmd_Vel", "diagnostics_topic": "/Car/T4/control/mppi_diagnostics",
     "map_qos_reliability": "reliable", "map_qos_durability": "volatile",
     "p3_map_timeout_s": "3.0", "odometry_timeout_s": "0.5", "mppi_time_steps": "40",
-    "mppi_compute_envelope_s": "0.05",
+    "mppi_compute_envelope_s": "0.05", "initial_travel_direction": "",
     "coarse_resolution_m": "0.2", "navigation_map_wait_timeout_s": "30.0",
 }
 
@@ -41,6 +41,8 @@ def _compose(context):
     values["odometry_timeout_s"] = float(values["odometry_timeout_s"])
     if not isfinite(values["odometry_timeout_s"]) or values["odometry_timeout_s"] <= 0:
         raise ValueError("odometry_timeout_s must be finite and positive")
+    if values["initial_travel_direction"] not in ("", "forward", "reverse"):
+        raise ValueError("initial_travel_direction must be forward or reverse")
     values["mppi_time_steps"] = int(values["mppi_time_steps"])
     if values["mppi_time_steps"] <= 0:
         raise ValueError("mppi_time_steps must be positive")
@@ -76,6 +78,7 @@ def _compose(context):
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
             "execution_contract_enabled":values["enable_controller"]=="true",
             "odometry_timeout_s":values["odometry_timeout_s"],
+            "initial_travel_direction":values["initial_travel_direction"],
             "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
             **{k: values[k] for k in ("action_name","goal_topic","global_route_topic","local_path_topic","build_dir")},
             "allow_unknown": values["allow_unknown"] == "true"}),

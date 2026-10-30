@@ -255,3 +255,24 @@ def test_global_submit_error_preserves_old_buffer_and_latest_pending_goal():
     r=c.tick(world,state,(0,3),.15)
     assert r.action.source=='brake'
     assert c._goal==(0.,3.) and c._pending_reason=='GOAL_CHANGED'
+
+
+@pytest.mark.parametrize('direction,target,velocity',[('forward',0.,.02),('reverse',np.pi,-.02)])
+def test_initial_direction_lives_once_per_goal_not_reference_refresh(direction,target,velocity):
+    from scripts.navigation.one_cm.nav1cm.contracts import LocalReference
+    c=AsyncNavigationCoordinator(local_worker=ManualLocal(),global_runner=PendingGlobal(),initial_travel_direction=direction)
+    c.replace_goal((3.,0.),goal_yaw=0.,generation=1)
+    reference=LocalReference(1,1,[[0.,0.],[3.,0.]],[0.,3.])
+    assert c._initial_start_direction(VehicleState(0.,0.,target,0.,0.),reference)==direction
+    assert c._initial_start_direction(VehicleState(.1,0.,target,velocity,0.),reference)==''
+    changed=LocalReference(2,2,[[.1,0.],[4.,1.]],[0.,4.])
+    assert c._initial_start_direction(VehicleState(.1,0.,target,0.,0.),changed)==''
+    c.replace_goal((3.,0.),goal_yaw=0.,generation=2)
+    assert c._initial_start_direction(VehicleState(.1,0.,target,0.,0.),reference)==direction
+    c.close()
+
+
+def test_invalid_initial_direction_fails_before_creating_resources(monkeypatch):
+    import scripts.navigation.one_cm.nav1cm.async_coordinator as module
+    monkeypatch.setattr(module.NavigationCoordinator,'__init__',lambda *a,**kw:pytest.fail('must validate before resource creation'))
+    with pytest.raises(ValueError):AsyncNavigationCoordinator(initial_travel_direction='sideways')

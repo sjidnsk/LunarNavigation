@@ -46,6 +46,7 @@ def create_resources(limits, capability, settings):
             backend=NativeGeometry(prefix / 'lib/libnav1cm_geometry.so'),
             field_backend=NativeDistanceField(prefix / 'lib/libnav1cm_distance_field.so'),
             allow_unknown=settings['allow_unknown'],
+            initial_travel_direction=settings.get('initial_travel_direction',''),
             planning_period_s=settings['planning_period_s'], execution_period_s=settings['execution_period_s'],
             global_period_s=settings['global_period_s'], global_budget_s=settings['global_budget_s'],
             clearance_radius_m=settings['clearance_radius_m'], revalidate_current_map=True,
@@ -93,7 +94,7 @@ class PlannerNode(Node):
         limits, capability = load_configuration(capability_file, overrides)
         defaults = {
             'map_frame': 'map', 'build_dir': os.environ.get('NAV1CM_BUILD_DIR', ''),
-            'allow_unknown': False, 'planning_period_s': .1, 'execution_period_s': .05,
+            'allow_unknown': False, 'initial_travel_direction': '', 'planning_period_s': .1, 'execution_period_s': .05,
             'global_period_s': 1., 'global_budget_s': 1., 'clearance_radius_m': limits.global_clearance_radius(.9),
             'horizon_steps': 20, 'horizon_dt_s': .2,
             'goal_tolerance_m': .1, 'goal_position_target_m': .02, 'goal_yaw_tolerance_rad': .05,
@@ -110,7 +111,13 @@ class PlannerNode(Node):
             'execution_reference_topic':'/Car/T4/control/path_execution_reference',
             'tracking_status_topic':'/Car/T4/control/tracking_status',
         }
-        settings = {name: self.declare_parameter(name, default).value for name, default in defaults.items()}
+        from rcl_interfaces.msg import ParameterDescriptor
+        settings={}
+        for name,default in defaults.items():
+            if name=='initial_travel_direction':
+                settings[name]=self.declare_parameter(name,default,
+                    descriptor=ParameterDescriptor(read_only=True)).value
+            else:settings[name]=self.declare_parameter(name,default).value
         settings['clearance_radius_m']=limits.global_clearance_radius(settings['clearance_radius_m'])
         self.set_parameters([Parameter('minimum_clearance_m',value=limits.minimum_clearance_m),
                              Parameter('clearance_radius_m',value=settings['clearance_radius_m'])])
