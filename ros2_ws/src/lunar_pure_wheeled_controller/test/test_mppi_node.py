@@ -323,7 +323,7 @@ def test_standard_path_backend_startup_and_volatile_qos():
         qos=subscriptions[0].qos_profile
         assert qos.depth==1 and qos.durability==DurabilityPolicy.VOLATILE
         assert qos.reliability==ReliabilityPolicy.RELIABLE
-        assert node.get_parameter('path_timeout_s').value==.35
+        assert not node.has_parameter('path_timeout_s')
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()
@@ -355,7 +355,7 @@ def test_standard_path_receipt_liveness_and_empty_stop_preserve_history(monkeypa
         monkeypatch.setattr(node,'_standard_grid',lambda state:node._executor.map)
         monkeypatch.setattr(node,'_standard_unavailable',lambda reason:None)
         clock[0]=11.36;node._tick()
-        assert node._executor._stop_reason=='STALE_PATH'
+        assert node._executor._stop_reason is None
         assert node._executor._last_command[0]==.2
         node._on_path(path)
         assert node._executor._stop_reason is None

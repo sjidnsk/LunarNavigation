@@ -46,6 +46,7 @@ class MppiPolicy:
 
 class MppiExecutor:
     requires_map = True
+    tracks_task_progress = True
 
     def __init__(self,policy: TrackingPolicy,mppi_policy=None,**_):
         if not _valid_policy(policy):raise ValueError('invalid execution policy')
@@ -55,8 +56,12 @@ class MppiExecutor:
         self.phase='WAITING';self.failure=None;self.progress_m=0.;self.error=0.;self.heading_error=0.;self.direction=1
         self._last_command=np.zeros(2);self._model_time=0.;self._state_age_s=0.;self._command_history=[];self._nominal=np.zeros((self.config.time_steps,2))
         self._first_target_step=self.config.model_dt
-        self._translation_credit_m=0.;self.no_progress_s=0.;self._last_pose=None
+        self._reset_task_progress()
         self.diagnostics={};self.predicted_trajectory=np.empty((0,3))
+
+    def _reset_task_progress(self):
+        if self.tracks_task_progress:
+            self._translation_credit_m=0.;self.no_progress_s=0.;self._last_pose=None
 
     def note_command(self,v,w,stamp_s=None):
         self._last_command=np.array([v,w],float)
@@ -78,7 +83,7 @@ class MppiExecutor:
 
     def clear(self):
         self.path=None;self.phase='WAITING';self.failure=None
-        self._nominal[:]=0.;self.note_command(0.,0.);self.no_progress_s=0.;self._last_pose=None;self._translation_credit_m=0.;self._command_history=[]
+        self._nominal[:]=0.;self.note_command(0.,0.);self._reset_task_progress();self._command_history=[]
 
     def set_map(self,grid):
         if self.map is None or grid.epoch!=self.map.epoch:self._nominal[:]=0.
@@ -95,8 +100,9 @@ class MppiExecutor:
                 self.identity=identity
                 return True
             # Keep physical net-progress time across rolling revisions.
-        else:self.no_progress_s=0.;self._last_pose=None
-        self.path=path;self.identity=identity;self.final=final;self.progress_m=0.;self._translation_credit_m=0.
+        else:self._reset_task_progress()
+        self.path=path;self.identity=identity;self.final=final;self.progress_m=0.
+        if self.tracks_task_progress:self._translation_credit_m=0.
         self.failure=None;self.phase='BRAKING';self._nominal[:]=0.
         return True
 
@@ -122,6 +128,7 @@ class MppiExecutor:
 
     def _observe_progress(self,state,distance,yaw_error,dt):
         """唯一物理进展/行进停滞计算；滚动参考刷新本身不产生进展。"""
+        if not self.tracks_task_progress:return False
         if self._last_pose is None:self._bind_progress_anchor(state)
         anchor,travel,best_angle=self._last_pose
         advance=self._translation_credit_m+float(np.dot(np.array([state.x_m,state.y_m])-anchor,travel))

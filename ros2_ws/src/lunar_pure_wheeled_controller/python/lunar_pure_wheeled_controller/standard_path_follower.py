@@ -9,6 +9,7 @@ from .standard_path_reference import StandardPathReference
 
 
 class StandardPathFollower(MppiPathFollower):
+    tracks_task_progress = False
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.config=replace(self.config,state_age_budget_s=None)
@@ -105,11 +106,6 @@ class StandardPathFollower(MppiPathFollower):
             self._local_progress=self.path.project(state.x_m,state.y_m,reach=.75).s if compatible else 0.
         if not compatible:
             self.discard_prediction()
-
-    def _observe_progress(self,state,distance,yaw_error,dt):
-        # 任务级无进展由导航统一处理；标准执行器不另起累计/判死机制。
-        # 有序几何游标、运动约束、完整制动认证及真实执行故障保持独立。
-        return False
 
     def _stop(self, state, dt, now_s, state_age_s, *, switching=False):
         self._model_time=self._model_time+dt if now_s is None else float(now_s)
@@ -351,7 +347,6 @@ class StandardPathFollower(MppiPathFollower):
                             self._execution_retired.pop(next(iter(self._execution_retired)))
                     self._retire_execution_geometry()
                     self.failure=None;self._stop_reason=None
-                    self.no_progress_s=0.;self._last_pose=None;self._translation_credit_m=0.
                 if requested.intent!=0 and not continuous_align:
                     self._retire_execution_geometry()
                     if self._stop_reason in (None,'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH',

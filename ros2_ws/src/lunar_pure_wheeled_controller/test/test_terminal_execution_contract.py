@@ -288,14 +288,14 @@ def test_continuation_preserves_nonzero_cursor_and_physical_clocks():
     e.update(TrackingState(0.,0.,1.),.05)
     assert e._stage_index==1
     e.note_command(0.,.1); old=tuple(e._stages); history=list(e._command_history)
-    e.no_progress_s=.7; anchor=e._last_pose
+    e.no_progress_s=.7; anchor=getattr(e,'_last_pose',None)
     e._update_standard=lambda *a,**k: e._result(0.,.1)
     e.offer_execution_reference(spin_path([1.01,2.,3.,4.,4.1]),ref(2,3))
     e.update(TrackingState(0.,0.,1.01,0.,.1),.05)
     assert e.reference_accepted and e._stage_index==1
     assert tuple(e._stages[:2])==old[:2]
     assert sum(s.spin_delta for s in e._stages[1:])>=sum(s.spin_delta for s in old[1:])
-    assert e.no_progress_s==.7 and e._last_pose is anchor
+    assert getattr(e,'no_progress_s',0.)==.7 and getattr(e,'_last_pose',None) is anchor
     assert len(e._command_history)==len(history)
 
 
@@ -349,10 +349,10 @@ def test_retired_terminal_stage_does_not_start_a_task_progress_clock():
     e.no_progress_s=14.8; history=list(e._command_history)
     e.offer_execution_reference(spin_path([0.,1.]),ref(2,3))
     e.update(TrackingState(0.,0.,0.),.05)
-    assert e._last_pose is None and e.no_progress_s==14.8
+    assert getattr(e,'_last_pose',None) is None and getattr(e,'no_progress_s',0.)==14.8
     assert len(e._command_history)==len(history)
     e.update(TrackingState(0.,0.,.02,0.,.1),.05)
-    assert e.no_progress_s==14.8 and e.failure is None
+    assert getattr(e,'no_progress_s',0.)==14.8 and e.failure is None
     assert e._stages[e._stage_index].direction==0
 
 
@@ -362,14 +362,14 @@ def test_static_terminal_rolling_has_no_tracker_task_timeout():
     e.update(TrackingState(0.,0.,0.),.05); e.no_progress_s=.15
     e.offer_execution_reference(spin_path([0.,1.]),ref(2,3))
     e.update(TrackingState(0.,0.,0.),.05)
-    anchor=e._last_pose
-    assert e.no_progress_s==.15
+    anchor=getattr(e,'_last_pose',None)
+    assert getattr(e,'no_progress_s',0.)==.15
     for revision in range(3,103):
         e.offer_execution_reference(spin_path([0.,1.]),ref(revision,3))
         e.update(TrackingState(0.,0.,0.),.05)
-        assert e._last_pose is anchor
+        assert getattr(e,'_last_pose',None) is anchor
     assert e.failure is None and e.last_execution_state!=6
-    assert e.no_progress_s==.15
+    assert getattr(e,'no_progress_s',0.)==.15
 
 
 def test_brake_to_follow_rebinds_geometry_without_a_task_progress_clock():
@@ -381,8 +381,8 @@ def test_brake_to_follow_rebinds_geometry_without_a_task_progress_clock():
     assert e.path is None
     e.offer_execution_reference(((0.,0.,0.),(0.,1.,1.57)),ref(3))
     e.update(TrackingState(0.,0.,0.),.05)
-    assert e._last_pose is None and e.path.points[-1]==(0.,1.)
-    assert e.no_progress_s>=.7
+    assert getattr(e,'_last_pose',None) is None and e.path.points[-1]==(0.,1.)
+    assert getattr(e,'no_progress_s',0.)>=.7
 
 
 def test_failed_task_cannot_revive_when_explicit_terminal_rebinds():
@@ -391,7 +391,7 @@ def test_failed_task_cannot_revive_when_explicit_terminal_rebinds():
     e.failure='TRACKING_STALLED'; e.no_progress_s=15.1
     e.offer_execution_reference(spin_path([0.,1.]),ref(2,3))
     e.update(TrackingState(0.,0.,0.),.05)
-    assert e.failure=='TRACKING_STALLED' and e.no_progress_s==15.1
+    assert e.failure=='TRACKING_STALLED' and getattr(e,'no_progress_s',0.)==15.1
     assert e.last_execution_state==6
 
 
@@ -406,17 +406,17 @@ def test_progress_is_physical_for_plain_and_contract_translation_and_spin():
             e.update(TrackingState(0.,0.,0.),.05)
             e.no_progress_s=.4
             history=list(e._command_history)
-            anchor=e._last_pose
+            anchor=getattr(e,'_last_pose',None)
             if contract:e.offer_execution_reference(path,ref(2,3 if spin else 0))
             else:e.set_standard_path(path,2)
             e.update(TrackingState(0.,0.,0.),.05)
-            assert e.no_progress_s==.4
-            assert e._last_pose is anchor
+            assert getattr(e,'no_progress_s',0.)==.4
+            assert getattr(e,'_last_pose',None) is anchor
             assert len(e._command_history)==len(history)
             actual=(TrackingState(0.,0.,.02,0.,.1) if spin
                     else TrackingState(.04,0.,0.,.1))
             e.update(actual,.05)
-            assert e.no_progress_s==.4 and e.failure is None
+            assert getattr(e,'no_progress_s',0.)==.4 and e.failure is None
 
 
 def test_stage_rebinding_is_not_physical_progress_or_command_publication():
@@ -431,8 +431,8 @@ def test_stage_rebinding_is_not_physical_progress_or_command_publication():
     e.update(TrackingState(0.,0.,0.),.05)
     e.offer_execution_reference(((0.,0.,1.57),(0.,1.,1.57)),ref(3))
     e.update(TrackingState(0.,0.,0.),.05)
-    assert e.no_progress_s==.7
-    assert e._last_pose is None and e.path.points[-1]==(0.,1.)
+    assert getattr(e,'no_progress_s',0.)==.7
+    assert getattr(e,'_last_pose',None) is None and e.path.points[-1]==(0.,1.)
     assert len(e._command_history)==len(history)
     assert all(t==old_t and np.array_equal(u,old_u)
                for (t,u),(old_t,old_u) in zip(e._command_history,history))
@@ -450,20 +450,20 @@ def test_brake_to_follow_while_still_moving_rebinds_without_requiring_stop():
     e.offer_execution_reference(((0.,0.,1.57),(0.,1.,1.57)),ref(3))
     e.update(TrackingState(0.,0.,.01,0.,.05),.05)
     assert e.reference_accepted and e.execution_reference.intent==0
-    assert e._last_pose is None and e.path.points[-1]==(0.,1.)
-    assert e._last_pose is None and e.no_progress_s==.7
-    assert e.no_progress_s==.7 and e.failure is None
+    assert getattr(e,'_last_pose',None) is None and e.path.points[-1]==(0.,1.)
+    assert getattr(e,'_last_pose',None) is None and getattr(e,'no_progress_s',0.)==.7
+    assert getattr(e,'no_progress_s',0.)==.7 and e.failure is None
 
 def test_plain_initial_path_waits_for_map_before_binding_physical_progress():
     """无地图等待不提前建立行进锚，也不把等待期间外力位移算成进展。"""
     e=follower();grid=e.map;e.map=None;e.no_progress_s=.7
     e.set_standard_path(((0.,0.,0.),(1.,0.,0.)),1)
     e.update(TrackingState(0.,0.,0.),.05)
-    assert e._last_pose is None and e.no_progress_s==.7
+    assert getattr(e,'_last_pose',None) is None and getattr(e,'no_progress_s',0.)==.7
     e.set_map(grid)
     e.update(TrackingState(.04,0.,0.),.05)
-    assert e.no_progress_s==.7
-    assert e._last_pose is None and e.progress_m>=.04
+    assert getattr(e,'no_progress_s',0.)==.7
+    assert getattr(e,'_last_pose',None) is None and e.progress_m>=.04
 
 def test_pose_wait_retires_old_motion_and_recovery_requires_stop_and_new_proof():
     e=follower();old=ref();path=((0.,0.,0.),(1.,0.,0.))

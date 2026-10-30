@@ -50,7 +50,7 @@ def test_identical_geometry_new_identity_does_not_reset_or_brake():
     tick(e,TrackingState(.2,0.,0.,.1));e.note_command(.1,0.)
     progress=e.progress_m;history=list(e._command_history);e.no_progress_s=.4
     e.set_standard_path(path,2)
-    assert e.progress_m==progress and e.no_progress_s==.4
+    assert e.progress_m==progress and getattr(e,'no_progress_s',0.)==.4
     assert len(e._command_history)==len(history)
     assert e.phase!='BRAKING'
 
@@ -60,7 +60,7 @@ def test_rolling_reference_does_not_add_a_tracker_task_timeout():
     for i in range(12):
         e.set_standard_path(((0.,0.,0.),(1.+i*.001,0.,0.)),i)
         r=tick(e,TrackingState(0.,0.,0.))
-    assert e.failure is None and e.no_progress_s==0.
+    assert e.failure is None and getattr(e,'no_progress_s',0.)==0.
 
 
 @pytest.mark.parametrize('target',[math.pi/2,-math.pi+.03])
@@ -187,13 +187,13 @@ def test_latest_active_geometry_cancels_older_pending_reference():
     progress=e.progress_m
     history=[(t,u.copy()) for t,u in e._command_history]
     e.set_standard_path(b,2);e.set_standard_path(a,3)
-    assert e.progress_m==progress and e.no_progress_s==.4
+    assert e.progress_m==progress and getattr(e,'no_progress_s',0.)==.4
     assert len(e._command_history)==len(history)
     assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
     r=tick(e,TrackingState(.2,0.,0.,.1))
     assert e.reference.points==a
     assert r.phase=='TRACKING' and r.command.linear_x_mps>0.
-    assert e.progress_m>=progress and e.no_progress_s>=.4
+    assert e.progress_m>=progress and getattr(e,'no_progress_s',0.)>=.4
 
 
 def test_dense_spin_rolling_makes_physical_progress():
@@ -316,13 +316,13 @@ def test_transient_stopping_failure_recovers_only_after_real_conditions_change(c
         assert e.diagnostics['measured_stopped'] is True
         assert r.command.linear_x_mps==r.command.angular_z_radps==0.
     assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
-    before=e.no_progress_s
+    before=getattr(e,'no_progress_s',0.)
     e.set_map(GridMap(np.ones((100,100),np.uint8),.1,(-5.,-5.)))
     # A published zero and elapsed delay drain the queue; retain every historical record.
     e.note_command(0.,0.,.1)
     r=e.update(state,.05,now_s=.5)
     assert e.failure is None and r.command.angular_z_radps>0.
-    assert e.no_progress_s>=before
+    assert getattr(e,'no_progress_s',0.)>=before
     assert len(e._command_history)>=len(history)+1
     for i in range(100):
         e.note_command(r.command.linear_x_mps,r.command.angular_z_radps,.5+i*.05)
@@ -339,11 +339,11 @@ def test_fresh_standard_path_does_not_clear_hard_fault(fault):
     if fault=='INVALID_STATE':e.update(TrackingState(float('nan'),0.,0.),.05)
     else:e.failure=fault
     assert e.failure==fault
-    elapsed=e.no_progress_s
+    elapsed=getattr(e,'no_progress_s',0.)
     e.set_standard_path(path,identity=99)
     r=e.update(TrackingState(0.,0.,0.),.05)
     assert e.failure==fault and r.command.linear_x_mps==r.command.angular_z_radps==0.
-    assert e.no_progress_s>=elapsed
+    assert getattr(e,'no_progress_s',0.)>=elapsed
 
 
 def test_recovery_certifies_measured_motion_without_fabricating_a_stop():
@@ -382,7 +382,7 @@ def test_stopped_spin_replaced_by_rolling_translation_counts_physical_progress(c
         points=tuple((x+j*.02*math.cos(theta),y+j*.02*math.sin(theta),theta) for j in range(51))
         e.set_standard_path(points,i)
         r=tick(e,TrackingState(x,y,theta,0. if i==0 else .2,.2 if curved and i else 0.))
-        assert e.failure is None, (i,x,y,e.no_progress_s)
+        assert e.failure is None, (i,x,y,getattr(e,'no_progress_s',0.))
     assert math.hypot(x,y)>.28 and r.phase=='TRACKING'
 
 
@@ -394,7 +394,7 @@ def test_motion_observation_is_not_a_second_task_timeout(motion):
         y=i*.01 if motion=='lateral' else 0.
         e.set_standard_path(((0.,0.,0.),(2.+i*.001,0.,0.)),i)
         tick(e,TrackingState(x,y,0.))
-    assert e.failure is None and e.no_progress_s==0.
+    assert e.failure is None and getattr(e,'no_progress_s',0.)==0.
 
 
 def test_stopped_incompatible_rebindings_preserve_command_history_without_task_clock():
@@ -402,11 +402,11 @@ def test_stopped_incompatible_rebindings_preserve_command_history_without_task_c
     for i in range(12):
         end=1. if i%2 else -1.
         e.set_standard_path(((0.,0.,0.),(end,0.,0.)),i)
-        before=e.no_progress_s
+        before=getattr(e,'no_progress_s',0.)
         history=[(t,u.copy()) for t,u in e._command_history]
         r=e.update(TrackingState(0.,0.,0.),.05)
-        assert e.no_progress_s>=before
+        assert getattr(e,'no_progress_s',0.)>=before
         assert len(history)==len(e._command_history)
         assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
         e.note_command(r.command.linear_x_mps,r.command.angular_z_radps)
-    assert e.failure is None and e.no_progress_s==0.
+    assert e.failure is None and getattr(e,'no_progress_s',0.)==0.

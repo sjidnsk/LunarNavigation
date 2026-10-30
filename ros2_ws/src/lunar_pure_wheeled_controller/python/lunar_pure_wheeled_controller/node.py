@@ -136,7 +136,6 @@ class PureWheeledControllerNode(Node):
             "control_rate_hz": 20.0,
             "odometry_timeout_s": 0.5,
             "tf_timeout_s": 0.5,
-            "path_timeout_s": 0.35,
             "lookahead_m": 0.5,
             "max_linear_mps": 0.2,
             "max_angular_radps": 0.5,
@@ -313,7 +312,7 @@ class PureWheeledControllerNode(Node):
         if self._execution_enabled:
             from lunar_planning_msgs.msg import PathExecutionReference
             from .execution_pairing import ExecutionInbox
-            self._execution_inbox=ExecutionInbox()
+            self._execution_inbox=ExecutionInbox(max_age_s=None)
             self._execution_offered=None
 
         control_rate_hz = float(self.get_parameter("control_rate_hz").value)
@@ -325,9 +324,6 @@ class PureWheeledControllerNode(Node):
             raise ValueError("odometry_timeout_s must be finite and greater than zero")
         if not isfinite(self._tf_timeout_s) or self._tf_timeout_s <= 0.0:
             raise ValueError("tf_timeout_s must be finite and greater than zero")
-        self._path_timeout_s=float(self.get_parameter("path_timeout_s").value)
-        if not isfinite(self._path_timeout_s) or self._path_timeout_s<=0:
-            raise ValueError("path_timeout_s must be finite and positive")
         self._path_received_at=None
         self._active: ParsedReference | ParsedIncrementalPath | None = None
         self._trajectory_cursor = 0
@@ -517,7 +513,7 @@ class PureWheeledControllerNode(Node):
         try:
             reference=reference_from_message(message)
             now=self.get_clock().now().nanoseconds
-            if message.header.frame_id!=self._map_frame or reference.stamp_ns>now or now-reference.stamp_ns>self._path_timeout_s*1e9:
+            if message.header.frame_id!=self._map_frame or reference.stamp_ns>now:
                 return
             if not self._execution_inbox.add_reference(reference,monotonic() if received_at is None else received_at):return
             actual=self._executor.execution_reference
@@ -816,8 +812,8 @@ class PureWheeledControllerNode(Node):
         dt=.05 if self._last_control_ns is None else (now_ns-self._last_control_ns)/1e9
         self._last_control_ns=now_ns
         if dt<=0:return self._standard_unavailable('nonpositive_dt')
-        if self._active is None or self._input_is_stale(self._path_received_at,self._path_timeout_s):
-            self._executor.request_stop('STALE_PATH' if self._active is not None else 'NO_PATH')
+        if self._active is None:
+            self._executor.request_stop('NO_PATH')
         self._executor.set_map(grid)
         started=monotonic()
         result=self._executor.update(state,dt,now_s=source_ns/1e9,state_age_s=(now_ns-source_ns)/1e9)
@@ -896,8 +892,6 @@ class PureWheeledControllerNode(Node):
                 self._mppi_observe("stop", reason="missing_or_stale_input")
             self._publish_twist()
             return
-        if self._standard_mode and self._input_is_stale(self._path_received_at,self._path_timeout_s):
-            self._executor.request_stop("STALE_PATH")
         if self._input_mode in {"incremental_path", "incremental_reference"}:
             self._tick_incremental_path()
             return
