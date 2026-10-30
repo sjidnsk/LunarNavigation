@@ -34,7 +34,8 @@ constexpr std::string_view kPlannerError{"PLANNER_ERROR"};
 [[noreturn]] void Invalid(const std::string& detail = "invalid platform config structure") { throw std::runtime_error{detail}; }
 
 void RequireKeys(const YAML::Node& node,
-                 std::initializer_list<std::string_view> expected) {
+                 std::initializer_list<std::string_view> expected,
+                 std::initializer_list<std::string_view> optional = {}) {
   if (!node.IsMap()) Invalid("expected configuration mapping");
   for (const auto key : expected) {
     if (!node[std::string{key}]) Invalid("missing field: " + std::string{key});
@@ -50,6 +51,9 @@ void RequireKeys(const YAML::Node& node,
         found = true;
         break;
       }
+    }
+    for (const auto candidate : optional) {
+      if (key == candidate) found = true;
     }
     if (!found) {
       Invalid("unknown field: " + key);
@@ -243,7 +247,15 @@ PlatformCapability ParseWheel(const YAML::Node& root) {
                      "maximum_spin_rate_radps", "maximum_acceleration_mps2",
                      "maximum_braking_deceleration_mps2", "maximum_yaw_acceleration_radps2",
                      "maximum_lateral_acceleration_mps2", "maximum_curvature_per_m",
-                     "maximum_slope_rad", "minimum_clearance_m", "motion_primitives"});
+                     "maximum_slope_rad", "minimum_clearance_m", "motion_primitives"},
+                    {"motion_model"});
+  // 此入口保留原几何/地形能力；仅校验共享配置的运动模型标签。
+  if (node["motion_model"]) {
+    const auto model = String(node, "motion_model");
+    if (model != "differential_drive" && model != "curvature_limited") {
+      Invalid("motion_model: expected differential_drive or curvature_limited");
+    }
+  }
   const YAML::Node& footprint = Require(node, "footprint_xy_m");
   if (!footprint.IsSequence() || footprint.size() != 4U) {
     Invalid();
