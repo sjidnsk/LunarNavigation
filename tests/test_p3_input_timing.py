@@ -148,8 +148,8 @@ def test_runtime_map_receipt_expiry_and_zero_policy_match_controller():
     assert not runtime_health('map',None,200_000_000_000,110.,p3_map_timeout_s=0.)['ready']
 
 
-@pytest.mark.parametrize('age,ready',[(4.5,True),(4.500001,False)])
-def test_runtime_odometry_uses_full_configured_source_budget(age,ready):
+@pytest.mark.parametrize('age,ready',[(4.5,True),(4.500001,True),(10.,True)])
+def test_runtime_odometry_does_not_use_source_age_as_timeout(age,ready):
     sample=record_sample(None,int((100-age)*1e9),100_000_000_000,10.)
     assert runtime_health('odom',sample,100_000_000_000,10.)['ready']==ready
 
@@ -157,7 +157,9 @@ def test_runtime_odometry_uses_full_configured_source_budget(age,ready):
 def test_runtime_duplicate_receipts_do_not_rejuvenate_source():
     sample=record_sample(None,98_000_000_000,100_000_000_000,10.)
     sample=record_sample(sample,98_000_000_000,103_000_000_000,13.)
-    assert runtime_health('odom',sample,103_000_000_000,13.)['reason']=='SOURCE_TOO_OLD'
+    assert runtime_health('odom',sample,103_000_000_000,13.)['ready']
+    sample=record_sample(sample,98_000_000_000,105_000_000_000,15.)
+    assert runtime_health('odom',sample,105_000_000_000,15.)['reason']=='SOURCE_FROZEN'
 
 
 def test_separate_arrival_delay_closed_gap_and_open_gap_statistics():
@@ -178,11 +180,11 @@ def test_runtime_timing_keeps_integrity_faults(kind):
     assert runtime_health(kind,sample,100_000_000_000,10.)['reason']=='FUTURE_TIMESTAMP'
 
 
-def test_normal_delay_plus_frame_interval_can_exceed_pose_budget():
+def test_normal_delay_plus_frame_interval_is_not_a_pose_interruption():
     sample=record_sample(None,97_500_000_000,100_000_000_000,10.)
     assert runtime_health('odom',sample,100_000_000_000,10.)['ready']
     report=runtime_health('odom',sample,102_500_000_000,12.5)
-    assert report['reason']=='SOURCE_TOO_OLD'
+    assert report['reason']=='READY'
     assert report['source_age_s']==5. and report['receive_age_s']==2.5
 
 
@@ -205,3 +207,14 @@ def test_statistics_queries_do_not_refresh_receipt_or_mutate_previous():
         stats=_module.timing_statistics(later,int((now+90)*1e9),now)
         assert stats['current_receive_gap_s']==now-11.
     assert later['received_mono_s']==11.
+
+
+def test_continuously_advancing_delayed_odometry_is_not_expired_by_source_age():
+    first=record_sample(None,90_000_000_000,100_000_000_000,10.)
+    assert runtime_health('odom',first,100_000_000_000,10.)['ready']
+    later=record_sample(first,92_000_000_000,102_000_000_000,12.)
+    assert runtime_health('odom',later,102_000_000_000,12.)['ready']
+    assert runtime_health('odom',later,102_000_000_000,12.)['source_age_s']==10.
+    duplicate=record_sample(later,92_000_000_000,107_000_000_000,17.)
+    report=runtime_health('odom',duplicate,107_000_000_000,17.)
+    assert not report['ready'] and report['reason']=='SOURCE_FROZEN'

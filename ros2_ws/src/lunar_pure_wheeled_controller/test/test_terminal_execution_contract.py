@@ -516,3 +516,21 @@ def test_manual_stop_survives_pose_wait_parking_and_same_session_follow():
     e.offer_execution_reference(path,ref(3));result=e.update(TrackingState(0.,0.,0.),.05)
     assert e._stop_reason=='MANUAL_STOP'
     assert result.command.linear_x_mps==0. and result.command.angular_z_radps==0.
+
+
+def test_continuity_mode_preserves_age_and_independent_brake_veto():
+    from dataclasses import replace
+    e=follower();e.config=replace(e.config,state_age_budget_s=None)
+    e.offer_execution_reference(((0.,0.,0.),(1.,0.,0.)),ref())
+    ages=[]
+    e._brake_safe=lambda *a:(ages.append(e._state_age_s) or [False])
+    e.update(TrackingState(0.,0.,0.),.05,now_s=1.,state_age_s=9.)
+    assert ages and all(a==9. for a in ages)
+    assert not e.reference_accepted
+
+
+def test_delayed_stationary_reference_passes_actual_complete_brake_certificate():
+    e=follower();r=ref();e.offer_execution_reference(((0.,0.,0.),(1.,0.,0.)),r)
+    e.update(TrackingState(0.,0.,0.),.05,now_s=1.,state_age_s=5.)
+    assert e.reference_accepted and e.execution_reference is r
+    assert e._state_age_s==5. and e.failure is None

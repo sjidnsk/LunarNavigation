@@ -42,6 +42,7 @@ class PlannerRuntime:
         self.execution_contract_enabled=False
         self.execution_context=None
         self._odometry_received_s=None
+        self._pose_advanced_received_s=None
         self._pose_timeout_s=None
         self._pose_source_high_water=self._pose_clock_high_water=None
         self._pose_integrity_fault=None
@@ -62,12 +63,14 @@ class PlannerRuntime:
             stamp=message.header.stamp
             source_ns=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
             clock=self.ros_now_ns()
-            age=(clock-source_ns)/1e9
+            advanced_s=(received_s if self._pose_source_high_water is None or
+                        source_ns>self._pose_source_high_water else self._pose_advanced_received_s)
             valid=(source_ns>0 and received_s is not None and
                    (self._pose_clock_high_water is None or clock>=self._pose_clock_high_water) and
                    (self._pose_source_high_water is None or source_ns>=self._pose_source_high_water) and
                    0<=now_s-received_s<=self._pose_timeout_s and
-                   0<=age<=self._pose_timeout_s)
+                   source_ns<=clock and advanced_s is not None and
+                   0<=now_s-advanced_s<=self._pose_timeout_s)
             return valid,source_ns
         except (ValueError,TypeError,AttributeError,OverflowError):return False,None
 
@@ -88,10 +91,12 @@ class PlannerRuntime:
             if fault:
                 self._pose_integrity_fault=self._pose_integrity_fault or fault
                 valid=False
-            if valid:self._pose_source_high_water=max(stamp,self._pose_source_high_water or stamp)
+            if valid and (self._pose_source_high_water is None or stamp>self._pose_source_high_water):
+                self._pose_source_high_water=stamp
+                self._pose_advanced_received_s=received_s
         if not valid:
             self._enter_pose_wait()
-            self._notice('ODOMETRY_WAITING','missing_or_stale_pose')
+            self._notice('ODOMETRY_WAITING','missing_or_nonadvancing_pose')
             return
         if message is None:return
         try:value=state_from_odometry(message,transforms,self.map_frame)

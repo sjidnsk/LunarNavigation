@@ -120,7 +120,7 @@ def test_actual_runtime_tick_preserves_target_across_loss_and_stable_recovery(mo
         assert runtime.tasks.active.outcome is None
 
 
-@pytest.mark.parametrize('delay,gap,expected',[(2.5,0.,True),(3.8,0.,True),(2.5,2.5,False),(4.5,0.,True),(4.5001,0.,False)])
+@pytest.mark.parametrize('delay,gap,expected',[(2.5,0.,True),(3.8,0.,True),(2.5,2.5,True),(4.5,0.,True),(4.5001,0.,True),(10.,4.5001,False)])
 def test_preflight_pose_time_gate_matches_runtime(delay,gap,expected):
     import importlib.util
     path=next(p/'scripts/simulation/p3_input_timing.py' for p in Path(__file__).resolve().parents if (p/'scripts/simulation/p3_input_timing.py').exists())
@@ -134,3 +134,19 @@ def test_preflight_pose_time_gate_matches_runtime(delay,gap,expected):
     actual=runtime._pose_source_current(message,10.,10.+gap)[0]
     report=timing.runtime_input_health('odom',sample,now,10.+gap,odometry_timeout_s=4.5,p3_map_timeout_s=6.)
     assert actual==report['ready']==expected
+
+
+def test_delayed_pose_continuity_and_duplicate_stream_timeout(monkeypatch):
+    runtime,session,_,_=build_runtime();runtime.configure_pose_input(4.5)
+    module=__import__('lunar_nav1cm_planner.runtime',fromlist=['state_from_odometry'])
+    monkeypatch.setattr(module,'state_from_odometry',lambda *a:VehicleState(0.,0.,0.,0.,0.))
+    clock=[100_000_000_000];runtime.ros_now_ns=lambda:clock[0]
+    message=S(header=S(stamp=S(sec=90,nanosec=0)))
+    assert runtime._pose_source_current(message,10.,10.)[0]
+    runtime._apply_pose_input(message,10.,10.,S())
+    clock[0]=103_000_000_000;message.header.stamp.sec=93
+    runtime._apply_pose_input(message,13.,13.,S())
+    assert session.state is not None
+    clock[0]=108_000_000_000
+    runtime._apply_pose_input(message,18.,18.,S())
+    assert session.state is None, '持续接收重复旧帧不能维持定位有效'

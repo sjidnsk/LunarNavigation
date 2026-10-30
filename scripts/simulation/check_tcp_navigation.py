@@ -83,7 +83,7 @@ def command_input(msg):
  if 'telemetry' not in latest or time.monotonic()-latest['telemetry'][0]>.5:raise RuntimeError('telemetry stale before command')
  if 'odom' not in latest:return
  od=latest['odom'][1];age=time.time()-od.header.stamp.sec-od.header.stamp.nanosec*1e-9
- if age>float(feedback_budget['odometry_timeout_s']):raise RuntimeError('source odometry exceeds P3 budget before motion')
+ if not runtime_input_health('odom',samples.get('odom'),n57.get_clock().now().nanoseconds,time.monotonic(),odometry_timeout_s=float(feedback_budget['odometry_timeout_s']),p3_map_timeout_s=float(feedback_budget['p3_map_timeout_s']))['ready']:raise RuntimeError('odometry stream stopped advancing before motion')
  if not armed:mode.publish(String(data='auto'));armed=True;event('auto_mode_entered')
  vel.publish(msg);forwarded_nonzero+=1
 subs.append(n57.create_subscription(Twist,PREFIX+'/cmd_vel',command_input,q))
@@ -110,7 +110,7 @@ try:
                       p3_map_timeout_s=result['controller_params']['p3_map_timeout_s'])
  result['planner_pose_budget']=params('lunar_nav1cm_planner',['odometry_timeout_s'])
  assert result['planner_pose_budget']['odometry_timeout_s']==measured_budget['odometry_timeout_s']
- result['preflight_time_contract']=dict(measured_budget,map_source_age_gate=False,stable_interval_s=2.,requires_odometry_source_advance=True)
+ result['preflight_time_contract']=dict(measured_budget,map_source_age_gate=False,stable_interval_s=2.,requires_odometry_source_advance=True,odometry_source_age_gate=False)
  stable_since=None;stable_source=None;end=time.monotonic()+45;last_report=0.
  while time.monotonic()<end:
   spin(.1);ros_now=n57.get_clock().now().nanoseconds;mono_now=time.monotonic()

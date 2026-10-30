@@ -347,7 +347,7 @@ def test_standard_path_receipt_liveness_and_empty_stop_preserve_history(monkeypa
         clock[0]=11.;path.header.stamp.sec=2;node._on_path(path)
         assert node._path_received_at==11. and len(node._executor._command_history)==1
         from nav_msgs.msg import Odometry
-        odom=Odometry();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.
+        odom=Odometry();odom.header.stamp=node.get_clock().now().to_msg();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.
         node._on_odometry(odom)
         from test_standard_path_follower import follower
         node._executor.set_map(follower().map)

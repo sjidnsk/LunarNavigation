@@ -119,7 +119,7 @@ def timing_health(sample, ros_now_ns, mono_now_s, *, max_source_age_s,
 def runtime_input_health(kind,sample,ros_now_ns,mono_now_s,*,odometry_timeout_s,p3_map_timeout_s):
     """匹配标准 Path 输入时间合同，不替代地图处理/几何/停车认证。
 
-    定位检查源龄和接收龄；direct_p3 地图只检查接收龄，0保留静态图策略。
+    定位检查源戳推进接收龄；direct_p3 地图只检查接收龄，0保留静态图策略。
     源延迟和戳推进年龄一直如实返回，不额外缩短配置预算。
     """
     if kind not in ('odom','map'):raise ValueError('unknown input kind')
@@ -131,8 +131,8 @@ def runtime_input_health(kind,sample,ros_now_ns,mono_now_s,*,odometry_timeout_s,
     budget=odometry_timeout_s if kind=='odom' else p3_map_timeout_s
     if budget>0 and result['receive_age_s']>budget:
         return dict(result,ready=False,reason='RECEIVE_TIMEOUT')
-    if kind=='odom' and result['source_age_s']>budget:
-        return dict(result,ready=False,reason='SOURCE_TOO_OLD')
+    if kind=='odom' and (result['progress_age_s'] is None or result['progress_age_s']>budget):
+        return dict(result,ready=False,reason='SOURCE_FROZEN')
     return result
 
 

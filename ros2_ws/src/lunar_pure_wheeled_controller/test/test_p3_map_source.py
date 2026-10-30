@@ -20,7 +20,7 @@ def test_standard_defaults_use_direct_p3_and_wheel_capability():
         node=PureWheeledControllerNode()
         assert node._map_client is None
         assert node._p3_source is not None
-        assert node._executor.config.state_age_budget_s==.5
+        assert node._executor.config.state_age_budget_s is None
         assert node._body_dimensions==pytest.approx((1.182,.818))
         import yaml
         from pathlib import Path
@@ -104,7 +104,7 @@ def test_latest_zero_stamp_chain_and_missing_feedback_diagnostic(monkeypatch):
         node._tick()
         assert diagnostics[-1]['measured_stopped'] is None
         assert not diagnostics[-1]['certified_stop']
-        odom=Odometry();odom.header.frame_id='arbitrary_odom';odom.child_frame_id='wheel_body'
+        odom=Odometry();odom.header.stamp=node.get_clock().now().to_msg();odom.header.frame_id='arbitrary_odom';odom.child_frame_id='wheel_body'
         odom.pose.pose.orientation.w=1.;odom.twist.twist.linear.x=-.12
         node._on_odometry(odom)
         assert node._odometry is None
@@ -134,7 +134,7 @@ def test_map_replaced_during_solve_rejects_stale_command(monkeypatch):
         for x in (0.,1.):
             p=PoseStamped();p.pose.position.x=x;p.pose.orientation.w=1.;path.poses.append(p)
         node._on_path(path)
-        odom=Odometry();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.;node._on_odometry(odom)
+        odom=Odometry();odom.header.stamp=node.get_clock().now().to_msg();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.;node._on_odometry(odom)
         free=GridMap(np.ones((500,500),np.uint8),.01,(-2.5,-2.5),revision=1)
         blocked=GridMap(np.full((500,500),2,np.uint8),.01,(-2.5,-2.5),revision=2)
         current=[free]
@@ -205,7 +205,7 @@ def test_slow_publication_recertification_expires_without_chasing_current_ros_ag
     try:
         node=PureWheeledControllerNode();clock=[10_000_000_000]
         monkeypatch.setattr(node,'get_clock',lambda:S(now=lambda:Time(nanoseconds=clock[0])))
-        odom=Odometry();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.
+        odom=Odometry();odom.header.stamp=node.get_clock().now().to_msg();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.
         node._on_odometry(odom)
         path=Path();path.header.frame_id='map'
         for x in (0.,1.):
@@ -265,7 +265,7 @@ def test_lateral_feedback_is_preserved_in_body_frame_and_is_not_stopped(monkeypa
         tf.transform.rotation.z=np.sin(np.pi/4)
         tf.transform.rotation.w=np.cos(np.pi/4)
         node._on_tf(TFMessage(transforms=[tf]))
-        odom=Odometry();odom.header.frame_id='sensor_odom';odom.child_frame_id='wheel_body'
+        odom=Odometry();odom.header.stamp=node.get_clock().now().to_msg();odom.header.frame_id='sensor_odom';odom.child_frame_id='wheel_body'
         odom.pose.pose.orientation.w=1.;odom.twist.twist.linear.y=.1
         node._on_odometry(odom)
         assert node._standard_state.yaw_rad==pytest.approx(np.pi/2)
@@ -289,10 +289,10 @@ def test_nan_lateral_feedback_is_rejected_and_cannot_renew_liveness():
     node=None
     try:
         node=PureWheeledControllerNode()
-        good=Odometry();good.header.frame_id='map';good.pose.pose.orientation.w=1.
+        good=Odometry();good.header.stamp=node.get_clock().now().to_msg();good.header.frame_id='map';good.pose.pose.orientation.w=1.
         node._on_odometry(good)
         assert node._odometry is good and node._odometry_received_at is not None
-        bad=Odometry();bad.header.frame_id='map';bad.pose.pose.orientation.w=1.
+        bad=Odometry();bad.header.stamp=node.get_clock().now().to_msg();bad.header.frame_id='map';bad.pose.pose.orientation.w=1.
         bad.twist.twist.linear.y=float('nan')
         node._on_odometry(bad)
         assert node._odometry is None and node._odometry_received_at is None

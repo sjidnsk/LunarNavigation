@@ -26,16 +26,22 @@ class MppiPolicy:
     control_cost: float = .002
     seed: int = 17
     compute_budget_s: float = .05
-    state_age_budget_s: float = .05
+    state_age_budget_s: float | None = .05
     nominal_response_time_s: float | None = None
 
     def __post_init__(self):
         if any(not isinstance(v,int) or isinstance(v,bool) or v<1 for v in (self.batch_size,self.time_steps,self.iterations)) or self.batch_size<8:
             raise ValueError('invalid MPPI dimensions')
-        if any(not math.isfinite(v) or v<=0 for v in (self.model_dt,self.temperature,self.linear_std,self.angular_std,self.compute_budget_s,self.state_age_budget_s)) or not math.isfinite(self.control_cost) or self.control_cost<0:
+        if any(not math.isfinite(v) or v<=0 for v in (self.model_dt,self.temperature,self.linear_std,self.angular_std,self.compute_budget_s)) or not math.isfinite(self.control_cost) or self.control_cost<0:
             raise ValueError('invalid MPPI parameters')
+        if self.state_age_budget_s is not None and (not math.isfinite(self.state_age_budget_s) or self.state_age_budget_s<=0):
+            raise ValueError('invalid state age budget')
         if self.nominal_response_time_s is not None and (not math.isfinite(self.nominal_response_time_s) or self.nominal_response_time_s<0):
             raise ValueError('invalid nominal response calibration')
+
+    def accepts_state_age(self,age):
+        # 标准Path以定位推进心跳判断中断；真实age仍用于全部延迟积分。
+        return math.isfinite(age) and age>=0 and (self.state_age_budget_s is None or age<=self.state_age_budget_s)
 
 
 class MppiExecutor:
@@ -60,7 +66,7 @@ class MppiExecutor:
         else:self._command_history.append(record)
         # 保留原64条下限，同时覆盖允许的真实反馈年龄和执行响应；
         # 必须保留cutoff之前一条，才能重放窗口起点仍在生效的指令。
-        cutoff=stamp-(self.config.state_age_budget_s+self.policy.control_response_time_s+
+        cutoff=stamp-(max(self.config.state_age_budget_s or 0.,self._state_age_s)+self.policy.control_response_time_s+
                       self.config.compute_budget_s+self.config.model_dt)
         keep=max(0,len(self._command_history)-64)
         while keep>0 and self._command_history[keep][0]>cutoff:
@@ -377,7 +383,7 @@ class MppiExecutor:
         self.diagnostics={'valid_samples':0,'weighted_updates':0}
         self._model_time=self._model_time+dt if now_s is None else float(now_s)
         self._state_age_s=float(state_age_s)
-        if not all(math.isfinite(v) for v in (state.x_m,state.y_m,state.yaw_rad,state.linear_mps,state.angular_radps,state.lateral_mps,dt,self._model_time,self._state_age_s)) or dt<=0 or not 0<=self._state_age_s<=c.state_age_budget_s:
+        if not all(math.isfinite(v) for v in (state.x_m,state.y_m,state.yaw_rad,state.linear_mps,state.angular_radps,state.lateral_mps,dt,self._model_time,self._state_age_s)) or dt<=0 or not c.accepts_state_age(self._state_age_s):
             self.failure='INVALID_STATE';self.phase='FAILED';return self._result()
         # The first target uses this control interval; subsequent prediction
         # knots retain the fixed model interval. Publication uses the same cap.

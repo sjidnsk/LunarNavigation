@@ -11,6 +11,7 @@ from .standard_path_reference import StandardPathReference
 class StandardPathFollower(MppiPathFollower):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.config=replace(self.config,state_age_budget_s=None)
         self.reference=None;self._pending=None;self._stages=[];self._stage_index=0
         self._local_progress=0.;self._total_progress=0.;self._stop_reason=None
         self._switch_brake=False
@@ -120,7 +121,7 @@ class StandardPathFollower(MppiPathFollower):
         self.phase='BRAKING'
         safe_state=all(math.isfinite(v) for v in (state.x_m,state.y_m,state.yaw_rad,
             state.linear_mps,state.angular_radps,state.lateral_mps,dt,self._state_age_s))
-        if not safe_state or dt<=0 or not 0<=state_age_s<=self.config.state_age_budget_s:
+        if not safe_state or dt<=0 or not self.config.accepts_state_age(state_age_s):
             self.failure='INVALID_STATE';self.phase='FAILED';return self._result()
         if self._stopped(state):
             if switching:
@@ -263,7 +264,7 @@ class StandardPathFollower(MppiPathFollower):
         # 独立检查完整停车尾部（含真实发布历史），实测零速本身不构成认证。
         if (not all(math.isfinite(v) for v in (state.x_m,state.y_m,state.yaw_rad,
                 state.linear_mps,state.angular_radps,state.lateral_mps,dt,state_age_s))
-                or dt<=0 or not 0<=state_age_s<=self.config.state_age_budget_s):return False
+                or dt<=0 or not self.config.accepts_state_age(state_age_s)):return False
         self._model_time=self._model_time if now_s is None else float(now_s)
         self._state_age_s=state_age_s
         return self.map is not None and bool(self._brake_safe(

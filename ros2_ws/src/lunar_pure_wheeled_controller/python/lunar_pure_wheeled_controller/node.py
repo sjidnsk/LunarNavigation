@@ -269,7 +269,7 @@ class PureWheeledControllerNode(Node):
                 seed=self.get_parameter("mppi_seed").value,
                 nominal_response_time_s=self.get_parameter("mppi_nominal_response_time_s").value,
                 compute_budget_s=float(self.get_parameter('mppi_compute_envelope_s').value),
-                state_age_budget_s=float(self.get_parameter('odometry_timeout_s').value) if self._standard_mode else .05))
+                state_age_budget_s=None if self._standard_mode else .05))
             self._mppi_diagnostics = self.create_publisher(String,self._absolute_topic_name("mppi_diagnostics_topic",self.get_parameter("mppi_diagnostics_topic").value),10)
             self._map_client = None
             if self._standard_mode and self._standard_map_source=='direct_p3':
@@ -333,6 +333,8 @@ class PureWheeledControllerNode(Node):
         self._trajectory_cursor = 0
         self._odometry: Odometry | None = None
         self._odometry_received_at: float | None = None
+        self._odometry_advanced_at=None
+        self._standard_source_high_water=None
         self._mppi_tf_history = deque(maxlen=16)
         self._mppi_odom_history = deque(maxlen=16)
         self._map_from_odom: MapFromOdom | None = None
@@ -734,11 +736,20 @@ class PureWheeledControllerNode(Node):
             # 非有限/损坏测量是完整性故障，不能降格成普通断流等待。
             self._executor.failure=self._executor.failure or 'INVALID_FEEDBACK'
             return
-        self._standard_state=TrackingState(value.x,value.y,value.yaw,value.v,value.w,lateral_mps)
-        self._odometry=odometry;self._odometry_received_at=received
         stamp=odometry.header.stamp
         source_ns=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
-        self._standard_state_ns=source_ns if source_ns>0 else receipt_ns
+        high=getattr(self,'_standard_source_high_water',None)
+        if source_ns<=0 or source_ns>receipt_ns or (high is not None and source_ns<high):
+            self._executor.failure=self._executor.failure or 'INVALID_FEEDBACK_TIMESTAMP'
+            self._odometry=None;self._odometry_received_at=None
+            self._standard_pending_odometry=None
+            return
+        if high is None or source_ns>high:
+            self._standard_source_high_water=source_ns
+            self._odometry_advanced_at=received
+        self._standard_state=TrackingState(value.x,value.y,value.yaw,value.v,value.w,lateral_mps)
+        self._odometry=odometry;self._odometry_received_at=received
+        self._standard_state_ns=source_ns
         if self._p3_source is not None:self._p3_source.set_center(value.x,value.y)
 
     def _standard_pose_wait(self,reason='WAITING_FOR_POSE'):
@@ -782,7 +793,8 @@ class PureWheeledControllerNode(Node):
         return self._map_cache.local_grid(state.x_m,state.y_m,2.5)
 
     def _tick_standard_path(self):
-        received_at=self._odometry_received_at
+        # 消费同一快照的推进接收时间；新消息不能给本轮旧计算续期。
+        received_at=getattr(self,'_odometry_advanced_at',self._odometry_received_at)
         if self._odometry is None or self._input_is_stale(received_at,self._odometry_timeout_s):
             return self._standard_unavailable('missing_or_stale_feedback')
         state=self._standard_state
@@ -791,8 +803,6 @@ class PureWheeledControllerNode(Node):
         now_ns=self.get_clock().now().nanoseconds
         source_ns=self._standard_state_ns
         if now_ns<source_ns:return self._standard_unavailable('future_feedback')
-        if (now_ns-source_ns)/1e9>self._odometry_timeout_s:
-            return self._standard_unavailable('stale_source_feedback')
         if self._active is None and getattr(self._executor,'_stop_reason',None) in (
                 'WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
             return self._standard_pose_wait('WAITING_FOR_FRESH_REFERENCE')
@@ -808,8 +818,6 @@ class PureWheeledControllerNode(Node):
             return self._standard_unavailable('stale_feedback_after_optimization')
         after_solve_ns=self.get_clock().now().nanoseconds
         if after_solve_ns<now_ns:return self._standard_unavailable('clock_regressed_during_optimization')
-        if (after_solve_ns-source_ns)/1e9>self._odometry_timeout_s:
-            return self._standard_unavailable('stale_source_feedback')
         # 每周期最多追加一次证明，截止时刻从证明开始计算，绝不追赶自身耗时。
         covered_ns=now_ns+int(self._executor.config.compute_budget_s*1e9)
         latest=self._standard_grid(state)
@@ -832,8 +840,6 @@ class PureWheeledControllerNode(Node):
             return self._standard_unavailable('stale_feedback_after_certification')
         if publication_ns<certificate_ns:
             return self._standard_unavailable('clock_regressed_during_certification')
-        if (publication_ns-source_ns)/1e9>self._odometry_timeout_s:
-            return self._standard_unavailable('stale_source_feedback')
         if identity(final_grid)!=identity(latest):
             return self._standard_unavailable('map_changed_during_certification',retryable=True)
         if publication_ns>covered_ns:

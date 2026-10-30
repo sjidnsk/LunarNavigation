@@ -125,13 +125,13 @@ def test_waiting_for_reference_still_checks_source_time_and_map(case):
         get_clock=lambda:S(now=lambda:S(nanoseconds=clock)),_standard_state_ns=source,
         _standard_unavailable=reasons.append,_standard_pose_wait=wait.append)
     PureWheeledControllerNode._tick_standard_path(n)
-    expected={'future':'future_feedback','old_source':'stale_source_feedback','missing_map':'missing_or_stale_map'}
-    assert reasons==([] if case=='valid' else [expected[case]])
-    assert wait==(['WAITING_FOR_FRESH_REFERENCE'] if case=='valid' else [])
+    expected={'future':'future_feedback','missing_map':'missing_or_stale_map'}
+    assert reasons==([] if case in ('valid','old_source') else [expected[case]])
+    assert wait==(['WAITING_FOR_FRESH_REFERENCE'] if case in ('valid','old_source') else [])
 
 
 @pytest.mark.parametrize('crossing',['solve','certificate'])
-def test_source_age_crossing_budget_blocks_publication_with_fresh_receipt(crossing):
+def test_source_age_crossing_old_limit_keeps_certified_publication(crossing):
     clock=[10_000_000_000];reasons=[];published=[];queries=[]
     old=S(revision=1,epoch='1',origin=(0.,0.));new=S(revision=2,epoch='1',origin=(0.,0.))
     def update(*a,**kw):
@@ -143,13 +143,13 @@ def test_source_age_crossing_budget_blocks_publication_with_fresh_receipt(crossi
         _odometry_timeout_s=.5,_active=object(),_path_received_at=1.,_path_timeout_s=.35,
         _standard_state=object(),_standard_state_ns=9_510_000_000,_last_control_ns=None,
         _executor=S(config=S(compute_budget_s=.2),request_stop=lambda *a:None,set_map=lambda *a:None,
-            update=update,certify_publication=certify,diagnostics={}),_input_is_stale=lambda *a:False,
+            update=update,certify_publication=certify,diagnostics={},_stopped=lambda *a:False),_input_is_stale=lambda *a:False,
         _standard_grid=grid,get_clock=lambda:S(now=lambda:S(nanoseconds=clock[0])),
         _standard_unavailable=lambda reason,**kw:reasons.append(reason),
         _publish_twist=lambda *a:published.append(a),_publish_execution_status=lambda:None,
         _mppi_diagnostics=S(publish=lambda *a:None))
     PureWheeledControllerNode._tick_standard_path(n)
-    assert reasons==['stale_source_feedback'] and not published
+    assert not reasons and published==[(.1,0.)]
 
 
 def test_failed_feedback_stays_failed_when_pose_returns_during_wait():
@@ -166,3 +166,39 @@ def test_failed_feedback_stays_failed_when_pose_returns_during_wait():
     PureWheeledControllerNode._tick_standard_path(n)
     assert not wrong and statuses[-1]['state_code']==6
     assert statuses[-1]['reason'].endswith('INVALID_FEEDBACK')
+
+
+def test_delayed_source_is_forwarded_to_model_without_source_age_veto():
+    age=[];emitted=[];errors=[];clock=10_000_000_000
+    grid=S(revision=1,epoch='1',origin=(0.,0.))
+    node=S(_feedback_lock=Lock(),_execution_ingress_overflow=False,_odometry=object(),
+        _odometry_received_at=0.,_odometry_advanced_at=0.,_odometry_timeout_s=.5,
+        _active=object(),_path_received_at=0.,_path_timeout_s=.35,
+        _standard_state=object(),_standard_state_ns=1_000_000_000,_last_control_ns=None,
+        _executor=S(config=S(compute_budget_s=.05),set_map=lambda *a:None,
+            update=lambda *a,**kw:(age.append(kw['state_age_s']) or S(command=S(linear_x_mps=.1,angular_z_radps=0.),phase='TRACKING')),
+            diagnostics={},_stopped=lambda *a:False,certify_publication=lambda *a:True),
+        _input_is_stale=lambda *a:False,_standard_grid=lambda state:grid,
+        get_clock=lambda:S(now=lambda:S(nanoseconds=clock)),
+        _standard_unavailable=errors.append,_mppi_diagnostics=S(publish=lambda *a:None),
+        _publish_twist=lambda *a:emitted.append(a),_publish_execution_status=lambda:None)
+    PureWheeledControllerNode._tick_standard_path(node)
+    assert age==[9.] and emitted==[(.1,0.)] and not errors
+
+
+def test_only_new_source_stamp_renews_controller_continuity(monkeypatch):
+    import nav1cm.ros_conversion as conversion
+    monkeypatch.setattr(conversion,'state_from_odometry',lambda *a:S(x=0.,y=0.,yaw=0.,v=0.,w=0.))
+    n=S(_executor=S(failure=None),_latest_transforms=object(),_map_frame='map',_p3_source=None)
+    def feed(source,received,ros):
+        message=S(header=S(stamp=S(sec=source,nanosec=0)),twist=S(twist=S(linear=S(y=0.))))
+        n._standard_pending_odometry=(message,received,ros*10**9)
+        PureWheeledControllerNode._accept_standard_odometry(n)
+    feed(90,10.,100)
+    assert n._standard_state_ns==90*10**9 and n._odometry_advanced_at==10.
+    feed(90,14.,104)
+    assert n._odometry_received_at==14. and n._odometry_advanced_at==10.
+    feed(92,15.,105)
+    assert n._odometry_advanced_at==15. and n._executor.failure is None
+    feed(91,16.,106)
+    assert n._executor.failure=='INVALID_FEEDBACK_TIMESTAMP' and n._odometry is None
