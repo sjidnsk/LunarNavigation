@@ -49,6 +49,7 @@ def create_resources(limits, capability, settings):
             planning_period_s=settings['planning_period_s'], execution_period_s=settings['execution_period_s'],
             global_period_s=settings['global_period_s'], global_budget_s=settings['global_budget_s'],
             clearance_radius_m=settings['clearance_radius_m'], revalidate_current_map=True,
+            reference_smoothing=settings['smooth_global_reference'],
             planner_options={'n': settings['horizon_steps'], 'dt': settings['horizon_dt_s']})
     except Exception:
         terrain._terrain.close()
@@ -93,7 +94,7 @@ class PlannerNode(Node):
         limits, capability = load_configuration(capability_file, overrides)
         defaults = {
             'map_frame': 'map', 'build_dir': os.environ.get('NAV1CM_BUILD_DIR', ''),
-            'allow_unknown': False, 'planning_period_s': .1, 'execution_period_s': .05,
+            'allow_unknown': False, 'smooth_global_reference': True, 'planning_period_s': .1, 'execution_period_s': .05,
             'global_period_s': 1., 'global_budget_s': 1., 'clearance_radius_m': limits.global_clearance_radius(.9),
             'horizon_steps': 20, 'horizon_dt_s': .2,
             'goal_tolerance_m': .1, 'goal_position_target_m': .02, 'goal_yaw_tolerance_rad': .05,
@@ -103,14 +104,24 @@ class PlannerNode(Node):
             'odometry_topic': '/Car/T3/localization/odometry',
             'goal_topic': '/Car/T4/navigation/goal',
             'tf_topic': '/tf', 'tf_static_topic': '/tf_static',
-            'global_route_topic': '/Car/T4/planning/global_route',
+            'global_route_topic': '/Car/T4/planning/global_route', 'global_reference_topic': '',
             'local_path_topic': '/Car/T4/planning/local_path',
             'execution_contract_enabled':False,'execution_feedback_timeout_s':2.,
             'odometry_timeout_s':.5,
             'execution_reference_topic':'/Car/T4/control/path_execution_reference',
             'tracking_status_topic':'/Car/T4/control/tracking_status',
         }
-        settings = {name: self.declare_parameter(name, default).value for name, default in defaults.items()}
+        from rcl_interfaces.msg import ParameterDescriptor
+        settings = {name: self.declare_parameter(name,default,
+                    descriptor=ParameterDescriptor(read_only=name=='smooth_global_reference')).value
+                    for name,default in defaults.items()}
+        if not settings['global_reference_topic']:
+            settings['global_reference_topic']=settings['global_route_topic']+'_reference'
+            self.set_parameters([Parameter('global_reference_topic',value=settings['global_reference_topic'])])
+        topics={self.resolve_topic_name(settings[key]) for key in
+                ('global_route_topic','global_reference_topic','local_path_topic')}
+        if len(topics)!=3:
+            raise ValueError('global reference, raw route and local path topics must be distinct')
         settings['clearance_radius_m']=limits.global_clearance_radius(settings['clearance_radius_m'])
         self.set_parameters([Parameter('minimum_clearance_m',value=limits.minimum_clearance_m),
                              Parameter('clearance_radius_m',value=settings['clearance_radius_m'])])
@@ -120,6 +131,7 @@ class PlannerNode(Node):
         factory = create_resources if resource_factory is None else resource_factory
         session, store = factory(limits, capability, settings)
         self._global_publisher = self.create_publisher(PathMessage, settings['global_route_topic'], 1)
+        self._reference_publisher = self.create_publisher(PathMessage, settings['global_reference_topic'], 1)
         self._local_publisher = self.create_publisher(PathMessage, settings['local_path_topic'], 1)
         self.runtime = PlannerRuntime(session, store, publish=self._publish,
                                       ros_now_ns=lambda: self.get_clock().now().nanoseconds,
@@ -180,6 +192,7 @@ class PlannerNode(Node):
             self.runtime.register_execution_reference(reference)
             self._execution_publisher.publish(reference_message(reference,self.runtime.map_frame))
         self._global_publisher.publish(path_message(data.global_route))
+        self._reference_publisher.publish(path_message(data.global_reference or data.global_route))
         self._local_publisher.publish(local)
 
     def stop_runtime(self):

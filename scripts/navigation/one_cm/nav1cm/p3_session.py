@@ -13,6 +13,7 @@ class SessionPacket:
     result: object = None
     waiting: tuple = ()
     candidate: object = None
+    raw_route: object = None
 
 
 class NavigationSession:
@@ -71,7 +72,8 @@ class NavigationSession:
         if (candidate is None or result.certificate is None or
                 not result.certificate.matches(candidate, result.grid, self.coordinator.limits, candidate.route_version)):
             candidate = None
-        return SessionPacket(self.accepted_generation, self.coordinator.route, result, candidate=candidate)
+        return SessionPacket(self.accepted_generation, self.coordinator.route, result, candidate=candidate,
+                             raw_route=self.coordinator.raw_route)
 
     def publication_current(self, packet):
         return bool(packet.generation == self.accepted_generation and not packet.waiting and

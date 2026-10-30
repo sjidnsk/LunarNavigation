@@ -33,7 +33,7 @@ class NavigationCoordinator:
     def __init__(self, planner, *, runner=None, limits=None, backend=None,
                  allow_unknown=False, local_period_s=.05, global_period_s=1.,
                  global_budget_s=1., clearance_radius_m=.9, stall_timeout_s=4., field_backend=None,
-                 revalidate_current_map=False):
+                 revalidate_current_map=False, reference_smoothing=False):
         self.planner = planner
         self.runner = GlobalWorker() if runner is None else runner
         self.limits = WheelLimits() if limits is None else limits
@@ -48,6 +48,11 @@ class NavigationCoordinator:
         self.goal_yaw_tolerance_rad = .05
         self.stopped_linear_mps = self.stopped_angular_rps = .01
         self.route = self.progress = None
+        if type(reference_smoothing) is not bool:raise ValueError("reference_smoothing must be bool")
+        if reference_smoothing and not revalidate_current_map:
+            raise ValueError("reference smoothing requires current map revalidation")
+        self.reference_smoothing=reference_smoothing
+        self._raw_route=self._shaped_route=None
         self._goal = self._epoch = self._policy = None
         self._goal_yaw = None
         self.goal_revision = 0
@@ -138,7 +143,31 @@ class NavigationCoordinator:
             self._blocked_boxes = self._blocked_boxes + [-radius, -radius, radius, radius]
         return changed
 
+    @property
+    def raw_route(self):
+        # 缓存只能属于当前有效参考；等待/取消不能暴露已退休几何。
+        if self.route is None:return None
+        if self._shaped_route is not None and self._shaped_route.route is self.route:
+            return self._raw_route
+        return self.route
+
+    def _adopt_route(self, route, events):
+        shaped=None
+        if self.reference_smoothing:
+            from .reference_smoothing import shape_route
+            shaped=shape_route(route,self._blocked_boxes)
+        self._raw_route,self._shaped_route=route,shaped
+        self.route=route if shaped is None else shaped.route
+        self.progress=None
+        if shaped is not None:
+            events.append(dict(kind='GLOBAL_REFERENCE_SHAPED',version=route.version,
+                map_epoch=route.map_epoch,changed=shaped.changed,reason=shaped.reason,
+                raw_points=len(route.points),reference_points=len(self.route.points)))
+
     def _route_clear(self, route):
+        if self._shaped_route is not None and self._shaped_route.route is route:
+            from .reference_smoothing import reference_clear
+            return reference_clear(self._shaped_route,self._blocked_boxes)
         return all(_segment_clear(a, b, self._blocked_boxes) for a, b in zip(route.points[:-1], route.points[1:]))
 
     @staticmethod
@@ -181,7 +210,7 @@ class NavigationCoordinator:
         """共享全局身份、目标检查与非阻塞路线调度；不执行局部求解。"""
         self._set_goal(goal, goal_yaw)
         goal = self._goal
-        blocked_changed = self._observe_world(world) if self.revalidate_current_map else False
+        blocked_changed = self._observe_world(world) if (self.revalidate_current_map or self.reference_smoothing) else False
         if world.epoch != self._epoch:
             if not self.revalidate_current_map or blocked_changed:
                 self._pending_reason = 'MAP_CHANGED'
@@ -231,10 +260,10 @@ class NavigationCoordinator:
                                        'requested_epoch': route.map_epoch, 'current_epoch': world.epoch})
                     # 同图周期重算保留现有路线，避免从移动起点裁短导致进度每秒清零。
                     keep = (self.route is not None and route is not None and
-                            ((self.revalidate_current_map and self._same_route_geometry(self.route, route)) or
+                            ((self.revalidate_current_map and self._same_route_geometry(self.raw_route, route)) or
                              (not self.revalidate_current_map and self.route.map_epoch == route.map_epoch and global_result.get('request_reason') == 'PERIODIC')))
                     if route is not None and not keep:
-                        self.route, self.progress = route, None
+                        self._adopt_route(route,events)
                         events.append({'kind': 'ROUTE_ACCEPTED', 'version': route.version, 'map_epoch': route.map_epoch, 'points': route.points.tolist()})
                     elif route is not None:
                         events.append({'kind': 'ROUTE_CONTINUITY_RETAINED', 'version': self.route.version, 'computed_version': route.version})
