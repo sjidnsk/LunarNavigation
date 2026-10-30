@@ -159,10 +159,10 @@ def test_late_budget_exhaustion_discards_all_previously_accepted_corners():
     def ticking_clock():
         nonlocal calls
         calls += 1
-        return 0. if calls < 200 else 1.
+        return 0. if calls < 50 else 1.
 
     result = api().shape_route(raw, np.empty((0, 4)), clock=ticking_clock)
-    assert calls >= 200
+    assert calls >= 50
     assert result.route is raw and not result.changed and not len(result.proof_boxes)
     assert "BUDGET" in result.reason.upper()
 
@@ -216,8 +216,8 @@ def test_already_verified_raw_has_constant_work_zero_budget_fallback(monkeypatch
     def forbidden_collision_scan(*args):
         pytest.fail('zero-budget trusted fallback must not scan obstacle geometry')
 
-    monkeypatch.setattr(api(), '_segment_clear', forbidden_collision_scan)
-    monkeypatch.setattr(api(), '_overlaps', forbidden_collision_scan)
+    monkeypatch.setattr(api(), '_segments_clear', forbidden_collision_scan)
+    monkeypatch.setattr(api(), '_overlap_mask', forbidden_collision_scan)
     result = api().shape_route(raw, blocked, budget_s=0, raw_verified=True)
     assert result.route is raw and not result.changed and not len(result.proof_boxes)
     assert 'BUDGET' in result.reason
@@ -228,7 +228,7 @@ def test_unverified_raw_stops_collision_work_at_deadline(monkeypatch):
     blocked = np.tile((2000., 20., 2001., 21.), (20000, 1))
     now = 0.
     calls = 0
-    original = api()._segment_clear
+    original = api()._segments_clear
 
     def timed_segment(a, b, boxes):
         nonlocal now, calls
@@ -238,7 +238,7 @@ def test_unverified_raw_stops_collision_work_at_deadline(monkeypatch):
         now += .01
         return clear
 
-    monkeypatch.setattr(api(), '_segment_clear', timed_segment)
+    monkeypatch.setattr(api(), '_segments_clear', timed_segment)
     with pytest.raises(ValueError, match='raw validation budget exhausted'):
         api().shape_route(raw, blocked, budget_s=.025, clock=lambda: now)
     assert calls == 3
@@ -246,22 +246,24 @@ def test_unverified_raw_stops_collision_work_at_deadline(monkeypatch):
 
 def test_curve_and_final_revalidation_bound_obstacle_batches(monkeypatch):
     blocked = np.tile((20., 20., 21., 21.), (2050, 1))
-    segment = api()._segment_clear
-    overlaps = api()._overlaps
+    segment = api()._segments_clear
+    overlaps = api()._overlap_mask
     segment_sizes, overlap_sizes = [], []
 
     def bounded_segment(a, b, boxes):
         segment_sizes.append(len(boxes))
+        assert 0 < len(a) <= 64
         assert 0 < len(boxes) <= 1024
         return segment(a, b, boxes)
 
     def bounded_overlap(box, boxes):
         overlap_sizes.append(len(boxes))
+        assert 0 < len(box) <= 64
         assert 0 < len(boxes) <= 1024
         return overlaps(box, boxes)
 
-    monkeypatch.setattr(api(), '_segment_clear', bounded_segment)
-    monkeypatch.setattr(api(), '_overlaps', bounded_overlap)
+    monkeypatch.setattr(api(), '_segments_clear', bounded_segment)
+    monkeypatch.setattr(api(), '_overlap_mask', bounded_overlap)
     result = shape(boxes=blocked, raw_verified=True)
     assert result.changed
     assert 1024 in segment_sizes and 2 in segment_sizes
@@ -271,18 +273,18 @@ def test_curve_and_final_revalidation_bound_obstacle_batches(monkeypatch):
 def test_final_connector_revalidation_expiry_discards_candidate_immediately(monkeypatch):
     raw = route()
     blocked = np.asarray([[20., 20., 21., 21.]])
-    original = api()._segment_clear
+    original = api()._segments_clear
     expired = False
 
     def expire_on_final_connector(a, b, boxes):
         nonlocal expired
         assert not expired, 'geometry work continued after the final-check deadline'
         clear = original(a, b, boxes)
-        if np.array_equal(a, (0, 0)) and np.array_equal(b, (1.5, 0)):
+        if np.any(np.all(a == (0, 0), axis=1) & np.all(b == (1.5, 0), axis=1)):
             expired = True
         return clear
 
-    monkeypatch.setattr(api(), '_segment_clear', expire_on_final_connector)
+    monkeypatch.setattr(api(), '_segments_clear', expire_on_final_connector)
     result = api().shape_route(raw, blocked, raw_verified=True, clock=lambda: 1. if expired else 0.)
     assert expired
     assert result.route is raw and not result.changed and not len(result.proof_boxes)
@@ -299,7 +301,7 @@ def test_trusted_raw_still_checks_curve_evidence_and_sampled_edges():
 def test_final_curve_proof_revalidation_checks_deadline_after_each_batch(monkeypatch):
     raw = route()
     blocked = np.asarray([[20., 20., 21., 21.]])
-    original = api()._overlaps
+    original = api()._overlap_mask
     first_leaf = None
     expired = False
 
@@ -307,13 +309,14 @@ def test_final_curve_proof_revalidation_checks_deadline_after_each_batch(monkeyp
         nonlocal first_leaf, expired
         assert not expired, 'curve-proof work continued after the final-check deadline'
         collision = original(box, boxes)
-        if first_leaf is None and np.max(box[2:] - box[:2]) < .04:
-            first_leaf = box.copy()
-        elif first_leaf is not None and np.array_equal(box, first_leaf):
-            expired = True
+        for leaf in box:
+            if first_leaf is None and np.max(leaf[2:] - leaf[:2]) < .04:
+                first_leaf = leaf.copy()
+            elif first_leaf is not None and np.array_equal(leaf, first_leaf):
+                expired = True
         return collision
 
-    monkeypatch.setattr(api(), '_overlaps', expire_on_repeated_leaf)
+    monkeypatch.setattr(api(), '_overlap_mask', expire_on_repeated_leaf)
     result = api().shape_route(raw, blocked, raw_verified=True, clock=lambda: 1. if expired else 0.)
     assert expired
     assert result.route is raw and not result.changed and not len(result.proof_boxes)
@@ -326,6 +329,112 @@ def test_empty_obstacles_need_no_raw_edge_scan_for_zero_budget(monkeypatch):
     def forbidden_collision_scan(*args):
         pytest.fail('empty obstacles should not require a raw edge scan')
 
-    monkeypatch.setattr(api(), '_segment_clear', forbidden_collision_scan)
+    monkeypatch.setattr(api(), '_segments_clear', forbidden_collision_scan)
     result = api().shape_route(raw, np.empty((0, 4)), budget_s=0)
     assert result.route is raw and not result.changed and 'BUDGET' in result.reason
+
+
+# P3真实地图快照的四点规划路线与19个已膨胀障碍，仅保留纯几何回归数据。
+REAL_FOUR_POINT_ROUTE = (
+    (-4.842089032379527, 0.7480244785279971),
+    (-8.881277422266072, -5.31872257773393),
+    (-11.31872257773393, -5.31872257773393),
+    (-14.40797233581543, -1.9836714267730713),
+)
+REAL_INFLATED_BOXES = (
+    (-11.31872247773393, -4.31872247773393, -8.881277522266071, -2.2812775222660697),
+    (-11.31872247773393, -4.118722477733931, -8.48127752226607, -2.0812775222660695),
+    (-11.31872247773393, -3.9187224777339305, -8.28127752226607, -1.8812775222660696),
+    (-11.118722477733929, -3.7187224777339303, -8.08127752226607, -1.6812775222660699),
+    (-11.118722477733929, -3.51872247773393, -7.88127752226607, -1.28127752226607),
+    (-11.118722477733929, -3.1187224777339306, -7.681277522266069, -1.0812775222660698),
+    (-10.91872247773393, -2.9187224777339305, -7.681277522266069, -0.8812775222660698),
+    (-11.118722477733929, -2.7187224777339303, -7.681277522266069, -0.6812775222660699),
+    (-10.91872247773393, -2.51872247773393, -7.681277522266069, -0.2812775222660697),
+    (-11.118722477733929, -2.11872247773393, -7.681277522266069, -0.08127752226606977),
+    (-11.51872247773393, -1.9187224777339302, -7.88127752226607, 0.11872247773393019),
+    (-11.71872247773393, -1.7187224777339303, -7.88127752226607, 0.5187224777339302),
+    (-11.51872247773393, -1.3187224777339304, -7.88127752226607, 1.1187224777339302),
+    (-11.71872247773393, -0.7187224777339303, -7.88127752226607, 1.3187224777339304),
+    (-11.51872247773393, -0.5187224777339302, -7.88127752226607, 1.51872247773393),
+    (-11.31872247773393, -0.31872247773393025, -7.88127752226607, 1.9187224777339302),
+    (-11.71872247773393, 0.08127752226606977, -7.88127752226607, 2.11872247773393),
+    (-11.91872247773393, 0.2812775222660697, -8.08127752226607, 2.31872247773393),
+    (-11.91872247773393, 0.4812775222660697, -8.881277522266071, 2.51872247773393),
+)
+
+def test_real_four_point_route_fits_bounded_geometry_callback_budget():
+    raw = route(REAL_FOUR_POINT_ROUTE)
+    blocked = np.asarray(REAL_INFLATED_BOXES)
+    calls = 0
+
+    def work_clock():
+        # 目标机已观察到重复小操作/时钟检查成本；此处固定工作配额，避免墙钟抖动。
+        nonlocal calls
+        calls += 1
+        return calls * .0001
+
+    result = api().shape_route(raw, blocked, raw_verified=True, clock=work_clock)
+    assert result.changed, (result.reason, calls)
+    assert len(result.route.points) == 68 and len(result.proof_boxes) == 64
+    assert calls < 250
+    assert api().reference_clear(result, blocked)
+
+
+def recursive_oracle(a, control, b, step=.05):
+    controls = np.asarray((a, control, b))
+    pad = 32 * np.finfo(float).eps * max(1., float(np.max(np.abs(controls))))
+    box = np.r_[np.min(controls, axis=0) - pad, np.max(controls, axis=0) + pad]
+    if np.linalg.norm(control-a) + np.linalg.norm(b-control) <= step:
+        return [b], [box]
+    left, right = (a+control)/2, (control+b)/2
+    middle = (left+right)/2
+    first = recursive_oracle(a, left, middle, step)
+    second = recursive_oracle(middle, right, b, step)
+    return first[0] + second[0], first[1] + second[1]
+
+
+@pytest.mark.parametrize('points', [((0, 0), (2, 0), (2, 2)), REAL_FOUR_POINT_ROUTE,
+                                    ((0, 0), (7, 2), (9, 8), (12, 4))])
+def test_batched_curve_samples_and_boxes_match_recursive_oracle_in_order(points):
+    raw = route(points)
+    result = shape(raw)
+    expected_points, expected_boxes = [raw.points[0]], []
+    for previous, corner, following in zip(raw.points[:-2], raw.points[1:-1], raw.points[2:]):
+        before, after = np.linalg.norm(corner-previous), np.linalg.norm(following-corner)
+        trim = min(.75, .25*before, .25*after)
+        a = corner - trim*(corner-previous)/before
+        b = corner + trim*(following-corner)/after
+        samples, boxes = recursive_oracle(a, corner, b)
+        expected_points.extend([a] + samples)
+        expected_boxes.extend(boxes)
+    expected_points.append(raw.points[-1])
+    assert result.changed
+    np.testing.assert_allclose(result.route.points, expected_points, atol=1e-14, rtol=0)
+    np.testing.assert_allclose(result.proof_boxes, expected_boxes, atol=1e-14, rtol=0)
+
+
+def test_vectorized_segment_clipping_matches_scalar_closed_interval_oracle():
+    rng = np.random.default_rng(3719)
+    starts, ends = rng.uniform(-3, 3, (2, 48, 2))
+    starts[:6] = ((-2, 0), (0, -2), (1, 1), (2, 1), (0, 0), (2, 2))
+    ends[:6] = ((2, 0), (0, 2), (1, 1), (2, 2), (1, 1), (3, 3))
+    blocked = np.asarray(((0, 0, 1, 1), (-1.5, -.2, -1., .5)))
+    expected = [_segment_clear(a, b, blocked) for a, b in zip(starts, ends)]
+    for a, b, clear in zip(starts, ends, expected):
+        assert api()._segments_clear(a[None], b[None], blocked) == clear
+    assert api()._segments_clear(starts, ends, blocked) == all(expected)
+    assert expected[:6] == [False, False, False, True, False, True]
+
+
+def test_vectorized_proof_overlap_matches_scalar_touch_rejection():
+    boxes = np.asarray(((-1, -1, 0, 0), (1, 1, 2, 2), (1.01, 1.01, 2, 2),
+                        (-.5, -.5, -.1, -.1), (.2, .2, .8, .8)))
+    blocked = np.asarray(((0, 0, 1, 1),))
+    np.testing.assert_array_equal(api()._overlap_mask(boxes, blocked),
+                                  (True, True, False, False, True))
+
+
+def test_positive_budget_raw_collision_still_rejects_after_batching():
+    with pytest.raises(ValueError, match='raw route collision'):
+        shape(boxes=((.5, -.1, .6, .1),))

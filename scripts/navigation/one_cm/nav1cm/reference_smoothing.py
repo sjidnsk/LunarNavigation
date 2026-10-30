@@ -42,6 +42,33 @@ def _overlaps(box, blocked):
                        (blocked[:, 1] <= box[3]) & (blocked[:, 3] >= box[1])))
 
 
+def _segments_clear(starts, ends, blocked):
+    """批量执行与 _segment_clear 相同的闭区间裁剪，触边仍拒绝。"""
+    lo = np.zeros((len(starts), len(blocked)))
+    hi = np.ones_like(lo)
+    possible = np.ones_like(lo, dtype=bool)
+    for axis in (0, 1):
+        delta = (ends[:, axis] - starts[:, axis])[:, None]
+        origin = starts[:, axis, None]
+        fixed = delta == 0
+        possible &= (~fixed | ((origin >= blocked[None, :, axis]) &
+                               (origin <= blocked[None, :, axis + 2])))
+        divisor = np.where(fixed, 1., delta)
+        near = (blocked[None, :, axis] - origin) / divisor
+        far = (blocked[None, :, axis + 2] - origin) / divisor
+        lo = np.maximum(lo, np.where(fixed, -np.inf, np.minimum(near, far)))
+        hi = np.minimum(hi, np.where(fixed, np.inf, np.maximum(near, far)))
+    return not bool(np.any(possible & (lo <= hi)))
+
+
+def _overlap_mask(boxes, blocked):
+    """每个凸包盒的障碍闭区间相交掩码。"""
+    return np.any((blocked[None, :, 0] <= boxes[:, None, 2]) &
+                  (blocked[None, :, 2] >= boxes[:, None, 0]) &
+                  (blocked[None, :, 1] <= boxes[:, None, 3]) &
+                  (blocked[None, :, 3] >= boxes[:, None, 1]), axis=1)
+
+
 def reference_clear(shaped: ShapedRoute, blocked_boxes) -> bool:
     """当前地图必须同时接纳采样折线与全部连续曲线凸包叶证据。"""
     try:
@@ -89,33 +116,36 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
         if not np.isfinite(now) or now - began >= budget_s:
             raise _Exhausted("BUDGET_EXHAUSTED")
 
-    def segment_clear(a, b):
+    def segments_clear(starts, ends):
         check()
-        for offset in range(0, len(blocked), 1024):
-            check()
-            clear = _segment_clear(a, b, blocked[offset:offset + 1024])
-            check()
-            if not clear:
-                return False
+        # 两个维度均分块，避免 4096×1024 的大临时矩阵吞掉本次预算。
+        for first in range(0, len(starts), 64):
+            for offset in range(0, len(blocked), 1024):
+                check()
+                clear = _segments_clear(starts[first:first + 64], ends[first:first + 64],
+                                        blocked[offset:offset + 1024])
+                check()
+                if not clear:
+                    return False
         return True
 
-    def overlaps(box):
+    def overlaps(boxes):
         check()
-        for offset in range(0, len(blocked), 1024):
-            check()
-            collision = _overlaps(box, blocked[offset:offset + 1024])
-            check()
-            if collision:
-                return True
-        return False
+        mask = np.zeros(len(boxes), dtype=bool)
+        for first in range(0, len(boxes), 64):
+            for offset in range(0, len(blocked), 1024):
+                check()
+                mask[first:first + 64] |= _overlap_mask(boxes[first:first + 64],
+                                                       blocked[offset:offset + 1024])
+                check()
+        return mask
 
     try:
         # 起钟在障碍准备之前；空障碍无需逐边扫描即可完成原路线证明。
         blocked = _boxes(blocked_boxes, check)
         if not raw_verified and len(blocked):
-            for a, b in zip(points[:-1], points[1:]):
-                if not segment_clear(a, b):
-                    raise ValueError("raw route collision")
+            if not segments_clear(points[:-1], points[1:]):
+                raise ValueError("raw route collision")
         raw_verified = True
     except _Exhausted as exhausted:
         if not raw_verified:
@@ -139,32 +169,58 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
         # 直线单边就是精确连续表示；仅曲线叶受 step_m 采样长度限制。
         append(point)
 
-    def certify(a, control, b, depth=0):
-        nonlocal subdivisions
+    def append_samples(samples):
         check()
-        subdivisions += 1
-        if subdivisions > 16384 or depth > 16:
-            raise _Exhausted("SUBDIVISION_LIMIT")
-        controls = np.asarray((a, control, b))
-        # 浮点二分和凸包求界向外留余量，不让舍入产生虚假严格分离。
-        pad = 32 * np.finfo(float).eps * max(1., float(np.max(np.abs(controls))))
-        box = np.r_[np.min(controls, axis=0) - pad, np.max(controls, axis=0) + pad]
-        collision = overlaps(box)
-        if collision and (not segment_clear(a, a) or not segment_clear(b, b)):
-            return None
-        length_bound = np.linalg.norm(control - a) + np.linalg.norm(b - control)
-        if not collision and length_bound <= step_m:
-            return [b], [box]
-        left = (a + control) / 2
-        right = (control + b) / 2
-        middle = (left + right) / 2
-        first = certify(a, left, middle, depth + 1)
-        if first is None:
-            return None
-        second = certify(middle, right, b, depth + 1)
-        if second is None:
-            return None
-        return first[0] + second[0], first[1] + second[1]
+        distinct = np.any(np.diff(np.vstack((output[-1], samples)), axis=0) != 0, axis=1)
+        if len(output) + int(np.count_nonzero(distinct)) > max_points:
+            raise _Exhausted("POINT_LIMIT")
+        output.extend(samples[distinct])
+        check()
+
+    def certify(a, control, b):
+        nonlocal subdivisions
+        controls = np.asarray([[a, control, b]])
+        # 用深度17的整数参数区间定位叶，最后恢复原递归从左到右的顺序。
+        keys = np.zeros(1, dtype=np.int64)
+        accepted_points, accepted_boxes, accepted_keys = [], [], []
+        for depth in range(17):
+            check()
+            subdivisions += len(controls)
+            if subdivisions > 16384:
+                raise _Exhausted("SUBDIVISION_LIMIT")
+            # 与递归版逐节点相同的控制点凸包、32eps外扩和长度判据。
+            pad = 32 * np.finfo(float).eps * np.maximum(1., np.max(np.abs(controls), axis=(1, 2)))
+            boxes = np.concatenate((np.min(controls, axis=1) - pad[:, None],
+                                    np.max(controls, axis=1) + pad[:, None]), axis=1)
+            collision = overlaps(boxes)
+            if np.any(collision):
+                endpoints = controls[collision][:, (0, 2), :].reshape(-1, 2)
+                if not segments_clear(endpoints, endpoints):
+                    return None
+            length_bound = (np.linalg.norm(controls[:, 1] - controls[:, 0], axis=1) +
+                            np.linalg.norm(controls[:, 2] - controls[:, 1], axis=1))
+            leaves = ~collision & (length_bound <= step_m)
+            if np.any(leaves):
+                accepted_points.append(controls[leaves, 2])
+                accepted_boxes.append(boxes[leaves])
+                accepted_keys.append(keys[leaves])
+            pending = ~leaves
+            if not np.any(pending):
+                order = np.argsort(np.concatenate(accepted_keys), kind="stable")
+                check()
+                return np.concatenate(accepted_points)[order], np.concatenate(accepted_boxes)[order]
+            if depth == 16:
+                raise _Exhausted("SUBDIVISION_LIMIT")
+            controls = controls[pending]
+            keys = keys[pending]
+            left = (controls[:, 0] + controls[:, 1]) / 2
+            right = (controls[:, 1] + controls[:, 2]) / 2
+            middle = (left + right) / 2
+            controls = np.stack((np.stack((controls[:, 0], left, middle), axis=1),
+                                 np.stack((middle, right, controls[:, 2]), axis=1)), axis=1).reshape(-1, 3, 2)
+            keys = (keys[:, None] + np.asarray((0, 1 << (16-depth)))).reshape(-1)
+            check()
+        raise _Exhausted("SUBDIVISION_LIMIT")
 
     try:
         check()
@@ -189,8 +245,7 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
                     candidate = certify(a, corner, b)
                     if candidate is not None:
                         samples, boxes = candidate
-                        if all(segment_clear(x, y)
-                               for x, y in zip([a] + samples[:-1], samples)):
+                        if segments_clear(np.vstack((a, samples[:-1])), samples):
                             break
                         candidate = None
                     trim /= 2
@@ -198,8 +253,7 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
                 line_to(corner)
             else:
                 line_to(a)
-                for sample in samples:
-                    append(sample)
+                append_samples(samples)
                 proof.extend(boxes)
                 changed = True
         if not changed:
@@ -209,12 +263,10 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
         shaped = ShapedRoute(Route(route.version, route.map_epoch, np.asarray(output), route.goal),
                              np.asarray(proof).reshape(-1, 4), True, "SMOOTHED")
         # 不调用无 deadline 的公开新图复核入口；逐边和逐叶共享本次预算。
-        for a, b in zip(shaped.route.points[:-1], shaped.route.points[1:]):
-            if not segment_clear(a, b):
-                return fallback("GEOMETRY_REJECTED")
-        for box in shaped.proof_boxes:
-            if overlaps(box):
-                return fallback("GEOMETRY_REJECTED")
+        if not segments_clear(shaped.route.points[:-1], shaped.route.points[1:]):
+            return fallback("GEOMETRY_REJECTED")
+        if np.any(overlaps(shaped.proof_boxes)):
+            return fallback("GEOMETRY_REJECTED")
         check()
         return shaped
     except _Exhausted as exhausted:
