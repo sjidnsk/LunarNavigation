@@ -96,6 +96,14 @@ class GridMap:
         if np.any(radius<0) or np.any(~np.isfinite(radius)):raise ValueError('invalid margin')
         valid=np.all(np.isfinite(aa)&np.isfinite(bb),axis=1)
         if not np.all(valid):return np.zeros(shape,dtype=bool)
+        # 仅本次调用共享逐位相同的有向边证明；权限与间距都是完整键的一部分。
+        # 不合并近似边、不跨地图缓存。保留全部延迟场景和制动尾，仅复用相同几何。
+        keys=np.ascontiguousarray(np.column_stack((aa,bb,radius,allowed)))
+        bits=keys.view(np.dtype((np.void,keys.dtype.itemsize*keys.shape[1]))).reshape(-1)
+        _,keep,inverse=np.unique(bits,return_index=True,return_inverse=True)
+        inverse=inverse.reshape(-1)
+        aa,bb,radius,allowed=aa[keep],bb[keep],radius[keep],allowed[keep]
+        valid=np.ones(len(keep),dtype=bool)
         count=max(1,int(np.ceil(np.max(np.linalg.norm(bb-aa,axis=1),initial=0.)/(self.resolution*.5))))
         if count>4096:raise ValueError('segment certificate exceeds bounded local range')
         reach=int(np.ceil(float(radius.max())/self.resolution))+1
@@ -132,7 +140,7 @@ class GridMap:
         # Canonical order of grid visitation is irrelevant: compare actual
         # clipped contact intervals, including closed boundary/corner contacts.
         valid &= last_assumed<=first_free+1e-12
-        return valid.reshape(shape)
+        return valid[inverse].reshape(shape)
 
     def valid_trajectories(self, xy, margin):
         state,_,assumed=self.sample(xy)
