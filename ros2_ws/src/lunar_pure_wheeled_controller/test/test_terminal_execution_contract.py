@@ -533,3 +533,21 @@ def test_delayed_stationary_reference_passes_actual_complete_brake_certificate()
     e.update(TrackingState(0.,0.,0.),.05,now_s=1.,state_age_s=5.)
     assert e.reference_accepted and e.execution_reference is r
     assert e._state_age_s==5. and e.failure is None
+
+
+
+def test_terminal_continuous_spin_keeps_reference_identity_and_feedback():
+    import math
+    e=follower(motion_model='differential_drive'); contract=ref(intent=3)
+    points=((0.,0.,0.),(0.,0.,math.pi/2),(0.,0.,5*math.pi/6))
+    e.offer_execution_reference(points,contract)
+    tick(e,TrackingState(0.,0.,0.))
+    r=tick(e,TrackingState(0.,0.,math.pi/2,0.,.1))
+    assert r.command.linear_x_mps==0. and r.command.angular_z_radps>0.
+    assert e.last_execution_state==4 and not r.command.complete
+    assert e.execution_reference is contract and e.reference.points==points
+    assert e.path is e._stages[e._stage_index].path
+    r=tick(e,TrackingState(0.,0.,5*math.pi/6,0.,.1))
+    assert r.phase=='BRAKING' and not r.command.complete
+    r=tick(e,TrackingState(0.,0.,5*math.pi/6))
+    assert r.command.complete and e.last_execution_state==5

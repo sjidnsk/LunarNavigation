@@ -4,7 +4,7 @@ import math
 import numpy as np
 from .mppi import MppiExecutor
 from .mppi_path_follower import MppiPathFollower
-from .path_geometry import angle
+from .path_geometry import Polyline, angle
 from .standard_path_reference import StandardPathReference
 
 
@@ -172,6 +172,31 @@ class StandardPathFollower(MppiPathFollower):
             heading=heading+(math.pi if self.direction<0 else 0.)
         return distance,heading
 
+    def _continuous_spin_target(self,state):
+        # 分段保留圈数与反向顺序，但同中心同向分段不是停车屏障。
+        current=self._stages[self._stage_index]
+        if current.direction!=0 or abs(current.spin_delta)<=1e-9:return self.path
+        end=self._stage_index
+        while end+1<len(self._stages):
+            following=self._stages[end+1]
+            if (following.direction!=0 or following.spin_delta*current.spin_delta<=0 or
+                    math.dist(current.path.points[-1],following.path.points[-1])>1e-8):break
+            end+=1
+        sign=1. if current.spin_delta>0 else -1.
+        at_center=math.dist((state.x_m,state.y_m),current.path.points[-1])<=self.policy.goal_position_tolerance_m
+        while self._stage_index<end and at_center:
+            remaining=sign*angle(current.path.final_yaw-state.yaw_rad)
+            if remaining>1e-9:break
+            self._stage_index+=1
+            current=self._stages[self._stage_index]
+            self.path=current.path
+        if self._stage_index==end:return self.path
+        remaining=(sign*angle(current.path.final_yaw-state.yaw_rad)+
+            sum(abs(stage.spin_delta) for stage in self._stages[self._stage_index+1:end+1]))
+        # 沿既有有序参考前视，最多四分之一圈，避免最短角目标反转或丢圈。
+        x,y=current.path.points[-1]
+        return Polyline(((x,y,state.yaw_rad+sign*min(math.pi/2,remaining)),))
+
     def _update_standard(self,state,dt,*,now_s=None,state_age_s=0.):
         if self._stop_reason is not None:
             return self._stop(state,dt,now_s,state_age_s)
@@ -181,6 +206,8 @@ class StandardPathFollower(MppiPathFollower):
         if self._switch_brake:
             return self._stop(state,dt,now_s,state_age_s,switching=True)
         if self.path is None:return MppiExecutor.update(self,state,dt,now_s,state_age_s)
+        target=self._continuous_spin_target(state)
+        stage_path=self.path
         total=self._total_progress;previous=self._local_progress
         self.progress_m=previous
         policy=self.policy
@@ -188,8 +215,11 @@ class StandardPathFollower(MppiPathFollower):
         if self._stage_index+1<len(self._stages) and not (
                 self.execution_reference is not None and self.execution_reference.intent==3):
             self.policy=replace(policy,goal_position_tolerance_m=min(.005,policy.corner_position_tolerance_m))
+        self.path=target
         try:result=MppiExecutor.update(self,state,dt,now_s,state_age_s)
-        finally:self.policy=policy
+        finally:
+            self.policy=policy
+            self.path=stage_path
         self._local_progress=self.progress_m
         self._total_progress=total+max(0.,self._local_progress-previous)
         self.progress_m=self._total_progress

@@ -410,3 +410,77 @@ def test_stopped_incompatible_rebindings_preserve_command_history_without_task_c
         assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
         e.note_command(r.command.linear_x_mps,r.command.angular_z_radps)
     assert e.failure is None and getattr(e,'no_progress_s',0.)==0.
+
+
+@pytest.mark.parametrize('sign,start',[(1.,0.),(-1.,0.),(1.,2.8),(-1.,-2.8)])
+def test_same_direction_spin_crosses_internal_boundary_without_stopping(sign,start):
+    e=follower(motion_model='differential_drive')
+    points=tuple((0.,0.,start+sign*y) for y in (0.,math.pi/2,5*math.pi/6))
+    e.set_standard_path(points)
+    tick(e,TrackingState(0.,0.,start))
+    # 验证实际旋转跨段连续性，定位角度不需要累计圈数。
+    for offset in (-.02,0.,.02):
+        r=tick(e,TrackingState(0.,0.,start+sign*(math.pi/2+offset),0.,sign*.1))
+        assert r.phase not in ('BRAKING','WAITING','FAILED')
+        assert r.command.linear_x_mps==0.
+        assert sign*r.command.angular_z_radps>0.
+    assert e._stage_index==1
+    assert e.path is e._stages[1].path
+
+
+@pytest.mark.parametrize('sign',[1.,-1.])
+def test_multiturn_spin_passes_all_internal_boundaries_and_stops_at_end(sign):
+    e=follower(motion_model='differential_drive')
+    yaws=[sign*i*math.pi/2 for i in range(10)]
+    e.set_standard_path(tuple((0.,0.,y) for y in yaws))
+    tick(e,TrackingState(0.,0.,0.))
+    for i,yaw in enumerate(yaws[1:-1],1):
+        # 验证实际旋转跨段连续性，定位角度不需要累计圈数。
+        wrapped=math.atan2(math.sin(yaw),math.cos(yaw))
+        r=tick(e,TrackingState(0.,0.,wrapped,0.,sign*.1))
+        assert r.phase not in ('BRAKING','WAITING','FAILED')
+        assert sign*r.command.angular_z_radps>0.
+        assert e._stage_index==i
+    r=tick(e,TrackingState(0.,0.,yaws[-1],0.,sign*.1))
+    assert r.phase=='BRAKING'
+    assert tick(e,TrackingState(0.,0.,yaws[-1])).phase=='WAITING'
+
+
+def test_spin_reversal_keeps_actual_stop_boundary():
+    e=follower(motion_model='differential_drive')
+    e.set_standard_path(((0.,0.,0.),(0.,0.,math.pi/2),(0.,0.,0.)))
+    tick(e,TrackingState(0.,0.,0.))
+    r=tick(e,TrackingState(0.,0.,math.pi/2,0.,.1))
+    assert r.phase=='BRAKING' and e._stage_index==0
+    tick(e,TrackingState(0.,0.,math.pi/2))
+    assert e._stage_index==1
+    assert tick(e,TrackingState(0.,0.,math.pi/2)).command.angular_z_radps<0.
+
+
+@pytest.mark.parametrize('end',[5*math.pi/6,-5*math.pi/6,4*math.pi])
+def test_simulated_spin_has_no_internal_stop(end):
+    e=follower(motion_model='differential_drive')
+    points=tuple((0.,0.,float(y)) for y in np.linspace(0.,end,100))
+    e.set_standard_path(points)
+    s=TrackingState(0.,0.,0.);crossed=False
+    for _ in range(1600):
+        r=tick(e,s)
+        if math.pi/2-.1<abs(s.yaw_rad)<abs(end)-.1:
+            crossed=True
+            assert r.phase not in ('BRAKING','WAITING','FAILED')
+            assert abs(s.angular_radps)>.01
+            assert r.command.angular_z_radps*end>0.
+        w=s.angular_radps+float(np.clip(r.command.angular_z_radps-s.angular_radps,-.025,.025))
+        s=TrackingState(0.,0.,s.yaw_rad+w*.05,0.,w)
+        if r.phase=='WAITING':break
+    assert crossed and r.phase=='WAITING'
+    assert abs(s.yaw_rad-end)<.05 and abs(s.angular_radps)<=.01
+
+
+def test_spin_to_translation_keeps_alignment_and_stop_boundary():
+    e=follower(motion_model='differential_drive')
+    e.set_standard_path(((0.,0.,0.),(0.,0.,math.pi/2),(0.,1.,math.pi/2)))
+    tick(e,TrackingState(0.,0.,0.))
+    r=tick(e,TrackingState(0.,0.,math.pi/2,0.,.1))
+    assert r.phase=='BRAKING' and r.command.linear_x_mps==0.
+    assert e._stage_index==0
