@@ -34,14 +34,19 @@ class StandardPathReference:
                 flush();run=[b];heading=None;direction=None
                 delta=angle(b[2]-a[2])
                 if abs(delta)>1e-9:
-                    # 合并同向密集角采样，以小于 pi 的屏障保留圈数和反转。
-                    if (stages and stages[-1].direction==0 and
-                            stages[-1].spin_delta*delta>0 and
-                            abs(stages[-1].spin_delta+delta)<=math.pi/2 and
-                            math.dist(stages[-1].path.points[-1],b[:2])<=1e-8):
-                        prior=stages.pop()
-                        stages.append(OrderedStage(Polyline((b,)),0,prior.spin_delta+delta))
-                    else:stages.append(OrderedStage(Polyline((b,)),0,delta))
+                    # 稀疏大角与密集采样遵守同一段长上限，避免半圈端点的wrap歧义。
+                    count=max(1,math.ceil(abs(delta)/(math.pi/2)))
+                    increment=delta/count
+                    for index in range(count):
+                        endpoint=(b if index+1==count else
+                                  (*b[:2],a[2]+increment*(index+1)))
+                        if (stages and stages[-1].direction==0 and
+                                stages[-1].spin_delta*increment>0 and
+                                abs(stages[-1].spin_delta+increment)<=math.pi/2 and
+                                math.dist(stages[-1].path.points[-1],b[:2])<=1e-8):
+                            prior=stages.pop()
+                            stages.append(OrderedStage(Polyline((endpoint,)),0,prior.spin_delta+increment))
+                        else:stages.append(OrderedStage(Polyline((endpoint,)),0,increment))
                 continue
             new_heading=math.atan2(b[1]-a[1],b[0]-a[0])
             new_direction=-1 if math.cos(new_heading-a[2])<0 else 1

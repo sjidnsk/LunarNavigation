@@ -484,3 +484,15 @@ def test_spin_to_translation_keeps_alignment_and_stop_boundary():
     r=tick(e,TrackingState(0.,0.,math.pi/2,0.,.1))
     assert r.phase=='BRAKING' and r.command.linear_x_mps==0.
     assert e._stage_index==0
+
+
+@pytest.mark.parametrize('sign',[1.,-1.])
+@pytest.mark.parametrize('start',[0.,2.8,-2.8])
+def test_sparse_half_turn_with_small_initial_error_preserves_order(sign,start):
+    e=follower(motion_model='differential_drive')
+    points=tuple((0.,0.,start+sign*y) for y in (0.,math.pi,1.5*math.pi))
+    e.set_standard_path(points)
+    r=tick(e,TrackingState(0.,0.,start-sign*.01))
+    assert e._stage_index==0
+    assert all(abs(stage.spin_delta)<=math.pi/2+1e-12 for stage in e._stages)
+    assert r.command.linear_x_mps==0. and sign*r.command.angular_z_radps>0.
