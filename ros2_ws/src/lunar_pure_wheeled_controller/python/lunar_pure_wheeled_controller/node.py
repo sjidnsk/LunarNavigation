@@ -781,8 +781,13 @@ class PureWheeledControllerNode(Node):
             reason=reason,retryable=retryable,measured_stopped=None,certified_stop=False))))
         self._publish_twist()
         # 仅证明在发布前作废可重算；输入失效/不安全仍是终端故障。
+        # 输入拒绝归属当前收到的参考；真正执行故障仍归属实际执行身份。
+        # 否则等待新参考时持续重发旧未接管参考故障，只会被导航正确拒收。
+        rejected=(getattr(self,'_execution_offered',None)
+                  if failure is None and not retryable else None)
+        identity={} if rejected is None else dict(reference=rejected,accepted=False)
         self._publish_execution_status(state_code=1 if retryable else 6,
-            reason=('PUBLICATION_DEFERRED:' if retryable else 'EXECUTION_INPUT_UNAVAILABLE:')+str(reason))
+            reason=('PUBLICATION_DEFERRED:' if retryable else 'EXECUTION_INPUT_UNAVAILABLE:')+str(reason),**identity)
 
     def _standard_grid(self,state):
         if self._p3_source is not None:

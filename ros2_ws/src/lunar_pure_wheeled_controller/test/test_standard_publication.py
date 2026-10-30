@@ -202,3 +202,20 @@ def test_only_new_source_stamp_renews_controller_continuity(monkeypatch):
     assert n._odometry_advanced_at==15. and n._executor.failure is None
     feed(91,16.,106)
     assert n._executor.failure=='INVALID_FEEDBACK_TIMESTAMP' and n._odometry is None
+
+
+@pytest.mark.parametrize('hard_failure',[False,True])
+def test_input_fault_uses_current_offered_identity_but_execution_failure_keeps_active(hard_failure):
+    statuses=[];active=object();offered=object()
+    n=S(_execution_offered=offered,
+        _executor=S(failure='UNSAFE' if hard_failure else None,last_execution_state=0,
+                    execution_reference=active,discard_prediction=lambda:None),
+        _mppi_diagnostics=S(publish=lambda msg:None),_publish_twist=lambda:None,
+        _publish_execution_status=lambda **kw:statuses.append(kw))
+    PureWheeledControllerNode._standard_unavailable(n,'missing_or_stale_map')
+    status=statuses[-1]
+    assert status['state_code']==6
+    if hard_failure:
+        assert status.get('reference',active) is active and status['reason'].endswith('UNSAFE')
+    else:
+        assert status['reference'] is offered and status['accepted'] is False

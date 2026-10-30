@@ -105,14 +105,11 @@ class StandardPathFollower(MppiPathFollower):
             self._local_progress=self.path.project(state.x_m,state.y_m,reach=.75).s if compatible else 0.
         if not compatible:
             self.discard_prediction()
-            if self._stopped(state):
-                # 已实测停稳的参考切换不经过 _stop(switching=True)。
-                # 在此同样绑定新有序阶段；仅更新锚点，不刷新停滞时钟。
-                self._orient_progress_anchor(state)
 
-    def _orient_progress_anchor(self, state):
-        # 换向或越过有序屏障后更新方向，保留已经累积的物理停滞时间。
-        self._bind_progress_anchor(state,progress_m=self._local_progress,retain_translation=True)
+    def _observe_progress(self,state,distance,yaw_error,dt):
+        # 任务级无进展由导航统一处理；标准执行器不另起累计/判死机制。
+        # 有序几何游标、运动约束、完整制动认证及真实执行故障保持独立。
+        return False
 
     def _stop(self, state, dt, now_s, state_age_s, *, switching=False):
         self._model_time=self._model_time+dt if now_s is None else float(now_s)
@@ -126,7 +123,6 @@ class StandardPathFollower(MppiPathFollower):
         if self._stopped(state):
             if switching:
                 self._switch_brake=False
-                self._orient_progress_anchor(state)
             else:self.phase='WAITING'
             return self._result()
         first=self._first_commands(state,np.zeros((1,2)),min(dt,self.config.model_dt))
@@ -205,7 +201,6 @@ class StandardPathFollower(MppiPathFollower):
             if self._stage_index+1<len(self._stages):
                 self._stage_index+=1;self.path=self._stages[self._stage_index].path
                 self._local_progress=0.;self.phase='TRACKING';self.discard_prediction()
-                self._orient_progress_anchor(state)
             else:self.phase='WAITING'
             return self._result()
         if result.phase=='BRAKING' and self.failure is None:
@@ -367,12 +362,8 @@ class StandardPathFollower(MppiPathFollower):
                     x,y=geometry.points[-1][:2]
                     geometry=StandardPathReference(tuple((x,y,p[2]) for p in geometry.points),self.policy)
                 if requested.intent in (0,3) and not continuous_align:
-                    retired_geometry=self.path is None
                     self._pending=geometry
                     self._accept_pending(state)
-                    # 显式退休后的新阶段使用自己的物理比较锚；保留累计停滞
-                    # 时间，后续只有真实位移/角误差下降才能清钟。
-                    if retired_geometry:self._orient_progress_anchor(state)
                     if requested.intent==3:self.phase='FINAL_ALIGN'
                 if continuous_align:
                     # 固定当前stage与已执行前缀，仅重建未来同向表示片段。

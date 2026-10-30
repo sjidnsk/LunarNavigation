@@ -55,13 +55,12 @@ def test_identical_geometry_new_identity_does_not_reset_or_brake():
     assert e.phase!='BRAKING'
 
 
-def test_stall_survives_reference_revisions():
+def test_rolling_reference_does_not_add_a_tracker_task_timeout():
     e=follower(no_progress_timeout_s=.3)
     for i in range(12):
         e.set_standard_path(((0.,0.,0.),(1.+i*.001,0.,0.)),i)
         r=tick(e,TrackingState(0.,0.,0.))
-    assert e.failure=='TRACKING_STALLED'
-    assert r.command.linear_x_mps==0.
+    assert e.failure is None and e.no_progress_s==0.
 
 
 @pytest.mark.parametrize('target',[math.pi/2,-math.pi+.03])
@@ -334,12 +333,11 @@ def test_transient_stopping_failure_recovers_only_after_real_conditions_change(c
     assert abs(state.yaw_rad-.6)<.05 and abs(state.angular_radps)<=.01
 
 
-@pytest.mark.parametrize('fault',['INVALID_STATE','TRACKING_STALLED'])
+@pytest.mark.parametrize('fault',['INVALID_STATE','UNSAFE'])
 def test_fresh_standard_path_does_not_clear_hard_fault(fault):
     e=follower(no_progress_timeout_s=.1);path=((0.,0.,0.),(1.,0.,0.));e.set_standard_path(path)
     if fault=='INVALID_STATE':e.update(TrackingState(float('nan'),0.,0.),.05)
-    else:
-        for _ in range(5):tick(e,TrackingState(0.,0.,0.))
+    else:e.failure=fault
     assert e.failure==fault
     elapsed=e.no_progress_s
     e.set_standard_path(path,identity=99)
@@ -389,17 +387,17 @@ def test_stopped_spin_replaced_by_rolling_translation_counts_physical_progress(c
 
 
 @pytest.mark.parametrize('motion',['stationary','lateral','wrongway','oscillation'])
-def test_revised_reference_cannot_manufacture_physical_progress(motion):
+def test_motion_observation_is_not_a_second_task_timeout(motion):
     e=follower(no_progress_timeout_s=.4)
     for i in range(40):
         x=(-i*.01 if motion=='wrongway' else .02*(i%2) if motion=='oscillation' else 0.)
         y=i*.01 if motion=='lateral' else 0.
         e.set_standard_path(((0.,0.,0.),(2.+i*.001,0.,0.)),i)
         tick(e,TrackingState(x,y,0.))
-    assert e.failure=='TRACKING_STALLED'
+    assert e.failure is None and e.no_progress_s==0.
 
 
-def test_stopped_incompatible_rebindings_preserve_stall_clock_and_history():
+def test_stopped_incompatible_rebindings_preserve_command_history_without_task_clock():
     e=follower(no_progress_timeout_s=.3)
     for i in range(12):
         end=1. if i%2 else -1.
@@ -411,4 +409,4 @@ def test_stopped_incompatible_rebindings_preserve_stall_clock_and_history():
         assert len(history)==len(e._command_history)
         assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
         e.note_command(r.command.linear_x_mps,r.command.angular_z_radps)
-    assert e.failure=='TRACKING_STALLED'
+    assert e.failure is None and e.no_progress_s==0.

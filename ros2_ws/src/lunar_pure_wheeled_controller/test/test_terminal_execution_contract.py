@@ -343,37 +343,36 @@ def test_micro_reverse_samples_cannot_disappear_below_stage_zero_threshold():
 
 
 
-def test_retired_terminal_stage_rebinds_angle_without_erasing_stall_balance():
+def test_retired_terminal_stage_does_not_start_a_task_progress_clock():
     e=follower(); e.offer_execution_reference(((0.,0.,0.),(1.,0.,0.)),ref())
     e.update(TrackingState(0.,0.,0.),.05)
-    e._last_pose=(e._last_pose[0],e._last_pose[1],0.)
     e.no_progress_s=14.8; history=list(e._command_history)
     e.offer_execution_reference(spin_path([0.,1.]),ref(2,3))
     e.update(TrackingState(0.,0.,0.),.05)
-    assert e._last_pose[2]==1. and 14.8<e.no_progress_s<15.
+    assert e._last_pose is None and e.no_progress_s==14.8
     assert len(e._command_history)==len(history)
     e.update(TrackingState(0.,0.,.02,0.,.1),.05)
-    assert e.no_progress_s==0. and e.failure is None
-    assert abs(e._last_pose[2]-.98)<1e-9
+    assert e.no_progress_s==14.8 and e.failure is None
+    assert e._stages[e._stage_index].direction==0
 
 
-def test_static_terminal_rolling_uses_remaining_stall_budget_and_latches_failure():
+def test_static_terminal_rolling_has_no_tracker_task_timeout():
     e=follower(no_progress_timeout_s=.3)
     e.offer_execution_reference(((0.,0.,0.),(1.,0.,0.)),ref())
     e.update(TrackingState(0.,0.,0.),.05); e.no_progress_s=.15
     e.offer_execution_reference(spin_path([0.,1.]),ref(2,3))
     e.update(TrackingState(0.,0.,0.),.05)
     anchor=e._last_pose
-    assert e.no_progress_s>=.2
+    assert e.no_progress_s==.15
     for revision in range(3,103):
         e.offer_execution_reference(spin_path([0.,1.]),ref(revision,3))
         e.update(TrackingState(0.,0.,0.),.05)
         assert e._last_pose is anchor
-    assert e.failure=='TRACKING_STALLED' and e.last_execution_state==6
-    assert e.no_progress_s>.3
+    assert e.failure is None and e.last_execution_state!=6
+    assert e.no_progress_s==.15
 
 
-def test_brake_to_follow_rebinds_direction_but_preserves_stall_clock():
+def test_brake_to_follow_rebinds_geometry_without_a_task_progress_clock():
     import numpy as np
     e=follower(); e.offer_execution_reference(((0.,0.,0.),(1.,0.,0.)),ref())
     e.update(TrackingState(0.,0.,0.),.05)
@@ -382,7 +381,7 @@ def test_brake_to_follow_rebinds_direction_but_preserves_stall_clock():
     assert e.path is None
     e.offer_execution_reference(((0.,0.,0.),(0.,1.,1.57)),ref(3))
     e.update(TrackingState(0.,0.,0.),.05)
-    assert np.allclose(e._last_pose[1],(0.,1.))
+    assert e._last_pose is None and e.path.points[-1]==(0.,1.)
     assert e.no_progress_s>=.7
 
 
@@ -397,7 +396,7 @@ def test_failed_task_cannot_revive_when_explicit_terminal_rebinds():
 
 
 def test_progress_is_physical_for_plain_and_contract_translation_and_spin():
-    """传输/参考刷新不生成进展；真实位移或朝向误差下降才清钟。"""
+    """平移/旋转仍执行路径，但不维护导航任务级停滞计时。"""
     for contract in (False,True):
         for spin in (False,True):
             e=follower()
@@ -411,13 +410,13 @@ def test_progress_is_physical_for_plain_and_contract_translation_and_spin():
             if contract:e.offer_execution_reference(path,ref(2,3 if spin else 0))
             else:e.set_standard_path(path,2)
             e.update(TrackingState(0.,0.,0.),.05)
-            assert abs(e.no_progress_s-.45)<1e-9
+            assert e.no_progress_s==.4
             assert e._last_pose is anchor
             assert len(e._command_history)==len(history)
             actual=(TrackingState(0.,0.,.02,0.,.1) if spin
                     else TrackingState(.04,0.,0.,.1))
             e.update(actual,.05)
-            assert e.no_progress_s==0. and e.failure is None
+            assert e.no_progress_s==.4 and e.failure is None
 
 
 def test_stage_rebinding_is_not_physical_progress_or_command_publication():
@@ -432,8 +431,8 @@ def test_stage_rebinding_is_not_physical_progress_or_command_publication():
     e.update(TrackingState(0.,0.,0.),.05)
     e.offer_execution_reference(((0.,0.,1.57),(0.,1.,1.57)),ref(3))
     e.update(TrackingState(0.,0.,0.),.05)
-    assert abs(e.no_progress_s-.75)<1e-9
-    assert np.allclose(e._last_pose[1],(0.,1.))
+    assert e.no_progress_s==.7
+    assert e._last_pose is None and e.path.points[-1]==(0.,1.)
     assert len(e._command_history)==len(history)
     assert all(t==old_t and np.array_equal(u,old_u)
                for (t,u),(old_t,old_u) in zip(e._command_history,history))
@@ -451,9 +450,9 @@ def test_brake_to_follow_while_still_moving_rebinds_without_requiring_stop():
     e.offer_execution_reference(((0.,0.,1.57),(0.,1.,1.57)),ref(3))
     e.update(TrackingState(0.,0.,.01,0.,.05),.05)
     assert e.reference_accepted and e.execution_reference.intent==0
-    assert np.allclose(e._last_pose[1],(0.,1.))
-    assert abs(e._last_pose[2]-1.56)<1e-9
-    assert abs(e.no_progress_s-.75)<1e-9 and e.failure is None
+    assert e._last_pose is None and e.path.points[-1]==(0.,1.)
+    assert e._last_pose is None and e.no_progress_s==.7
+    assert e.no_progress_s==.7 and e.failure is None
 
 def test_plain_initial_path_waits_for_map_before_binding_physical_progress():
     """无地图等待不提前建立行进锚，也不把等待期间外力位移算成进展。"""
@@ -463,8 +462,8 @@ def test_plain_initial_path_waits_for_map_before_binding_physical_progress():
     assert e._last_pose is None and e.no_progress_s==.7
     e.set_map(grid)
     e.update(TrackingState(.04,0.,0.),.05)
-    assert abs(e.no_progress_s-.75)<1e-9
-    assert abs(e._last_pose[0][0]-.04)<1e-9
+    assert e.no_progress_s==.7
+    assert e._last_pose is None and e.progress_m>=.04
 
 def test_pose_wait_retires_old_motion_and_recovery_requires_stop_and_new_proof():
     e=follower();old=ref();path=((0.,0.,0.),(1.,0.,0.))

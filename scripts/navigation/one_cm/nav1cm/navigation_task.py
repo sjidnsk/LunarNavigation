@@ -180,7 +180,7 @@ class NavigationTaskCoordinator:
                         return self.waiting(task_id, 'WAITING_FOR_POSE')
                     yaw = self.session.state.yaw
                 goal = PoseGoal(x, y, yaw)
-            accepted = self.session.offer_goal(goal, force_new=task_id is not None)
+            accepted = self.session.offer_goal(goal, force_new=task_id is not None or self._feedback_required)
         except (ValueError, TypeError) as exc:
             return self.reject(task_id, 'INVALID_GOAL: ' + str(exc))
         if not accepted:
@@ -189,8 +189,12 @@ class NavigationTaskCoordinator:
             self._emit(replace(self.active, phase='FINISHED', outcome='CANCELED', reason_code='GOAL_REPLACED'))
         self._arrived_since = None
         self._reset_execution_feedback(now_s)
-        self.active = (None if task_id is None else
-                       TaskSnapshot(task_id, self.session.accepted_generation, 'PLANNING', reason_code='GOAL_ACCEPTED'))
+        # 执行合同启用时，人工入口同样复用现有任务状态和原有执行身份。
+        # 否则无active会绕过故障接收/停稳终态，造成跟踪已失败而导航仍规划。
+        owned_id=(execution_session_id(None,self.session.accepted_generation)
+                  if task_id is None and self._feedback_required else task_id)
+        self.active = (None if owned_id is None else
+                       TaskSnapshot(owned_id, self.session.accepted_generation, 'PLANNING', reason_code='GOAL_ACCEPTED'))
         return None if self.active is None else self._emit(self.active)
 
     def cancel(self, task_id, now_s):

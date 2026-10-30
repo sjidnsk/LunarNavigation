@@ -9,12 +9,18 @@ from nav1cm.contracts import VehicleState
 from nav1cm.execution_contract import ExecutionReference,ExecutionStatus,BRAKE,FOLLOW
 
 
-def test_tracking_failure_retires_planning_then_independently_stops_and_finishes():
+@pytest.mark.parametrize('manual',[False,True])
+def test_tracking_failure_retires_planning_then_independently_stops_and_finishes(manual):
     runtime,session,published,_=build_runtime();events=[];runtime.event_sink=events.append
     runtime.enable_execution_contract(timeout_s=2.)
     t=time.monotonic();task='a'*32
-    runtime.offer_managed_goal(task,S(target_x_m=0.,target_y_m=3.,target_yaw_rad=0.,has_target_yaw=True))
+    if manual:
+        from test_runtime import pose
+        runtime.offer_goal(pose(0.,3.))
+    else:runtime.offer_managed_goal(task,S(target_x_m=0.,target_y_m=3.,target_yaw_rad=0.,has_target_yaw=True))
     runtime._tick_once(t)
+    assert runtime.tasks.active is not None
+    task=runtime.tasks.active.task_id
     ref=ExecutionReference(task,1,'d'*64,FOLLOW,1)
     runtime.register_execution_reference(ref)
     session.offer_state(VehicleState(0.,0.,0.,.02,0.))

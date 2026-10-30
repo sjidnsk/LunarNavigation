@@ -219,7 +219,10 @@ class PlannerRuntime:
     def _deliver_task_events(self):
         # 事件已提交；外部回调引入的新输入严格排在该提交之后。
         while self._task_events:
-            self.event_sink(self._task_events.popleft())
+            snapshot=self._task_events.popleft()
+            if snapshot.phase=='ERROR_STOPPING' or snapshot.outcome is not None:
+                self._notice('TASK_STATE',json.dumps(vars(snapshot),sort_keys=True))
+            self.event_sink(snapshot)
 
     def _tick_once(self, now_s):
         with self._condition:
