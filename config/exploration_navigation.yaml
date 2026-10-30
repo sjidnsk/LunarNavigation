@@ -38,16 +38,13 @@ exploration:
   diagnostics_topic: /Car/T4/exploration/diagnostics
 
 navigation:
-  clearance_weight: 2.0
-  terrain_background_half_width_m: 0.4
-  confidence_weight: 2.0
   publish_local_fine_map: true
   local_fine_map_topic: /Car/T4/mapping/local_fine_map
   local_fine_map_window_m: 28.0
   planning_sla_ms: 2000
   planning_hard_timeout_ms: 3000
   global_subdeadline_ms: 500
-  local_window_size_m: 32.0
+  local_window_size_m: 64.0
   path_reference_topic: /Car/T4/planning/path_reference
   local_path_topic: /Car/T4/planning/local_path
   global_route_topic: /Car/T4/planning/global_route

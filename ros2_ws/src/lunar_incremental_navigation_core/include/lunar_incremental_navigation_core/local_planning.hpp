@@ -203,8 +203,7 @@ class RequestLocalPlanningView final {
 
   [[nodiscard]] bool CanBeEndpoint(const GridIndex index) const noexcept {
     return geometry_.Contains(index) &&
-           base_->State(index) == FineCellState::kFree &&
-           base_->PlanningElevationRangeAt(index).has_value();
+           base_->State(index) == FineCellState::kFree;
   }
 
   // Certify the entire closed segment, including corner contacts. A prefix
@@ -226,9 +225,7 @@ class RequestLocalPlanningView final {
   [[nodiscard]] bool CanCertifyLeggedSupport(
       const GridIndex index, const bool is_initial_support) const noexcept {
     const LocalCellSource source = Source(index);
-    // Supported inferred ground is usable elevation; confidence contributes to cost.
-    return (source == LocalCellSource::kEvidenceFree &&
-            base_->PlanningElevationRangeAt(index).has_value()) ||
+    return source == LocalCellSource::kEvidenceFree ||
            (is_initial_support &&
             source == LocalCellSource::kStartAssumedFree);
   }

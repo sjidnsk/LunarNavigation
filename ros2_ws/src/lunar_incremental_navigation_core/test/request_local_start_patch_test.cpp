@@ -1,7 +1,3 @@
-#include "lunar_incremental_navigation_core/request_local_start_patch.hpp"
-
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -14,9 +10,10 @@
 #include <stdexcept>
 #include <vector>
 
+#include <gtest/gtest.h>
+
 #include "lunar_incremental_navigation_core/elevation_map.hpp"
 #include "lunar_incremental_navigation_core/fine_traversability_builder.hpp"
-#include "lunar_incremental_navigation_core/local_planning_window.hpp"
 #include "lunar_incremental_navigation_core/request_local_start_patch.hpp"
 #include "lunar_incremental_navigation_core/wheel_local_planner.hpp"
 #include "lunar_incremental_navigation_core/local_target_selector.hpp"
@@ -167,31 +164,6 @@ struct SnapshotFixture final {
 }
 
 TEST(RequestLocalStartPatch,
-     UnknownInputBorderContainsStartAndAllowsExistingPatch) {
-  GridGeometry geometry = Geometry(50U, 50U, .2);
-  geometry.origin_m = {.x = -5., .y = -5.};
-  std::vector<float> heights(geometry.CellCount(),
-                             std::numeric_limits<float>::quiet_NaN());
-  for (int y = 0; y < 50; ++y)
-    for (int x = 30; x < 50; ++x) heights[Offset(geometry, {x, y})] = 0.F;
-  const auto profile = Profile(2.0);
-  const auto fixture =
-      MakeFixture(geometry, heights, WheelCapability(), profile);
-  const auto pose = PoseAt(geometry, {25, 25});
-  const auto window =
-      BuildLocalPlanningWindow(*fixture.fine, pose.position_m, 10.);
-  ASSERT_EQ(window.status, LocalPlanningWindowStatus::kReady);
-  ASSERT_TRUE(window.geometry);
-  EXPECT_EQ(fixture.fine->State({25, 25}), FineCellState::kUnknown);
-  const auto result = RequestLocalStartPatchBuilder().Build(
-      fixture.fine, *window.geometry, pose, WheelCapability(), profile);
-  EXPECT_EQ(result.status, StartPatchResult::Status::kReady);
-  EXPECT_GT(result.assumed_cells, 0U);
-  EXPECT_FALSE(fixture.raw->ElevationAt({25, 25}));
-  EXPECT_EQ(fixture.fine->State({25, 25}), FineCellState::kUnknown);
-}
-
-TEST(RequestLocalStartPatch,
      UsesExactRadiusAndCellAreaIntersectionForMissingRawCells) {
   const GridGeometry geometry = Geometry();
   const GridIndex start{.x = 12, .y = 12};
@@ -317,7 +289,7 @@ TEST(RequestLocalStartPatch,
   EXPECT_GT(result.assumed_cells, 0U);
 }
 
-TEST(RequestLocalStartPatch, KeepsIsolatedFiniteAnomalyUnresolved) {
+TEST(RequestLocalStartPatch, KeepsFiniteObstacleAndItsInflationAuthoritative) {
   const GridGeometry geometry = Geometry();
   const GridIndex start{.x = 12, .y = 12};
   std::vector<float> elevation = FlatWithMissingSquare(geometry, start, 1);
@@ -329,24 +301,9 @@ TEST(RequestLocalStartPatch, KeepsIsolatedFiniteAnomalyUnresolved) {
   const StartPatchResult result = RequestLocalStartPatchBuilder().Build(
       fixture.fine, PoseAt(geometry, start), WheelCapability(), profile);
 
-  EXPECT_EQ(result.status, StartPatchResult::Status::kUnresolved);
-  EXPECT_FALSE(result.view);
-  EXPECT_EQ(fixture.fine->State(start), FineCellState::kUnknown);
-}
-
-TEST(RequestLocalStartPatch, KeepsSupportedObstacleAuthoritative) {
-  const GridGeometry geometry = Geometry();
-  const GridIndex start{.x = 12, .y = 12};
-  std::vector<float> elevation = FlatWithMissingSquare(geometry, start, 1);
-  for (int y = 11; y <= 12; ++y)
-    for (int x = 10; x <= 11; ++x) elevation[Offset(geometry, {x, y})] = 1.0F;
-  const TraversabilityProfile profile = Profile(2.0);
-  const auto fixture =
-      MakeFixture(geometry, elevation, WheelCapability(), profile);
-  const auto result = RequestLocalStartPatchBuilder().Build(
-      fixture.fine, PoseAt(geometry, start), WheelCapability(), profile);
   EXPECT_EQ(result.status, StartPatchResult::Status::kStartBlocked);
   EXPECT_FALSE(result.view);
+  EXPECT_EQ(fixture.fine->State(start), FineCellState::kUnknown);
 }
 
 TEST(RequestLocalStartPatch,
@@ -385,7 +342,7 @@ TEST(RequestLocalStartPatch,
   const StartPatchResult result = RequestLocalStartPatchBuilder().Build(
       fine, PoseAt(geometry, start), WheelCapability(), profile);
 
-  EXPECT_EQ(result.status, StartPatchResult::Status::kUnresolved);
+  EXPECT_EQ(result.status, StartPatchResult::Status::kStartBlocked);
   EXPECT_FALSE(result.view);
   EXPECT_EQ(raw->ElevationRangeAt({.x = 4, .y = 5}), obstacle_range);
 }
@@ -563,11 +520,10 @@ TEST(RequestLocalStartPatch, ReportsNotNeededAndRejectsInvalidMargin) {
 }
 
 TEST(RequestLocalStartPatch, StationarySupportDoesNotRequireTranslationExit) {
-  // 输入边界完整保留；边界起点仍需建立越出原图的有限原地支撑域。
-  const auto geometry = Geometry(3U, 3U, 0.2);
-  const GridIndex start{0, 0};
+  const auto geometry = Geometry(25U, 25U, 0.2);
+  const GridIndex start{12, 12};
   std::vector<float> heights(geometry.CellCount(), std::numeric_limits<float>::quiet_NaN());
-  for (const GridIndex cell : {start, GridIndex{1, 0}, GridIndex{1, 1}})
+  for (const GridIndex cell : {start, GridIndex{13, 12}, GridIndex{13, 13}})
     heights[Offset(geometry, cell)] = 0.0F;
   const auto profile = Profile(0.4);
   const auto fixture = MakeFixture(geometry, heights, WheelCapability(), profile);
@@ -606,8 +562,6 @@ TEST(RequestLocalStartPatch, StationaryPreservesKnownBlockersAndRequiresMeasured
   const GridIndex start{12,12};
   auto h=FlatWithMissingSquare(g,start,1);
   h[Offset(g,{13,12})]=1.0F;
-  // 相邻高点构成支持障碍，避免把未获支持的孤立异常当作已知阻塞。
-  h[Offset(g,{13,13})]=1.0F;
   const auto fixture=MakeFixture(g,h,WheelCapability(),Profile(.4));
   EXPECT_EQ(RequestLocalStartPatchBuilder{}.BuildStationary(fixture.fine,PoseAt(g,start),
       WheelCapability(),Profile(.4)).status,StartPatchResult::Status::kStartBlocked);
@@ -665,72 +619,6 @@ TEST(RequestLocalStartPatch, CanonicalWheelNearWallWedgeCertifiesStationarySuppo
   ASSERT_TRUE(patch.view->CanCertifyStationary(pose.position_m));
   EXPECT_FALSE(patch.view->CanBeEndpoint({20,20}));
 }
-
-// 只提供原始height；中心缺测使请求实际进入支撑平面路径。
-struct HeightOnlyProfileFixture final {
-  GridGeometry geometry;
-  std::vector<float> heights;
-  WheeledCapability capability;
-  TraversabilityProfile profile;
-};
-
-HeightOnlyProfileFixture ProfileSupportFixture(bool cubic) {
-  auto geometry = Geometry(25U, 25U, .2);
-  std::vector<float> heights(geometry.CellCount());
-  for (int y = 0; y < 25; ++y)
-    for (int x = 0; x < 25; ++x) {
-      const double dx = (x - 12) * .2, dy = (y - 12) * .2;
-      heights[y * 25 + x] = cubic ? .5 * dx * dx * dx + .03 * dy
-                                 : .1 * dx + .25 * dx * dx + .07 * dy * dy;
-      if (std::abs(x - 12) <= 1 && std::abs(y - 12) <= 1)
-        heights[y * 25 + x] = std::numeric_limits<float>::quiet_NaN();
-    }
-  auto capability = WheelCapability();
-  capability.footprint_xy_m = {{-.01, -.01}, {.01, -.01}, {.01, .01}, {-.01, .01}};
-  capability.minimum_clearance_m = 0.;
-  capability.maximum_slope_rad = .3;
-  capability.maximum_local_obstacle_relief_m = cubic ? .2 : 10.;
-  capability.minimum_underbody_clearance_m = 10.;
-  auto profile = Profile(.4, {.slope = 1., .relief = 1.});
-  profile.planar_envelope_xy_m = capability.footprint_xy_m;
-  profile.maximum_slope_rad = capability.maximum_slope_rad;
-  profile.terrain_background_half_width_m = cubic ? 1.6 : .8;
-  return {geometry, std::move(heights), capability, profile};
-}
-
-std::size_t DifferentSupportSelections(const ElevationSnapshot& raw,
-    const HeightOnlyProfileFixture& fixture,
-    double other_background) {
-  auto selected = MakePlatformElevationEvaluator(fixture.capability,
-      fixture.profile.terrain_background_half_width_m);
-  auto other = MakePlatformElevationEvaluator(fixture.capability,
-      other_background);
-  std::size_t count = 0;
-  for (int y = 8; y <= 16; ++y)
-    for (int x = 8; x <= 16; ++x)
-      if (raw.ElevationAt({x, y}) &&
-          ((selected->Evaluate(raw, {x, y}).state == IntrinsicCellState::kBlocked) !=
-           (other->Evaluate(raw, {x, y}).state == IntrinsicCellState::kBlocked))) ++count;
-  return count;
-}
-
-TEST(RequestLocalStartPatch, StationarySupportUsesProfileBackgroundWidth) {
-  const auto fixture = ProfileSupportFixture(true);
-  const auto snapshots = MakeFixture(fixture.geometry, fixture.heights,
-      fixture.capability, fixture.profile);
-  ASSERT_EQ(snapshots.fine->State({12, 12}), FineCellState::kUnknown);
-  ASSERT_FALSE(snapshots.raw->TerrainMeasurementsAt({10, 10}));
-  ASSERT_GT(DifferentSupportSelections(*snapshots.raw, fixture,
-      0.), 0U);
-  const auto stationary = RequestLocalStartPatchBuilder{}.BuildStationary(
-      snapshots.fine, PoseAt(fixture.geometry, {12, 12}), fixture.capability, fixture.profile);
-  // 所选背景排除受支持障碍，剩余样本不能给出可认证的原地平面。
-  EXPECT_EQ(stationary.status, StartPatchResult::Status::kUnresolved);
-  EXPECT_FALSE(stationary.view);
-  EXPECT_EQ(snapshots.fine->State({12, 12}), FineCellState::kUnknown);
-}
-
-
 
 }  // namespace
 }  // namespace lunar::incremental_navigation

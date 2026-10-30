@@ -6,8 +6,6 @@
 #include <vector>
 
 #include "local/grid_supercover.hpp"
-#include "local/terrain_segment_cost.hpp"
-#include "local/boundary_distance_index.hpp"
 
 namespace lunar::incremental_navigation {
 namespace {
@@ -26,8 +24,31 @@ namespace {
 
 // Local cell coordinates keep the distance comparison independent of world
 // offsets and resolution. Physical clearance is certified separately by the view.
-using Point = local::BoundaryPoint;
-using Segment = local::BoundarySegment;
+struct Point {
+  long double x, y;
+};
+struct Segment {
+  Point a, b;
+};
+
+[[nodiscard]] long double PointDistanceSquared(Point p, Segment s) {
+  const long double dx = s.b.x - s.a.x, dy = s.b.y - s.a.y;
+  const long double length = dx * dx + dy * dy;
+  const long double t = length > 0
+      ? std::clamp(((p.x - s.a.x) * dx + (p.y - s.a.y) * dy) / length,
+                   0.0L, 1.0L)
+      : 0;
+  const long double ex = p.x - s.a.x - t * dx;
+  const long double ey = p.y - s.a.y - t * dy;
+  return ex * ex + ey * ey;
+}
+
+// LOS has excluded intersections. For disjoint segments, the minimum distance
+// is attained at an endpoint of at least one segment.
+[[nodiscard]] long double DistanceSquared(Segment a, Segment b) {
+  return std::min({PointDistanceSquared(a.a, b), PointDistanceSquared(a.b, b),
+                   PointDistanceSquared(b.a, a), PointDistanceSquared(b.b, a)});
+}
 
 // Per-call geometry of the current phase's allowed-cell union, including the
 // local-window boundary. This does not modify maps or their source semantics.
@@ -41,8 +62,7 @@ class PhaseGeometry final {
     const auto& geometry = view_.geometry();
     const auto lo = geometry.min_inclusive();
     const std::size_t width = geometry.width(), height = geometry.height();
-    allowed_.assign(geometry.CellCount(), 0);
-    auto& allowed = allowed_;
+    std::vector<unsigned char> allowed(geometry.CellCount());
     for (std::size_t y = 0; y < height; ++y) {
       if (Interrupted(control_)) return false;
       for (std::size_t x = 0; x < width; ++x) {
@@ -92,7 +112,7 @@ class PhaseGeometry final {
         }
       }
     }
-    return boundary_index_.Build(std::move(boundary_), control_);
+    return !Interrupted(control_);
   }
 
   [[nodiscard]] bool Legal(const PathPoint& a, const PathPoint& b) const {
@@ -107,8 +127,21 @@ class PhaseGeometry final {
                                      const PathPoint& b) const {
     if (!Legal(a, b)) return -1;
     const Segment line{Convert(a.pose.position_m), Convert(b.pose.position_m)};
-    const auto nearest = boundary_index_.Query(line, control_);
-    return nearest.value_or(-1);
+    long double minimum = std::numeric_limits<long double>::infinity();
+    for (std::size_t i = 0; i < boundary_.size(); ++i) {
+      if (i % 64 == 0 && Interrupted(control_)) return -1;
+      const auto& edge = boundary_[i];
+      const long double dx = std::max({
+          0.0L, std::min(line.a.x, line.b.x) - std::max(edge.a.x, edge.b.x),
+          std::min(edge.a.x, edge.b.x) - std::max(line.a.x, line.b.x)});
+      const long double dy = std::max({
+          0.0L, std::min(line.a.y, line.b.y) - std::max(edge.a.y, edge.b.y),
+          std::min(edge.a.y, edge.b.y) - std::max(line.a.y, line.b.y)});
+      if (dx * dx + dy * dy < minimum) {
+        minimum = std::min(minimum, DistanceSquared(line, edge));
+      }
+    }
+    return minimum;
   }
 
  private:
@@ -126,8 +159,6 @@ class PhaseGeometry final {
   StartPhase phase_;
   const SearchControl& control_;
   std::vector<Segment> boundary_;
-  std::vector<unsigned char> allowed_;
-  local::BoundaryDistanceIndex boundary_index_;
   double margin_m_{};
 };
 
@@ -168,10 +199,6 @@ class PhaseGeometry final {
     clearance[i] = geometry.Evaluate(path[i], path[i + 1]);
     if (clearance[i] < 0) return false;
   }
-  std::vector<long double> cost_prefix(path.size(), 0.L);
-  for (std::size_t i=1;i<path.size();++i)
-    cost_prefix[i]=cost_prefix[i-1]+local::TerrainSegmentCost(
-        view,path[i-1].pose.position_m,path[i].pose.position_m,control);
   output.push_back(path.front());
   std::size_t anchor = 0;
   while (anchor + 1 < path.size()) {
@@ -189,11 +216,7 @@ class PhaseGeometry final {
       // shortcuts cannot accumulate a sequence of tolerance relaxations.
       const long double tolerance = 64 * std::numeric_limits<double>::epsilon() *
                                     std::max(1.0L, minimum[j]);
-      const long double shortcut_cost=local::TerrainSegmentCost(
-          view,path[anchor].pose.position_m,path[j].pose.position_m,control);
-      const long double original_cost=cost_prefix[j]-cost_prefix[anchor];
-      if (candidate >= 0 && candidate + tolerance >= minimum[j] &&
-          shortcut_cost <= original_cost + 1e-12L*std::max(1.L,original_cost)) {
+      if (candidate >= 0 && candidate + tolerance >= minimum[j]) {
         selected = j;
         break;
       }

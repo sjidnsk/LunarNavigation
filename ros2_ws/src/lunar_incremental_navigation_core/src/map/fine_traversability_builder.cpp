@@ -20,8 +20,6 @@
 #include <vector>
 
 #include "map/grid_bounds.hpp"
-#include "map/terrain_observation_estimator.hpp"
-#include "map/influence_cells.hpp"
 
 namespace lunar::incremental_navigation {
 namespace {
@@ -80,11 +78,9 @@ using Clock = std::chrono::steady_clock;
 void ValidateProfile(const TraversabilityProfile& profile) {
   if (profile.planar_envelope_xy_m.size() < 3U ||
       !FiniteNonnegative(profile.preferred_clearance_m) ||
-      !FiniteNonnegative(profile.terrain_background_half_width_m) ||
       !FiniteNonnegative(profile.slope_weight) ||
       !FiniteNonnegative(profile.relief_weight) ||
-      !FiniteNonnegative(profile.clearance_weight) ||
-      !FiniteNonnegative(profile.confidence_weight)) {
+      !FiniteNonnegative(profile.clearance_weight)) {
     throw std::invalid_argument(
         "traversability profile parameters must be finite and nonnegative");
   }
@@ -137,11 +133,9 @@ class ProfileHasher final {
     hasher.Add(vertex.y);
   }
   hasher.Add(profile.preferred_clearance_m);
-  hasher.Add(profile.terrain_background_half_width_m);
   hasher.Add(profile.slope_weight);
   hasher.Add(profile.relief_weight);
   hasher.Add(profile.clearance_weight);
-  hasher.Add(profile.confidence_weight);
   std::visit(
       [&hasher](const auto& typed_capability) {
         using Capability = std::decay_t<decltype(typed_capability)>;
@@ -256,6 +250,26 @@ void ValidateMergedChanges(
   }
 }
 
+[[nodiscard]] std::set<GridIndex> InfluenceCells(
+    const SparseGridGeometry& geometry,
+    const std::set<GridIndex>& changed_raw_cells,
+    const double influence_m) {
+  std::set<GridIndex> result;
+  for (const GridIndex changed : changed_raw_cells) {
+    const auto [minimum, maximum] =
+        detail::CellBoundsForRadius(geometry, changed, influence_m);
+    for (std::int64_t y = minimum.y; y < maximum.y; ++y) {
+      for (std::int64_t x = minimum.x; x < maximum.x; ++x) {
+        const GridIndex candidate{.x = x, .y = y};
+        if (CircleIntersectsCellArea(CellCenter(geometry, candidate),
+                                     influence_m, geometry, changed)) {
+          result.insert(candidate);
+        }
+      }
+    }
+  }
+  return result;
+}
 
 void IncludeNewGeometryCells(const ElevationSnapshot& raw,
                              const SparseGridGeometry& previous,
@@ -376,7 +390,7 @@ FineTraversabilityBuilder::Derive(
     std::shared_ptr<const FineTraversabilitySnapshot> previous,
     std::optional<FineElevationChangeSet> merged_changes) const {
   return DeriveImpl(std::move(raw),capability,profile,std::move(previous),merged_changes,
-      nullptr,false);
+      MakePlatformElevationEvaluator(capability),false);
 }
 
 std::shared_ptr<const FineTraversabilitySnapshot>
@@ -407,10 +421,7 @@ FineTraversabilityBuilder::DeriveImpl(
         "fine traversability requires a valid elevation snapshot");
   }
   ValidateProfile(profile);
-  // 普通派生保留TCP的物理背景窗口与共享观测缓存；投影派生只采用调用方证据。
-  FineCellEvaluator cell_evaluator = projected
-      ? FineCellEvaluator(*raw, capability, profile, std::move(intrinsic))
-      : FineCellEvaluator(*raw, capability, profile);
+  FineCellEvaluator cell_evaluator(*raw, capability, profile, std::move(intrinsic));
   const double hard_radius_m = cell_evaluator.hard_inflation_radius_m();
   const std::string profile_hash = PlatformProfileHash(capability, profile) + (projected ? ":projected-v1" : "");
   if (merged_changes) {
@@ -435,13 +446,9 @@ FineTraversabilityBuilder::DeriveImpl(
     const std::set<GridIndex> changed_raw(changed.begin(), changed.end());
     const double influence_m =
         hard_radius_m + profile.preferred_clearance_m +
-        (std::holds_alternative<WheeledCapability>(capability)
-             ? TerrainBackgroundRadiusCells(profile.terrain_background_half_width_m,
-                                            raw->geometry().resolution_m()) +
-               map::TerrainObservationEstimator(*raw).dependency_radius_cells() : 1) *
         std::sqrt(2.0) * raw->geometry().resolution_m();
     recompute_cells =
-        detail::InfluenceCells(raw->geometry(), changed_raw, influence_m);
+        InfluenceCells(raw->geometry(), changed_raw, influence_m);
     IncludeNewGeometryCells(*raw, previous->geometry(), hard_radius_m,
                              recompute_cells);
   }
@@ -473,30 +480,20 @@ FineTraversabilityBuilder::DeriveImpl(
 
     FineTraversabilityTile::StateArray states;
     FineTraversabilityTile::CostArray costs;
-    FineTraversabilityTile::ConfidenceArray confidence{};
-    auto ground = FineTraversabilityTile::UnknownGround();
     if (old_tile) {
       states = old_tile->states();
       costs = old_tile->traversal_costs();
-      confidence = old_tile->confidence_values();
-      ground = old_tile->ground_values();
     } else {
       states.fill(FineCellState::kUnknown);
       costs.fill(0.0);
     }
     const auto old_states = states;
     const auto old_costs = costs;
-    const auto old_confidence = confidence;
-    const auto old_ground = ground;
     const auto update_cell = [&](const GridIndex cell) {
       const FineCellEvaluation evaluation = cell_evaluator.Evaluate(cell);
       const std::size_t offset = TileCellOffset(cell);
       states[offset] = evaluation.state;
       costs[offset] = evaluation.traversal_cost;
-      confidence[offset] = static_cast<float>(evaluation.confidence);
-      ground[offset] = evaluation.state == FineCellState::kFree
-          ? cell_evaluator.GroundHeight(cell).value_or(std::numeric_limits<float>::quiet_NaN())
-          : std::numeric_limits<float>::quiet_NaN();
       ++updated_cells;
     };
     if (incremental) {
@@ -532,9 +529,7 @@ FineTraversabilityBuilder::DeriveImpl(
     }
 
     const bool unobserved = TileIsUnobserved(states, costs);
-    const bool ground_changed = !std::equal(ground.begin(),ground.end(),old_ground.begin(),
-        [](float a,float b){return a==b || (std::isnan(a)&&std::isnan(b));});
-    const bool changed = old_tile ? ground_changed || states != old_states || costs != old_costs || confidence != old_confidence
+    const bool changed = old_tile ? states != old_states || costs != old_costs
                                   : !unobserved;
     if (!changed) {
       continue;
@@ -542,7 +537,7 @@ FineTraversabilityBuilder::DeriveImpl(
     changed_tiles.push_back(tile_index);
     directory = directory.WithTile(
         tile_index, std::make_shared<const FineTraversabilityTile>(
-                        std::move(states), std::move(costs), std::move(confidence), std::move(ground)));
+                        std::move(states), std::move(costs)));
   }
 
   std::vector<TileIndex> changed_halo_tiles(halo_tiles.begin(),
@@ -555,13 +550,10 @@ FineTraversabilityBuilder::DeriveImpl(
       .elevation_cells_examined =
           cell_evaluator.evaluated_elevation_cells(),
       .elevation_cache_tiles = cell_evaluator.cached_elevation_tiles(),
-      .ground_cells_estimated = cell_evaluator.evaluated_ground_cells(),
-      .ground_cache_bytes = cell_evaluator.ground_cache_bytes(),
       .allocated_cells = directory.tile_count() * kGridTileCellCount,
       .allocated_bytes = directory.tile_count() *
                          (sizeof(FineCellState) + sizeof(double)) *
-                         kGridTileCellCount + directory.tile_count() *
-                         (sizeof(FineTraversabilityTile::ConfidenceArray) + sizeof(FineTraversabilityTile::GroundArray)),
+                         kGridTileCellCount,
       .derivation_ms = elapsed_ms,
   };
   const std::uint64_t fine_revision =
@@ -571,8 +563,7 @@ FineTraversabilityBuilder::DeriveImpl(
       profile_hash, hard_radius_m, profile.preferred_clearance_m,
       TraversalCostWeights{.slope = profile.slope_weight,
                            .relief = profile.relief_weight,
-                           .clearance = profile.clearance_weight,
-                           .confidence = profile.confidence_weight},
+                           .clearance = profile.clearance_weight},
       std::move(raw), std::move(directory), std::move(changed_tiles),
       std::move(changed_halo_tiles), metrics);
 }

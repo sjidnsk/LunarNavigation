@@ -27,20 +27,12 @@ struct IntrinsicTraversalEvaluation final {
   IntrinsicCellState state{IntrinsicCellState::kUnknown};
   double slope_rad{};
   double relief_m{};
-  // Continuous evidence confidence in [0, 1], not a calibrated probability.
-  // Unknown is 0; inferred evidence remains below fully observed evidence.
-  double confidence{};
 };
 
 struct FineCellEvaluation final {
   FineCellState state{FineCellState::kUnknown};
   double traversal_cost{};
-  double confidence{};
 };
-
-// Square background sampling half-width; minimum two cells retains local guards.
-// Unsupported excessively fine grids are rejected rather than silently truncating.
-[[nodiscard]] int TerrainBackgroundRadiusCells(double half_width_m, double resolution_m);
 
 class PlatformElevationEvaluator {
  public:
@@ -51,8 +43,7 @@ class PlatformElevationEvaluator {
 };
 
 [[nodiscard]] std::unique_ptr<const PlatformElevationEvaluator>
-MakePlatformElevationEvaluator(const PlatformCapability& capability,
-                               double background_half_width_m = 0.0);
+MakePlatformElevationEvaluator(const PlatformCapability& capability);
 
 class FineCellEvaluator final {
  public:
@@ -74,12 +65,9 @@ class FineCellEvaluator final {
   FineCellEvaluator& operator=(FineCellEvaluator&&) noexcept;
 
   [[nodiscard]] FineCellEvaluation Evaluate(GridIndex index);
-  [[nodiscard]] std::optional<float> GroundHeight(GridIndex index);
   [[nodiscard]] double hard_inflation_radius_m() const noexcept;
   [[nodiscard]] std::size_t evaluated_elevation_cells() const noexcept;
   [[nodiscard]] std::size_t cached_elevation_tiles() const noexcept;
-  [[nodiscard]] std::size_t evaluated_ground_cells() const noexcept;
-  [[nodiscard]] std::size_t ground_cache_bytes() const noexcept;
 
  private:
   struct Impl;

@@ -20,8 +20,7 @@ def build_command(output, compiler="g++"):
             "-I", str(core / "include"), "-I", str(core / "src"),
             str(Path(__file__).with_name("nav1cm") / "terrain_bridge.cpp"),
             *[str(core / "src/map" / name) for name in
-              ("persistent_elevation_map.cpp", "platform_elevation_physics.cpp",
-               "terrain_observation_estimator.cpp", "fine_traversability_builder.cpp")],
+              ("persistent_elevation_map.cpp", "platform_elevation_physics.cpp", "fine_traversability_builder.cpp")],
             *([] if os.name == "nt" else ["-Wl,-z,defs"]), "-o", str(Path(output).resolve())]
 
 

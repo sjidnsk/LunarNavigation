@@ -1,7 +1,6 @@
 #include "lunar_incremental_navigation_core/wheel_local_planner.hpp"
 #include "lunar_incremental_navigation_core/local_goal_region.hpp"
 #include "lunar_incremental_navigation_core/arrival_tolerance.hpp"
-#include "local/request_cell_cache.hpp"
 
 #include <algorithm>
 #include <array>
@@ -313,8 +312,7 @@ LocalPlanResult WheelLocalPlanner::PlanWithClearance(
   if (!start_index || (!region && (!goal_index || !view.CanBeEndpoint(*goal_index)))) {
     return result;
   }
-  local::RequestCellCache cells(view);
-  const LocalCellSource start_source = cells.Source(*start_index);
+  const LocalCellSource start_source = view.Source(*start_index);
   if (start_source != LocalCellSource::kEvidenceFree &&
       start_source != LocalCellSource::kStartAssumedFree) {
     return result;
@@ -453,7 +451,7 @@ LocalPlanResult WheelLocalPlanner::PlanWithClearance(
       if (!geometry.Contains(next)) {
         continue;
       }
-      const auto next_phase = cells.AdvancePhase(phase_[current.offset], next);
+      const auto next_phase = view.AdvancePhase(phase_[current.offset], next);
       if (!next_phase) {
         continue;
       }
@@ -481,7 +479,7 @@ LocalPlanResult WheelLocalPlanner::PlanWithClearance(
           geometry.resolution_m();
       const long double step_cost =
           static_cast<long double>(distance) *
-          (1.0L + static_cast<long double>(cells.TraversalCost(next)));
+          (1.0L + static_cast<long double>(view.TraversalCost(next)));
       const long double candidate_g = g_cost_[current.offset] + step_cost;
       if (!std::isfinite(candidate_g) || candidate_g >= g_cost_[next_offset]) {
         continue;

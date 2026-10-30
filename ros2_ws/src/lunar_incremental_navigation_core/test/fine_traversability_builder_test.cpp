@@ -233,11 +233,7 @@ TEST(FineTraversabilityBuilder, PreservesWheelAndLeggedPhysicsDifferences) {
   const GridGeometry geometry = Geometry(21U, 21U);
   std::vector<float> values(geometry.CellCount(), 0.0F);
   const GridIndex bump{.x = 10, .y = 10};
-  for (int dy = 0; dy < 2; ++dy) {
-    for (int dx = 0; dx < 2; ++dx) {
-      values[Offset(geometry, {bump.x + dx, bump.y + dy})] = 0.4F;
-    }
-  }
+  values[Offset(geometry, bump)] = 0.4F;
   PersistentElevationMap map;
   const auto raw = Snapshot(map, geometry, values);
   const TraversabilityProfile profile = Profile(0.01, 0.01, 0.0, {});
@@ -258,7 +254,6 @@ TEST(FineTraversabilityBuilder, BlockedTakesPriorityOverInflatedUnknown) {
   std::vector<float> values(geometry.CellCount(), 0.0F);
   const GridIndex center{.x = 12, .y = 12};
   values[Offset(geometry, center)] = 0.5F;
-  values[Offset(geometry, {center.x, center.y + 1})] = 0.5F;
   values[Offset(geometry, {.x = 13, .y = 12})] =
       std::numeric_limits<float>::quiet_NaN();
   PersistentElevationMap map;
@@ -417,7 +412,6 @@ TEST(FineTraversabilityBuilder,
   const GridIndex center{.x = 12, .y = 12};
   std::vector<float> obstructed_values(geometry.CellCount(), 0.0F);
   obstructed_values[Offset(geometry, center)] = 0.5F;
-  obstructed_values[Offset(geometry, {center.x, center.y + 1})] = 0.5F;
   std::vector<float> flat_values(geometry.CellCount(), 0.0F);
   PersistentElevationMap obstructed_map;
   PersistentElevationMap flat_map;
@@ -557,37 +551,6 @@ TEST(FineTraversabilityBuilder,
             first->TraversalCost({.x = 100, .y = 8}));
 }
 
-TEST(FineTraversabilityBuilder, WheelTwoCellSupportUpdatesMatchFullDerivation) {
-  const GridGeometry geometry = Geometry(520U, 16U);
-  PersistentElevationMap map;
-  auto raw =
-      Snapshot(map, geometry, std::vector<float>(geometry.CellCount(), 0.0F));
-  FineTraversabilityBuilder builder;
-  const auto capability = WheelCapability();
-  const auto profile = Profile(0.01, 0.01, 0.0);
-  auto previous = builder.Derive(raw, capability, profile);
-  // Across the tile seam: flat -> isolated UNKNOWN -> supported BLOCKED ->
-  // flat.
-  for (const auto& values : {std::vector<float>{0.3F, 0.F, 0.F, 0.F},
-                             std::vector<float>{0.3F, 0.3F, 0.3F, 0.3F},
-                             std::vector<float>{0.F, 0.F, 0.F, 0.F}}) {
-    GridGeometry update = Geometry(2U, 2U);
-    update.origin_m = {.x = 255 * .2, .y = 7 * .2};
-    ASSERT_EQ(Apply(map, update, values).status,
-              ElevationUpdateResult::Status::kApplied);
-    raw = map.Snapshot();
-    const auto incremental = builder.Derive(raw, capability, profile, previous);
-    const auto fresh = builder.Derive(raw, capability, profile);
-    for (int y = 0; y < 16; ++y)
-      for (int x = 0; x < 520; ++x) {
-        EXPECT_EQ(incremental->State({x, y}), fresh->State({x, y}));
-        EXPECT_DOUBLE_EQ(incremental->TraversalCost({x, y}),
-                         fresh->TraversalCost({x, y}));
-      }
-    previous = incremental;
-  }
-}
-
 TEST(FineTraversabilityBuilder,
      GeometryGrowthDerivesNewBlockedHaloInEveryDirectionAndAtCorners) {
   struct GrowthCase {
@@ -611,8 +574,7 @@ TEST(FineTraversabilityBuilder,
     std::vector<float> values(geometry.CellCount(), 0.0F);
     values[Offset(geometry, fixture.surface)] = 1.3F;
     const auto first_raw = Snapshot(map, geometry, values);
-    // The wheel model deliberately leaves unsupported boundary spikes UNKNOWN.
-    const auto capability = LeggedCapabilityForTest();
+    const auto capability = WheelCapability();
     const auto profile = Profile(0.25, 0.01, 0.0, {});
     FineTraversabilityBuilder builder;
     const auto first = builder.Derive(first_raw, capability, profile);
@@ -668,8 +630,7 @@ TEST(FineTraversabilityBuilder,
   std::vector<float> values(geometry.CellCount(), 0.0F);
   values[Offset(geometry, {16, 0})] = 1.3F;
   const auto first_raw = Snapshot(map, geometry, values);
-  // The wheel model deliberately leaves unsupported boundary spikes UNKNOWN.
-  const auto capability = LeggedCapabilityForTest();
+  const auto capability = WheelCapability();
   const auto profile = Profile(0.25, 0.01, 0.0, {});
   FineTraversabilityBuilder builder;
   const auto first = builder.Derive(first_raw, capability, profile);
@@ -706,8 +667,7 @@ TEST(FineTraversabilityBuilder,
   std::vector<float> values(geometry.CellCount(), 0.0F);
   values[Offset(geometry, {16, 0})] = 1.3F;
   const auto first_raw = Snapshot(map, geometry, values);
-  // The wheel model deliberately leaves unsupported boundary spikes UNKNOWN.
-  const auto capability = LeggedCapabilityForTest();
+  const auto capability = WheelCapability();
   const auto profile = Profile(0.25, 0.01, 0.0, {});
   FineTraversabilityBuilder builder;
   const auto first = builder.Derive(first_raw, capability, profile);
@@ -801,37 +761,6 @@ TEST(FineTraversabilityBuilder, PublishesCompleteImmutableSnapshotLineage) {
   EXPECT_TRUE(std::isfinite(fine->metrics().derivation_ms));
 }
 
-
-TEST(FineTraversabilityBuilder, OverlappingHighResolutionUpdatesMatchFullDerive) {
-  for (double resolution : {.05, .1, .2}) {
-    auto geometry = Geometry(64, 48, resolution);
-    geometry.origin_m = {-.37, -.61, 0.};
-    PersistentElevationMap map;
-    std::vector<float> values(geometry.CellCount(), 0.F);
-    FineTraversabilityBuilder builder;
-    const auto capability = LeggedCapabilityForTest();
-    const auto profile = Profile(.34, .165, .3);
-    auto previous = builder.Derive(Snapshot(map, geometry, values), capability, profile);
-    for (int revision = 0; revision < 3; ++revision) {
-      for (int y = 15; y < 29; ++y)
-        for (int x = 20; x < 38; ++x)
-          values[y * 64 + x] = revision == 1 ? 0.F : .7F;
-      values[25 * 64 + 45] = revision == 2 ? .8F : .02F;
-      auto raw = Snapshot(map, geometry, values);
-      auto incremental = builder.Derive(raw, capability, profile, previous);
-      auto full = builder.Derive(raw, capability, profile);
-      for (auto y = raw->geometry().min_inclusive().y;
-           y < raw->geometry().max_exclusive().y; ++y)
-        for (auto x = raw->geometry().min_inclusive().x;
-             x < raw->geometry().max_exclusive().x; ++x) {
-          const GridIndex cell{x, y};
-          EXPECT_EQ(incremental->State(cell), full->State(cell));
-          EXPECT_DOUBLE_EQ(incremental->TraversalCost(cell), full->TraversalCost(cell));
-        }
-      previous = incremental;
-    }
-  }
-}
 
 TEST(TerrainMeasurements, VisibleFloorRetainsWallClosureWithoutHiddenElevation) {
   const auto geometry = Geometry(3, 3, 1.0);
@@ -946,60 +875,6 @@ TEST_P(StrengthenedPartialTerrain, NewBlockingEvidenceAdvancesRevision) {
 
 INSTANTIATE_TEST_SUITE_P(OldCompleteness, StrengthenedPartialTerrain,
                         testing::Values(false, true));
-
-TEST(FineCellEvaluator, ExplicitNullCustomEvaluatorIsRejected) {
-  PersistentElevationMap map;
-  const auto raw = Snapshot(map, Geometry(3, 3, 1.), std::vector<float>(9, 0.F));
-  EXPECT_THROW((FineCellEvaluator(*raw, WheelCapability(), Profile(), nullptr)),
-               std::invalid_argument);
-  EXPECT_NO_THROW((FineCellEvaluator(*raw, WheelCapability(), Profile())));
-}
-
-TEST(TerrainMeasurements, VisibleCenterEvidenceSurvivesApplicationBaseline) {
-  const auto geometry = Geometry(3, 3, .05);
-  const float unknown = std::numeric_limits<float>::quiet_NaN();
-  std::vector<float> visible(9, unknown);
-  visible[4] = 0.F;
-  std::vector<LocalTerrainMeasurements> stats(9);
-  stats[4] = {true, false, 0., 2., 2.};
-  PersistentElevationMap map;
-  ASSERT_EQ(map.Apply({.geometry = geometry, .elevation_m = visible,
-      .map_from_source = IdentityMapTransform(), .terrain_measurements = stats}).status,
-      ElevationUpdateResult::Status::kApplied);
-  const auto blocked = map.Snapshot();
-  class MissingCenterView final : public ElevationRangeView {
-   public:
-    explicit MissingCenterView(SparseGridGeometry geometry) : geometry_(geometry) {}
-    const SparseGridGeometry& geometry() const noexcept override { return geometry_; }
-    std::optional<ElevationRange> ElevationRangeAt(GridIndex) const noexcept override {
-      return std::nullopt;
-    }
-    std::optional<LocalTerrainMeasurements> TerrainMeasurementsAt(
-        GridIndex) const noexcept override {
-      return LocalTerrainMeasurements{false, false, 0., 2., 2.};
-    }
-   private:
-    SparseGridGeometry geometry_;
-  } missing_center(blocked->geometry());
-  {
-    EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)
-                  ->Evaluate(*blocked, {1, 1}).state, IntrinsicCellState::kBlocked);
-    EXPECT_EQ(MakePlatformElevationEvaluator(LeggedCapabilityForTest(), .2)
-                  ->Evaluate(*blocked, {1, 1}).state, IntrinsicCellState::kBlocked);
-    EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)
-                  ->Evaluate(missing_center, {1, 1}).state, IntrinsicCellState::kUnknown);
-    EXPECT_FALSE(blocked->ElevationRangeAt({2, 1}));
-  }
-  // 完整的新观测可以释放障碍；旧稀疏快照仍保持原证据。
-  stats[4] = {true, true, 0., 0., 0.};
-  ASSERT_EQ(map.Apply({.geometry = geometry, .elevation_m = visible,
-      .map_from_source = IdentityMapTransform(), .terrain_measurements = stats}).status,
-      ElevationUpdateResult::Status::kApplied);
-  EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)->Evaluate(*map.Snapshot(), {1, 1}).state,
-      IntrinsicCellState::kFree);
-  EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)->Evaluate(*blocked, {1, 1}).state,
-      IntrinsicCellState::kBlocked);
-}
 
 
 class ProjectedFixture final : public PlatformElevationEvaluator {

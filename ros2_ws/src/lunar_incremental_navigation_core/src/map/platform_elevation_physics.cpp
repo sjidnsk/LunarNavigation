@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <bitset>
 #include <cmath>
 #include <limits>
@@ -14,7 +13,6 @@
 #include <utility>
 
 #include "map/grid_bounds.hpp"
-#include "map/terrain_observation_estimator.hpp"
 
 namespace lunar::incremental_navigation {
 namespace {
@@ -149,6 +147,94 @@ namespace {
   return std::isfinite(sum) ? sum : kLargestFinite;
 }
 
+class WheelElevationEvaluator final : public PlatformElevationEvaluator {
+ public:
+  explicit WheelElevationEvaluator(WheeledCapability capability)
+      : capability_(std::move(capability)) {
+    if (!FiniteNonnegative(capability_.maximum_slope_rad) ||
+        !FiniteNonnegative(capability_.maximum_local_obstacle_relief_m) ||
+        !FiniteNonnegative(capability_.minimum_underbody_clearance_m)) {
+      throw std::invalid_argument(
+          "wheel elevation limits must be finite and nonnegative");
+    }
+  }
+
+  [[nodiscard]] IntrinsicTraversalEvaluation Evaluate(
+      const ElevationRangeView& elevation,
+      const GridIndex index) const override {
+    const LocalTerrainMeasurements measured =
+        MeasureLocalTerrain(elevation, index);
+    if (!measured.center_known) {
+      return {};
+    }
+    const bool exceeds_physical_limit =
+        measured.slope_rad > capability_.maximum_slope_rad ||
+        measured.relief_m > capability_.maximum_local_obstacle_relief_m ||
+        measured.positive_rise_m >
+            capability_.minimum_underbody_clearance_m;
+    if (exceeds_physical_limit) {
+      return IntrinsicTraversalEvaluation{
+          .state = IntrinsicCellState::kBlocked,
+          .slope_rad = measured.slope_rad,
+          .relief_m = measured.relief_m,
+      };
+    }
+    return IntrinsicTraversalEvaluation{
+        .state = measured.neighborhood_complete
+                     ? IntrinsicCellState::kFree
+                     : IntrinsicCellState::kUnknown,
+        .slope_rad = measured.slope_rad,
+        .relief_m = measured.relief_m,
+    };
+  }
+
+ private:
+  WheeledCapability capability_;
+};
+
+class LeggedElevationEvaluator final : public PlatformElevationEvaluator {
+ public:
+  explicit LeggedElevationEvaluator(LeggedCapability capability)
+      : capability_(std::move(capability)) {
+    if (!FiniteNonnegative(capability_.maximum_slope_rad) ||
+        !FiniteNonnegative(capability_.maximum_step_height_m) ||
+        !FiniteNonnegative(capability_.maximum_gap_width_m)) {
+      throw std::invalid_argument(
+          "legged elevation limits must be finite and nonnegative");
+    }
+  }
+
+  [[nodiscard]] IntrinsicTraversalEvaluation Evaluate(
+      const ElevationRangeView& elevation,
+      const GridIndex index) const override {
+    const LocalTerrainMeasurements measured =
+        MeasureLocalTerrain(elevation, index);
+    if (!measured.center_known) {
+      return {};
+    }
+    const bool exceeds_physical_limit =
+        measured.slope_rad > capability_.maximum_slope_rad ||
+        measured.relief_m > capability_.maximum_step_height_m;
+    if (exceeds_physical_limit) {
+      return IntrinsicTraversalEvaluation{
+          .state = IntrinsicCellState::kBlocked,
+          .slope_rad = measured.slope_rad,
+          .relief_m = measured.relief_m,
+      };
+    }
+    return IntrinsicTraversalEvaluation{
+        .state = measured.neighborhood_complete
+                     ? IntrinsicCellState::kFree
+                     : IntrinsicCellState::kUnknown,
+        .slope_rad = measured.slope_rad,
+        .relief_m = measured.relief_m,
+    };
+  }
+
+ private:
+  LeggedCapability capability_;
+};
+
 }  // namespace
 
 [[nodiscard]] LocalTerrainMeasurements MeasureLocalTerrain(
@@ -211,193 +297,15 @@ namespace {
   };
 }
 
-namespace {
-
-template <typename Capability>
-IntrinsicTraversalEvaluation EvaluateTerrainPatch(
-    const ElevationRangeView& elevation, GridIndex center,
-    const Capability& capability, double half_width_m,
-    map::TerrainObservationEstimator* shared_observations = nullptr) {
-  if (const auto measured = elevation.TerrainMeasurementsAt(center)) {
-    if (!measured->center_known) return {};
-    const double relief_limit = [&] {
-      if constexpr (std::is_same_v<Capability, LeggedCapability>)
-        return capability.maximum_step_height_m;
-      else return capability.maximum_local_obstacle_relief_m;
-    }();
-    bool blocked = measured->slope_rad > capability.maximum_slope_rad ||
-                   measured->relief_m > relief_limit;
-    if constexpr (std::is_same_v<Capability, WheeledCapability>)
-      blocked |= measured->positive_rise_m > capability.minimum_underbody_clearance_m;
-    return {.state = blocked ? IntrinsicCellState::kBlocked :
-                      (measured->neighborhood_complete ? IntrinsicCellState::kFree :
-                                                        IntrinsicCellState::kUnknown),
-            .slope_rad = measured->slope_rad,
-            .relief_m = measured->relief_m,
-            .confidence = blocked || measured->neighborhood_complete ? 1. : 0.};
-  }
-  map::TerrainObservationEstimator local_observations(elevation);
-  auto& observations = shared_observations ? *shared_observations : local_observations;
-  constexpr bool legged = std::is_same_v<Capability, LeggedCapability>;
-  auto patch = map::MeasureTerrainPatch(elevation, center, half_width_m, observations);
-  if (!patch) return {};
-  auto& points = patch->points;
-  const auto observed_count = patch->observed_count;
-  const double slope = legged ? patch->median_slope_rad : patch->refined_slope_rad;
-  const double low = patch->low, high = patch->high;
-  const double relief = high - low;
-  // Underbody rise needs a center reference; raw local relief does not.
-  const double rise = patch->center_available
-      ? std::max(0., high - patch->center_residual) : 0.;
-  const double confidence = patch->confidence;
-  const double relief_limit = [&] {
-    if constexpr (legged) return capability.maximum_step_height_m;
-    else return capability.maximum_local_obstacle_relief_m;
-  }();
-  const double rise_limit = [&] {
-    if constexpr (legged) return std::numeric_limits<double>::infinity();
-    else return capability.minimum_underbody_clearance_m;
-  }();
-  // A legged step can raise the body onto another supported surface. Wheel
-  // underbody rise is not a legged step limit; full 3D body/footfall execution
-  // certification remains outside this 2.5D terrain evaluator.
-  const bool discontinuity = relief > relief_limit || rise > rise_limit;
-  if (discontinuity || (legged && relief > .0125 && !patch->continuous_ground)) {
-    // Meaningful legged relief requires two supported surfaces even below the
-    // step limit. An isolated tall/low return is UNKNOWN, never free landing.
-    const double band = legged ? std::min(.0125, .25 * relief_limit)
-                               : .25 * std::min(relief_limit, rise_limit);
-    bool low_supported = false, high_supported = false;
-    // A larger plane fit must not enlarge the local support certificate.
-    std::array<std::size_t, 25> support{};
-    std::size_t support_count = 0;
-    for (std::size_t i = 0; i < observed_count; ++i)
-      if (std::abs(points[i].x) <= 2 && std::abs(points[i].y) <= 2)
-        support[support_count++] = i;
-    for (std::size_t i = 0; i < support_count; ++i)
-      for (std::size_t j = i + 1; j < support_count; ++j) {
-        const auto& p = points[support[i]];
-        const auto& q = points[support[j]];
-        if (std::max(std::abs(p.x - q.x), std::abs(p.y - q.y)) != 1) continue;
-        if constexpr (legged) {
-          // Compare interval endpoints with interval extrema. Midpoints cannot
-          // certify even identical adjacent ranges wider than the support band.
-          low_supported |= p.low <= low + band && q.low <= low + band;
-          high_supported |= p.high >= high - band && q.high >= high - band;
-        } else {
-          low_supported |= p.residual <= low + band && q.residual <= low + band;
-          high_supported |=
-              p.residual >= high - band && q.residual >= high - band;
-        }
-      }
-    if (!low_supported || !high_supported)
-      return {.state = IntrinsicCellState::kUnknown,
-              .slope_rad = slope,
-              .relief_m = relief};
-  }
-  const bool blocked = discontinuity || slope > capability.maximum_slope_rad;
-  // Missing returns cannot erase a supported obstacle. Completeness gates
-  // FREE only, after the unchanged raw high/low support checks above.
-  if (!blocked && (!patch->center_available || (legged && !patch->central_complete &&
-          (!patch->continuous_ground || elevation.geometry().resolution_m() > .10 + 1e-12))))
-    return {.state = IntrinsicCellState::kUnknown,
-            .slope_rad = slope, .relief_m = relief};
-  return {.state = blocked ? IntrinsicCellState::kBlocked : IntrinsicCellState::kFree,
-          .slope_rad = slope,
-          .relief_m = relief,
-          .confidence = confidence};
-}
-
-class WheelElevationEvaluator final : public PlatformElevationEvaluator {
- public:
-  explicit WheelElevationEvaluator(WheeledCapability capability, double half_width_m,
-                                   map::TerrainObservationEstimator* observations = nullptr)
-      : capability_(std::move(capability)), half_width_m_(half_width_m), observations_(observations) {
-    if (!FiniteNonnegative(capability_.maximum_slope_rad) ||
-        !FiniteNonnegative(capability_.maximum_local_obstacle_relief_m) ||
-        !FiniteNonnegative(capability_.minimum_underbody_clearance_m)) {
-      throw std::invalid_argument(
-          "wheel elevation limits must be finite and nonnegative");
-    }
-  }
-
-  [[nodiscard]] IntrinsicTraversalEvaluation Evaluate(
-      const ElevationRangeView& elevation,
-      const GridIndex index) const override {
-    return EvaluateTerrainPatch(elevation, index, capability_, half_width_m_, observations_);
-  }
-
- private:
-  WheeledCapability capability_;
-  double half_width_m_{};
-  map::TerrainObservationEstimator* observations_{};
-};
-
-class LeggedElevationEvaluator final : public PlatformElevationEvaluator {
- public:
-  explicit LeggedElevationEvaluator(LeggedCapability capability)
-      : capability_(std::move(capability)) {
-    if (!FiniteNonnegative(capability_.maximum_slope_rad) ||
-        !FiniteNonnegative(capability_.maximum_step_height_m) ||
-        !FiniteNonnegative(capability_.maximum_gap_width_m)) {
-      throw std::invalid_argument(
-          "legged elevation limits must be finite and nonnegative");
-    }
-  }
-
-  [[nodiscard]] IntrinsicTraversalEvaluation Evaluate(
-      const ElevationRangeView& elevation,
-      const GridIndex index) const override {
-    const LocalTerrainMeasurements measured =
-        MeasureLocalTerrain(elevation, index);
-    if (!measured.center_known) {
-      return {};
-    }
-    const bool exceeds_physical_limit =
-        measured.slope_rad > capability_.maximum_slope_rad ||
-        measured.relief_m > capability_.maximum_step_height_m;
-    if (exceeds_physical_limit) {
-      return IntrinsicTraversalEvaluation{
-          .state = IntrinsicCellState::kBlocked,
-          .slope_rad = measured.slope_rad,
-          .relief_m = measured.relief_m,
-          .confidence = 1.,
-      };
-    }
-    return IntrinsicTraversalEvaluation{
-        .state = measured.neighborhood_complete
-                     ? IntrinsicCellState::kFree
-                     : IntrinsicCellState::kUnknown,
-        .slope_rad = measured.slope_rad,
-        .relief_m = measured.relief_m,
-        .confidence = measured.neighborhood_complete ? 1. : 0.,
-    };
-  }
-
- private:
-  LeggedCapability capability_;
-};
-
-}  // namespace
-
-int TerrainBackgroundRadiusCells(double half_width_m, double resolution_m) {
-  return map::ObservationBackgroundRadiusCells(half_width_m, resolution_m);
-}
-
-namespace {
 std::unique_ptr<const PlatformElevationEvaluator>
-MakeEvaluatorWithObservations(const PlatformCapability& capability,
-                               const double background_half_width_m,
-                               map::TerrainObservationEstimator* observations) {
-  if (!FiniteNonnegative(background_half_width_m))
-    throw std::invalid_argument("terrain background width must be finite and nonnegative");
+MakePlatformElevationEvaluator(const PlatformCapability& capability) {
   return std::visit(
-      [background_half_width_m, observations](const auto& typed_capability)
+      [](const auto& typed_capability)
           -> std::unique_ptr<const PlatformElevationEvaluator> {
         using Capability = std::decay_t<decltype(typed_capability)>;
         if constexpr (std::is_same_v<Capability, WheeledCapability>) {
           return std::make_unique<const WheelElevationEvaluator>(
-              typed_capability, background_half_width_m, observations);
+              typed_capability);
         } else if constexpr (std::is_same_v<Capability, LeggedCapability>) {
           return std::make_unique<const LeggedElevationEvaluator>(
               typed_capability);
@@ -409,44 +317,26 @@ MakeEvaluatorWithObservations(const PlatformCapability& capability,
       capability);
 }
 
-}  // namespace
-
-std::unique_ptr<const PlatformElevationEvaluator>
-MakePlatformElevationEvaluator(const PlatformCapability& capability, double half_width_m) {
-  return MakeEvaluatorWithObservations(capability, half_width_m, nullptr);
-}
-
 struct FineCellEvaluator::Impl final {
   struct IntrinsicCacheTile final {
     std::array<IntrinsicTraversalEvaluation, kGridTileCellCount> evaluations;
     std::bitset<kGridTileCellCount> populated;
-    // Lazy 16-cell row summaries; scoped to this immutable elevation view.
-    std::array<std::uint16_t, kGridTileCellCount / 16> hazards{};
-    std::array<std::uint16_t, kGridTileCellCount / 16> blocked{};
-    std::array<std::uint16_t, kGridTileCellCount / 16> inferred{};
-    std::bitset<kGridTileCellCount / 16> summarized;
   };
 
   Impl(const ElevationRangeView& elevation_value,
        PlatformCapability capability_value,
        TraversabilityProfile profile_value,
-       std::unique_ptr<const PlatformElevationEvaluator> intrinsic,
-       bool use_observations = false)
+       std::unique_ptr<const PlatformElevationEvaluator> intrinsic)
       : elevation(elevation_value),
         capability(std::move(capability_value)),
         profile(std::move(profile_value)),
-        observations(elevation),
-        intrinsic_evaluator(use_observations ?
-            MakeEvaluatorWithObservations(
-                capability, profile.terrain_background_half_width_m, &observations) :
-            std::move(intrinsic)),
+        intrinsic_evaluator(std::move(intrinsic)),
         hard_radius_m(CircumscribedRadius(profile.planar_envelope_xy_m)) {
     if (!intrinsic_evaluator ||
         !FiniteNonnegative(profile.preferred_clearance_m) ||
         !FiniteNonnegative(profile.slope_weight) ||
         !FiniteNonnegative(profile.relief_weight) ||
-        !FiniteNonnegative(profile.clearance_weight) ||
-        !FiniteNonnegative(profile.confidence_weight)) {
+        !FiniteNonnegative(profile.clearance_weight)) {
       throw std::invalid_argument(
           "fine cell soft costs must be finite and nonnegative");
     }
@@ -473,54 +363,6 @@ struct FineCellEvaluator::Impl final {
     return last_cache_tile->evaluations[offset];
   }
 
-  // Invoke only for non-FREE intrinsic cells, preserving row-major order.
-  // Summaries skip empty spans without changing circle/cell intersection math.
-  template <typename Visitor>
-  bool VisitHazards(GridIndex minimum, GridIndex maximum, Visitor visitor,
-                    bool blocked_only = false, bool inferred_only = false) {
-    for (auto y = minimum.y; y < maximum.y; ++y) {
-      for (auto x = minimum.x; x < maximum.x;) {
-        const GridIndex seed{x, y};
-        const auto offset = TileCellOffset(seed);
-        const auto lane = offset % 16;
-        const auto count = std::min<std::int64_t>(maximum.x - x, 16 - lane);
-        static_cast<void>(IntrinsicAt(seed));
-        auto* tile = last_cache_tile;
-        const auto block = offset / 16;
-        if (!tile->summarized.test(block)) {
-          std::uint16_t mask = 0, blocked = 0, inferred = 0;
-          const auto base = x - static_cast<std::int64_t>(lane);
-          for (int i = 0; i < 16; ++i) {
-            const GridIndex cell{base + i, y};
-            if (!elevation.geometry().Contains(cell)) continue;
-            const auto& evaluation = IntrinsicAt(cell);
-            const auto state = evaluation.state;
-            if (state == IntrinsicCellState::kFree && evaluation.confidence < 1.)
-              inferred |= std::uint16_t(1U << i);
-            if (state != IntrinsicCellState::kFree)
-              mask |= std::uint16_t(1U << i);
-            if (state == IntrinsicCellState::kBlocked)
-              blocked |= std::uint16_t(1U << i);
-          }
-          tile->hazards[block] = mask;
-          tile->blocked[block] = blocked;
-          tile->inferred[block] = inferred;
-          tile->summarized.set(block);
-        }
-        const unsigned candidates = inferred_only ? tile->inferred[block] :
-            (blocked_only ? tile->blocked[block] : tile->hazards[block]);
-        unsigned mask = (candidates >> lane) & ((1U << count) - 1);
-        while (mask) {
-          const auto bit = std::countr_zero(mask);
-          if (!visitor(GridIndex{x + bit, y})) return false;
-          mask &= mask - 1;
-        }
-        x += count;
-      }
-    }
-    return true;
-  }
-
   [[nodiscard]] FineCellEvaluation Evaluate(const GridIndex candidate) {
     const SparseGridGeometry& geometry = elevation.geometry();
     if (!geometry.Contains(candidate)) {
@@ -531,27 +373,24 @@ struct FineCellEvaluator::Impl final {
         CircleLeavesGeometry(center, hard_radius_m, geometry);
     const auto [minimum, maximum] =
         detail::CellBoundsForRadius(geometry, candidate, hard_radius_m);
-    // Resolve BLOCKED first. Once absent, the first intersecting UNKNOWN
-    // certifies UNKNOWN; scanning every other unknown cell cannot change it.
-    const bool clear = VisitHazards(minimum, maximum, [&](GridIndex seed) {
-      return !CircleIntersectsCellArea(center, hard_radius_m, geometry, seed);
-    }, true);
-    if (!clear) return {.state = FineCellState::kBlocked, .confidence = 1.};
-    if (!intersects_unknown) {
-      intersects_unknown = !VisitHazards(minimum, maximum, [&](GridIndex seed) {
-        return !CircleIntersectsCellArea(center, hard_radius_m, geometry, seed);
-      });
+    for (std::int64_t y = minimum.y; y < maximum.y; ++y) {
+      for (std::int64_t x = minimum.x; x < maximum.x; ++x) {
+        const GridIndex seed{.x = x, .y = y};
+        if (!CircleIntersectsCellArea(center, hard_radius_m, geometry, seed)) {
+          continue;
+        }
+        const IntrinsicCellState state = IntrinsicAt(seed).state;
+        if (state == IntrinsicCellState::kBlocked) {
+          return {.state = FineCellState::kBlocked};
+        }
+        intersects_unknown =
+            intersects_unknown || state == IntrinsicCellState::kUnknown;
+      }
     }
     if (intersects_unknown) {
       return {.state = FineCellState::kUnknown};
     }
 
-    double confidence = 1.;
-    VisitHazards(minimum, maximum, [&](GridIndex seed) {
-      if (CircleIntersectsCellArea(center, hard_radius_m, geometry, seed))
-        confidence = std::min(confidence, IntrinsicAt(seed).confidence);
-      return true;
-    }, false, true);
     const IntrinsicTraversalEvaluation& intrinsic = IntrinsicAt(candidate);
     const double slope_cost = SaturatingProduct(
         profile.slope_weight,
@@ -559,13 +398,11 @@ struct FineCellEvaluator::Impl final {
     const double relief_cost = SaturatingProduct(
         profile.relief_weight,
         NormalizedSquared(intrinsic.relief_m, ReliefLimit(capability)));
-    double traversal_cost = SaturatingSum(
-        SaturatingSum(slope_cost, relief_cost),
-        SaturatingProduct(profile.confidence_weight, 1. - confidence));
+    double traversal_cost = SaturatingSum(slope_cost, relief_cost);
     if (profile.clearance_weight == 0.0 ||
         profile.preferred_clearance_m == 0.0) {
       return {.state = FineCellState::kFree,
-              .traversal_cost = traversal_cost, .confidence = confidence};
+              .traversal_cost = traversal_cost};
     }
 
     const double influence_m =
@@ -573,11 +410,17 @@ struct FineCellEvaluator::Impl final {
     double nearest_hazard_m = DistanceToGeometryBoundary(center, geometry);
     const auto [clearance_minimum, clearance_maximum] =
         detail::CellBoundsForRadius(geometry, candidate, influence_m);
-    VisitHazards(clearance_minimum, clearance_maximum, [&](GridIndex seed) {
-      nearest_hazard_m = std::min(
-          nearest_hazard_m, DistanceToCellArea(center, geometry, seed));
-      return true;
-    });
+    for (std::int64_t y = clearance_minimum.y; y < clearance_maximum.y; ++y) {
+      for (std::int64_t x = clearance_minimum.x;
+           x < clearance_maximum.x; ++x) {
+        const GridIndex seed{.x = x, .y = y};
+        if (IntrinsicAt(seed).state == IntrinsicCellState::kFree) {
+          continue;
+        }
+        nearest_hazard_m = std::min(
+            nearest_hazard_m, DistanceToCellArea(center, geometry, seed));
+      }
+    }
     const double remaining_clearance_m =
         std::max(0.0, nearest_hazard_m - hard_radius_m);
     const double clearance_penalty = std::clamp(
@@ -587,13 +430,12 @@ struct FineCellEvaluator::Impl final {
         traversal_cost,
         SaturatingProduct(profile.clearance_weight, clearance_penalty));
     return {.state = FineCellState::kFree,
-            .traversal_cost = traversal_cost, .confidence = confidence};
+            .traversal_cost = traversal_cost};
   }
 
   const ElevationRangeView& elevation;
   PlatformCapability capability;
   TraversabilityProfile profile;
-  map::TerrainObservationEstimator observations;
   std::unique_ptr<const PlatformElevationEvaluator> intrinsic_evaluator;
   double hard_radius_m{};
   std::map<TileIndex, std::unique_ptr<IntrinsicCacheTile>> intrinsic_cache;
@@ -606,7 +448,8 @@ FineCellEvaluator::FineCellEvaluator(
     const ElevationRangeView& elevation,
     const PlatformCapability& capability,
     const TraversabilityProfile& profile)
-    : impl_(std::make_unique<Impl>(elevation, capability, profile, nullptr, true)) {}
+    : FineCellEvaluator(elevation, capability, profile,
+                        MakePlatformElevationEvaluator(capability)) {}
 
 FineCellEvaluator::FineCellEvaluator(
     const ElevationRangeView& elevation,
@@ -625,11 +468,6 @@ FineCellEvaluation FineCellEvaluator::Evaluate(const GridIndex index) {
   return impl_->Evaluate(index);
 }
 
-std::optional<float> FineCellEvaluator::GroundHeight(GridIndex index) {
-  const auto& ground = impl_->observations.Estimate(index);
-  return ground ? std::optional<float>(static_cast<float>(ground->surface_height_m)) : std::nullopt;
-}
-
 double FineCellEvaluator::hard_inflation_radius_m() const noexcept {
   return impl_->hard_radius_m;
 }
@@ -643,12 +481,3 @@ std::size_t FineCellEvaluator::cached_elevation_tiles() const noexcept {
 }
 
 }  // namespace lunar::incremental_navigation
-
-namespace lunar::incremental_navigation {
-std::size_t FineCellEvaluator::evaluated_ground_cells() const noexcept {
-  return impl_->observations.evaluated_cells();
-}
-std::size_t FineCellEvaluator::ground_cache_bytes() const noexcept {
-  return impl_->observations.allocated_bytes();
-}
-}

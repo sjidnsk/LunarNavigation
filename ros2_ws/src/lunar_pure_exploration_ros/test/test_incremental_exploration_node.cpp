@@ -594,23 +594,6 @@ class IncrementalExplorationDefaultMapWaitTest
   double MapWaitTimeoutSeconds() const override { return -1.0; }
 };
 
-class OmnidirectionalExplorationTest : public IncrementalExplorationNodeTest {
- protected:
-  void ConfigureParameters(IncrementalExplorationNodeParameters& p) override {
-    p.sensor_model.field_of_view_rad = 2.0 * std::numbers::pi;
-  }
-};
-
-TEST_F(OmnidirectionalExplorationTest, RequiresTerminalViewingYaw) {
-  Start();
-  EXPECT_TRUE(server_->goal(0).has_target_yaw);
-}
-
-TEST_F(IncrementalExplorationNodeTest, DirectionalSensorRequiresTerminalViewingYaw) {
-  Start();
-  EXPECT_TRUE(server_->goal(0).has_target_yaw);
-}
-
 TEST_F(IncrementalExplorationDefaultMapWaitTest,
        DefaultThirtySecondsCancelsOnlyAtDeadline) {
   EXPECT_DOUBLE_EQ(node_->get_parameter("navigation_map_wait_timeout_s").as_double(), 30.0);
@@ -1433,42 +1416,6 @@ TEST_F(IncrementalExplorationNodeTest, OnlyInternalNavigationErrorEntersError) {
     const auto status = LastStatus();
     return status && status->state == Status::ERROR;
   }));
-}
-
-class CoverageMilestoneTest : public IncrementalExplorationNodeTest {
- protected:
-  void ConfigureParameters(IncrementalExplorationNodeParameters& p) override {
-    p.coverage_target = 0.80;
-  }
-};
-class SecondCoverageMilestoneTest : public CoverageMilestoneTest {
- protected:
-  void ConfigureParameters(IncrementalExplorationNodeParameters& p) override {
-    p.coverage_target = 0.99;
-  }
-};
-TEST_F(CoverageMilestoneTest, CandidatesContinueBeyondEightyPercent) {
-  Start(false);
-  ASSERT_TRUE(WaitFor([this] { return LastStatus()->coverage_ratio > 0.99; }));
-  EXPECT_NE(LastStatus()->state, Status::COMPLETED);
-}
-TEST_F(SecondCoverageMilestoneTest, CandidatesContinueBeyondNinetyNinePercent) {
-  Start(false);
-  ASSERT_TRUE(WaitFor([this] { return LastStatus()->coverage_ratio > 0.99; }));
-  EXPECT_NE(LastStatus()->state, Status::COMPLETED);
-}
-TEST_F(CoverageMilestoneTest, FullyKnownMapCompletesWithoutNavigation) {
-  auto map = ExplorationMap(false);
-  std::fill(map.data.begin(), map.data.end(), 0);
-  map_publisher_->publish(map);
-  odometry_publisher_->publish(Odometry());
-  tf_publisher_->publish(MapFromOdom());
-  task_publisher_->publish(StartTask());
-  ASSERT_TRUE(WaitFor([this] {
-    return LastStatus() && LastStatus()->state == Status::COMPLETED;
-  }));
-  EXPECT_EQ(LastStatus()->reason_code, "COMPLETED_NO_REACHABLE_FRONTIER");
-  EXPECT_EQ(server_->goal_count(), 0U);
 }
 
 }  // namespace

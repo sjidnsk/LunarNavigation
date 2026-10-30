@@ -248,11 +248,9 @@ class BoundedSupportEvaluator final : public PlatformElevationEvaluator {
  public:
   BoundedSupportEvaluator(const ElevationSnapshot& measured,
                           const std::set<GridIndex>& assumptions,
-                          const PlatformCapability& capability,
-                          const TraversabilityProfile& profile)
+                          const PlatformCapability& capability)
       : measured_(measured), assumptions_(assumptions),
-        evaluator_(MakePlatformElevationEvaluator(
-            capability, profile.terrain_background_half_width_m)) {}
+        evaluator_(MakePlatformElevationEvaluator(capability)) {}
 
   IntrinsicTraversalEvaluation Evaluate(
       const ElevationRangeView& support, GridIndex index) const override {
@@ -405,7 +403,7 @@ StartPatchResult RequestLocalStartPatchBuilder::Build(
   }
 
   const std::unique_ptr<const PlatformElevationEvaluator> evaluator =
-      MakePlatformElevationEvaluator(capability, profile.terrain_background_half_width_m);
+      MakePlatformElevationEvaluator(capability);
   const std::set<GridIndex> patch_cells =
       PatchCells(local_window, p0.position_m, patch_radius_m);
   const std::optional<Plane> plane = FitSupportPlane(
@@ -420,7 +418,7 @@ StartPatchResult RequestLocalStartPatchBuilder::Build(
   FineCellEvaluator patched_evaluator(
       patched, capability, profile,
       std::make_unique<BoundedSupportEvaluator>(*fine->elevation(), patch_cells,
-                                                 capability, profile));
+                                                 capability));
 
   std::vector<LocalCellOverride> overrides;
   overrides.reserve(patch_cells.size());
@@ -483,8 +481,7 @@ StartPatchResult RequestLocalStartPatchBuilder::BuildStationary(
   // halo is part of this request-local plane assumption, not navigable space.
   // Measured ranges/stats remain authoritative throughout the halo.
   const auto cells = WithOneCellRing(geometry, PatchCells(geometry, p0.position_m, radius));
-  const auto evaluator = MakePlatformElevationEvaluator(
-      capability, profile.terrain_background_half_width_m);
+  const auto evaluator = MakePlatformElevationEvaluator(capability);
   const auto plane = FitSupportPlane(*fine->elevation(), *evaluator,
       WithOneCellRing(geometry, cells), p0.position_m);
   if (!plane) return {.status = StartPatchResult::Status::kUnresolved};
