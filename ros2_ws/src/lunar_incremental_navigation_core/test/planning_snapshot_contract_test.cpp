@@ -182,9 +182,11 @@ static_assert(std::is_same_v<
 [[nodiscard]] std::shared_ptr<const FineTraversabilityTile> MakeFineTile(
     const FineCellState initial_state = FineCellState::kUnknown,
     const double initial_cost = 0.0) {
-  FineTraversabilityTile::StateArray states;
+  auto states_buffer = std::make_unique<FineTraversabilityTile::StateArray>();
+  auto& states = *states_buffer;
   states.fill(initial_state);
-  FineTraversabilityTile::CostArray costs;
+  auto costs_buffer = std::make_unique<FineTraversabilityTile::CostArray>();
+  auto& costs = *costs_buffer;
   costs.fill(initial_cost);
   return std::make_shared<const FineTraversabilityTile>(std::move(states),
                                                         std::move(costs));
@@ -218,9 +220,11 @@ static_assert(std::is_same_v<
 [[nodiscard]] std::shared_ptr<const GlobalGuidanceTile> MakeGuidanceTile(
     const GuidanceCellState initial_state = GuidanceCellState::kCandidate,
     const double initial_risk = 0.0) {
-  GlobalGuidanceTile::StateArray states;
+  auto states_buffer = std::make_unique<GlobalGuidanceTile::StateArray>();
+  auto& states = *states_buffer;
   states.fill(initial_state);
-  GlobalGuidanceTile::RiskArray risks;
+  auto risks_buffer = std::make_unique<GlobalGuidanceTile::RiskArray>();
+  auto& risks = *risks_buffer;
   risks.fill(initial_risk);
   return std::make_shared<const GlobalGuidanceTile>(std::move(states),
                                                     std::move(risks));
@@ -547,9 +551,11 @@ TEST(PlanningSnapshotContractTest,
       expanded_fine_geometry.frame_id(), expanded_fine_geometry.resolution_m(),
       expanded_fine_geometry.origin_m(), GridIndex{.x = 0, .y = 0},
       GridIndex{.x = 2, .y = 1});
-  FineTraversabilityTile::StateArray hidden_fine_states;
+  auto hidden_fine_states_buffer = std::make_unique<FineTraversabilityTile::StateArray>();
+  auto& hidden_fine_states = *hidden_fine_states_buffer;
   hidden_fine_states.fill(FineCellState::kUnknown);
-  FineTraversabilityTile::CostArray hidden_fine_costs;
+  auto hidden_fine_costs_buffer = std::make_unique<FineTraversabilityTile::CostArray>();
+  auto& hidden_fine_costs = *hidden_fine_costs_buffer;
   hidden_fine_costs.fill(0.0);
   hidden_fine_states[TileCellOffset(GridIndex{.x = 2, .y = 0})] =
       FineCellState::kFree;
@@ -573,9 +579,11 @@ TEST(PlanningSnapshotContractTest,
       before_fine_replacement.TraversalCost(GridIndex{.x = 2, .y = 0}),
       0.0);
 
-  FineTraversabilityTile::StateArray replacement_fine_states;
+  auto replacement_fine_states_buffer = std::make_unique<FineTraversabilityTile::StateArray>();
+  auto& replacement_fine_states = *replacement_fine_states_buffer;
   replacement_fine_states.fill(FineCellState::kUnknown);
-  FineTraversabilityTile::CostArray replacement_fine_costs;
+  auto replacement_fine_costs_buffer = std::make_unique<FineTraversabilityTile::CostArray>();
+  auto& replacement_fine_costs = *replacement_fine_costs_buffer;
   replacement_fine_costs.fill(0.0);
   replacement_fine_states[TileCellOffset(GridIndex{.x = 2, .y = 0})] =
       FineCellState::kFree;
@@ -600,9 +608,11 @@ TEST(PlanningSnapshotContractTest,
   const SparseGridGeometry expanded_guidance_geometry(
       "map", 1.0, Vec3{}, GridIndex{.x = 0, .y = 0},
       GridIndex{.x = 3, .y = 1});
-  GlobalGuidanceTile::StateArray hidden_guidance_states;
+  auto hidden_guidance_states_buffer = std::make_unique<GlobalGuidanceTile::StateArray>();
+  auto& hidden_guidance_states = *hidden_guidance_states_buffer;
   hidden_guidance_states.fill(GuidanceCellState::kUnknown);
-  GlobalGuidanceTile::RiskArray hidden_guidance_risks;
+  auto hidden_guidance_risks_buffer = std::make_unique<GlobalGuidanceTile::RiskArray>();
+  auto& hidden_guidance_risks = *hidden_guidance_risks_buffer;
   hidden_guidance_risks.fill(0.0);
   hidden_guidance_states[TileCellOffset(GridIndex{.x = 2, .y = 0})] =
       GuidanceCellState::kCandidate;
@@ -628,9 +638,11 @@ TEST(PlanningSnapshotContractTest,
       before_guidance_replacement.TerrainRisk(GridIndex{.x = 2, .y = 0}),
       0.0);
 
-  GlobalGuidanceTile::StateArray replacement_guidance_states;
+  auto replacement_guidance_states_buffer = std::make_unique<GlobalGuidanceTile::StateArray>();
+  auto& replacement_guidance_states = *replacement_guidance_states_buffer;
   replacement_guidance_states.fill(GuidanceCellState::kUnknown);
-  GlobalGuidanceTile::RiskArray replacement_guidance_risks;
+  auto replacement_guidance_risks_buffer = std::make_unique<GlobalGuidanceTile::RiskArray>();
+  auto& replacement_guidance_risks = *replacement_guidance_risks_buffer;
   replacement_guidance_risks.fill(0.0);
   replacement_guidance_states[TileCellOffset(GridIndex{.x = 2, .y = 0})] =
       GuidanceCellState::kCandidate;

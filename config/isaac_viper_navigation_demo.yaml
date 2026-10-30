@@ -1,0 +1,81 @@
+# 仅用于原 Isaac 场景百米导航演示；禁止作为 Orin/实车能力档。
+simulation_only: true
+# 仅保存仿真适配值；项目几何、运动上限、有效视场从 sources 动态读取。
+sources:
+  capability: wheel_isaac_navigation_demo.yaml
+  exploration: exploration_navigation.yaml
+simulation:
+  mass:
+    chassis_kg: 40.0
+    steering_knuckle_kg: 0.5
+    wheel_kg: 2.0
+    total_kg: 50.0
+    source: legacy_simulation_user_confirmed
+    calibration_status: pending_real_calibration
+  mast:
+    center_m: [0.52, 0.0, 0.85]
+    size_m: [0.05, 0.05, 0.70]
+  odometry_adapter: simulation_truth
+sensors:
+  calibration_status: pending_real_calibration
+  origin_frame: base_footprint
+  forward_axis: '+X'
+  minimum_effective_range_m: 0.05
+  stereo:
+    baseline_m: 0.14
+    left_origin_m: [0.567, 0.07, 1.10]
+    right_origin_m: [0.567, -0.07, 1.10]
+    housing_center_m: [0.535, 0.0, 1.10]
+    housing_size_m: [0.06, 0.24, 0.08]
+    resolution: [640, 480]
+    frequency_hz: 15.0
+    focal_length_mm: 24.0
+    horizontal_aperture_mm: 48.0
+    vertical_aperture_mm: 36.0
+    calibration_status: pending_real_calibration
+  lidar:
+    origin_m: [0.587, 0.0, 1.235]
+    housing_center_m: [0.55, 0.0, 1.215]
+    housing_size_m: [0.06, 0.08, 0.08]
+    frequency_hz: 10.0
+    implementation: rtx_builtin_schema
+    calibration_status: pending_real_calibration
+  imu:
+    origin_m: [0.0, 0.0, 0.30]
+    frequency_hz: 100.0
+    implementation: physics_sensor
+    calibration_status: pending_real_calibration
+ros:
+  domain_id: 117
+  localhost_only: true
+  use_sim_time: true
+  frames:
+    map: map
+    odom: odom
+    base: base_link
+    footprint: base_footprint
+    left_optical: viper_left_camera_optical
+    right_optical: viper_right_camera_optical
+    lidar: viper_lidar
+    imu: viper_imu
+  topics:
+    command: /Car/T5/Car_Cmd_Vel
+    odometry: /Car/T3/localization/odometry
+    tf: /tf
+    clock: /clock
+    left_image: /Car/T3/sensors/stereo/left/image_raw
+    right_image: /Car/T3/sensors/stereo/right/image_raw
+    left_camera_info: /Car/T3/sensors/stereo/left/camera_info
+    right_camera_info: /Car/T3/sensors/stereo/right/camera_info
+    depth: /Car/T3/sensors/stereo/depth
+    depth_points: /Car/T3/sensors/stereo/points
+    lidar_raw: /Car/T3/sensors/lidar/raw_points
+    lidar_effective: /Car/T3/sensors/lidar/effective_points
+    imu: /Car/T3/sensors/imu
+# 这些是执行门控参数，不是另一份车辆能力上限。
+drive:
+  command_timeout_s: 0.5
+  steering_tolerance_rad: 0.02
+  steering_limit_rad: 1.5707963267948966
+  stopped_linear_speed_mps: 0.01
+  stopped_yaw_rate_radps: 0.01

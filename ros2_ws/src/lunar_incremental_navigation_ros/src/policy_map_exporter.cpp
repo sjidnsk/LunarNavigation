@@ -50,6 +50,25 @@ PolicyMapExporter::PolicyMapExporter(core::PlatformCapability capability,
 lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::Export(
     const PolicyMapExportInput& input, const std::uint64_t since_revision,
     const std::int64_t minimum_map_stamp_ns) const {
+  return ExportImpl(input, since_revision, minimum_map_stamp_ns, false);
+}
+
+lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::ExportObserved(
+    const PolicyMapExportInput& input, const std::uint64_t since_revision,
+    const std::int64_t minimum_map_stamp_ns) const {
+  return ExportImpl(input, since_revision, minimum_map_stamp_ns, true);
+}
+
+lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::ExportObserved(
+    const ObservedPolicyMapExportInput& input, const std::uint64_t since_revision,
+    const std::int64_t minimum_map_stamp_ns) const {
+  return ExportImpl(input.map, since_revision, minimum_map_stamp_ns, true, input.intrinsic.get());
+}
+
+lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::ExportImpl(
+    const PolicyMapExportInput& input, const std::uint64_t since_revision,
+    const std::int64_t minimum_map_stamp_ns, const bool observed_only,
+    const core::PlatformElevationEvaluator* intrinsic) const {
   lunar_planning_msgs::srv::GetPolicyMap::Response response;
   if (!input.fine) {
     response.ready = false;
@@ -72,6 +91,12 @@ lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::Export(
   // only this immutable fine/raw pair and its selected tile ids.
   response.full_snapshot = input.full_snapshot;
   response.base_revision = input.base_revision;
+  if (observed_only && !response.full_snapshot &&
+      (since_revision == 0U || input.base_revision != since_revision ||
+       since_revision > fine.fine_traversability_revision())) {
+    response.full_snapshot = true;
+    response.base_revision = 0U;
+  }
   const auto& geometry = fine.geometry();
   response.frame_id = geometry.frame_id();
   response.resolution_m = geometry.resolution_m();
@@ -89,12 +114,62 @@ lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::Export(
     response.anchor_pose.position.y = input.anchor->position_m.y;
     response.anchor_pose.orientation.w = std::cos(input.anchor->yaw_rad / 2.0);
     response.anchor_pose.orientation.z = std::sin(input.anchor->yaw_rad / 2.0);
+    if (observed_only) {
+      const core::GridIndex start{
+          static_cast<std::int64_t>(std::floor((input.anchor->position_m.x-geometry.origin_m().x)/geometry.resolution_m())),
+          static_cast<std::int64_t>(std::floor((input.anchor->position_m.y-geometry.origin_m().y)/geometry.resolution_m()))};
+      // 仅已认证的真实 FREE 格可作为直接连接；不调用任何起步补全。
+      bool supported = fine.State(start) == core::FineCellState::kFree;
+      const auto center=input.anchor->position_m;
+      const double radius=fine.hard_inflation_radius_m(),resolution=geometry.resolution_m();
+      const auto origin=geometry.origin_m();
+      supported = supported && center.x-radius>=origin.x+geometry.min_inclusive().x*resolution &&
+          center.x+radius<=origin.x+geometry.max_exclusive().x*resolution &&
+          center.y-radius>=origin.y+geometry.min_inclusive().y*resolution &&
+          center.y+radius<=origin.y+geometry.max_exclusive().y*resolution;
+      const auto native=core::MakePlatformElevationEvaluator(capability_);
+      const auto* support=intrinsic?intrinsic:native.get();
+      const auto minx=static_cast<std::int64_t>(std::floor((center.x-radius-origin.x)/resolution));
+      const auto maxx=static_cast<std::int64_t>(std::floor((center.x+radius-origin.x)/resolution));
+      const auto miny=static_cast<std::int64_t>(std::floor((center.y-radius-origin.y)/resolution));
+      const auto maxy=static_cast<std::int64_t>(std::floor((center.y+radius-origin.y)/resolution));
+      for(auto y=miny;supported&&y<=maxy;++y) for(auto x=minx;supported&&x<=maxx;++x) {
+        const core::GridIndex cell{x,y};
+        if(core::CircleIntersectsCellArea(center,radius,geometry,cell) &&
+           support->Evaluate(*fine.elevation(),cell).state!=core::IntrinsicCellState::kFree) supported=false;
+      }
+      response.stationary_support_ready = supported;
+      response.start_connection_status = static_cast<std::uint8_t>(supported
+          ? core::StartPatchResult::Status::kNotNeeded : core::StartPatchResult::Status::kUnresolved);
+      if (supported) {
+        response.start_connection_x.push_back(start.x);
+        response.start_connection_y.push_back(start.y);
+      } else {
+        response.ready = false;
+        response.reason_code = "INPUT_UNAVAILABLE";
+      }
+      const auto local = core::BuildLocalPlanningWindow(fine, input.anchor->position_m, input.local_window_size_m);
+      if (local.geometry) response.local_bounds = {local.geometry->min_inclusive().x,
+          local.geometry->min_inclusive().y,local.geometry->max_exclusive().x,local.geometry->max_exclusive().y};
+    } else {
+    const auto stationary = core::RequestLocalStartPatchBuilder{}.BuildStationary(
+        input.fine, *input.anchor, capability_, profile_);
+    response.stationary_support_ready =
+        stationary.view && stationary.status == core::StartPatchResult::Status::kReady;
     const auto local = core::BuildLocalPlanningWindow(
         fine, input.anchor->position_m, input.local_window_size_m);
     if (local.geometry) {
       const auto connections = core::RequestLocalStartPatchBuilder{}.BuildStartConnections(
           input.fine, *local.geometry, *input.anchor, capability_, profile_);
       response.start_connection_status = static_cast<std::uint8_t>(connections.status);
+      const auto patch = core::RequestLocalStartPatchBuilder{}.Build(
+          input.fine, *local.geometry, *input.anchor, capability_, profile_);
+      if (patch.view && patch.status == core::StartPatchResult::Status::kReady) {
+        for (const auto& cell : patch.view->overrides()) {
+          response.assumed_start_x.push_back(cell.index.x);
+          response.assumed_start_y.push_back(cell.index.y);
+        }
+      }
       for (const auto& connection : connections.connections) {
         response.start_connection_x.push_back(connection.index.x);
         response.start_connection_y.push_back(connection.index.y);
@@ -103,6 +178,7 @@ lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::Export(
                                local.geometry->max_exclusive().x, local.geometry->max_exclusive().y};
     } else {
       response.start_connection_status = static_cast<std::uint8_t>(core::StartPatchResult::Status::kUnresolved);
+    }
     }
   } else {
     response.start_connection_status = static_cast<std::uint8_t>(core::StartPatchResult::Status::kUnresolved);
@@ -138,7 +214,9 @@ lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::Export(
                                        static_cast<std::int64_t>(offset / core::kGridTileWidthCells)};
       const auto center = fine.elevation()->ElevationAt(cell);
       has_measured_center = has_measured_center || (center && std::isfinite(*center));
-      const auto classification = intrinsic_evaluator->Evaluate(*fine.elevation(), cell);
+      const auto classification = observed_only && intrinsic
+          ? intrinsic->Evaluate(*fine.elevation(), cell)
+          : intrinsic_evaluator->Evaluate(*fine.elevation(), cell);
       output.states.push_back(tile ? WireState(tile->State(offset)) : kPolicyMapUnknown);
       output.intrinsic_states.push_back(static_cast<std::uint8_t>(classification.state));
       output.observed.push_back(EffectiveObservedState(classification.state,

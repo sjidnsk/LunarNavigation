@@ -29,3 +29,33 @@ TEST(PlatformConfig, ModifiedProfileUsesConfiguredValuesAndRejectsInvalidSpeed) 
   EXPECT_NE(invalid.error_detail.find("maximum_forward_speed_mps"), std::string::npos);
   std::filesystem::remove(path);
 }
+
+// 演示能力档也必须走真实严格parser；simulation_only仅属于Python profile。
+TEST(PlatformConfig, IsaacNavigationDemoUsesStrictSchemaAndRetainsSafety) {
+  const auto path = std::filesystem::path{PLATFORM_CONFIG_DIR} /
+                    "wheel_isaac_navigation_demo.yaml";
+  const auto result = lunar::incremental_navigation_ros::LoadPlatformConfig(path, "wheel");
+  ASSERT_TRUE(result.capability) << result.error_detail;
+  const auto& wheel = std::get<lunar::incremental_navigation::WheeledCapability>(*result.capability);
+  EXPECT_DOUBLE_EQ(wheel.maximum_forward_speed_mps, 2.0);
+  EXPECT_DOUBLE_EQ(wheel.maximum_spin_rate_radps, 2.0);
+  EXPECT_DOUBLE_EQ(wheel.maximum_reverse_speed_mps, 0.2);
+  EXPECT_DOUBLE_EQ(wheel.maximum_acceleration_mps2, 0.5);
+  EXPECT_DOUBLE_EQ(wheel.maximum_braking_deceleration_mps2, 0.5);
+  EXPECT_DOUBLE_EQ(wheel.maximum_yaw_acceleration_radps2, 0.5);
+  EXPECT_DOUBLE_EQ(wheel.maximum_lateral_acceleration_mps2, 0.5);
+  EXPECT_DOUBLE_EQ(wheel.maximum_slope_rad, 0.3490658503988659);
+  EXPECT_DOUBLE_EQ(wheel.minimum_clearance_m, 0.4);
+  EXPECT_EQ(wheel.footprint_xy_m.size(), 4U);
+  EXPECT_EQ(wheel.motion_primitives.size(), 9U);
+
+  auto invalid = YAML::LoadFile(path.string());
+  invalid["simulation_only"] = true;
+  const auto invalid_path = std::filesystem::temp_directory_path() /
+                            "incremental_isaac_annotation_schema_test.yaml";
+  { std::ofstream stream(invalid_path); stream << invalid; }
+  const auto rejected = lunar::incremental_navigation_ros::LoadPlatformConfig(invalid_path, "wheel");
+  EXPECT_FALSE(rejected.capability);
+  EXPECT_NE(rejected.error_detail.find("unknown field: simulation_only"), std::string::npos);
+  std::filesystem::remove(invalid_path);
+}

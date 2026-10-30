@@ -107,6 +107,23 @@ class FineTraversabilityBuilder final {
       std::shared_ptr<const FineTraversabilitySnapshot> previous = nullptr,
       std::optional<FineElevationChangeSet> merged_changes = std::nullopt)
       const;
+
+  // 保守源格投影拥有独立分类语义；原始高程未变也可产生新 fine revision。
+  [[nodiscard]] std::shared_ptr<const FineTraversabilitySnapshot> DeriveProjected(
+      std::shared_ptr<const ElevationSnapshot> raw,
+      const PlatformCapability& capability,
+      const TraversabilityProfile& profile,
+      std::unique_ptr<const PlatformElevationEvaluator> intrinsic,
+      std::shared_ptr<const FineTraversabilitySnapshot> previous = nullptr) const;
+ private:
+  [[nodiscard]] std::shared_ptr<const FineTraversabilitySnapshot> DeriveImpl(
+      std::shared_ptr<const ElevationSnapshot> raw,
+      const PlatformCapability& capability,
+      const TraversabilityProfile& profile,
+      std::shared_ptr<const FineTraversabilitySnapshot> previous,
+      std::optional<FineElevationChangeSet> merged_changes,
+      std::unique_ptr<const PlatformElevationEvaluator> intrinsic,
+      bool projected) const;
 };
 
 }  // namespace lunar::incremental_navigation

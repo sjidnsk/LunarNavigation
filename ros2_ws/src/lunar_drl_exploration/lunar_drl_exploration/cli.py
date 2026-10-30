@@ -40,6 +40,7 @@ def parser():
         elif name == 'infer':
             cmd.add_argument('--actor', required=True, type=Path)
             cmd.add_argument('--task-topic', default='/Car/T4/exploration/task')
+            cmd.add_argument('--navigation-backend', choices=('incremental_v2','nav1cm'),default=None)
         else:
             cmd.add_argument('--checkpoint', required=True, type=Path)
             cmd.add_argument('--output', required=True, type=Path)
@@ -56,11 +57,16 @@ def load_config(args):
         text = args.config.read_text(encoding='utf-8')
         loaded = json.loads(text) if args.config.suffix == '.json' else yaml.safe_load(text)
         record = config_record(config)
+        if args.command == 'infer':
+            record['navigation_backend'] = config.navigation_backend
         for key, value in loaded.items():
             if key not in record: raise ValueError('unknown training setting: ' + key)
             if isinstance(record[key], dict): record[key].update(value)
             else: record[key] = value
         config = training_config_from_record(record)
+    # 推理专用优先级：显式 flag > 配置 > 旧默认；配置仍先完整验证。
+    if args.command == 'infer' and args.navigation_backend is not None:
+        config = replace(config, navigation_backend=args.navigation_backend)
     if args.sensor_range is not None:
         config = replace(config, sensor=replace(config.sensor, range_m=args.sensor_range))
     if args.sensor_fov is not None:
@@ -101,7 +107,7 @@ def main(argv=None):
         return evaluate(config, args.actor, seeds=args.seeds, families=args.families,
             extents=args.extents, budget=args.budget, output=args.output, domain_base=args.domain_base)
     from .evaluation import infer
-    return infer(config, args.actor, task_topic=args.task_topic)
+    return infer(config, args.actor, task_topic=args.task_topic,navigation_backend=config.navigation_backend)
 
 
 def console_main():

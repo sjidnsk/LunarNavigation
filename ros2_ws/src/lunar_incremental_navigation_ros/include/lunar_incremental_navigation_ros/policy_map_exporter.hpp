@@ -32,6 +32,12 @@ struct PolicyMapExportInput final {
   std::vector<lunar::incremental_navigation::TileIndex> dirty_tiles;
 };
 
+struct ObservedPolicyMapExportInput final {
+  PolicyMapExportInput map;
+  // 只用于本快照的源格保守分类；不改变原输入的公开布局。
+  std::shared_ptr<const lunar::incremental_navigation::PlatformElevationEvaluator> intrinsic;
+};
+
 class PolicyMapExporter final {
  public:
   PolicyMapExporter(lunar::incremental_navigation::PlatformCapability capability,
@@ -41,7 +47,19 @@ class PolicyMapExporter final {
       const PolicyMapExportInput& input, std::uint64_t since_revision,
       std::int64_t minimum_map_stamp_ns = 0) const;
 
+  [[nodiscard]] lunar_planning_msgs::srv::GetPolicyMap::Response ExportObserved(
+      const PolicyMapExportInput& input, std::uint64_t since_revision,
+      std::int64_t minimum_map_stamp_ns = 0) const;
+
+  [[nodiscard]] lunar_planning_msgs::srv::GetPolicyMap::Response ExportObserved(
+      const ObservedPolicyMapExportInput& input, std::uint64_t since_revision,
+      std::int64_t minimum_map_stamp_ns = 0) const;
+
  private:
+  [[nodiscard]] lunar_planning_msgs::srv::GetPolicyMap::Response ExportImpl(
+      const PolicyMapExportInput& input, std::uint64_t since_revision,
+      std::int64_t minimum_map_stamp_ns, bool observed_only,
+      const lunar::incremental_navigation::PlatformElevationEvaluator* intrinsic = nullptr) const;
   lunar::incremental_navigation::PlatformCapability capability_;
   lunar::incremental_navigation::TraversabilityProfile profile_;
 };

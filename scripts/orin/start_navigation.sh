@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 set -eo pipefail
-
 platform_type="${1:-wheel}"
 use_sim_time="${2:-false}"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-
-source /opt/ros/humble/setup.bash
-source "$repository_root/ros2_ws/install/setup.bash"
+# 保留四个历史位置参数；第五个参数显式选择旧栈。
+stack_mode="${5:-${LUNAR_NAVIGATION_MODE:-nav1cm}}"
+if [[ "$platform_type" == legged && $# -lt 5 ]]; then stack_mode=incremental_v2; fi
+source "${ROS_SETUP:-/opt/ros/humble/setup.bash}"
+source "${LUNAR_INSTALL_ROOT:-$repository_root/ros2_ws/install}/setup.bash"
 set -u
-exec ros2 launch lunar_pure_exploration_ros exploration_navigation.launch.py \
-  stack_mode:=incremental_v2 \
-  config_file:="${3:-$repository_root/config/exploration_navigation.yaml}" \
-  platform_type:="$platform_type" \
-  use_sim_time:="$use_sim_time" \
-  start_rviz:="${4:-false}" \
-  start_navigation:=true \
-  start_exploration:=false
+case "$stack_mode" in
+  nav1cm)
+    [[ "$platform_type" == wheel ]] || { echo 'nav1cm 仅支持 wheel' >&2; exit 2; }
+    exec ros2 launch lunar_pure_wheeled_controller nav1cm_wheel.launch.py \
+      params_file:="${3:-}" use_sim_time:="$use_sim_time" start_rviz:="${4:-false}" start_controller:=false ;;
+  incremental_v2)
+    exec ros2 launch lunar_pure_exploration_ros exploration_navigation.launch.py \
+      stack_mode:=incremental_v2 config_file:="${3:-$repository_root/config/exploration_navigation.yaml}" \
+      platform_type:="$platform_type" use_sim_time:="$use_sim_time" start_rviz:="${4:-false}" \
+      start_navigation:=true start_exploration:=false ;;
+  *) echo '未知导航模式：仅支持 nav1cm 或 incremental_v2' >&2; exit 2 ;;
+esac

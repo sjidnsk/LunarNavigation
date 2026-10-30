@@ -25,7 +25,7 @@ namespace {
 }
 
 // Local cell coordinates keep the distance comparison independent of world
-// offsets and resolution. No physical clearance threshold is introduced.
+// offsets and resolution. Physical clearance is certified separately by the view.
 using Point = local::BoundaryPoint;
 using Segment = local::BoundarySegment;
 
@@ -34,8 +34,8 @@ using Segment = local::BoundarySegment;
 class PhaseGeometry final {
  public:
   PhaseGeometry(const RequestLocalPlanningView& view, StartPhase phase,
-                const SearchControl& control)
-      : view_(view), phase_(phase), control_(control) {}
+                const SearchControl& control, double margin_m)
+      : view_(view), phase_(phase), control_(control), margin_m_(margin_m) {}
 
   [[nodiscard]] bool Build() {
     const auto& geometry = view_.geometry();
@@ -96,8 +96,8 @@ class PhaseGeometry final {
   }
 
   [[nodiscard]] bool Legal(const PathPoint& a, const PathPoint& b) const {
-    return !Interrupted(control_) && view_.CertifySegment(
-        a.pose.position_m, b.pose.position_m, a.phase, b.phase, &control_) &&
+    return !Interrupted(control_) && view_.CertifySegmentWithClearance(
+        a.pose.position_m, b.pose.position_m, a.phase, b.phase, margin_m_, &control_) &&
         !Interrupted(control_);
   }
 
@@ -128,6 +128,7 @@ class PhaseGeometry final {
   std::vector<Segment> boundary_;
   std::vector<unsigned char> allowed_;
   local::BoundaryDistanceIndex boundary_index_;
+  double margin_m_{};
 };
 
 [[nodiscard]] bool SameDirection(const PathPoint& a, const PathPoint& b,
@@ -142,7 +143,7 @@ class PhaseGeometry final {
 
 [[nodiscard]] bool SimplifyPhase(
     const RequestLocalPlanningView& view, std::span<const PathPoint> raw,
-    std::vector<PathPoint>& output, const SearchControl& control) {
+    std::vector<PathPoint>& output, const SearchControl& control, double margin_m) {
   std::vector<PathPoint> path;
   path.reserve(raw.size());
   for (const auto& point : raw) {
@@ -154,7 +155,7 @@ class PhaseGeometry final {
       path.push_back(point);
     }
   }
-  PhaseGeometry geometry(view, raw.front().phase, control);
+  PhaseGeometry geometry(view, raw.front().phase, control, margin_m);
   if (path.size() < 3) {
     if (path.size() == 1 && !geometry.Legal(path[0], path[0])) return false;
     if (path.size() == 2 && !geometry.Legal(path[0], path[1])) return false;
@@ -208,14 +209,21 @@ class PhaseGeometry final {
 std::vector<PathPoint> SimplifyPhaseAwarePath(
     const RequestLocalPlanningView& view, std::span<const PathPoint> raw,
     const SearchControl& control) {
+  return SimplifyPhaseAwarePath(view, raw, control, 0.);
+}
+
+std::vector<PathPoint> SimplifyPhaseAwarePath(
+    const RequestLocalPlanningView& view, std::span<const PathPoint> raw,
+    const SearchControl& control, double execution_clearance_m) {
+  if (!std::isfinite(execution_clearance_m) || execution_clearance_m<0.) return {};
   if (Interrupted(control)) return {};
   // Same-phase runs are checked after collinear compression. Phase-switch
   // edges are never compressed, and short paths need the same certification.
   if (raw.size() < 3) {
     for (std::size_t i = 0; i < raw.size(); ++i) {
       const auto& from = raw[i == 0 ? 0 : i - 1];
-      if (!view.CertifySegment(from.pose.position_m, raw[i].pose.position_m,
-                               from.phase, raw[i].phase, &control)) return {};
+      if (!view.CertifySegmentWithClearance(from.pose.position_m, raw[i].pose.position_m,
+                               from.phase, raw[i].phase, execution_clearance_m, &control)) return {};
     }
     return {raw.begin(), raw.end()};
   }
@@ -223,12 +231,12 @@ std::vector<PathPoint> SimplifyPhaseAwarePath(
   output.reserve(raw.size());
   for (std::size_t begin = 0; begin < raw.size();) {
     if (Interrupted(control)) return {};
-    if (begin > 0 && !view.CertifySegment(
+    if (begin > 0 && !view.CertifySegmentWithClearance(
             raw[begin - 1].pose.position_m, raw[begin].pose.position_m,
-            raw[begin - 1].phase, raw[begin].phase, &control)) return {};
+            raw[begin - 1].phase, raw[begin].phase, execution_clearance_m, &control)) return {};
     std::size_t end = begin + 1;
     while (end < raw.size() && raw[end].phase == raw[begin].phase) ++end;
-    if (!SimplifyPhase(view, raw.subspan(begin, end - begin), output, control)) {
+    if (!SimplifyPhase(view, raw.subspan(begin, end - begin), output, control, execution_clearance_m)) {
       return {};
     }
     begin = end;

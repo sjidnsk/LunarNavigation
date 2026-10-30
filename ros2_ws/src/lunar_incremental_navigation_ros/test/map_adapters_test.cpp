@@ -236,5 +236,29 @@ TEST(MapAdaptersTest, TerrainLayersRespectIndependentLayoutsAndAbsentCells) {
   EXPECT_FALSE(AdaptLocalElevation(SnapshotFor(map)).value);
 }
 
+
+TEST(MapAdaptersTest, ExplorationComposesGridPoseYawAndZeroStampTfWithoutRelabelingSource) {
+  auto message=FourLayerMap();
+  message.info.pose.orientation.w=std::cos(.2);
+  message.info.pose.orientation.z=std::sin(.2);
+  auto input=SnapshotFor(message);
+  input.map_from_odom->transform.rotation.w=std::cos(.3);
+  input.map_from_odom->transform.rotation.z=std::sin(.3);
+  const auto adapted=AdaptExplorationElevation(input);
+  ASSERT_TRUE(adapted.value);
+  EXPECT_DOUBLE_EQ(adapted.value->geometry.resolution_m,.2);
+  EXPECT_DOUBLE_EQ(adapted.value->geometry.origin_m.x,-.3);
+  EXPECT_NEAR(adapted.value->map_from_source.rotation.w,std::cos(.5),1e-12);
+  EXPECT_NEAR(adapted.value->map_from_source.rotation.z,std::sin(.5),1e-12);
+  EXPECT_NEAR(adapted.value->map_from_source.translation_m.x,7.+3.*std::cos(.6)-4.*std::sin(.6),1e-12);
+  EXPECT_EQ(adapted.value->map_from_source.stamp.nanoseconds_since_epoch,0);
+  EXPECT_FALSE(AdaptLocalElevation(input).value);
+  auto terrain=SnapshotFor(TerrainMap());
+  terrain.map_from_odom->transform.rotation.w=std::cos(.2);
+  terrain.map_from_odom->transform.rotation.z=std::sin(.2);
+  EXPECT_TRUE(AdaptExplorationElevation(terrain).value);
+  EXPECT_FALSE(AdaptLocalElevation(terrain).value);
+}
+
 }  // namespace
 }  // namespace lunar::incremental_navigation_ros

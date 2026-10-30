@@ -21,3 +21,10 @@ int64[4] local_bounds
 float64 goal_position_tolerance_m
 float64 goal_yaw_tolerance_rad
 lunar_planning_msgs/PolicyMapTile[] tiles
+# Request-local UNKNOWN prefix certified by native start-patch builder.
+# These cells remain UNKNOWN in tiles; they are not observed FREE cells.
+int64[] assumed_start_x
+int64[] assumed_start_y
+# Native BuildStationary result for this response's anchor_pose/fine_revision.
+# Authorizes stationary support only; never observed FREE or translating space.
+bool stationary_support_ready

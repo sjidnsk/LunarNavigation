@@ -32,16 +32,17 @@ setup(
         Extension(
             "lunar_drl_terrain_native",
             ["native/terrain.cpp", "native/visibility.cpp"],
-            include_dirs=[str(core_include)] + [str(p / "include") for p in prefixes],
+            include_dirs=[str(p / "include") for p in prefixes] + [str(core_include)],
             depends=["native/grid_buffer.hpp"],
-            library_dirs=core_libs,
+            library_dirs=core_libs[:1],
             libraries=["lunar_incremental_navigation_core"],
-            runtime_library_dirs=core_libs,
+            runtime_library_dirs=core_libs[:1],
             language="c++",
             extra_compile_args=["-std=c++20", "-O3", "-Wall", "-Wextra"],
         )
     ],
-    entry_points={"console_scripts": ["lunar-drl = lunar_drl_exploration.cli:console_main"]},
+    entry_points={"console_scripts": ["lunar-drl = lunar_drl_exploration.cli:console_main",
+                                      "lunar_drl_inference_node = lunar_drl_exploration.inference_node:main"]},
     tests_require=["pytest"],
     install_requires=["numpy", "PyYAML", "scipy"],
 )

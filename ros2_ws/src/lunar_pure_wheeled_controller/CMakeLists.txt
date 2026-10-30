@@ -17,17 +17,33 @@ install(PROGRAMS
   scripts/lunar_pure_wheeled_controller_node.py
   DESTINATION lib/${PROJECT_NAME})
 
+install(FILES README.md DESTINATION share/${PROJECT_NAME})
+
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(${PROJECT_NAME}_reference_seed_test test/test_reference_seed.py)
+  ament_add_pytest_test(${PROJECT_NAME}_progress_anchor_lifecycle_test test/test_progress_anchor_lifecycle.py)
+  ament_add_pytest_test(${PROJECT_NAME}_terminal_execution_contract_test test/test_terminal_execution_contract.py)
+  ament_add_pytest_test(${PROJECT_NAME}_execution_contract_ros_test test/test_execution_contract_ros.py)
+  ament_add_pytest_test(${PROJECT_NAME}_motion_capability_test test/test_motion_capability.py)
+  ament_add_pytest_test(${PROJECT_NAME}_motion_model_node_test test/test_motion_model_node.py)
+  ament_add_pytest_test(${PROJECT_NAME}_nav1cm_launch_test test/test_nav1cm_launch.py)
+  ament_add_pytest_test(${PROJECT_NAME}_p3_map_source_test test/test_p3_map_source.py)
   ament_add_pytest_test(${PROJECT_NAME}_shutdown_test test/test_shutdown.py)
   ament_add_pytest_test(${PROJECT_NAME}_reference_test test/test_reference.py)
   ament_add_pytest_test(${PROJECT_NAME}_incremental_path_test test/test_incremental_path.py)
   ament_add_pytest_test(${PROJECT_NAME}_tracking_test test/test_tracking.py)
   ament_add_pytest_test(${PROJECT_NAME}_execution_test test/test_execution.py)
+  ament_add_pytest_test(${PROJECT_NAME}_short_terminal_test test/test_short_terminal_execution.py)
   ament_add_pytest_test(${PROJECT_NAME}_node_test test/test_node.py)
+  ament_add_pytest_test(${PROJECT_NAME}_standard_path_test test/test_standard_path_follower.py)
+  ament_add_pytest_test(${PROJECT_NAME}_mppi_test test/test_mppi.py)
+  ament_add_pytest_test(${PROJECT_NAME}_mppi_node_test test/test_mppi_node.py)
+  ament_add_pytest_test(${PROJECT_NAME}_mppi_reference_geometry_test test/test_mppi_reference_geometry.py)
+  ament_add_pytest_test(${PROJECT_NAME}_mppi_path_follower_swept_map_test test/test_mppi_path_follower_swept_map.py)
 endif()
 
 ament_package()

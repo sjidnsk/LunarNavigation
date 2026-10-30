@@ -16,3 +16,8 @@ float64 heading_error_rad
 float64 linear_speed_mps
 float64 angular_speed_radps
 string reason
+
+# 标准Path执行合同；旧增量参考发布器保持缺省值。
+string reference_digest
+uint8 reference_intent
+bool reference_accepted

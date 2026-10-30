@@ -1001,5 +1001,36 @@ TEST(TerrainMeasurements, VisibleCenterEvidenceSurvivesApplicationBaseline) {
       IntrinsicCellState::kBlocked);
 }
 
+
+class ProjectedFixture final : public PlatformElevationEvaluator {
+ public:
+  explicit ProjectedFixture(IntrinsicCellState state):state_(state) {}
+  IntrinsicTraversalEvaluation Evaluate(const ElevationRangeView& raw,GridIndex index) const override {
+    if(index==GridIndex{10,10}) return {.state=state_};
+    return MakePlatformElevationEvaluator(WheelCapability())->Evaluate(raw,index);
+  }
+ private:
+  IntrinsicCellState state_;
+};
+TEST(FineTraversabilityBuilderProjected, SameRawNewIntrinsicHasIndependentRevisionAndLegacyIsUnchanged) {
+  PersistentElevationMap raw;
+  const auto elevation=Snapshot(raw,Geometry(21,21),std::vector<float>(441,0.F));
+  FineTraversabilityBuilder builder;
+  const auto ordinary=builder.Derive(elevation,WheelCapability(),Profile());
+  ASSERT_EQ(ordinary->State({10,10}),FineCellState::kFree);
+  auto blocked=builder.DeriveProjected(elevation,WheelCapability(),Profile(),
+    std::make_unique<ProjectedFixture>(IntrinsicCellState::kBlocked));
+  EXPECT_EQ(blocked->State({10,10}),FineCellState::kBlocked);
+  auto unknown=builder.DeriveProjected(elevation,WheelCapability(),Profile(),
+    std::make_unique<ProjectedFixture>(IntrinsicCellState::kUnknown),blocked);
+  EXPECT_EQ(unknown->State({10,10}),FineCellState::kUnknown);
+  EXPECT_EQ(unknown->raw_elevation_revision(),blocked->raw_elevation_revision());
+  EXPECT_EQ(unknown->fine_traversability_revision(),blocked->fine_traversability_revision()+1);
+  EXPECT_NE(unknown->platform_profile_hash(),ordinary->platform_profile_hash());
+  EXPECT_EQ(builder.Derive(elevation,WheelCapability(),Profile(),ordinary),ordinary);
+  EXPECT_EQ(ordinary->State({10,10}),FineCellState::kFree);
+  EXPECT_THROW(builder.DeriveProjected(elevation,WheelCapability(),Profile(),nullptr),std::invalid_argument);
+}
+
 }  // namespace
 }  // namespace lunar::incremental_navigation
