@@ -20,11 +20,19 @@ class ShapedRoute:
         object.__setattr__(self, "proof_boxes", _readonly_array(boxes, np.float64, 2, 4))
 
 
-def _boxes(value):
+def _boxes(value, check=None):
     boxes = np.asarray(value, dtype=float)
-    if (boxes.ndim != 2 or boxes.shape[1] != 4 or not np.isfinite(boxes).all()
-            or np.any(boxes[:, :2] > boxes[:, 2:])):
+    if boxes.ndim != 2 or boxes.shape[1] != 4:
         raise ValueError("boxes must be finite ordered (n, 4) bounds")
+    for offset in range(0, len(boxes), 1024):
+        if check is not None:
+            check()
+        batch = boxes[offset:offset + 1024]
+        invalid = not np.isfinite(batch).all() or np.any(batch[:, :2] > batch[:, 2:])
+        if check is not None:
+            check()
+        if invalid:
+            raise ValueError("boxes must be finite ordered (n, 4) bounds")
     return boxes
 
 
@@ -52,23 +60,26 @@ class _Exhausted(Exception):
 
 
 def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
-                step_m=.05, max_points=4096, clock=perf_counter) -> ShapedRoute:
+                step_m=.05, max_points=4096, clock=perf_counter,
+                raw_verified=False) -> ShapedRoute:
     """新全局路线的有界后处理；耗尽回退整条已验证原路线，不留部分曲线。
 
     二次曲线控制点为原拐角，端点分别位于相邻原线段上。每次 De Casteljau
     二分的控制三角形包住整段曲线，叶 AABB 与障碍严格分离才接受该段。
     叶控制多边形长度上限同时限制采样间距；采样折线仍独立连续重验。
+
+    raw_verified=True 仅供已用同一 blocked_boxes 连续认证原路线的调用方复用
+    证明，不能用于跳过新图复核。默认先在同一预算内验证原路线；未完成证明
+    即耗尽时抛 ValueError，只有已有原路线证明时才可安全整条回退。
+    预算是协作式墙钟限制；每个最多 1024 障碍的数值操作前后检查，不是硬实时。
     """
     if (not np.isfinite(budget_s) or budget_s < 0 or not np.isfinite(max_trim_m)
             or max_trim_m < 0 or not np.isfinite(step_m) or step_m <= 0
-            or type(max_points) is not int or max_points < 2):
+            or type(max_points) is not int or max_points < 2
+            or type(raw_verified) is not bool):
         raise ValueError("invalid smoothing budget, trim, step or point limit")
-    blocked = _boxes(blocked_boxes)
     began = clock()
     points = route.points
-    # 即使预算为零，也不能将未经验证或已碰撞的 raw 路线作为安全回退。
-    if not all(_segment_clear(a, b, blocked) for a, b in zip(points[:-1], points[1:])):
-        raise ValueError("raw route collision")
 
     def fallback(reason):
         return ShapedRoute(route, np.empty((0, 4)), False, reason)
@@ -77,6 +88,39 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
         now = clock()
         if not np.isfinite(now) or now - began >= budget_s:
             raise _Exhausted("BUDGET_EXHAUSTED")
+
+    def segment_clear(a, b):
+        check()
+        for offset in range(0, len(blocked), 1024):
+            check()
+            clear = _segment_clear(a, b, blocked[offset:offset + 1024])
+            check()
+            if not clear:
+                return False
+        return True
+
+    def overlaps(box):
+        check()
+        for offset in range(0, len(blocked), 1024):
+            check()
+            collision = _overlaps(box, blocked[offset:offset + 1024])
+            check()
+            if collision:
+                return True
+        return False
+
+    try:
+        # 起钟在障碍准备之前；空障碍无需逐边扫描即可完成原路线证明。
+        blocked = _boxes(blocked_boxes, check)
+        if not raw_verified and len(blocked):
+            for a, b in zip(points[:-1], points[1:]):
+                if not segment_clear(a, b):
+                    raise ValueError("raw route collision")
+        raw_verified = True
+    except _Exhausted as exhausted:
+        if not raw_verified:
+            raise ValueError("raw validation budget exhausted") from exhausted
+        return fallback(str(exhausted))
 
     output = [points[0]]
     proof = []
@@ -105,11 +149,11 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
         # 浮点二分和凸包求界向外留余量，不让舍入产生虚假严格分离。
         pad = 32 * np.finfo(float).eps * max(1., float(np.max(np.abs(controls))))
         box = np.r_[np.min(controls, axis=0) - pad, np.max(controls, axis=0) + pad]
-        overlaps = _overlaps(box, blocked)
-        if overlaps and (not _segment_clear(a, a, blocked) or not _segment_clear(b, b, blocked)):
+        collision = overlaps(box)
+        if collision and (not segment_clear(a, a) or not segment_clear(b, b)):
             return None
         length_bound = np.linalg.norm(control - a) + np.linalg.norm(b - control)
-        if not overlaps and length_bound <= step_m:
+        if not collision and length_bound <= step_m:
             return [b], [box]
         left = (a + control) / 2
         right = (control + b) / 2
@@ -145,7 +189,7 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
                     candidate = certify(a, corner, b)
                     if candidate is not None:
                         samples, boxes = candidate
-                        if all(_segment_clear(x, y, blocked)
+                        if all(segment_clear(x, y)
                                for x, y in zip([a] + samples[:-1], samples)):
                             break
                         candidate = None
@@ -164,8 +208,13 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
         check()
         shaped = ShapedRoute(Route(route.version, route.map_epoch, np.asarray(output), route.goal),
                              np.asarray(proof).reshape(-1, 4), True, "SMOOTHED")
-        if not reference_clear(shaped, blocked):
-            return fallback("GEOMETRY_REJECTED")
+        # 不调用无 deadline 的公开新图复核入口；逐边和逐叶共享本次预算。
+        for a, b in zip(shaped.route.points[:-1], shaped.route.points[1:]):
+            if not segment_clear(a, b):
+                return fallback("GEOMETRY_REJECTED")
+        for box in shaped.proof_boxes:
+            if overlaps(box):
+                return fallback("GEOMETRY_REJECTED")
         check()
         return shaped
     except _Exhausted as exhausted:

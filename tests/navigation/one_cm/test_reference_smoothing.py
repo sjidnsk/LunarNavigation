@@ -201,3 +201,131 @@ def test_long_straight_connectors_do_not_consume_curve_point_budget():
     curved = result.route.points[1:-1]
     assert np.max(np.linalg.norm(np.diff(curved, axis=0), axis=1)) <= .05 + 1e-12
     assert api().reference_clear(result, np.empty((0, 4)))
+
+
+def test_unverified_raw_with_obstacles_cannot_fall_back_when_budget_is_zero():
+    blocked = np.asarray([[20., 20., 21., 21.]])
+    with pytest.raises(ValueError, match='raw validation budget exhausted'):
+        api().shape_route(route(), blocked, budget_s=0)
+
+
+def test_already_verified_raw_has_constant_work_zero_budget_fallback(monkeypatch):
+    raw = route()
+    blocked = np.tile((20., 20., 21., 21.), (20000, 1))
+
+    def forbidden_collision_scan(*args):
+        pytest.fail('zero-budget trusted fallback must not scan obstacle geometry')
+
+    monkeypatch.setattr(api(), '_segment_clear', forbidden_collision_scan)
+    monkeypatch.setattr(api(), '_overlaps', forbidden_collision_scan)
+    result = api().shape_route(raw, blocked, budget_s=0, raw_verified=True)
+    assert result.route is raw and not result.changed and not len(result.proof_boxes)
+    assert 'BUDGET' in result.reason
+
+
+def test_unverified_raw_stops_collision_work_at_deadline(monkeypatch):
+    raw = route(np.column_stack((np.arange(1000), np.zeros(1000))))
+    blocked = np.tile((2000., 20., 2001., 21.), (20000, 1))
+    now = 0.
+    calls = 0
+    original = api()._segment_clear
+
+    def timed_segment(a, b, boxes):
+        nonlocal now, calls
+        assert len(boxes) <= 1024
+        clear = original(a, b, boxes)
+        calls += 1
+        now += .01
+        return clear
+
+    monkeypatch.setattr(api(), '_segment_clear', timed_segment)
+    with pytest.raises(ValueError, match='raw validation budget exhausted'):
+        api().shape_route(raw, blocked, budget_s=.025, clock=lambda: now)
+    assert calls == 3
+
+
+def test_curve_and_final_revalidation_bound_obstacle_batches(monkeypatch):
+    blocked = np.tile((20., 20., 21., 21.), (2050, 1))
+    segment = api()._segment_clear
+    overlaps = api()._overlaps
+    segment_sizes, overlap_sizes = [], []
+
+    def bounded_segment(a, b, boxes):
+        segment_sizes.append(len(boxes))
+        assert 0 < len(boxes) <= 1024
+        return segment(a, b, boxes)
+
+    def bounded_overlap(box, boxes):
+        overlap_sizes.append(len(boxes))
+        assert 0 < len(boxes) <= 1024
+        return overlaps(box, boxes)
+
+    monkeypatch.setattr(api(), '_segment_clear', bounded_segment)
+    monkeypatch.setattr(api(), '_overlaps', bounded_overlap)
+    result = shape(boxes=blocked, raw_verified=True)
+    assert result.changed
+    assert 1024 in segment_sizes and 2 in segment_sizes
+    assert 1024 in overlap_sizes and 2 in overlap_sizes
+
+
+def test_final_connector_revalidation_expiry_discards_candidate_immediately(monkeypatch):
+    raw = route()
+    blocked = np.asarray([[20., 20., 21., 21.]])
+    original = api()._segment_clear
+    expired = False
+
+    def expire_on_final_connector(a, b, boxes):
+        nonlocal expired
+        assert not expired, 'geometry work continued after the final-check deadline'
+        clear = original(a, b, boxes)
+        if np.array_equal(a, (0, 0)) and np.array_equal(b, (1.5, 0)):
+            expired = True
+        return clear
+
+    monkeypatch.setattr(api(), '_segment_clear', expire_on_final_connector)
+    result = api().shape_route(raw, blocked, raw_verified=True, clock=lambda: 1. if expired else 0.)
+    assert expired
+    assert result.route is raw and not result.changed and not len(result.proof_boxes)
+    assert 'BUDGET' in result.reason
+
+
+def test_trusted_raw_still_checks_curve_evidence_and_sampled_edges():
+    blocked = np.asarray([[1.84, .14, 1.90, .20]])
+    result = shape(boxes=blocked, raw_verified=True)
+    assert result.changed and api().reference_clear(result, blocked)
+    assert np.min(result.proof_boxes[:, 0]) > 1.5
+
+
+def test_final_curve_proof_revalidation_checks_deadline_after_each_batch(monkeypatch):
+    raw = route()
+    blocked = np.asarray([[20., 20., 21., 21.]])
+    original = api()._overlaps
+    first_leaf = None
+    expired = False
+
+    def expire_on_repeated_leaf(box, boxes):
+        nonlocal first_leaf, expired
+        assert not expired, 'curve-proof work continued after the final-check deadline'
+        collision = original(box, boxes)
+        if first_leaf is None and np.max(box[2:] - box[:2]) < .04:
+            first_leaf = box.copy()
+        elif first_leaf is not None and np.array_equal(box, first_leaf):
+            expired = True
+        return collision
+
+    monkeypatch.setattr(api(), '_overlaps', expire_on_repeated_leaf)
+    result = api().shape_route(raw, blocked, raw_verified=True, clock=lambda: 1. if expired else 0.)
+    assert expired
+    assert result.route is raw and not result.changed and not len(result.proof_boxes)
+    assert 'BUDGET' in result.reason
+
+
+def test_empty_obstacles_need_no_raw_edge_scan_for_zero_budget(monkeypatch):
+    raw = route(np.column_stack((np.arange(1000), np.zeros(1000))))
+
+    def forbidden_collision_scan(*args):
+        pytest.fail('empty obstacles should not require a raw edge scan')
+
+    monkeypatch.setattr(api(), '_segment_clear', forbidden_collision_scan)
+    result = api().shape_route(raw, np.empty((0, 4)), budget_s=0)
+    assert result.route is raw and not result.changed and 'BUDGET' in result.reason
