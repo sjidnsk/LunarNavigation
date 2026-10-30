@@ -187,3 +187,83 @@ def test_failed_same_revision_cannot_be_overwritten_with_completed():
     assert task.offer_execution_status(failed,.1)
     assert not task.offer_execution_status(replace(failed,state=5,stamp_ns=11),.2)
     assert task._execution_status is failed
+
+
+def accepted_reference_after_catalog_rollover():
+    session, Goal = make_session()
+    task = NavigationTaskCoordinator(session)
+    task.configure_execution_feedback(required=True)
+    task.submit('a', Goal(0, 3, 0), 0.)
+    reference = ref(task)
+    task.register_execution_reference(reference, 0.)
+    status = ExecutionStatus(reference.session_id, 1, reference.path_digest, FOLLOW, 1, True, 10)
+    assert task.offer_execution_status(status, .01)
+    for revision in range(2, 131):
+        now = revision * .05
+        task.register_execution_reference(replace(reference, revision=revision), now)
+        status = replace(status, stamp_ns=revision + 10)
+        assert task.offer_execution_status(status, now)
+        assert task.check_execution_fault(now) is None
+    return task, reference, status
+
+
+def test_active_accepted_reference_heartbeat_survives_catalog_rollover():
+    task, reference, status = accepted_reference_after_catalog_rollover()
+    assert len(task._references) == 128
+    assert task.check_execution_fault(8.49) is None
+    assert task.check_execution_fault(8.51) == 'EXECUTION_FEEDBACK_TIMEOUT'
+
+
+@pytest.mark.parametrize('changes', [
+    {'session_id': 'b' * 32}, {'path_digest': 'b' * 64}, {'intent': HOLD},
+    {'stamp_ns': 140}, {'stamp_ns': 139},
+])
+def test_pinned_reference_still_enforces_exact_identity_and_time(changes):
+    task, reference, status = accepted_reference_after_catalog_rollover()
+    assert not task.offer_execution_status(replace(status, **changes), 6.6)
+    assert task.check_execution_fault(8.51) == 'EXECUTION_FEEDBACK_TIMEOUT'
+
+
+def test_pinned_reference_is_replaced_only_by_real_acceptance_and_reset_on_new_task():
+    task, reference, status = accepted_reference_after_catalog_rollover()
+    newer = replace(status, revision=130, accepted=False, stamp_ns=141)
+    assert task.offer_execution_status(newer, 6.6)
+    assert task.check_execution_fault(8.51) == 'EXECUTION_FEEDBACK_TIMEOUT'
+    assert task.offer_execution_status(replace(newer, accepted=True, stamp_ns=142), 6.7)
+    assert not task.offer_execution_status(replace(status, stamp_ns=143), 6.8)
+    assert not task.offer_execution_status(replace(status, state=5, stamp_ns=144), 6.9)
+    # 旧pin已经退休且不在最近128条中，不能无界保存旧执行身份。
+    assert not task.offer_execution_status(replace(status, state=6, stamp_ns=145), 7.)
+    session, Goal = make_session()
+    task.submit('b', Goal(0, -3, 0), 7.1)
+    assert not task.offer_execution_status(replace(newer, accepted=True, stamp_ns=146), 7.2)
+    assert task.check_execution_fault(9.11) == 'EXECUTION_FEEDBACK_TIMEOUT'
+
+
+def test_pinned_accepted_failure_is_latched_after_catalog_rollover():
+    task, reference, status = accepted_reference_after_catalog_rollover()
+    failure = replace(status, state=6, accepted=False, stamp_ns=141, reason='LATE_ACCEPTED_FAILURE')
+    assert task.offer_execution_status(failure, 6.6)
+    assert task.check_execution_fault(6.6) == 'LATE_ACCEPTED_FAILURE'
+    assert not task.offer_execution_status(replace(status, state=5, stamp_ns=142), 6.7)
+
+
+def test_pinned_delayed_failure_does_not_regress_newer_unaccepted_status():
+    task, reference, status = accepted_reference_after_catalog_rollover()
+    newer = replace(status, revision=130, accepted=False, stamp_ns=150)
+    assert task.offer_execution_status(newer, 6.6)
+    failure = replace(status, state=6, stamp_ns=149, reason='LATE_ACCEPTED_FAILURE')
+    assert task.offer_execution_status(failure, 6.7)
+    assert task.check_execution_fault(6.7) == 'LATE_ACCEPTED_FAILURE'
+    assert task._execution_status is newer
+    assert not task.offer_execution_status(replace(status, state=5, stamp_ns=151), 6.8)
+
+
+def test_pinned_terminal_reference_cannot_resume_after_catalog_rollover():
+    task, reference, status = accepted_reference_after_catalog_rollover()
+    assert task.offer_execution_status(replace(status, state=5, stamp_ns=141), 6.6)
+    for revision in range(131, 261):
+        task.register_execution_reference(replace(reference, revision=revision), 6.7)
+    assert not task.offer_execution_status(replace(status, stamp_ns=142), 6.8)
+    assert task.offer_execution_status(replace(status, state=6, stamp_ns=143, reason='TERMINAL_FAILURE'), 6.9)
+    assert task.check_execution_fault(6.9) == 'TERMINAL_FAILURE'
