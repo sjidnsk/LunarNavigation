@@ -1,3 +1,4 @@
+#include <yaml-cpp/yaml.h>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -240,3 +241,51 @@ TEST(PlatformConfig, AcceptsExactPrimitiveProjectionDrift) {
 }
 
 }  // namespace
+
+// 使用实际配置和真实解析入口，覆盖可选字段与严格拒绝边界。
+TEST(PlatformConfig, WheelMotionModelCompatibilityAndStrictValidation) {
+  for (const auto* file : {"wheel.yaml", "wheel_orin.yaml"}) {
+    SCOPED_TRACE(file);
+    auto original = YAML::LoadFile(std::string{LUNAR_PURE_PLANNER_CONFIG_DIR} + "/" + file);
+    const auto path = std::filesystem::temp_directory_path() /
+        "lunar_pure_planner_ros_motion_model_test.yaml";
+    const auto load = [&](const YAML::Node& config) {
+      { std::ofstream stream(path); stream << config; }
+      return lunar::pure_planner_ros::LoadPlatformConfig(path, "wheel");
+    };
+    // Orin 文件含旧规划入口不负责的启动盲区配置；保留其严格拒绝，
+    // 再仅投影掉该已知字段，独立检验本次运动模型字段兼容性。
+    if (original["start_blind_zone_margin_m"]) {
+      const auto unsupported = load(original);
+      ASSERT_FALSE(unsupported.capability);
+      EXPECT_NE(unsupported.error_detail.find("unknown field: start_blind_zone_margin_m"),
+                std::string::npos);
+      original.remove("start_blind_zone_margin_m");
+    }
+    for (const auto* model : {"differential_drive", "curvature_limited"}) {
+      SCOPED_TRACE(model);
+      auto config = YAML::Clone(original);
+      config["capability"]["motion_model"] = model;
+      const auto result = load(config);
+      ASSERT_TRUE(result.capability) << result.error_detail;
+      const auto& wheel = std::get<lunar::pure_planning::WheeledCapability>(*result.capability);
+      EXPECT_DOUBLE_EQ(wheel.maximum_forward_speed_mps,
+                       original["capability"]["maximum_forward_speed_mps"].as<double>());
+      EXPECT_DOUBLE_EQ(wheel.footprint_xy_m.front().x,
+                       original["capability"]["footprint_xy_m"][0][0].as<double>());
+    }
+    auto legacy = YAML::Clone(original);
+    legacy["capability"].remove("motion_model");
+    ASSERT_TRUE(load(legacy).capability);
+    for (const auto* invalid : {"differential_driv", "", "null", "[differential_drive]", "{value: differential_drive}"}) {
+      SCOPED_TRACE(invalid);
+      auto config = YAML::Clone(original);
+      config["capability"]["motion_model"] = YAML::Load(invalid);
+      EXPECT_FALSE(load(config).capability);
+    }
+    auto typo = YAML::Clone(legacy);
+    typo["capability"]["motion_modle"] = "differential_drive";
+    EXPECT_FALSE(load(typo).capability);
+    std::filesystem::remove(path);
+  }
+}

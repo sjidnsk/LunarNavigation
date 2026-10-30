@@ -2,6 +2,7 @@
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <gtest/gtest.h>
+#include <yaml-cpp/yaml.h>
 
 #include <atomic>
 #include <cmath>
@@ -76,6 +77,46 @@ class TemporaryYaml final {
 std::string WheelYaml() { return ReadText(PlannerConfigPath("wheel.yaml")); }
 
 std::string LeggedYaml() { return ReadText(PlannerConfigPath("legged.yaml")); }
+
+
+TEST(PlatformConfigLoader, WheelMotionModelCompatibilityAndStrictValidation) {
+  for (const auto* file : {"wheel.yaml", "wheel_orin.yaml"}) {
+    SCOPED_TRACE(file);
+    auto original = YAML::LoadFile(PlannerConfigPath(file).string());
+    const auto load = [&](const YAML::Node& config) {
+      std::ostringstream text;
+      text << config;
+      const TemporaryYaml yaml{text.str()};
+      return LoadPlatformConfig(yaml.path(), "wheel");
+    };
+    // 此旧入口不消费 Orin 启动盲区；先保留原样拒绝，再检验能力字段。
+    if (original["start_blind_zone_margin_m"]) {
+      EXPECT_THROW(load(original), std::invalid_argument);
+      original.remove("start_blind_zone_margin_m");
+    }
+    for (const auto* model : {"differential_drive", "curvature_limited"}) {
+      auto config = YAML::Clone(original);
+      config["capability"]["motion_model"] = model;
+      const auto result = load(config);
+      EXPECT_DOUBLE_EQ(result.geometry.footprint_vertices.front().x,
+                       original["capability"]["footprint_xy_m"][0][0].as<double>());
+      EXPECT_DOUBLE_EQ(result.geometry.minimum_clearance_m,
+                       original["capability"]["minimum_clearance_m"].as<double>());
+    }
+    auto legacy = YAML::Clone(original);
+    legacy["capability"].remove("motion_model");
+    EXPECT_NO_THROW(load(legacy));
+    for (const auto* invalid : {"differential_driv", "", "null", "[differential_drive]", "{value: differential_drive}"}) {
+      SCOPED_TRACE(invalid);
+      auto config = YAML::Clone(original);
+      config["capability"]["motion_model"] = YAML::Load(invalid);
+      EXPECT_THROW(load(config), std::invalid_argument);
+    }
+    auto typo = YAML::Clone(legacy);
+    typo["capability"]["motion_modle"] = "differential_drive";
+    EXPECT_THROW(load(typo), std::invalid_argument);
+  }
+}
 
 TEST(PlatformConfigLoader, LoadsPlannerInstalledWheelGeometry) {
   const LoadedPlatformConfig config =
