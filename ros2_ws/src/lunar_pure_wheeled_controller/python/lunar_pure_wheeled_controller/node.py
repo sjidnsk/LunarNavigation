@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from math import atan2, isfinite, sqrt
 from dataclasses import fields
+from threading import Lock
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from collections import deque
 from pathlib import Path as FilePath
 import yaml
@@ -333,12 +335,18 @@ class PureWheeledControllerNode(Node):
         self._mppi_odom_history = deque(maxlen=16)
         self._map_from_odom: MapFromOdom | None = None
         self._map_from_odom_received_at: float | None = None
+        # 接收组只更新输入快照；默认组独占所有执行器/命令状态。
+        self._feedback_lock=Lock()
+        self._feedback_group=MutuallyExclusiveCallbackGroup() if self._standard_mode else None
+        self._feedback_pending=None
+        self._feedback_transforms=None
+        if self._standard_mode:self._feedback_tf_cache=self._latest_transforms.copy()
         self._commands = self.create_publisher(Twist, topics["command_topic"], 10)
         self.create_subscription(
             Odometry,
             topics["odometry_topic"],
-            self._on_odometry,
-            state_input_qos(),
+            self._receive_odometry if self._standard_mode else self._on_odometry,
+            state_input_qos(), callback_group=self._feedback_group,
         )
         if self._input_mode == "motion_reference":
             self.create_subscription(
@@ -369,13 +377,14 @@ class PureWheeledControllerNode(Node):
             self.create_subscription(
                 TFMessage,
                 topics["tf_topic"],
-                self._on_tf,
-                state_input_qos(),
+                self._receive_tf if self._standard_mode else self._on_tf,
+                state_input_qos(), callback_group=self._feedback_group,
             )
         if self._standard_mode:
             self.create_subscription(TFMessage,self._absolute_topic_name('tf_static_topic',
-                self.get_parameter('tf_static_topic').value),self._on_tf,
-                QoSProfile(depth=100,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL))
+                self.get_parameter('tf_static_topic').value),self._receive_tf,
+                QoSProfile(depth=100,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL),
+                callback_group=self._feedback_group)
         self.create_timer(1.0 / control_rate_hz, self._control_timer_tick)
         if self._mppi_step_sync:
             ack_qos=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,
@@ -601,6 +610,31 @@ class PureWheeledControllerNode(Node):
             self._map_received_at = None
             self.get_logger().warning(f"MPPI map unavailable: {exc}")
 
+    def _receive_odometry(self, message):
+        # 时间只在实际接收时记录一次，消费快照不重新标时。
+        pending=(message,monotonic(),self.get_clock().now().nanoseconds)
+        with self._feedback_lock:self._feedback_pending=pending
+
+    def _receive_tf(self, message):
+        try:
+            transforms=self._feedback_tf_cache.copy()
+            transforms.update(message)
+        except (ValueError,AttributeError,TypeError) as exc:
+            self.get_logger().warning(f'标准 TF 无效: {exc}')
+            return
+        self._feedback_tf_cache=transforms
+        with self._feedback_lock:self._feedback_transforms=transforms
+
+    def _drain_standard_feedback(self):
+        with self._feedback_lock:
+            pending,self._feedback_pending=self._feedback_pending,None
+            transforms,self._feedback_transforms=self._feedback_transforms,None
+        if transforms is not None:
+            self._latest_transforms=transforms
+            if self._p3_source is not None:self._p3_source.set_transforms(transforms)
+        if pending is not None:self._standard_pending_odometry=pending
+        if transforms is not None or pending is not None:self._accept_standard_odometry()
+
     def _on_tf(self, message: TFMessage) -> None:
         if self._standard_mode:
             try:
@@ -685,7 +719,8 @@ class PureWheeledControllerNode(Node):
         return self._map_cache.local_grid(state.x_m,state.y_m,2.5)
 
     def _tick_standard_path(self):
-        if self._odometry is None or self._input_is_stale(self._odometry_received_at,self._odometry_timeout_s):
+        received_at=self._odometry_received_at
+        if self._odometry is None or self._input_is_stale(received_at,self._odometry_timeout_s):
             return self._standard_unavailable('missing_or_stale_feedback')
         if self._active is None or self._input_is_stale(self._path_received_at,self._path_timeout_s):
             self._executor.request_stop('STALE_PATH' if self._active is not None else 'NO_PATH')
@@ -703,13 +738,13 @@ class PureWheeledControllerNode(Node):
         self._executor.set_map(grid)
         started=monotonic()
         result=self._executor.update(state,dt,now_s=source_ns/1e9,state_age_s=(now_ns-source_ns)/1e9)
-        if self._input_is_stale(self._odometry_received_at,self._odometry_timeout_s):
+        if self._input_is_stale(received_at,self._odometry_timeout_s):
             return self._standard_unavailable('stale_feedback_after_optimization')
         # 每周期最多追加一次证明，截止时刻从证明开始计算，绝不追赶自身耗时。
         covered_ns=now_ns+int(self._executor.config.compute_budget_s*1e9)
         latest=self._standard_grid(state)
         if latest is None:return self._standard_unavailable('stale_map_after_optimization')
-        if self._input_is_stale(self._odometry_received_at,self._odometry_timeout_s):
+        if self._input_is_stale(received_at,self._odometry_timeout_s):
             return self._standard_unavailable('stale_feedback_during_recertification')
         identity=lambda value:(value.revision,value.epoch,value.origin)
         certificate_ns=self.get_clock().now().nanoseconds
@@ -725,7 +760,7 @@ class PureWheeledControllerNode(Node):
             return self._standard_unavailable('map_changed_during_certification')
         if publication_ns<certificate_ns or publication_ns>covered_ns:
             return self._standard_unavailable('publication_certificate_expired')
-        if self._input_is_stale(self._odometry_received_at,self._odometry_timeout_s):
+        if self._input_is_stale(received_at,self._odometry_timeout_s):
             return self._standard_unavailable('stale_feedback_after_certification')
         self._publish_twist(result.command.linear_x_mps,result.command.angular_z_radps)
         self._publish_execution_status()
@@ -751,6 +786,7 @@ class PureWheeledControllerNode(Node):
 
     def _tick(self) -> None:
         if self._standard_mode:
+            self._drain_standard_feedback()
             return self._tick_standard_path()
         if self._is_mppi:
             self._mppi_observe("tick")
@@ -995,7 +1031,14 @@ def main() -> None:
         node = PureWheeledControllerNode()
         try:
             from nav1cm.ros_lifecycle import spin_until_sigint
-            spin_until_sigint(node,stopped)
+            if node._standard_mode:
+                from rclpy.executors import MultiThreadedExecutor
+                executor=MultiThreadedExecutor(num_threads=2)
+                executor.add_node(node)
+                try:
+                    while rclpy.ok() and not stopped.is_set():executor.spin_once(timeout_sec=.1)
+                finally:executor.shutdown()
+            else:spin_until_sigint(node,stopped)
         except KeyboardInterrupt:
             pass
         finally:

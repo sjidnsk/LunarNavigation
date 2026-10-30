@@ -36,3 +36,23 @@ def test_publication_certification_is_single_pass_and_checks_completion(case):
         assert published==[(.1,0.)] and not unavailable
     else:
         assert not published and unavailable
+
+
+def test_new_feedback_cannot_renew_the_state_used_by_this_calculation():
+    clock=[10_000_000_000];received=[0.];reasons=[];published=[]
+    grid=S(revision=1,epoch='1',origin=(0.,0.))
+    def update(*a,**kw):
+        clock[0]+=600_000_000
+        node._odometry_received_at=.6  # 模拟新消息；本轮state仍来自0秒。
+        return S(command=S(linear_x_mps=.1,angular_z_radps=0.),phase='TRACKING')
+    node=S(_odometry=object(),_odometry_received_at=0.,_odometry_timeout_s=.5,
+        _active=object(),_path_received_at=0.,_path_timeout_s=.35,
+        _standard_state=object(),_standard_state_ns=clock[0],_last_control_ns=None,
+        _executor=S(config=S(compute_budget_s=.05),set_map=lambda *a:None,update=update,
+            diagnostics={},_stopped=lambda *a:False,certify_publication=lambda *a:True),
+        _input_is_stale=lambda stamp,limit:(clock[0]-10_000_000_000)/1e9-stamp>limit,
+        _standard_grid=lambda state:grid,get_clock=lambda:S(now=lambda:S(nanoseconds=clock[0])),
+        _standard_unavailable=reasons.append,_mppi_diagnostics=S(publish=lambda *a:None),
+        _publish_twist=lambda *a:published.append(a),_publish_execution_status=lambda:None)
+    PureWheeledControllerNode._tick_standard_path(node)
+    assert reasons==['stale_feedback_after_optimization'] and not published
