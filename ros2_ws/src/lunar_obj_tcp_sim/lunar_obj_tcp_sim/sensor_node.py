@@ -24,11 +24,10 @@ from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 from lunar_planning_msgs.action import NavigateToPose
 from lunar_planning_msgs.msg import TrackingStatus
-from lunar_planning_msgs.srv import GetPolicyMap
 from lunar_pure_exploration_msgs.msg import PureExplorationTask, PureExplorationStatus
 
 from .geometry import TerrainMap
-from .observation_state import EvidenceCoverage, exploration_bounds, policy_map_covers_input
+from .observation_state import EvidenceCoverage, exploration_bounds
 from .ros_support import observation_grid_map, exploration_task
 from .visualization import marker, scene_markers, truth_preview
 from .scan_sequence import ScanSequence
@@ -87,7 +86,6 @@ class ObjVirtualSensorNode(Node):
         self.client = ActionClient(self, NavigateToPose, self.prefix+'/navigate_to_pose')
         self.create_subscription(Odometry, self.prefix+'/odometry', self.on_pose, STATE)
         self.create_subscription(OccupancyGrid, self.prefix+'/exploration_map', self.on_map, LATCHED)
-        self.map_client = self.create_client(GetPolicyMap, self.prefix+'/get_policy_map')
         self.create_subscription(TrackingStatus, self.prefix+'/tracking_status', self.on_tracking, 10)
         self.create_subscription(PureExplorationStatus, self.prefix+'/exploration/status', self.on_exploration, 10)
         self.create_subscription(PureExplorationTask, self.prefix+'/exploration/task', self.on_task_command, 10)
@@ -98,16 +96,6 @@ class ObjVirtualSensorNode(Node):
         self.last_query_ms = 0.
         self.phase = 'WAITING_FOR_STATE'
         self.map_seen = False
-        self.map_future = None
-        self.map_input_stamp_ns = 0
-        self.map_processed_stamp_ns = 0
-        self.map_revision = 0
-        self.known_chunks = None
-        self.known_started = None
-        self.known_done = False
-        self.known_count = 0
-        self.last_known_sent = 0.
-        self.pending_chunk = None
         self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix='obj-observation')
         self.observation_future = None
         self.observation_stamp = None
@@ -168,9 +156,8 @@ class ObjVirtualSensorNode(Node):
             return
         if not self.fresh_pose() or not self.map_pub.get_subscription_count():
             return
-        if self.mode == 'nav':
-            self.publish_known_chunk()
-        elif self.observation_future is None:
+        # 两种入口都发布实际反馈位姿的完整当前窗口；不可见区域保持未知。
+        if self.observation_future is None:
             stamp = self.latest.header.stamp
             key = (stamp.sec, stamp.nanosec)
             if key != self.last_sample_key:
@@ -197,12 +184,10 @@ class ObjVirtualSensorNode(Node):
 
     def publish_observation(self, observation, stamp):
         self.map_pub.publish(observation_grid_map(observation, stamp))
-        self.map_input_stamp_ns = int(stamp.sec)*1000000000 + int(stamp.nanosec)
         self.samples += 1
-        if self.mode == 'explore':
-            self.coverage.add(observation)
-            if self.phase == 'WAITING_FOR_STATE':
-                self.phase = 'OBSERVING'
+        self.coverage.add(observation)
+        if self.phase == 'WAITING_FOR_STATE':
+            self.phase = 'OBSERVING'
         if self.mode == 'explore' and self.observed_pub.get_subscription_count():
             indices = np.argwhere(np.isfinite(observation.elevation))
             measured = marker(0, Marker.POINTS, stamp, 'measured')
@@ -212,46 +197,6 @@ class ObjVirtualSensorNode(Node):
                                    y=float(observation.origin_xy[1]+(y+.5)*observation.resolution),
                                    z=float(observation.elevation[y,x])+.03) for y,x in indices]
             self.observed_pub.publish(MarkerArray(markers=[measured]))
-
-    def publish_known_chunk(self):
-        if self.known_done:
-            return
-        if self.known_chunks is None:
-            p = self.latest.pose.pose.position
-            self.known_chunks = iter(self.terrain.iter_known_chunks(
-                int(self.settings['known_chunk_cells']), (p.x,p.y)))
-            self.known_started = time.monotonic()
-        if self.map_processed_stamp_ns < self.map_input_stamp_ns:
-            self.phase = 'WAITING_FOR_KNOWN_MAP_DERIVATION'
-            if self.map_future is not None and self.map_future.done():
-                future, self.map_future = self.map_future, None
-                try:
-                    response = future.result()
-                    if policy_map_covers_input(response, self.map_input_stamp_ns):
-                        stamp = response.processed_stamp
-                        self.map_processed_stamp_ns = int(stamp.sec)*1000000000 + int(stamp.nanosec)
-                        self.map_revision = int(response.fine_revision)
-                except Exception as error:
-                    self.phase = 'OBSERVATION_ERROR'
-                    self.get_logger().error(f'公共地图处理回执失败: {error}')
-                return
-            if self.map_future is None and self.map_client.service_is_ready():
-                request = GetPolicyMap.Request()
-                request.minimum_map_stamp_ns = self.map_input_stamp_ns
-                request.since_revision = self.map_revision
-                self.map_future = self.map_client.call_async(request)
-            return
-        try:
-            self.pending_chunk = next(self.known_chunks)
-        except StopIteration:
-            self.known_done = True
-            self.phase = 'KNOWN_MAP_READY'
-            self.get_logger().info(f'Known-map loading finished: {self.known_count} chunks accepted and derived in {time.monotonic()-self.known_started:.2f}s')
-            return
-        self.publish_observation(self.pending_chunk, self.latest.header.stamp)
-        self.known_count += 1
-        self.last_known_sent = time.monotonic()
-        self.phase = 'LOADING_KNOWN_MAP'
 
     def advance_task(self):
         # A failed scan stops task advancement, not the observation pipeline.
@@ -287,7 +232,7 @@ class ObjVirtualSensorNode(Node):
                   'samples':self.samples, 'query_ms':self.last_query_ms,
                   'observed_cells':self.coverage.observed_cells, 'task_cells':self.coverage.total_cells,
                   'observation_coverage':self.coverage.observed_cells/max(1,self.coverage.total_cells),
-                  'known_chunks':self.known_count, 'tracking':self.tracking_text,
+                  'tracking':self.tracking_text,
                   'command_v':self.command.linear.x, 'command_w':self.command.angular.z,
                   'scan_reanchors': self.scan.reanchors, 'scan_reason': self.scan.reason,
                   'scan_targets_remaining': len(self.scan.targets) if self.scan.targets is not None else 0,

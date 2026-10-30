@@ -145,5 +145,6 @@ def test_launch_uses_shared_navigation_without_legacy_rolling_overrides(tmp_path
     nodes = module.compose(context)
     shared = next(n for n in nodes if isinstance(n, IncludeLaunchDescription))
     arguments = dict(shared.launch_arguments)
+    assert arguments['p3_map_timeout_s'] == '0.0'
     assert 'rolling_replan_period_s' not in arguments
     assert not any(isinstance(n, dict) and n.get('name') in ('obj_tcp_navigation', 'obj_tcp_executor') for n in nodes)

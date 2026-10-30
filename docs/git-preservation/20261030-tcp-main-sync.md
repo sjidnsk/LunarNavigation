@@ -66,3 +66,21 @@ TCP车辆接口是控制/反馈报文转换与连接层；OBJ虚拟观测是可�
 入口切片进展：共享Include代替旧导航及扫描执行器；OBJ已改用现有GetPolicyMap的processed_stamp确认真实输入处理，不再依赖旧诊断计数。入口与回执先3/4项RED，后15项GREEN；核心OBJ/协议组52通过2缺ROS跳过。Windows扩展组曾4项ROS/POSIX收集错误、22项失败，原证据保留；其中7项为真实NumPy标量shape写入npy头的兼容问题，已转Python整数并覆盖回归，其余留Humble核对，不称Windows全绿。
 
 新P4隔离CasADi3.6.7、acados_v0.4.0及ARM原生Tera renderer已构建完成；官方三个子模块按v0.4.0精确提交获取。Git smart协议两次TLS失败保留，改用官方固定归档获取。Rust工具链无profile修改，Python/Rust/SDK/缓存都在新P4；尚未运行车辆/新导航闭环。
+
+## 2026-10-30 静态地图与输入职责修复
+
+前述 GetPolicyMap 分块回执方案已被替代：它只证明地图 owner 处理，不能证明导航/跟踪独立消费者都接收完整历史。现 nav/explore 一律对新收到的真实反馈位姿调用 TerrainMap.observe，完整发布当前局部窗口，保持原反馈时间戳，不可见区域保留 UNKNOWN；不再宣称 KNOWN_MAP_READY 或已知全图。nav 远处未知目标可以被主线拒绝，这是输入语义调整，不放开 UNKNOWN 通行。历史窗口不保证三消费者完全一致。
+
+公共修复已由 main e9b37bb 接收：现有 p3_map_timeout_s=0 仅禁用 direct_p3 接收年龄过期，默认仍3秒；TCP静态OBJ入口显式传0。缺地图、位姿/动态输入年龄、覆盖/碰撞/revision/epoch/origin认证继续生效。三个公共 C++ 解析入口支持可选合法 motion_model，重复/非法值仍拒绝，不改车辆能力数值。44实际入口探针、3个正式gtest、2个真实ROS静态策略测试通过；完整ament包测未跑，精简部署缺其他测试源的配置失败已保留。
+
+目标机 Humble 11包构建成功（8分41秒）；公共4包增量构建成功；OBJ新观测回归7通过，配置/共享入口9通过。所有写入在新P4，其他目录只读；无外部UE连接或训练。只有必要源码/配置/脚本、依赖及实际构建调试产物，设计与本记录均只在本地。
+
+### 回环失败保留与当前阻塞
+
+- r1 配置字段unknown motion_model导致地图owner退出，修复后消除。
+- r2 进入新链，失败 EXECUTION_INPUT_UNAVAILABLE:stale_feedback_during_recertification，未运动、正常停稳。
+- r3 独立wrapper采样暴露调试脚本只等mapowner而未等controller地图就绪，失败missing_or_stale_map。脚本现须看到controller自身有效地图后的solve_result，再发目标；退出后统一检查returncode/forced_shutdown/vehicle_errors/停稳，不能提前标PASS。
+- r4 已收到3条全局路由、9条执行参考、5条匹配接收状态，但仍认证反馈超时。独立profile显示某次tick持续540.5ms、反馈年龄541.8ms，其中追加认证62.5ms超过50ms覆盖窗；地图revision=1/epoch=1未变化。单线程控制回调期间无法处理Odometry，追加认证可能追赶自身耗时。此为剩余计算/调度问题；未放宽反馈门槛，未修改公共控制算法，不能归因于静态地图接收年龄。
+- 四轮均非完整闭环PASS；r4车辆位置未变、退出速度零、无TCP错误、launch返回0。原始日志P4/run/tcp-nav1cm-r1至r4与P4/log保留，不把ARM回环当外部UE物理/实车证据。
+
+当前处置：TCP专题已保存源码待应用接收，应用owner仍2d9a8ce；公共main e9b37bb已落地。未push、不删除分支/工作树。剩余跟踪器认证计算与回调时序应作为公共问题继续定位，不能以TCP私有算法绕过。

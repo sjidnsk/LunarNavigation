@@ -12,8 +12,31 @@ from grid_map_msgs.msg import GridMap
 from visualization_msgs.msg import MarkerArray
 
 
+@pytest.mark.parametrize('mode', ['nav', 'explore'])
+def test_both_modes_query_fresh_feedback_without_full_map_loading(mode):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from lunar_obj_tcp_sim.sensor_node import ObjVirtualSensorNode
+    pose = Odometry()
+    pose.header.stamp.sec = 7
+    pose.pose.pose.orientation.w = 1.
+    pending = object()
+    pool = Mock()
+    pool.submit.return_value = pending
+    fake = SimpleNamespace(stopping=False, phase='WAITING_FOR_STATE', mode=mode,
+        fresh_pose=lambda: True, map_pub=SimpleNamespace(get_subscription_count=lambda: 1),
+        observation_future=None, latest=pose, last_sample_key=None, pool=pool,
+        terrain=SimpleNamespace(observe=lambda *a, **k: None), sensor_options={},
+        advance_task=lambda: None, publish_known_chunk=Mock())
+    ObjVirtualSensorNode.tick(fake)
+    assert fake.observation_future is pending
+    assert fake.observation_stamp is pose.header.stamp
+    fake.publish_known_chunk.assert_not_called()
+
+
 @pytest.mark.parametrize('initial_phase', ['WAITING_FOR_STATE', 'BOOTSTRAP_FAILED'])
-def test_sensor_does_not_reobserve_or_restamp_an_old_pose(tmp_path, initial_phase):
+@pytest.mark.parametrize('mode', ['nav', 'explore'])
+def test_sensor_does_not_reobserve_or_restamp_an_old_pose(tmp_path, initial_phase, mode):
     from lunar_obj_tcp_sim.sensor_node import ObjVirtualSensorNode
     from lunar_obj_tcp_sim.prepare import prepare_map
     obj = tmp_path/'flat.obj'
@@ -23,7 +46,7 @@ def test_sensor_does_not_reobserve_or_restamp_an_old_pose(tmp_path, initial_phas
     node=ObjVirtualSensorNode(parameter_overrides=[
         Parameter('map_directory',value=str(tmp_path/'map')),
         Parameter('auto_start',value=False), Parameter('initial_scan',value=False),
-        Parameter('mode',value='explore')])
+        Parameter('mode',value=mode)])
     node.phase = initial_phase
     peer=Node('sensor_probe')
     publisher=peer.create_publisher(Odometry,'/lunar_sim/odometry',10)
@@ -52,7 +75,8 @@ def test_sensor_does_not_reobserve_or_restamp_an_old_pose(tmp_path, initial_phas
             executor.spin_once(timeout_sec=.02)
         assert len(received)==1, 'old feedback was restamped or reobserved'
         assert node.phase != 'OBSERVATION_ERROR'
-        assert observed and observed[0].markers[0].points
+        if mode == 'explore':
+            assert observed and observed[0].markers[0].points
         if initial_phase == 'BOOTSTRAP_FAILED':
             assert node.phase == 'BOOTSTRAP_FAILED'
             assert not node.task_started

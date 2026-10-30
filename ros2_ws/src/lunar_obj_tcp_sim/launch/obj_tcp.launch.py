@@ -81,7 +81,8 @@ def compose(context):
         current_goal_topic=prefix+"/exploration/current_goal", frontiers_topic=prefix+"/exploration/frontiers",
         task_boundary_topic=prefix+"/exploration/task_boundary", task_map_markers_topic=prefix+"/exploration/task_map_markers",
         exploration_diagnostics_topic=prefix+"/exploration/diagnostics", command_topic=prefix+"/cmd_vel",
-        diagnostics_topic=prefix+"/control/mppi_diagnostics", map_qos_durability="transient_local")
+        diagnostics_topic=prefix+"/control/mppi_diagnostics", map_qos_durability="transient_local",
+        p3_map_timeout_s="0.0")
     shared_navigation = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(str(Path(get_package_share_directory("lunar_pure_exploration_ros"))
                                          / "launch/nav1cm_exploration.launch.py")),
