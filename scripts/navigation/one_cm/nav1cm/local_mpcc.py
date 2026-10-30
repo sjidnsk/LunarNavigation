@@ -4,10 +4,11 @@ from pathlib import Path
 from time import perf_counter, process_time
 import hashlib
 import numpy as np
-from .contracts import CellState, Trajectory
+from .contracts import CellState, Trajectory, VehicleState
 from .maps import build_distance_field
-from .seeds import initial_seed, rollout
+from .seeds import initial_seed, rollout, brake_candidate
 from .pose_goal import angle_error, terminal_candidate
+from .dynamics import step
 
 
 # 固定 SDK acados-get-stats-source.txt 实际支持；时间值保留 SDK 原始秒单位。
@@ -96,15 +97,18 @@ def travel_target_yaw(state, reference, mode, approach_distance_m, *, initial_tr
     return yaw
 
 
-def select_mode(state, reference, *, approach_distance_m=.8, initial_travel_direction=""):
+def select_mode(state, reference, *, approach_distance_m=.8, initial_travel_direction="",initial_stopped_angular_rps=.01):
     if len(reference.points)<2:
         if reference.terminal_yaw is not None and abs(state.v) <= 1e-10:
             return 'spin' if abs(angle_error(reference.terminal_yaw, state.yaw)) > .05 or abs(state.w) > 1e-10 else 'brake'
         return 'brake'
     heading, desired = _travel_direction(state, reference, approach_distance_m,initial_travel_direction=initial_travel_direction)
     error = _wrap(heading-state.yaw)
+    if initial_travel_direction:
+        if abs(state.v)>1e-8:return 'brake'
+        aligned=_wrap(error-(np.pi if desired=='reverse' else 0.))
+        return 'spin' if abs(aligned)>.08 or abs(state.w)>initial_stopped_angular_rps else desired
     if abs(state.v)>1e-8:
-        if initial_travel_direction:return 'brake'
         current='forward' if state.v>0 else 'reverse'
         return current if current==desired else 'brake'
     if abs(state.w)>1e-8:
@@ -232,7 +236,7 @@ class MpccPlanner:
             params.append(p)
         return params
 
-    def plan(self,state,grid,reference,*,distance_field=None,field_grid_digest=None,initial_travel_direction=""):
+    def plan(self,state,grid,reference,*,distance_field=None,field_grid_digest=None,initial_travel_direction="",initial_stopped_angular_rps=.01):
         """外部净空场必须显式附带其来源 grid.digest()；仅生成未认证候选。"""
         started=perf_counter(); started_cpu=process_time(); timing={'field':0.,'reference':0.,'seed':0.,'solve':0.,'candidate':0.}
         for stage in ('reset','input_set','solve_call','read_validate','diagnostics','solve'):
@@ -250,7 +254,32 @@ class MpccPlanner:
                               'TERMINAL_CANDIDATE_UNCERTIFIED')
             return finish(None,'REFERENCE_END')
         if grid.cell_at_world(*reference.points[-1])==CellState.BLOCKED: return finish(None,'KNOWN_BLOCKED_GOAL')
-        mode=select_mode(state,reference,approach_distance_m=self.N*self.dt*self.limits.linear_speed_mps,initial_travel_direction=initial_travel_direction)
+        if initial_travel_direction and abs(state.v)>1e-10:
+            # 从真实测量推导制动终点，不把测量重标为零；保留转动连续性。
+            if self.limits.motion_model=='differential_drive':
+                initial=np.array([state.x,state.y,state.yaw,state.v,state.w,reference.progress_s])
+                duration=abs(state.v)/self.limits.linear_accel_mps2
+                control=np.array([-state.v/duration,0.,0.])
+                stopped=step(initial,control,duration)
+                prefix=Trajectory(grid.epoch,reference.route_version,[0.,duration],
+                    np.stack((initial,stopped)),control[None,:],
+                    'forward' if state.v>0 else 'reverse','brake')
+            else:prefix=brake_candidate(state,grid,reference,self.limits)
+            endpoint=prefix.states[-1]
+            derived=VehicleState(*endpoint[:5])
+            continuation=self.plan(derived,grid,reference,distance_field=distance_field,
+                field_grid_digest=field_grid_digest,initial_travel_direction=initial_travel_direction,
+                initial_stopped_angular_rps=initial_stopped_angular_rps)
+            timing.update(continuation.timings_ms);attempts.extend(continuation.attempts)
+            if continuation.candidate is None:return finish(None,continuation.reason)
+            c=continuation.candidate
+            candidate=Trajectory(grid.epoch,reference.route_version,
+                np.concatenate((prefix.times[:-1],prefix.times[-1]+c.times)),
+                np.vstack((prefix.states[:-1],c.states)),np.vstack((prefix.controls,c.controls)),
+                c.mode,c.source+'+braking-entry')
+            return finish(candidate,'CANDIDATE_UNCERTIFIED')
+        mode=select_mode(state,reference,approach_distance_m=self.N*self.dt*self.limits.linear_speed_mps,
+            initial_travel_direction=initial_travel_direction,initial_stopped_angular_rps=initial_stopped_angular_rps)
         if mode=='brake': return finish(None,'MODE_CHANGE_REQUIRES_BRAKE')
         t=perf_counter()
         if distance_field is not None:

@@ -226,13 +226,33 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
         np.abs(controls[:, 1]) > limits.angular_accel_rps2 + 1e-9
     ) or np.any(controls[:, 2] < -1e-9):
         return _reject(CertificationReason.LIMIT, 0)
-    if trajectory.mode == "spin" and np.any(np.abs(controls[:, 0]) > 1e-9):
-        return _reject(CertificationReason.MODE, 0)
+    # 模式开始前可含显式、单调且无进展信用的真实制动段。
+    # 起点测量不归零；到零速结点后才按主模式检查，所有段仍完整积分和扫掠。
+    prefix_end=0;prefix_mode=trajectory.mode
+    initial_reason=_state_limit_reason(states[0],limits,trajectory.mode)
+    needs_entry=(initial_reason==CertificationReason.MODE or
+                 trajectory.mode=='spin' and np.any(np.abs(controls[:,0])>1e-9))
+    if needs_entry:
+        zero=np.flatnonzero(np.abs(states[1:,3])<=1e-9)
+        if not len(zero) or states[0,3]==0.:
+            return _reject(CertificationReason.MODE,0)
+        prefix_end=int(zero[0])+1
+        sign=float(np.sign(states[0,3]));speeds=states[:prefix_end+1,3]
+        if (np.any(sign*speeds<-1e-9) or np.any(np.diff(np.abs(speeds))>1e-12) or
+                np.any(sign*controls[:prefix_end,0]>1e-12) or
+                np.any(np.abs(controls[:prefix_end,2])>1e-12)):
+            return _reject(CertificationReason.MODE,0)
+        prefix_mode='forward' if sign>0 else 'reverse'
+        reason=_state_limit_reason(states[prefix_end],limits,prefix_mode)
+        if reason is not None:return _reject(reason,0)
+    if trajectory.mode == 'spin' and np.any(np.abs(controls[prefix_end:,0])>1e-9):
+        return _reject(CertificationReason.MODE,0)
     if context is None:
         context = prepare_certification(grid, backend=backend)
     checked = 0
     for index, state in enumerate(states):
-        reason = _state_limit_reason(state, limits, trajectory.mode)
+        mode=prefix_mode if index<prefix_end else trajectory.mode
+        reason = _state_limit_reason(state, limits, mode)
         if reason is not None:
             return _reject(reason, checked)
         if index == len(states) - 1:
@@ -243,12 +263,12 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
             return _reject(CertificationReason.DYNAMICS, checked)
         # v(t) 过零处仍有 w 会违反行进曲率；端点检查不足以发现。
         a = controls[index, 0]
-        if limits.motion_model == "curvature_limited" and trajectory.mode != "spin" and abs(a) > 1e-12:
+        if limits.motion_model == "curvature_limited" and mode != "spin" and abs(a) > 1e-12:
             crossing = -state[3] / a
             if 0 < crossing < dt and abs(state[4] + controls[index, 1] * crossing) > 1e-9:
                 return _reject(CertificationReason.LIMIT, checked)
         midpoint = step(state, controls[index], dt / 2)
-        reason = _state_limit_reason(midpoint, limits, trajectory.mode)
+        reason = _state_limit_reason(midpoint, limits, mode)
         if reason is not None:
             return _reject(reason, checked)
         collision, count = _sweep(state, controls[index], dt, context, limits)

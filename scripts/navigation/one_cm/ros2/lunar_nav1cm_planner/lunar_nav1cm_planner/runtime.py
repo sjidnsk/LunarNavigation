@@ -345,6 +345,9 @@ class PlannerRuntime:
                               current_accepted_generation=packet.generation)
                 self._notice('GLOBAL_RESULT', json.dumps(record, sort_keys=True))
             for event in result.events:
+                if event['kind']=='LOCAL_RESULT':
+                    self._notice('LOCAL_PLAN_STATUS',json.dumps(dict(reason=event.get('reason'),
+                        mode=event.get('candidate_mode'),attempt_reasons=[r.get('reason') for r in event.get('attempts',())]),sort_keys=True))
                 if event['kind'] in ('GLOBAL_CURRENT_MAP_REVALIDATED', 'GLOBAL_CURRENT_MAP_REJECTED',
                                       'LOCAL_CURRENT_MAP_REVALIDATED', 'INITIAL_START_COMPLETED'):
                     self._notice(event['kind'], json.dumps(event, sort_keys=True))

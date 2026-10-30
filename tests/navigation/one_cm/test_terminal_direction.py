@@ -76,3 +76,10 @@ def test_initial_direction_aligns_before_start_and_is_not_a_permanent_limit(dire
     # 起步提示撤销后，既有双向模式选择恢复，不把选择当运动权限。
     assert select_mode(VehicleState(0.,0.,np.pi,0.,0.),reference)=='reverse'
     assert select_mode(VehicleState(0.,0.,0.,0.,0.),reference)=='forward'
+
+
+def test_initial_alignment_uses_existing_stopped_angular_condition():
+    state=VehicleState(0.,0.,0.,0.,.0001564915249)
+    reference=ref(length=2.,heading=0.,yaw=0.)
+    assert select_mode(state,reference,initial_travel_direction='forward',initial_stopped_angular_rps=.01)=='forward'
+    assert select_mode(state,reference,initial_travel_direction='forward',initial_stopped_angular_rps=.0001)=='spin'

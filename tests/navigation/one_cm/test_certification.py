@@ -191,3 +191,41 @@ def test_unknown_policy_and_window_boundary_apply_to_entire_body():
     assert certify(t, allowed, WheelLimits(), 1).valid
     edge = trajectory([2.0, 0.0, 0.0, 0.0, 0.0, 0.0], [], mode="spin")
     assert certify(edge, free_grid(), WheelLimits(), 1).reason == CertificationReason.OUT_OF_BOUNDS
+
+
+def braking_entry(mode='spin',progress=0.):
+    state=np.array([0.,0.,.4,-.004,.02,0.])
+    controls=np.array([[.5,0.,progress],[0.,.1,0.]])
+    times=np.array([0.,.008,.208]);states=[state]
+    for u,dt in zip(controls,np.diff(times)):states.append(step(states[-1],u,float(dt)))
+    return Trajectory(1,1,times,np.array(states),controls,mode,'candidate-with-real-braking-entry')
+
+
+def test_real_braking_entry_precedes_spin_without_zeroing_measurement():
+    limits=WheelLimits(motion_model='differential_drive')
+    candidate=braking_entry()
+    assert candidate.states[0,3]==-.004 and candidate.states[1,3]==pytest.approx(0.)
+    assert certify(candidate,free_grid(),limits,1).valid
+
+
+def test_braking_entry_cannot_credit_route_progress_or_hide_bad_dynamics():
+    from dataclasses import replace
+    limits=WheelLimits(motion_model='differential_drive')
+    assert not certify(braking_entry(progress=.1),free_grid(),limits,1).valid
+    candidate=braking_entry();states=candidate.states.copy();states[1,0]+=.01
+    assert not certify(replace(candidate,states=states),free_grid(),limits,1).valid
+
+
+def test_braking_entry_remains_subject_to_full_body_collision():
+    cells=np.zeros((500,500),dtype=np.int8);cells[250,250]=CellState.BLOCKED
+    grid=GridSnapshot(1,(-2.5,-2.5),.01,cells,False)
+    result=certify(braking_entry(),grid,WheelLimits(motion_model='differential_drive'),1)
+    assert not result.valid and result.reason==CertificationReason.COLLISION
+
+
+def test_braking_entry_must_not_accelerate_away_before_stopping():
+    initial=np.array([0.,0.,0.,-.004,0.,0.]);controls=np.array([[-.1,0.,0.],[.5,0.,0.],[0.,.1,0.]])
+    intervals=[.01,.01,.2];states=[initial]
+    for u,dt in zip(controls,intervals):states.append(step(states[-1],u,dt))
+    candidate=Trajectory(1,1,np.r_[0.,np.cumsum(intervals)],np.array(states),controls,'spin')
+    assert not certify(candidate,free_grid(),WheelLimits(motion_model='differential_drive'),1).valid

@@ -106,6 +106,7 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
                 expected,self._inflight=self._inflight,None
                 incoming=result.get('request_identity')
                 events.append({'kind':'LOCAL_RESULT','reason':result.get('reason'),'attempts':result.get('attempts',()),
+                               'candidate_mode':getattr(result.get('candidate'),'mode',None),
                                'request_identity':incoming,'received_s':now_s,'received_wall_s':perf_counter(),
                                'worker_start_wall_s':result.get('worker_start_wall_s'),
                                'worker_finish_wall_s':result.get('worker_finish_wall_s'),
@@ -167,7 +168,9 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
                                 submitted_wall_s=perf_counter())
             try:
                 request=dict(identity=self._inflight,state=state,grid=grid,reference=reference)
-                if initial_direction:request['initial_travel_direction']=initial_direction
+                if initial_direction:
+                    request['initial_travel_direction']=initial_direction
+                    request['initial_stopped_angular_rps']=self.stopped_angular_rps
                 self.local_worker.submit(request)
                 events.append({'kind':'LOCAL_SUBMITTED',**self._inflight,'initial_travel_direction':initial_direction})
             except Exception as exc:
