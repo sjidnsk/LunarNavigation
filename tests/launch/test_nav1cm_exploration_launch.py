@@ -87,3 +87,16 @@ def test_exploration_passes_map_age_policy_only_to_follower(monkeypatch,timeout)
 @pytest.mark.parametrize('timeout',['-1.0','nan','inf'])
 def test_exploration_rejects_invalid_map_age_policy(monkeypatch,timeout):
     with pytest.raises(ValueError):graph(monkeypatch,enable_controller='true',p3_map_timeout_s=timeout)
+
+
+def test_current_exploration_default_matches_twenty_centimeter_p3(monkeypatch):
+    maps=nodes(graph(monkeypatch,exploration_strategy='frontier'))[0]['parameters'][0]
+    assert maps['coarse_resolution_m']==.2
+
+
+def test_owned_nav1cm_map_uses_same_twenty_centimeter_exploration_default():
+    path=ROOT/'ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/navigation_backend.py'
+    spec=importlib.util.spec_from_file_location('owned_nav1cm_resolution',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    maps=module.owned_nav1cm_specs('/private',platform_config='/wheel.yaml',build_dir='/cache',use_sim_time=False)[0][2]
+    assert maps['coarse_resolution_m']==.2

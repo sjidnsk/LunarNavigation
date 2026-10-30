@@ -28,7 +28,7 @@ DEFAULTS = {
     "command_topic": "/Car/T5/Car_Cmd_Vel", "diagnostics_topic": "/Car/T4/control/mppi_diagnostics",
     "map_qos_reliability": "reliable", "map_qos_durability": "volatile",
     "p3_map_timeout_s": "3.0",
-    "coarse_resolution_m": "1.0", "navigation_map_wait_timeout_s": "30.0",
+    "coarse_resolution_m": "0.2", "navigation_map_wait_timeout_s": "30.0",
 }
 
 def _compose(context):

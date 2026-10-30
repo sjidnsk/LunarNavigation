@@ -100,7 +100,7 @@ struct ExplorationMapNode::Impl {
     map = std::make_unique<ExplorationMap>(
         capability, profile,
         node.declare_parameter<double>("policy_resolution_m", .2),
-        node.declare_parameter<double>("coarse_resolution_m", 1.));
+        node.declare_parameter<double>("coarse_resolution_m", .2));
     exporter = std::make_unique<PolicyMapExporter>(capability, profile);
     inputs = std::make_unique<InputStore>(map_frame, odom_frame);
     epoch = "observed-projection-v1-" +
