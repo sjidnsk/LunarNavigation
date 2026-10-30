@@ -41,3 +41,25 @@ def test_feedback_is_received_while_control_group_is_blocked(monkeypatch):
         assert node._odometry_received_at==received, 'draining restamped old feedback'
     finally:
         release.set();executor.shutdown();node.destroy_node();peer.destroy_node();rclpy.shutdown()
+
+
+def test_tf_only_update_does_not_refresh_old_odometry_receipt_or_source():
+    from geometry_msgs.msg import TransformStamped
+    from tf2_msgs.msg import TFMessage
+    rclpy.init(args=['--ros-args','-p','controller_backend:=mppi_path_follower','-p','input_mode:=incremental_path'])
+    node=PureWheeledControllerNode()
+    try:
+        odom=Odometry();odom.header.frame_id='odom';odom.header.stamp.sec=7
+        odom.pose.pose.orientation.w=1.
+        node._receive_odometry(odom)
+        pending=node._feedback_pending
+        node._drain_standard_feedback()
+        assert node._odometry is None
+        transform=TransformStamped();transform.header.frame_id='map';transform.child_frame_id='odom'
+        transform.header.stamp.sec=8;transform.transform.rotation.w=1.
+        node._receive_tf(TFMessage(transforms=[transform]));node._drain_standard_feedback()
+        assert node._odometry_received_at==pending[1]
+        assert node._standard_state_ns==7_000_000_000
+        node._receive_tf(TFMessage(transforms=[transform]));node._drain_standard_feedback()
+        assert node._odometry_received_at==pending[1] and node._standard_state_ns==7_000_000_000
+    finally:node.destroy_node();rclpy.shutdown()

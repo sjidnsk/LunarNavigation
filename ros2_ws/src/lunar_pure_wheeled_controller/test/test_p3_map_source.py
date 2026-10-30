@@ -193,7 +193,7 @@ def test_full_body_map_delayed_braking_tail_reaches_intrinsic_wall():
     assert not follower.certify_publication(state,0.,0.,.1)
 
 
-def test_slow_publication_recertification_covers_current_ros_age(monkeypatch):
+def test_slow_publication_recertification_expires_without_chasing_current_ros_age(monkeypatch):
     from types import SimpleNamespace as S
     from nav_msgs.msg import Odometry,Path
     from geometry_msgs.msg import PoseStamped
@@ -223,8 +223,12 @@ def test_slow_publication_recertification_covers_current_ros_age(monkeypatch):
             if len(ages)==1:clock[0]+=100_000_000
             return True
         monkeypatch.setattr(node._executor,'certify_publication',certify)
+        rejected=[];published=[]
+        monkeypatch.setattr(node,'_standard_unavailable',rejected.append)
+        monkeypatch.setattr(node,'_publish_twist',lambda *a:published.append(a))
         node._tick()
-        assert len(ages)==2 and ages[-1]>=.2
+        assert len(ages)==1 and ages[0]>=.1
+        assert rejected==['publication_certificate_expired'] and not published
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()
