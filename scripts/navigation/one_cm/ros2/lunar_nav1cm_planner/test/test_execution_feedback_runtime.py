@@ -118,3 +118,19 @@ def test_actual_runtime_tick_preserves_target_across_loss_and_stable_recovery(mo
     else:
         assert session.goal is goal and session.accepted_generation==generation
         assert runtime.tasks.active.outcome is None
+
+
+@pytest.mark.parametrize('delay,gap,expected',[(2.5,0.,True),(3.8,0.,True),(2.5,2.5,False),(4.5,0.,True),(4.5001,0.,False)])
+def test_preflight_pose_time_gate_matches_runtime(delay,gap,expected):
+    import importlib.util
+    path=next(p/'scripts/simulation/p3_input_timing.py' for p in Path(__file__).resolve().parents if (p/'scripts/simulation/p3_input_timing.py').exists())
+    spec=importlib.util.spec_from_file_location('p3_runtime_time_parity',path)
+    timing=importlib.util.module_from_spec(spec);spec.loader.exec_module(timing)
+    runtime,_,_,_=build_runtime();runtime.configure_pose_input(4.5)
+    source=int((100-delay)*1e9);now=100_000_000_000+int(gap*1e9)
+    runtime.ros_now_ns=lambda:now
+    message=S(header=S(stamp=S(sec=source//10**9,nanosec=source%10**9)))
+    sample=timing.record_sample(None,source,100_000_000_000,10.)
+    actual=runtime._pose_source_current(message,10.,10.+gap)[0]
+    report=timing.runtime_input_health('odom',sample,now,10.+gap,odometry_timeout_s=4.5,p3_map_timeout_s=6.)
+    assert actual==report['ready']==expected

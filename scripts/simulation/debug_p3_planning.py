@@ -114,7 +114,7 @@ def main():
     from lunar_planning_msgs.action import NavigateToPose
     from lunar_planning_msgs.srv import GetPolicyMap
     from lunar_pure_exploration_msgs.msg import PureExplorationTask,PureExplorationStatus
-    from p3_input_timing import record_sample,timing_health
+    from p3_input_timing import record_sample,timing_health,runtime_input_health,timing_statistics
     os.environ['ROS_DOMAIN_ID']='57'
     rclpy.init();node=rclpy.create_node('p4_p3_planning_observer')
     q=QoSProfile(depth=1,reliability=ReliabilityPolicy.BEST_EFFORT,durability=DurabilityPolicy.VOLATILE)
@@ -137,7 +137,11 @@ def main():
             state['tf']=value
     def health():
         now=node.get_clock().now().nanoseconds;mono=time.monotonic()
-        report={k:timing_health(state['samples'].get(k),now,mono,**v) for k,v in budgets.items()}
+        if profile is not None:
+            limits={k:float(profile[k]) for k in ('odometry_timeout_s','p3_map_timeout_s')}
+            report={k:runtime_input_health(k,state['samples'].get(k),now,mono,**limits) for k in budgets}
+        else:
+            report={k:timing_health(state['samples'].get(k),now,mono,**v) for k,v in budgets.items()}
         # 本次实测是固定单位变换；发生变化需历史TF配准，不默默采用latest补偿。
         identity=(0.,0.,0.,0.,0.,0.,1.)
         report['tf']=dict(ready=state['tf']==identity and not state['tf_changed'],reason='FIXED_IDENTITY' if state['tf']==identity and not state['tf_changed'] else 'WAITING_OR_CHANGED_TF')
@@ -167,7 +171,7 @@ def main():
     command += [k+':='+v for k,v in launch_arguments(args.source,os.environ['NAV1CM_BUILD_DIR'],profile=profile,allow_unknown=args.allow_unknown).items()]
     process=subprocess.Popen(command,cwd=artifact,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
     (artifact/'pids.json').write_text(json.dumps(dict(observer=os.getpid(),launch=process.pid)))
-    result=dict(ok=False,scope='P3 delayed observation planning only; no controller or vehicle bridge',budgets=budgets,manual_attempts=[])
+    result=dict(ok=False,scope='P3 delayed observation planning only; no controller or vehicle bridge',budgets=profile if profile is not None else budgets,timing_mode='runtime_contract' if profile is not None else 'observation_only',manual_attempts=[])
     stopped=[False];signal.signal(signal.SIGTERM,lambda *a:stopped.__setitem__(0,True));signal.signal(signal.SIGINT,lambda *a:stopped.__setitem__(0,True))
     deadline=time.monotonic()+args.duration;guarded=False;handle=None;send_future=None;result_future=None;last_health=0.;stay_fault=None;last_pause=0.
     def spin():
@@ -310,6 +314,7 @@ def main():
     finally:
         task(PureExplorationTask.CANCEL)
         for _ in range(10):rclpy.spin_once(node,timeout_sec=.05)
+        result['input_timing_statistics']={k:timing_statistics(state['samples'].get(k),node.get_clock().now().nanoseconds,time.monotonic()) for k in budgets}
         final_health=health()
         result['observation_ended_ros_ns']=node.get_clock().now().nanoseconds
         if process.poll() is None:
