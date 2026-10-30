@@ -14,6 +14,8 @@
 
 1. 进入治理main/DRL三工作树均干净；原保护目录只读保留。
 2. 公共路径来源固定为04f6b12；最终合入SHA和DRL晋级SHA随实际落地追加。
+3. 公共批次773828f9ad0271436a97fc741ffdc3792a3dce75已正常ff进入main；68个来源文件Git blob与候选相同，公共只读审查无阻断。
+4. 原DRL专题工作树从hk/drl-integration-20261029切到dev/drl-exploration用于owner接收；候选指针04f6b12保留。owner先ff公共main，再合04f6b12，唯一任务登记冲突完整保留双方追加。98个非任务清单文件、全部非docs源码树均与候选一致；没有改写算法或启动运行。
 
 Ruling：将初步机器清单中按docs目录归类的development-source-manifest.json作为DRL源码身份元数据处理，放入②而非公共证据。其余历史报告可在①保存，不表示提前接收DRL产品或训练资格。
 
