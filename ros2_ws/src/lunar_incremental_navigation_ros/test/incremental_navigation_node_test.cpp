@@ -1042,7 +1042,8 @@ TEST(IncrementalNavigationNode,
     return !system.FineStates().empty() && !system.GuidanceStates().empty() &&
            !system.StartPatches().empty() && !system.Diagnostics().empty() &&
            !system.Paths().empty() && !diagnostics.empty() &&
-           FindDiagnosticValue(diagnostics.back(), "reason_code") == "EXECUTING";
+           FindDiagnosticValue(diagnostics.back(), "reason_code") == "PLAN_FOUND" &&
+           FindDiagnosticValue(diagnostics.back(), "path_state") == "ACTIVE";
   }));
 
   const auto fine_states = system.FineStates();
@@ -1053,7 +1054,9 @@ TEST(IncrementalNavigationNode,
   EXPECT_EQ(system.Paths().back().state,
             lunar_planning_msgs::msg::PathReference::ACTIVE);
   EXPECT_EQ(FindDiagnosticValue(diagnostics.back(), "reason_code"),
-            "EXECUTING");
+            "PLAN_FOUND");
+  EXPECT_EQ(FindDiagnosticValue(diagnostics.back(), "cycle_result"), "PLAN_FOUND");
+  EXPECT_EQ(FindDiagnosticValue(diagnostics.back(), "path_state"), "ACTIVE");
   EXPECT_EQ(FindDiagnosticValue(diagnostics.back(),
                                 "fine_traversability_revision"),
             "17");
