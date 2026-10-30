@@ -19,3 +19,14 @@ attempt-4 在起步转向时反复 BRAKE，未出现真正平移。导航既有�
 ## 当前处置
 
 源码已验证并本地提交 d7ac6bb，待合入；长期分支不移动、不推送。attempt-6 有界车辆复测进行中，起步/走停/实际绕障/到达仍未通过，必须依据真实轨迹与结果单独更新。测试上限 1800s、距起点 18m，线速 0.1m/s、角速 0.195077rad/s；测试中取消及停车沿原脚本执行。只有 first_translation_command.v>0 才记录前进起步通过，不能以单纯旋转替代。
+
+
+## attempt-6 现场结果与后续阻塞
+
+固定目标 (-16.5,0)，本次实际起点 (-4.67488,0.73951)，距目标约 11.85m。发目标后 12.768s 以 EXECUTION_FEEDBACK_TIMEOUT 结束；9 个非零指令均为转向，无 first_translation_command，无 INITIAL_START_COMPLETED，因此前进起步、走停解决、实际绕障、到达均未通过。P3 最大位移约 0.00535m，TCP 最大位移约 0.00876m，不能当作有意平移。停车已实测确认，launch退出0，测试租约释放。
+
+定位接收最大断档9.3059s，地图9.7539s，超过现有无更新预算；这不是固定源龄停车。事件相对时间42.208s开始WAITING_FOR_POSE；等待期间参考版本推进至894。46.802s定位源恢复推进，46.839s跟踪器切到旧版本793的state6/accepted=false地图失效反馈，后续72条均是这一旧身份。793未被实际接受且低于最新已观测894，任务合同正确拒收；新等待心跳停止约2s后，48.793s出现EXECUTION_FEEDBACK_TIMEOUT。控制器_tick_standard_path在定位恢复后先检查地图，_standard_unavailable使用旧executor reference发故障，绕过了采用最新offered reference的等待路径。需要统一可恢复输入等待与真实执行失败的反馈归属，不延长超时、不移除地图/碰撞检查，也不能恢复旧轨迹。使用当前代码隔离重放788accepted→793未接受→894等待→793旧失败，复现旧失败拒收及相同超时；未增加接口实体或修改此处产品行为。
+
+全局三组路线正式PLAN_FOUND，额外检查均不穿已捕获障碍格，路线绕到y=-5.3187m，但没有实际行驶经过障碍，不能报告绕障通过。现场原始产物P4/run/tcp-long-obstacle-20261030/attempt-{5,6}-initial-forward，D盘execution-tests同名副本及derived-summary.json，安装/隔离重放证据位于initial-braking-entry目录。代码d7ac6bb及格式记录659ce63已提交待合入；本次没有继续盲目重试。
+
+用户反馈RViz点目标不动后只读图检查：普通rviz在域10发布/goal_pose，无订阅者；p4_planning_rviz在域57发布/p4_p3_debug/goal，导航器有订阅。但P4控制器输出/Car/T5/Car_Cmd_Vel在域57无订阅者，TCP接口在域10收/car/cmd_vel。测试转发进程已退出，/car/external_control_lease无发布者。现有常驻P4调试节点未被本轮停止或改动；未自动把两个RViz的目标接到车控。
