@@ -131,3 +131,16 @@ def test_publication_envelope_reaches_only_controller(monkeypatch,budget):
 @pytest.mark.parametrize('budget',['0','-.1','nan','inf'])
 def test_invalid_publication_envelope_is_rejected(monkeypatch,budget):
     with pytest.raises(ValueError):graph(monkeypatch,enable_controller='true',mppi_compute_envelope_s=budget)
+
+
+def test_current_exploration_default_matches_twenty_centimeter_p3(monkeypatch):
+    maps=nodes(graph(monkeypatch,exploration_strategy='frontier'))[0]['parameters'][0]
+    assert maps['coarse_resolution_m']==.2
+
+
+def test_owned_nav1cm_map_uses_same_twenty_centimeter_exploration_default():
+    path=ROOT/'ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/navigation_backend.py'
+    spec=importlib.util.spec_from_file_location('owned_nav1cm_resolution',path)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    maps=module.owned_nav1cm_specs('/private',platform_config='/wheel.yaml',build_dir='/cache',use_sim_time=False)[0][2]
+    assert maps['coarse_resolution_m']==.2

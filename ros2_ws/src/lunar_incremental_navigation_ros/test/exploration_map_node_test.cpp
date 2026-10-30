@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -207,5 +208,23 @@ TEST(ExplorationMap, NativeSourceCostsAndHistorySizeAreRetained) {
   EXPECT_EQ(map.StorageStats().fragments, 40000U);
   ASSERT_TRUE(map.Apply(source, 2));
   EXPECT_EQ(map.StorageStats().fragments, 40000U);
+}
+}  // namespace lunar::incremental_navigation_ros
+
+namespace lunar::incremental_navigation_ros {
+TEST(ExplorationMap, DefaultProjectionKeepsTwentyCentimeterFreeCells) {
+  ExplorationMap map(Wheel(), Profile());
+  ASSERT_TRUE(map.Apply(Flat(.2), 1));
+  const auto fine = map.Capture().map.fine;
+  const auto projection = map.Project();
+  ASSERT_NE(fine, nullptr);
+  EXPECT_DOUBLE_EQ(projection.geometry.resolution_m(), .2);
+  std::size_t fine_free = 0;
+  const auto& g = fine->geometry();
+  for (auto y = g.min_inclusive().y; y < g.max_exclusive().y; ++y)
+    for (auto x = g.min_inclusive().x; x < g.max_exclusive().x; ++x)
+      fine_free += fine->State({x, y}) == core::FineCellState::kFree;
+  EXPECT_GT(fine_free, 0U);
+  EXPECT_EQ(std::count(projection.data.begin(), projection.data.end(), 0), fine_free);
 }
 }  // namespace lunar::incremental_navigation_ros

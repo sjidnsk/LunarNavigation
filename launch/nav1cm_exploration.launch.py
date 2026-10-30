@@ -30,7 +30,7 @@ DEFAULTS = {
     "map_qos_reliability": "reliable", "map_qos_durability": "volatile",
     "p3_map_timeout_s": "3.0", "odometry_timeout_s": "0.5", "mppi_time_steps": "40",
     "mppi_compute_envelope_s": "0.05",
-    "coarse_resolution_m": "1.0", "navigation_map_wait_timeout_s": "30.0",
+    "coarse_resolution_m": "0.2", "navigation_map_wait_timeout_s": "30.0",
 }
 
 def _compose(context):

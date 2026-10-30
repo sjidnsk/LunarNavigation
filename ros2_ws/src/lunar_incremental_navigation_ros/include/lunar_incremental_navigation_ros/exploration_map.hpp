@@ -15,7 +15,7 @@ class ExplorationMap final {
   ExplorationMap(lunar::incremental_navigation::PlatformCapability capability,
                  lunar::incremental_navigation::TraversabilityProfile profile,
                  double policy_resolution_m = .2,
-                 double coarse_resolution_m = 1.);
+                 double coarse_resolution_m = .2);
   ~ExplorationMap();
   bool Apply(const OwnedElevationEvidence& source, std::int64_t stamp_ns);
   [[nodiscard]] ObservedPolicyMapExportInput Capture(

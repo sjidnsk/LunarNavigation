@@ -30,7 +30,7 @@ def owned_nav1cm_specs(namespace, *, platform_config, build_dir, use_sim_time,
         goal_yaw_tolerance_rad=goal_yaw_tolerance_rad,
         map_qos_reliability='reliable',map_qos_durability='transient_local')
     mapping=dict(inputs,platform_config=platform_config,exploration_map_topic=ns+'/map',
-                 policy_map_service=ns+'/get_map',coarse_resolution_m=1.,
+                 policy_map_service=ns+'/get_map',coarse_resolution_m=.2,
                  goal_position_tolerance_m=goal_position_tolerance_m)
     planning=dict(inputs,wheel_config=platform_config,action_name=ns+'/navigate',
         goal_topic=ns+'/goal',global_route_topic=ns+'/route',local_path_topic=ns+'/path',
