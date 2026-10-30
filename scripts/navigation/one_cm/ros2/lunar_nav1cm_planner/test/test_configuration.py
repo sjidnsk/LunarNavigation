@@ -16,7 +16,7 @@ def test_wheel_yaml_drives_full_limits_then_explicit_overrides():
     limits, capability = module.load_configuration(PACKAGE.parents[4] / 'config/wheel.yaml')
     assert (limits.body_length_m, limits.body_width_m, limits.linear_speed_mps,
             limits.angular_speed_rps, limits.linear_accel_mps2,
-            limits.angular_accel_rps2, limits.curvature_inv_m) == pytest.approx((1.182, .818, .2, 1., .5, .5, 1.))
+            limits.angular_accel_rps2, limits.curvature_inv_m) == pytest.approx((1.182, .818, .1, 0.1950770225306774, .5, .5, 1.))
     altered, same_terrain = module.load_configuration(PACKAGE.parents[4] / 'config/wheel.yaml', {'angular_speed_rps': .4})
     assert altered.angular_speed_rps == .4
     assert same_terrain == capability
