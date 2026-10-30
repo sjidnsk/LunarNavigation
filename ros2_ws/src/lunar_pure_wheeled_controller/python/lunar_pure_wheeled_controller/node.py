@@ -115,6 +115,7 @@ class PureWheeledControllerNode(Node):
             "body_width_m": 0.0,
             "minimum_clearance_m": 0.0,
             "mppi_compute_budget_s": 0.04,
+            "mppi_compute_envelope_s": 0.05,
             "mppi_nominal_response_time_s": TrackingPolicy().control_response_time_s,
             "mppi_trace_diagnostics": False,
             "execution_contract_enabled":False,
@@ -267,6 +268,7 @@ class PureWheeledControllerNode(Node):
                 temperature=self.get_parameter("mppi_temperature").value,
                 seed=self.get_parameter("mppi_seed").value,
                 nominal_response_time_s=self.get_parameter("mppi_nominal_response_time_s").value,
+                compute_budget_s=float(self.get_parameter('mppi_compute_envelope_s').value),
                 state_age_budget_s=float(self.get_parameter('odometry_timeout_s').value) if self._standard_mode else .05))
             self._mppi_diagnostics = self.create_publisher(String,self._absolute_topic_name("mppi_diagnostics_topic",self.get_parameter("mppi_diagnostics_topic").value),10)
             self._map_client = None

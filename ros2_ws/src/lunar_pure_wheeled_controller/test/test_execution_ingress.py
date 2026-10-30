@@ -89,3 +89,14 @@ def test_path_and_reference_callbacks_receive_while_control_is_blocked(monkeypat
         assert calls==received
     finally:
         release.set();executor.shutdown();node.destroy_node();peer.destroy_node();rclpy.shutdown()
+
+
+def test_configured_compute_envelope_is_used_by_full_brake_model():
+    import rclpy
+    rclpy.init(args=['--ros-args','-p','controller_backend:=mppi_path_follower',
+                     '-p','input_mode:=incremental_path','-p','mppi_compute_envelope_s:=0.2'])
+    node=C()
+    try:
+        assert node._executor.config.compute_budget_s==.2
+        assert node._executor.config.state_age_budget_s==node._odometry_timeout_s
+    finally:node.destroy_node();rclpy.shutdown()

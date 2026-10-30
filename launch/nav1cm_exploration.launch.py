@@ -27,7 +27,7 @@ DEFAULTS = {
     "exploration_diagnostics_topic": "/Car/T4/exploration/diagnostics",
     "command_topic": "/Car/T5/Car_Cmd_Vel", "diagnostics_topic": "/Car/T4/control/mppi_diagnostics",
     "map_qos_reliability": "reliable", "map_qos_durability": "volatile",
-    "p3_map_timeout_s": "3.0",
+    "p3_map_timeout_s": "3.0", "mppi_compute_envelope_s": "0.05",
     "coarse_resolution_m": "1.0", "navigation_map_wait_timeout_s": "30.0",
 }
 
@@ -36,6 +36,9 @@ def _compose(context):
     values["p3_map_timeout_s"] = float(values["p3_map_timeout_s"])
     if not isfinite(values["p3_map_timeout_s"]) or values["p3_map_timeout_s"] < 0:
         raise ValueError("p3_map_timeout_s must be finite and nonnegative")
+    values['mppi_compute_envelope_s'] = float(values['mppi_compute_envelope_s'])
+    if not isfinite(values['mppi_compute_envelope_s']) or values['mppi_compute_envelope_s'] <= 0:
+        raise ValueError('mppi_compute_envelope_s must be finite and positive')
     strategy = values["exploration_strategy"]
     if strategy not in {"none", "frontier", "drl"}:
         raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
@@ -86,6 +89,7 @@ def _compose(context):
             "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
             "standard_map_source": "direct_p3", "p3_map_topic": values["map_topic"],
             "p3_map_timeout_s": values["p3_map_timeout_s"],
+            "mppi_compute_envelope_s": values["mppi_compute_envelope_s"],
             "path_topic": values["local_path_topic"], "mppi_diagnostics_topic": values["diagnostics_topic"],
             "mppi_nominal_response_time_s": .15, "allow_unknown": False}))
     return actions
