@@ -45,6 +45,11 @@ def _segment_clear(a, b, boxes):
     """精确参数区间裁剪整条线段；边界接触也视为碰撞，不做离散采样。"""
     if not len(boxes):
         return True
+    # 包围盒闭区间相交是必要条件；仅排除确定无关障碍。
+    boxes = boxes[(boxes[:, 0] <= max(a[0], b[0])) &
+                  (boxes[:, 2] >= min(a[0], b[0])) &
+                  (boxes[:, 1] <= max(a[1], b[1])) &
+                  (boxes[:, 3] >= min(a[1], b[1]))]
     lo = np.zeros(len(boxes))
     hi = np.ones(len(boxes))
     possible = np.ones(len(boxes), dtype=bool)
@@ -58,6 +63,48 @@ def _segment_clear(a, b, boxes):
             lo = np.maximum(lo, np.minimum(near, far))
             hi = np.minimum(hi, np.maximum(near, far))
     return not bool(np.any(possible & (lo <= hi)))
+
+
+def _string_pull(start, goal, portals, check):
+    """有序左右portal漏斗；仅生成候选，调用者仍须连续认证。"""
+    def area(a, b, c):
+        # 与漏斗左右收紧判据一致的顺时针有向面积。
+        return (c[0]-a[0])*(b[1]-a[1]) - (b[0]-a[0])*(c[1]-a[1])
+
+    gates = [(start, start), *portals, (goal, goal)]
+    apex = left = right = start
+    apex_i = left_i = right_i = 0
+    points = [start]
+    i = 1
+    while i < len(gates):
+        check()
+        new_left, new_right = gates[i]
+        if area(apex, right, new_right) <= 0:
+            if apex == right or area(apex, left, new_right) > 0:
+                right, right_i = new_right, i
+            else:
+                if points[-1] != left:
+                    points.append(left)
+                apex, apex_i = left, left_i
+                left = right = apex
+                left_i = right_i = apex_i
+                i = apex_i + 1
+                continue
+        if area(apex, left, new_left) >= 0:
+            if apex == left or area(apex, right, new_left) < 0:
+                left, left_i = new_left, i
+            else:
+                if points[-1] != right:
+                    points.append(right)
+                apex, apex_i = right, right_i
+                left = right = apex
+                left_i = right_i = apex_i
+                i = apex_i + 1
+                continue
+        i += 1
+    if points[-1] != goal:
+        points.append(goal)
+    return points
 
 
 class _Budget(Exception):
@@ -114,6 +161,7 @@ class AdaptiveGlobalPlanner:
         deadline = began + budget_s
         domain = ()
         nodes, edges, boundary = [], [], []
+        portals = {}
         storage = {"obstacles": len(world.blocked), "nodes": 0, "edges": 0, "slabs": 0,
                    "free_cells": 0, "dense_cells": 0}
         timing = {}
@@ -175,6 +223,10 @@ class AdaptiveGlobalPlanner:
             if any(not (xmin < p[0] < xmax and ymin < p[1] < ymax) for p in (start, goal)):
                 return finish("DOMAIN_EXHAUSTED")
             check()
+            if _segment_clear(start, goal, physical):
+                check()
+                timing["direct_validate_s"] = time.perf_counter() - began
+                return finish("PLAN_FOUND", Route(version, world.epoch, np.asarray([start, goal]), goal))
             events = {xmin: [], xmax: []}
             clipped = []
             for box in inflated:
@@ -223,6 +275,7 @@ class AdaptiveGlobalPlanner:
                     high = min(previous[i][1], current[j][1])
                     if high - low > 1e-10:
                         portal = node(left, (low + high) / 2)
+                        portals[portal] = ((left, low), (left, high), previous[i][2], current[j][2])
                         connect(previous[i][2], portal)
                         connect(portal, current[j][2])
                     if previous[i][1] < current[j][1]:
@@ -277,6 +330,23 @@ class AdaptiveGlobalPlanner:
                 if point != points[-1]:
                     points.append(point)
                 i = j
+            ordered = []
+            for k, ident in enumerate(path):
+                check()
+                if ident in portals:
+                    bottom, top, before, after = portals[ident]
+                    # 向右时左手为上边界；回折时反向，不能按全局x排序。
+                    ordered.append((top, bottom) if path[k-1] == before else (bottom, top))
+            candidate = _string_pull(start, goal, ordered, check)
+            old_length = sum(math.dist(a, b) for a, b in zip(points[:-1], points[1:]))
+            new_length = sum(math.dist(a, b) for a, b in zip(candidate[:-1], candidate[1:]))
+            valid = new_length <= old_length
+            for a, b in zip(candidate[:-1], candidate[1:]):
+                check()
+                valid &= _segment_clear(a, b, physical)
+                valid &= all(xmin < p[0] < xmax and ymin < p[1] < ymax for p in (a, b))
+            if valid:
+                points = candidate
             # 独立于图的最终连续碰撞门禁；任何数值边界问题均不发布参考。
             for a, b in zip(points[:-1], points[1:]):
                 check()
