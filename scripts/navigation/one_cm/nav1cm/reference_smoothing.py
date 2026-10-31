@@ -269,9 +269,17 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
             if available > 1e-9:
                 unit = tail / available
                 # 模 pi 选择最小几何转角，不决定车辆前进或倒车。
-                relative = (terminal_yaw - np.arctan2(unit[1], unit[0]) + np.pi/2) % np.pi - np.pi/2
-                tangent = np.array((np.cos(np.arctan2(unit[1], unit[0]) + relative),
-                                    np.sin(np.arctan2(unit[1], unit[0]) + relative)))
+                heading = np.arctan2(unit[1], unit[0])
+                relative = np.arctan2(np.sin(terminal_yaw - heading),
+                                      np.cos(terminal_yaw - heading))
+                # 正负90度同长时优先显式yaw；容忍角度运算的舍入误差。
+                # 真正更短才取yaw+pi，避免在平局处反转几何末切线。
+                if abs(abs(relative) - np.pi/2) <= 64 * np.finfo(float).eps:
+                    relative = np.copysign(np.pi/2, relative)
+                elif abs(relative) > np.pi/2:
+                    relative -= np.copysign(np.pi, relative)
+                normal = np.array((-unit[1], unit[0]))
+                tangent = max(0., np.cos(relative)) * unit + np.sin(relative) * normal
                 # 最多3m接近区，避免750m直线整段弯曲；短尾段保留1/4直线。
                 # 这里只限制几何尺度，不证明曲率/车速/角速度可行性。
                 trim = min(3., .75 * available)
