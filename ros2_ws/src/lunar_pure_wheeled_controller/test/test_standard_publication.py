@@ -78,19 +78,21 @@ def test_candidate_invalidation_is_not_a_permanent_tracking_failure(reason,retry
         _publish_execution_status=lambda **kw:statuses.append(kw))
     node._standard_pose_wait=lambda reason='WAITING_FOR_POSE':PureWheeledControllerNode._standard_pose_wait(node,reason)
     PureWheeledControllerNode._standard_unavailable(node,reason,retryable=retryable)
-    assert emitted==[0] and discarded==[True]
+    assert emitted==[0]
+    assert discarded==([] if retryable else [True])
     assert statuses[0]['state_code']==expected_state
     assert diagnostics[0]['certified_stop'] is False and diagnostics[0]['measured_stopped'] is None
 
 
 def test_real_executor_failure_wins_over_retryable_map_race():
-    statuses=[]
+    statuses=[];discarded=[]
     node=S(_executor=S(failure='TRACKING_STALLED',last_execution_state=6,
-        discard_prediction=lambda:None),_mppi_diagnostics=S(publish=lambda m:None),
+        discard_prediction=lambda:discarded.append(True)),_mppi_diagnostics=S(publish=lambda m:None),
         _publish_twist=lambda:None,_publish_execution_status=lambda **kw:statuses.append(kw))
     PureWheeledControllerNode._standard_unavailable(node,'map_changed_during_certification',retryable=True)
     assert statuses[0]['state_code']==6
     assert statuses[0]['reason']=='EXECUTION_INPUT_UNAVAILABLE:TRACKING_STALLED'
+    assert discarded==[True]
 
 
 def test_missing_pose_requests_zero_and_reports_unaccepted_current_pair():

@@ -774,7 +774,8 @@ class PureWheeledControllerNode(Node):
         retryable=disposition=='RECOMPUTE'
         if failure is not None:reason=failure
         # 零目标是未知运动时的保底请求，不能当作有界制动认证或实测停车。
-        self._executor.discard_prediction()
+        # 可重算失效仅作废本次发布证明；nominal 只供下轮完整重算热启动。
+        if not retryable:self._executor.discard_prediction()
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(event='certificate_unavailable',
             reason=reason,retryable=retryable,measured_stopped=None,certified_stop=False))))
         self._publish_twist()
