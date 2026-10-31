@@ -156,3 +156,10 @@ def test_initial_direction_is_owned_only_by_navigator(monkeypatch,direction):
 
 def test_initial_direction_rejects_unsupported_choice(monkeypatch):
     with pytest.raises(ValueError):graph(monkeypatch,initial_travel_direction='sideways')
+
+
+def test_explicit_tcp_profile_is_shared_by_planner_and_follower(monkeypatch):
+    g=nodes(graph(monkeypatch,enable_controller='true',platform_config='/outside/tcp-final.yaml'))
+    planner=next(n for n in g if n['package']=='lunar_nav1cm_planner')['parameters'][0]
+    follower=next(n for n in g if n['package']=='lunar_pure_wheeled_controller')['parameters'][0]
+    assert planner['wheel_config']==follower['platform_config']=='/outside/tcp-final.yaml'

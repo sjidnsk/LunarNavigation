@@ -222,6 +222,17 @@ def profile_command_limits(profile):
     return values
 
 
+def tcp_platform_profile(base, speed_override):
+    """TCP 专用速度配置仅覆盖速度，其余车辆能力继承公共 profile。"""
+    keys = {'maximum_forward_speed_mps', 'maximum_reverse_speed_mps', 'maximum_spin_rate_radps'}
+    if not isinstance(speed_override, dict) or set(speed_override) != keys:
+        raise ValueError('invalid TCP speed override fields')
+    result = deepcopy(base)
+    result['capability'].update(speed_override)
+    profile_command_limits(result)
+    return result
+
+
 def low_speed_profile(profile,*,linear_mps=.1,angular_rps=.1950770225306774):
     if any(not math.isfinite(v) or v<=0 for v in (linear_mps,angular_rps)):
         raise ValueError('invalid low-speed profile')
@@ -362,7 +373,9 @@ def main():
     started=time.monotonic();last_report=0.;result=dict(control_domain=CONTROL_DOMAIN,p3_source_domain=P3_SOURCE_DOMAIN,check_only=options.check_only)
     try:
         if not options.check_only:
-            profile=low_speed_profile(yaml.safe_load((root/'source/config/wheel.yaml').read_text()))
+            profile=tcp_platform_profile(
+                yaml.safe_load((root/'source/config/wheel.yaml').read_text(encoding='utf-8')),
+                yaml.safe_load((root/'source/config/tcp_wheel_speed.yaml').read_text(encoding='utf-8')))
             config=out/'test-wheel.yaml';config.write_text(yaml.safe_dump(profile,sort_keys=False))
             budgets=yaml.safe_load((root/'source/config/tcp_p3_feedback.yaml').read_text())
             if options.rviz_config is not None and not options.check_only:

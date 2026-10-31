@@ -394,3 +394,48 @@ def test_new_arm_requires_fresh_telemetry_and_connection():
     assert not r.receive(message(.02))
     r.update_connected(S(data=True)); clock[0] = 1.01
     assert not r.receive(message(.02))
+
+
+def test_tcp_production_profile_overrides_only_speed_and_feeds_launch_and_relay():
+    from pathlib import Path
+    import yaml
+    from scripts.simulation.p4_tcp_runtime import tcp_platform_profile, TcpCommandRelay
+    root=Path(__file__).resolve().parents[1]
+    base=yaml.safe_load((root/'config/wheel.yaml').read_text(encoding='utf-8'))
+    override=yaml.safe_load((root/'config/tcp_wheel_speed.yaml').read_text(encoding='utf-8'))
+    merged=tcp_platform_profile(base,override)
+    assert profile_command_limits_for_test(merged)==(.5,.5,1.)
+    assert base['capability']['maximum_forward_speed_mps']==.2
+    for key in ('maximum_acceleration_mps2','maximum_braking_deceleration_mps2','maximum_yaw_acceleration_radps2'):
+        assert merged['capability'][key]==base['capability'][key]==.5
+    assert launch_settings('/p4/source','/p4/cache','/p4/final.yaml',dict(odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))['platform_config']=='/p4/final.yaml'
+    relay=TcpCommandRelay(merged,publish_velocity=lambda x:None,publish_mode=lambda x:None,publish_lease=lambda x:None,make_zero=message)
+    assert relay.limits==(.5,.5,1.)
+    assert profile_command_limits_for_test(low_speed_profile_for_test(merged))==(.05,.05,.1)
+
+
+def profile_command_limits_for_test(profile):
+    from scripts.simulation.p4_tcp_runtime import profile_command_limits
+    return profile_command_limits(profile)
+
+
+def low_speed_profile_for_test(profile):
+    from scripts.simulation.p4_tcp_runtime import low_speed_profile
+    return low_speed_profile(profile,linear_mps=.05,angular_rps=.1)
+
+
+def test_tcp_speed_override_rejects_non_speed_or_invalid_values():
+    from scripts.simulation.p4_tcp_runtime import tcp_platform_profile
+    valid={'maximum_forward_speed_mps':.5,'maximum_reverse_speed_mps':.5,'maximum_spin_rate_radps':1.}
+    for bad in ({**valid,'maximum_acceleration_mps2':5.}, {**valid,'maximum_forward_speed_mps':float('nan')}, {'maximum_forward_speed_mps':.5}):
+        with pytest.raises(ValueError): tcp_platform_profile(profile(),bad)
+
+
+def test_production_main_uses_tcp_overlay_and_bounded_check_stays_explicit():
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    main=(root/'scripts/simulation/p4_tcp_runtime.py').read_text(encoding='utf-8')
+    check=(root/'scripts/simulation/check_tcp_navigation.py').read_text(encoding='utf-8')
+    assert "profile=tcp_platform_profile(" in main and "source/config/tcp_wheel_speed.yaml" in main
+    assert "relay=TcpCommandRelay(profile," in main and "config.write_text(yaml.safe_dump(profile" in main
+    assert "linear_mps=.05,angular_rps=.1" in check
