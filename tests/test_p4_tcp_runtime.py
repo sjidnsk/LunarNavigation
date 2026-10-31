@@ -411,17 +411,11 @@ def test_tcp_production_profile_overrides_only_speed_and_feeds_launch_and_relay(
     assert launch_settings('/p4/source','/p4/cache','/p4/final.yaml',dict(odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))['platform_config']=='/p4/final.yaml'
     relay=TcpCommandRelay(merged,publish_velocity=lambda x:None,publish_mode=lambda x:None,publish_lease=lambda x:None,make_zero=message)
     assert relay.limits==(.5,.5,1.)
-    assert profile_command_limits_for_test(low_speed_profile_for_test(merged))==(.05,.05,.1)
 
 
 def profile_command_limits_for_test(profile):
     from scripts.simulation.p4_tcp_runtime import profile_command_limits
     return profile_command_limits(profile)
-
-
-def low_speed_profile_for_test(profile):
-    from scripts.simulation.p4_tcp_runtime import low_speed_profile
-    return low_speed_profile(profile,linear_mps=.05,angular_rps=.1)
 
 
 def test_tcp_speed_override_rejects_non_speed_or_invalid_values():
@@ -431,11 +425,19 @@ def test_tcp_speed_override_rejects_non_speed_or_invalid_values():
         with pytest.raises(ValueError): tcp_platform_profile(profile(),bad)
 
 
-def test_production_main_uses_tcp_overlay_and_bounded_check_stays_explicit():
+def test_both_entries_use_shared_profile_and_preflight_precedes_acquire():
     from pathlib import Path
     root=Path(__file__).resolve().parents[1]
     main=(root/'scripts/simulation/p4_tcp_runtime.py').read_text(encoding='utf-8')
     check=(root/'scripts/simulation/check_tcp_navigation.py').read_text(encoding='utf-8')
-    assert "profile=tcp_platform_profile(" in main and "source/config/tcp_wheel_speed.yaml" in main
+    assert "profile=load_tcp_platform_profile(root/'source')" in main
     assert "relay=TcpCommandRelay(profile," in main and "config.write_text(yaml.safe_dump(profile" in main
-    assert "linear_mps=.05,angular_rps=.1" in check
+    assert "profile=load_tcp_platform_profile(ROOT/'source')" in check
+    assert check.index("if options.preflight_only:raise PreflightOnlyComplete()") < check.index("relay.acquire()")
+
+
+def test_both_tcp_entries_load_same_configured_limits():
+    from pathlib import Path
+    from scripts.simulation.p4_tcp_runtime import load_tcp_platform_profile
+    root=Path(__file__).resolve().parents[1]
+    assert profile_command_limits_for_test(load_tcp_platform_profile(root))==(.5,.5,1.)

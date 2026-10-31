@@ -1,7 +1,7 @@
-"""216/P4 低速有界 TCP 导航检查；--preflight-only 不获取车辆控制权。"""
+"""216/P4 有界 TCP 导航检查；--preflight-only 不获取车辆控制权。"""
 import argparse
 from p3_input_timing import record_sample,runtime_input_health,timing_statistics
-from p4_tcp_runtime import (CONTROL_DOMAIN, TcpCommandRelay, low_speed_profile,
+from p4_tcp_runtime import (CONTROL_DOMAIN, TcpCommandRelay, load_tcp_platform_profile,
                             profile_command_limits, launch_settings, runtime_environment)
 import os,json,time,math,signal,subprocess,collections
 from pathlib import Path
@@ -31,7 +31,7 @@ samples={}
 start=time.monotonic();result={'scope':'one real UE TCP attempt using P3 map and odometry','allow_unknown':True,'reached':False};events=(OUT/'events.jsonl').open('w',buffering=1)
 def event(kind,**kw):events.write(json.dumps(dict(elapsed=time.monotonic()-start,kind=kind,**kw))+'\n')
 # 本轮独立命名空间；只管理自身launch和租约。
-profile=low_speed_profile(yaml.safe_load((ROOT/'source/config/wheel.yaml').read_text()),linear_mps=.05,angular_rps=.1)
+profile=load_tcp_platform_profile(ROOT/'source')
 limits=profile_command_limits(profile)
 result['speed_limits']=dict(v=limits[0],reverse=limits[1],w=limits[2])
 config=OUT/'test-wheel.yaml';config.write_text(yaml.safe_dump(profile,sort_keys=False))
