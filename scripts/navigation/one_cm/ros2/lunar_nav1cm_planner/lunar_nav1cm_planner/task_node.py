@@ -10,7 +10,8 @@ from rclpy.task import Future
 from rclpy.signals import SignalHandlerOptions
 from lunar_planning_msgs.action import NavigateToPose
 from nav1cm.navigation_task import TaskSnapshot
-from .node import PlannerNode
+from rcl_interfaces.msg import ParameterDescriptor
+from .node import PlannerNode, STARTUP_PARAMETER_DESCRIPTION
 
 
 class ROSTaskApi:
@@ -104,7 +105,9 @@ class ROSTaskApi:
 class NavigationTaskNode(PlannerNode):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        name = self.declare_parameter('action_name', '/Car/T4/navigation/navigate_to_pose').value
+        name = self.declare_parameter('action_name', '/Car/T4/navigation/navigate_to_pose',
+            descriptor=ParameterDescriptor(read_only=True,description=STARTUP_PARAMETER_DESCRIPTION)).value
+        self.get_logger().info(f'startup action_name (read-only; restart required): {name}')
         self.task_api = ROSTaskApi(self, self.runtime, name)
 
     def destroy_node(self):

@@ -1,5 +1,6 @@
 """P3 GridMap/Odometry/TF/PoseStamped → 两条标准 nav_msgs/Path。"""
 from dataclasses import fields
+import json
 import math
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ from tf2_msgs.msg import TFMessage
 
 from nav1cm.async_coordinator import AsyncNavigationCoordinator
 from rclpy.parameter import Parameter
+from rcl_interfaces.msg import ParameterDescriptor
 from nav1cm.contracts import WheelLimits
 from nav1cm.field_native import NativeDistanceField
 from nav1cm.geometry_native import NativeGeometry
@@ -26,6 +28,8 @@ from nav1cm.ros_conversion import frame_name
 from .configuration import load_configuration
 from .runtime import PlannerRuntime
 
+
+STARTUP_PARAMETER_DESCRIPTION = '仅启动时读取；修改启动参数后重启节点 (restart required).'
 
 def map_input_qos(reliability, durability):
     """地图独立QoS；位姿/TF继续使用原配置。"""
@@ -111,16 +115,18 @@ class PlannerNode(Node):
             'execution_reference_topic':'/Car/T4/control/path_execution_reference',
             'tracking_status_topic':'/Car/T4/control/tracking_status',
         }
-        from rcl_interfaces.msg import ParameterDescriptor
-        settings={}
-        for name,default in defaults.items():
-            if name=='initial_travel_direction':
-                settings[name]=self.declare_parameter(name,default,
-                    descriptor=ParameterDescriptor(read_only=True)).value
-            else:settings[name]=self.declare_parameter(name,default).value
+        settings={name:self.declare_parameter(name,default).value for name,default in defaults.items()}
         settings['clearance_radius_m']=limits.global_clearance_radius(settings['clearance_radius_m'])
-        self.set_parameters([Parameter('minimum_clearance_m',value=limits.minimum_clearance_m),
-                             Parameter('clearance_radius_m',value=settings['clearance_radius_m'])])
+        # 先保留启动覆盖并回写收敛后的净空，再冻结；不得冻结ROS自身有更新路径的use_sim_time。
+        result=self.set_parameters_atomically([
+            Parameter('minimum_clearance_m',value=limits.minimum_clearance_m),
+            Parameter('clearance_radius_m',value=settings['clearance_radius_m'])])
+        if not result.successful:
+            raise ValueError(f'启动参数回写失败: {result.reason}')
+        startup_names=('wheel_config',*overrides,*defaults)
+        for name in startup_names:
+            self.set_descriptor(name,ParameterDescriptor(type=self.describe_parameter(name).type,
+                read_only=True,description=STARTUP_PARAMETER_DESCRIPTION))
         if not settings['build_dir']:
             raise ValueError('build_dir 必须显式指定仓库外 acados 构建/缓存目录，或设置 NAV1CM_BUILD_DIR')
         source_qos = map_input_qos(settings['map_qos_reliability'], settings['map_qos_durability'])
@@ -146,6 +152,8 @@ class PlannerNode(Node):
         self.create_subscription(TFMessage, settings['tf_topic'], self._tf_input, dynamic_tf)
         self.create_subscription(TFMessage, settings['tf_static_topic'], self._tf_input, static_tf)
         self.get_logger().info(f'wheel={capability_file}; limits={limits}; local=0.01m/500x500; build={settings["build_dir"]}')
+        self.get_logger().info('startup_parameters (read-only; restart required): '+json.dumps(
+            {name:self.get_parameter(name).value for name in startup_names},ensure_ascii=False,sort_keys=True))
         self._execution_contract_enabled=settings['execution_contract_enabled']
         self._execution_revision=0
         if self._execution_contract_enabled:

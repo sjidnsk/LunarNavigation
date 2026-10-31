@@ -76,3 +76,20 @@ bridge 与停车尾段都扣同一份有限弧长/转角预算，预留一个反
 任务到达必须满足当前目标的 xy/yaw、实测线角速度容差，并保持 0.3 秒且有后续里程计测量；局部段结束、Path 存在、Action 接受均不代表到达。反馈 segment revision 仅报告真实当前路线版本，0 表示无；没有伪造执行 ACK。Action 使用异步 Future 和独立可重入回调组，单线程 executor 也不会因等待结果阻塞取消。
 
 关闭入口会终结未完成 Action 为 `INTERNAL_ERROR/SHUTDOWN`，停止 Runtime 并有界等待 worker 退出。此入口不启动控制器、不访问真实 T5，也不启动探索或训练。
+
+
+## 参数生效边界
+
+本包`planner_node`与`navigation_task_node`的应用参数均仅启动时读取。启动时仍可通过launch、YAML或`--ros-args -p`覆盖；运行时`ros2 param set`明确拒绝，修改后须重启对应节点。`ros2 param describe`显示只读及restart说明，避免参数表已改而实际导航仍用旧值。ROS自身的`use_sim_time`保留原生更新路径，不在本包冻结范围内。
+
+|参数组|启动时决定的对象|更改方式及保持原值的影响|
+|---|---|---|
+|`wheel_config`及`WheelLimits`同名参数（`linear_speed_mps`、`linear_accel_mps2`、`angular_speed_rps`、`motion_model`、车体/净空等）|加载的能力/地形判据、规划与认证模型|改启动配置并重启；不改则沿用原能力。只改规划器不等于跟踪器同步，部署仍须共用同一能力文件|
+|`build_dir`、`horizon_steps`、`horizon_dt_s`|acados生成/缓存目录及模型时域|重启重建相应资源；不改则使用原时域/缓存指纹|
+|`planning_period_s`、`execution_period_s`、`global_period_s`、`global_budget_s`|规划调度和预算|重启；不改则保持原调度节奏|
+|`goal_tolerance_m`、`goal_position_target_m`、`goal_yaw_tolerance_rad`、`stopped_linear_mps`、`stopped_angular_rps`|目标/停稳合同；位置收敛目标仍受验收容差约束|重启；不改则保持原目标精度和停稳条件|
+|`allow_unknown`、`initial_travel_direction`、`clearance_radius_m`|地图策略、起步偏好及全局几何包络|重启；不改则保持原规划行为，起步偏好不等于全程禁止另一方向|
+|`map_frame`、所有`*_topic`、`map_qos_reliability`、`map_qos_durability`、`action_name`|坐标解释、真实订阅/发布和Action端点|重启重新接线；不改则仍连接原端点和QoS|
+|`odometry_timeout_s`、`execution_contract_enabled`、`execution_feedback_timeout_s`|定位持续更新检测、执行合同与反馈路径|重启；不改则保持原检测和合同，不引入源数据年龄停车规则|
+
+`minimum_clearance_m`与`clearance_radius_m`先按现有能力下限收敛，参数表回写最终值后才冻结，不能通过小覆盖绕过车体/净空要求。启动日志`startup_parameters`记录最终声明参数值（Action名另行记录），资源仍由原配置解析和factory建立；不新增热更新管理器。这些日志不是节点健康、规划成功或车辆到达证明。
