@@ -92,3 +92,21 @@ def test_forward_initial_start_completes_once_across_rolling_sources():
 def test_explicit_generic_start_has_no_initial_start_evidence():
     result=simulate(ProbePlanner(),'straight',duration=.6,initial_travel_direction='')
     assert result['summary']['initial_start_completed']==0
+
+
+def test_cli_plan_period_is_forwarded_and_execution_stays_fifty_ms(monkeypatch,tmp_path):
+    import json
+    from scripts.analysis import compare_mpcc_handover as module
+    limits=tmp_path/'limits.json';limits.write_text(json.dumps(vars(ProbePlanner.limits)),encoding='utf-8')
+    output=tmp_path/'period.json';calls=[]
+    monkeypatch.setattr(module,'load_planner',lambda path,name:(ProbePlanner,{}))
+    def run(planner,scenario,**kwargs):
+        calls.append(kwargs);return dict(scenario=scenario,summary={})
+    monkeypatch.setattr(module,'simulate',run)
+    module.main(['--baseline-module','old.py','--warm-module','new.py','--limits-json',str(limits),
+        '--build-dir',str(tmp_path/'build'),'--output',str(output),'--plan-period','.5','--scenarios','curve'])
+    assert len(calls)==2
+    assert all(c['plan_period']==.5 and c['dt']==.05 for c in calls)
+    metadata=json.loads(output.read_text(encoding='utf-8'))
+    assert metadata['planning_period_s']==.5
+    assert metadata['execution_dt_s']==.05

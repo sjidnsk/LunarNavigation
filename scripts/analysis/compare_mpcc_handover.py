@@ -108,6 +108,7 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description=__doc__)
     for key in ('baseline-module','warm-module','build-dir','output','limits-json'):parser.add_argument('--'+key,required=True)
     parser.add_argument('--duration',type=float,default=12.)
+    parser.add_argument('--plan-period',type=float,default=.1)
     parser.add_argument('--feedback-delay',type=float,default=0.)
     parser.add_argument('--result-delay',type=float,default=0.)
     parser.add_argument('--n',type=int,default=20)
@@ -117,8 +118,8 @@ def main(argv=None):
     parser.add_argument('--field-lib')
     parser.add_argument('--scenarios',nargs='+',choices=['straight','curve','spin','refresh'],default=['straight','curve','spin','refresh'])
     a=parser.parse_args(argv)
-    if a.duration<=0 or min(a.feedback_delay,a.result_delay)<0 or a.command_hold<=0:parser.error('invalid duration/delay')
-    result=dict(evidence='MODEL_SIMULATION',plant='issued velocity reached over one dt using existing midpoint step; no vehicle actuator latency model',comparison='same initial conditions and scheduled map/routes; each arm feeds back its own commands, not identical state replay',feedback_delay_s=a.feedback_delay,result_delivery_delay_s=a.result_delay,n=a.n,arms={},shared={})
+    if a.duration<=0 or min(a.feedback_delay,a.result_delay)<0 or a.command_hold<=0 or a.plan_period<=0:parser.error('invalid duration/delay')
+    result=dict(evidence='MODEL_SIMULATION',plant='issued velocity reached over one dt using existing midpoint step; no vehicle actuator latency model',comparison='same initial conditions and scheduled map/routes; each arm feeds back its own commands, not identical state replay',feedback_delay_s=a.feedback_delay,result_delivery_delay_s=a.result_delay,planning_period_s=a.plan_period,execution_dt_s=.05,n=a.n,arms={},shared={})
     for name in ('async_coordinator','coordinator','reference_buffer','execution','certification'):
         result['shared'][name]=identity(ROOT/'scripts/navigation/one_cm/nav1cm'/(name+'.py'))
     limits=WheelLimits(**json.loads(Path(a.limits_json).read_text(encoding='utf-8')))
@@ -132,7 +133,7 @@ def main(argv=None):
         field_backend=NativeDistanceField(a.field_lib);result['field_library']=identity(a.field_lib)
     for arm in ('baseline','warm'):
         cls,info=load_planner(getattr(a,arm+'_module'),arm)
-        runs=[simulate(cls(limits,Path(a.build_dir),n=a.n,dt=.2),s,duration=a.duration,result_delay=a.result_delay,feedback_delay=a.feedback_delay,command_hold_s=a.command_hold,backend=backend,field_backend=field_backend,initial_travel_direction=a.initial_travel_direction) for s in a.scenarios]
+        runs=[simulate(cls(limits,Path(a.build_dir),n=a.n,dt=.2),s,duration=a.duration,dt=.05,plan_period=a.plan_period,result_delay=a.result_delay,feedback_delay=a.feedback_delay,command_hold_s=a.command_hold,backend=backend,field_backend=field_backend,initial_travel_direction=a.initial_travel_direction) for s in a.scenarios]
         result['arms'][arm]=dict(module=info,runs=runs)
     path=Path(a.output);path.parent.mkdir(parents=True,exist_ok=True)
     path.write_bytes(json.dumps(result,ensure_ascii=False,indent=2).encode('utf-8'))
