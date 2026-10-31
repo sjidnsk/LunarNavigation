@@ -97,7 +97,10 @@ def command_hold_proof(action, grid, limits, command_hold_s):
 
 def certified_velocity_command(result, measured, limits, *, reference_interval_s,
                                last_command, elapsed_s, command_hold_s, backend=None, diagnostics=None):
-    """首 shooting 区间速度参考；发布记忆只决定 slew，证明始终起于真实 P3。"""
+    """首 shooting 区间速度参考；发布记忆只决定 slew。
+
+    证明起于冻结周期的 P3 实测或命令响应模型估计初态；估计不是实测到达证据。
+    """
     from time import perf_counter
     started=perf_counter()
     if diagnostics is not None:

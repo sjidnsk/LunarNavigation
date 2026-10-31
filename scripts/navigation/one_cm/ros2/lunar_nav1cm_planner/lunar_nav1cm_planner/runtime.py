@@ -102,6 +102,9 @@ class PlannerRuntime:
         if self.publish_command is None:
             return
         self._publish_issued(command)
+        diagnostics=dict(diagnostics or {})
+        diagnostics['actual_published_vw']=list(command)
+        diagnostics.setdefault('final_publish_override_reason',None)
         self._notice('MPCC_COMMAND', json.dumps(dict(v=command[0], w=command[1],
             status=getattr(packet.result, 'status', None),
             source=getattr(packet.candidate, 'source', None),
@@ -502,6 +505,8 @@ class PlannerRuntime:
                     reference_interval_s=self.reference_interval_s,last_command=self._last_issued_command,
                     elapsed_s=elapsed,command_hold_s=self.command_hold_s,
                     backend=self.session.coordinator.backend,diagnostics=command_diagnostics)
+            else:
+                command_diagnostics['command_reject_reason']='NO_INPUT' if packet.waiting else 'CANCELING'
             command_diagnostics.update(p3_new_sample=p3_new_sample,
                 source_identity=dict(getattr(self.session.coordinator.buffer, 'source_identity', {})))
         with self._condition:
@@ -528,12 +533,21 @@ class PlannerRuntime:
                     # cancel_goal提升generation，执行身份仍固定在原接受任务上。
                     self.execution_context=(None if active is None else active.task_id,
                         self.session.accepted_generation if active is None else active.generation,intent)
+                if self.session.state is None:
+                    command_diagnostics['final_publish_override_reason']='POSE_UNAVAILABLE'
+                elif self._pose_integrity_fault is not None:
+                    command_diagnostics['final_publish_override_reason']='POSE_INTEGRITY_FAULT'
                 self._command(packet,command if self.session.state is not None and
                               self._pose_integrity_fault is None else (0.,0.), proof_stamp, command_diagnostics)
                 self.publish(data)
                 published_brake = packet.candidate is not None and packet.candidate.source == 'brake'
             elif self.publish_command is not None:
-                self._publish_issued((0., 0.))
+                command_diagnostics['final_publish_override_reason']=(
+                    'STOPPING' if self._stopping else
+                    'GOAL_GENERATION_CHANGED' if input_sequence != self._goal_sequence or
+                        packet.generation != self.session.accepted_generation else
+                    'MAP_NOT_CURRENT' if not physical_map_current else 'PUBLICATION_NOT_CURRENT')
+                self._command(packet,(0.,0.),proof_stamp,command_diagnostics)
         if published_brake:
             try:
                 record = brake_diagnostic(packet, now_s, self.session.coordinator.buffer)

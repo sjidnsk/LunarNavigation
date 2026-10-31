@@ -459,3 +459,48 @@ def test_command_diagnostics_merge_into_existing_notice(monkeypatch):
     assert records[0]['p3_new_sample'] is False
     assert records[0]['source_identity']=={}
     assert (records[0]['v'],records[0]['w'])==(.07,.03)
+
+
+@pytest.mark.parametrize('change,reason', [('pose','POSE_UNAVAILABLE'),
+    ('integrity','POSE_INTEGRITY_FAULT'),('goal','GOAL_GENERATION_CHANGED'),('stop','STOPPING')])
+def test_command_final_override_diagnostics_preserve_zero(monkeypatch,change,reason):
+    import nav1cm.execution as execution
+    from nav1cm.contracts import VehicleState
+    runtime,session,*_=build_runtime(); notices=[]; commands=[]
+    runtime._notice=lambda kind,detail:notices.append((kind,detail))
+    runtime.configure_direct_control(lambda *command:commands.append(command),command_hold_s=.1)
+    session.offer_state(VehicleState(0,0,0,0,0))
+    def command(result,state,*args,**kwargs):
+        kwargs['diagnostics'].update(issued_vw=[.07,.03],command_reject_reason=None)
+        if change=='pose': session.offer_state(None)
+        if change=='integrity': runtime._pose_integrity_fault='test'
+        if change=='goal': runtime._goal_sequence+=1
+        if change=='stop': runtime._stopping=True
+        return (.07,.03)
+    monkeypatch.setattr(execution,'certified_velocity_command',command)
+    runtime.offer_goal(pose(0,3));runtime._tick_once(0.)
+    records=[json.loads(detail) for kind,detail in notices if kind=='MPCC_COMMAND']
+    assert commands[-1]==(0.,0.)
+    assert len(records)==1
+    assert records[0]['issued_vw']==[.07,.03]
+    assert records[0]['actual_published_vw']==[0.,0.]
+    assert records[0]['final_publish_override_reason']==reason
+
+
+@pytest.mark.parametrize('canceling,reason',[(False,'NO_INPUT'),(True,'CANCELING')])
+def test_command_skipped_certification_has_reason(monkeypatch,canceling,reason):
+    import nav1cm.execution as execution
+    from nav1cm.contracts import VehicleState
+    runtime,session,*_=build_runtime(); notices=[]; commands=[]
+    runtime._notice=lambda kind,detail:notices.append((kind,detail))
+    runtime.configure_direct_control(lambda *command:commands.append(command),command_hold_s=.1)
+    session.offer_state(VehicleState(0,0,0,.1,0) if canceling else None)
+    if canceling: session.cancel_goal()
+    def unexpected(*args,**kwargs): raise AssertionError('must skip certification')
+    monkeypatch.setattr(execution,'certified_velocity_command',unexpected)
+    runtime._tick_once(0.)
+    records=[json.loads(detail) for kind,detail in notices if kind=='MPCC_COMMAND']
+    assert commands[-1]==(0.,0.)
+    assert len(records)==1
+    assert records[0]['command_reject_reason']==reason
+    assert records[0]['actual_published_vw']==[0.,0.]
