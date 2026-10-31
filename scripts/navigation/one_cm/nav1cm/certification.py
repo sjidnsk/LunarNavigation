@@ -24,7 +24,6 @@ class _CollisionContext:
     sparse_cols: object = None
     backend: object = None
     grid_digest: str = ""
-    geometry_cache: object = None
 
     @classmethod
     def build(cls, grid: GridSnapshot, backend=None):
@@ -45,24 +44,7 @@ class _CollisionContext:
         return bool(p[y1, x1] - p[y0, x1] - p[y1, x0] + p[y0, x0])
 
 
-_GEOMETRY_MISSING = object()
-
-
 def _body_collision(pose, radius_margin, context, limits):
-    """只在一次认证内复用完全相同的几何查询；不改变外层采样/计数。"""
-    cache = context.geometry_cache
-    if cache is None:
-        return _body_collision_uncached(pose, radius_margin, context, limits)
-    # 当前认证的grid/backend/limits固定；矩形仍须包含yaw，不能按车体中心省略朝向。
-    key = (float(pose[0]), float(pose[1]), float(pose[2]), float(radius_margin))
-    result = cache.get(key, _GEOMETRY_MISSING)
-    if result is _GEOMETRY_MISSING:
-        result = _body_collision_uncached(pose, radius_margin, context, limits)
-        cache[key] = result
-    return result
-
-
-def _body_collision_uncached(pose, radius_margin, context, limits):
     """实际矩形到候选格的欧氏距离检查；窗口外按阻断处理。"""
     radius_margin += limits.minimum_clearance_m
     if context.backend is not None:
@@ -269,8 +251,6 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
         return _reject(CertificationReason.MODE,0)
     if context is None:
         context = prepare_certification(grid, backend=backend)
-    # 共享的不可变地图索引保持原样；几何memo绝不跨本次certify复用。
-    context = replace(context, geometry_cache={})
     checked = 0
     for index, state in enumerate(states):
         mode=prefix_mode if index<prefix_end else trajectory.mode
