@@ -801,6 +801,8 @@ class PureWheeledControllerNode(Node):
         if self._odometry is None or self._input_is_stale(received_at,self._odometry_timeout_s):
             return self._standard_unavailable('missing_or_stale_feedback')
         state=self._standard_state
+        proof_source=getattr(self,'_p3_source',None)
+        proof_cache=getattr(self,'_map_cache',None)
         grid=self._standard_grid(state)
         if grid is None:return self._standard_unavailable('missing_or_stale_map')
         now_ns=self.get_clock().now().nanoseconds
@@ -827,10 +829,22 @@ class PureWheeledControllerNode(Node):
         if latest is None:return self._standard_unavailable('stale_map_after_optimization')
         if self._input_is_stale(received_at,self._odometry_timeout_s):
             return self._standard_unavailable('stale_feedback_during_recertification')
-        identity=lambda value:(value.revision,value.epoch,value.origin)
+        # direct P3 的 epoch 仅在同一 source 生命周期内表示不可变物理世界；
+        # revision/origin 是窗口投影。policy cache 的 revision 仍承载内容更新。
+        proof_grid=grid
+        identity=lambda value:(value.epoch if proof_source is not None else
+                               (value.revision,value.epoch,value.origin))
+        def same_source():
+            return (getattr(self,'_p3_source',None) is proof_source and
+                    getattr(self,'_map_cache',None) is proof_cache)
+        if not same_source():
+            return self._standard_unavailable('map_changed_during_certification',retryable=True)
         certificate_ns=self.get_clock().now().nanoseconds
-        if identity(latest)!=identity(grid) or certificate_ns>covered_ns:
-            self._executor.set_map(latest)
+        world_changed=identity(latest)!=identity(proof_grid)
+        if world_changed or certificate_ns>covered_ns:
+            if world_changed:proof_grid=latest
+            # 仅时间续期仍完整认证原快照；出窗/UNKNOWN 由既有认证拒绝。
+            self._executor.set_map(proof_grid)
             if not self._executor.certify_publication(state,result.command.linear_x_mps,
                     result.command.angular_z_radps,(certificate_ns-source_ns)/1e9):
                 return self._standard_unavailable('latest_map_or_aged_motion_unsafe')
@@ -843,7 +857,7 @@ class PureWheeledControllerNode(Node):
             return self._standard_unavailable('stale_feedback_after_certification')
         if publication_ns<certificate_ns:
             return self._standard_unavailable('clock_regressed_during_certification')
-        if identity(final_grid)!=identity(latest):
+        if not same_source() or identity(final_grid)!=identity(proof_grid):
             return self._standard_unavailable('map_changed_during_certification',retryable=True)
         if publication_ns>covered_ns:
             return self._standard_unavailable('publication_certificate_expired',retryable=True)
@@ -854,7 +868,7 @@ class PureWheeledControllerNode(Node):
         self._publish_execution_status()
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(self._executor.diagnostics,
             event='solve_result',phase=result.phase,compute_ms=(monotonic()-started)*1000,
-            map_revision=latest.revision,measured_stopped=self._executor._stopped(state)))))
+            map_revision=proof_grid.revision,measured_stopped=self._executor._stopped(state)))))
 
     def _publish_mppi_step(self, stamp_ns):
         self._mppi_step_ack.publish(String(data=json.dumps(dict(event="control_step",

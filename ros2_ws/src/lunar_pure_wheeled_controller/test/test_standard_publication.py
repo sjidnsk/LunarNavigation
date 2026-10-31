@@ -237,3 +237,55 @@ def test_braking_recovery_heartbeat_belongs_to_current_offered_reference(reason,
     PureWheeledControllerNode._publish_execution_status(n)
     assert emitted[0].segment_revision==offered.revision
     assert emitted[0].state==1 and not emitted[0].reference_accepted
+
+
+@pytest.mark.parametrize('case', ['window', 'aged_window', 'world', 'world_twice',
+    'policy_revision', 'policy_twice', 'source_latest', 'source_final',
+    'missing', 'expired', 'unsafe', 'aged_unsafe'])
+def test_map_proof_uses_source_specific_world_and_fixed_snapshot(case):
+    import json
+    clock=[10_000_000_000];calls=[];maps=[];published=[];reasons=[];diagnostics=[]
+    a=S(revision=1,epoch='1',origin=(0.,0.))
+    b=S(revision=2,epoch='2' if case in ('world','world_twice','unsafe') else '1',origin=(1.,0.))
+    c=S(revision=3,epoch='3' if case=='world_twice' else b.epoch,origin=(2.,0.))
+    source=object();queries=[]
+    def grid(state):
+        queries.append(1)
+        if case=='source_latest' and len(queries)==2:n._p3_source=object()
+        if case=='source_final' and len(queries)==3:n._p3_source=object()
+        if case=='missing' and len(queries)==3:return None
+        return [a,b,c][len(queries)-1]
+    def update(*args,**kwargs):
+        clock[0]+=60_000_000 if case in ('aged_window','aged_unsafe','expired') else 1_000_000
+        return S(command=S(linear_x_mps=.1,angular_z_radps=0.),phase='TRACKING')
+    def certify(*args):
+        calls.append(maps[-1])
+        clock[0]+=60_000_000 if case=='expired' else 1_000_000
+        return case not in ('unsafe','aged_unsafe')
+    # Policy revision tests retain fixed origin: revision alone changes content.
+    if case.startswith('policy'):
+        b.origin=c.origin=a.origin
+        if case=='policy_revision':c=b
+    n=S(_p3_source=None if case.startswith('policy') else source,
+        _feedback_lock=Lock(),_execution_ingress_overflow=False,_odometry=object(),
+        _odometry_received_at=0.,_odometry_timeout_s=.5,_active=object(),
+        _standard_state=object(),_standard_state_ns=clock[0],_last_control_ns=None,
+        _executor=S(config=S(compute_budget_s=.05),set_map=maps.append,update=update,
+            certify_publication=certify,diagnostics={},_stopped=lambda *a:False),
+        _input_is_stale=lambda *a:False,_standard_grid=grid,
+        get_clock=lambda:S(now=lambda:S(nanoseconds=clock[0])),
+        _standard_unavailable=lambda reason,**kw:reasons.append(reason),
+        _publish_twist=lambda *a:published.append(a),_publish_execution_status=lambda:None,
+        _mppi_diagnostics=S(publish=lambda msg:diagnostics.append(json.loads(msg.data))))
+    PureWheeledControllerNode._tick_standard_path(n)
+    success=case in ('window','aged_window','world','policy_revision')
+    assert bool(published)==success
+    if case=='window':assert calls==[] and diagnostics[-1]['map_revision']==a.revision
+    if case=='aged_window':assert calls==[a] and diagnostics[-1]['map_revision']==a.revision
+    if case in ('world','policy_revision'):assert calls==[b] and diagnostics[-1]['map_revision']==b.revision
+    if case in ('world_twice','policy_twice','source_final'):assert reasons==['map_changed_during_certification']
+    if case=='source_latest':assert reasons==['map_changed_during_certification'] and not calls
+    if case=='missing':assert reasons==['stale_map_after_certification']
+    if case=='expired':assert reasons==['publication_certificate_expired'] and calls==[a]
+    if case in ('unsafe','aged_unsafe'):assert reasons==['latest_map_or_aged_motion_unsafe']
+    if case=='aged_unsafe':assert calls==[a]

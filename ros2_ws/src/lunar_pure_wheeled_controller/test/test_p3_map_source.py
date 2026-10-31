@@ -119,7 +119,8 @@ def test_latest_zero_stamp_chain_and_missing_feedback_diagnostic(monkeypatch):
         rclpy.shutdown()
 
 
-def test_map_replaced_during_solve_rejects_stale_command(monkeypatch):
+@pytest.mark.parametrize('new_state',[0,2])
+def test_map_replaced_during_solve_rejects_stale_command(monkeypatch,new_state):
     import time
     from types import SimpleNamespace as S
     from nav_msgs.msg import Odometry,Path
@@ -135,8 +136,8 @@ def test_map_replaced_during_solve_rejects_stale_command(monkeypatch):
             p=PoseStamped();p.pose.position.x=x;p.pose.orientation.w=1.;path.poses.append(p)
         node._on_path(path)
         odom=Odometry();odom.header.stamp=node.get_clock().now().to_msg();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.;node._on_odometry(odom)
-        free=GridMap(np.ones((500,500),np.uint8),.01,(-2.5,-2.5),revision=1)
-        blocked=GridMap(np.full((500,500),2,np.uint8),.01,(-2.5,-2.5),revision=2)
+        free=GridMap(np.ones((500,500),np.uint8),.01,(-2.5,-2.5),revision=1,epoch='1')
+        blocked=GridMap(np.full((500,500),new_state,np.uint8),.01,(-2.5,-2.5),revision=2,epoch='2')
         current=[free]
         monkeypatch.setattr(node,'_standard_grid',lambda state:current[0])
         def solve(*args,**kwargs):
@@ -388,3 +389,23 @@ def test_direct_p3_clearance_support_drives_continuous_command_certificate(margi
     far=int(np.ceil((np.hypot(1.182,.818)/2+margin+.05)*100))
     # 支撑图已包含配置净空；command层只追加执行误差，不能再加一遍净空。
     assert grid_at(far,margin).valid_motion(poses,velocity,.1,0.).all()
+
+
+def test_computation_reprojects_same_world_without_mutating_old_receipt():
+    from nav1cm.contracts import WorldSnapshot
+    from lunar_pure_wheeled_controller.p3_map_source import _MapComputation
+    computation=_MapComputation(None,None,(1.182,.818),0.,False,'map')
+    computation.world=WorldSnapshot(7,(),())
+    computation.valid_received=1.
+    first,_,error,_=computation.process_inputs(None,None,(0.,0.))
+    assert error is None
+    original=first.grid.states.copy()
+    second,_,error,_=computation.process_inputs(None,None,(.013,.027))
+    assert error is None
+    assert first.grid.epoch==second.grid.epoch=='7'
+    assert second.grid.revision>first.grid.revision and second.grid.origin!=first.grid.origin
+    assert np.array_equal(first.grid.states,original) and not first.grid.states.flags.writeable
+    # 真实物理身份改变仍生成新 epoch，不复用旧窗口身份。
+    computation.world=WorldSnapshot(8,(),())
+    third,_,error,_=computation.process_inputs(None,None,(.013,.027))
+    assert error is None and third.grid.epoch=='8' and third.grid.revision>second.grid.revision
