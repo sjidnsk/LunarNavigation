@@ -106,8 +106,9 @@ class NavigationObserver:
 
 class DisplayWorker:
     """两个单槽邮箱：主线程仅交换引用，显示工作不持锁。"""
-    def __init__(self, observer):
+    def __init__(self, observer, timeout=4.5):
         self.observer = observer
+        self.timeout = timeout; self.latest_offer = None; self.offer_high_stamp = None; self.waiting_goal = None
         self.lock = threading.Lock(); self.wake = threading.Event()
         self.sequence = 0; self.pending = {}; self.closing = False
         self.thread = threading.Thread(target=self._run, name='p4-display', daemon=True)
@@ -119,7 +120,28 @@ class DisplayWorker:
         received = time.monotonic() if received is None else received
         with self.lock:
             self.sequence += 1
-            self.pending[kind] = (self.sequence, msg, received)
+            if kind == 'odom':
+                # 固定大小的合法性检查与锁存，不复制轨迹或 ROS 消息。
+                try:
+                    h, p = msg.header, msg.pose.pose
+                    stamp = (h.stamp.sec,h.stamp.nanosec)
+                    values = (p.position.x,p.position.y,p.position.z,p.orientation.x,p.orientation.y,p.orientation.z,p.orientation.w)
+                    valid = (bool(h.frame_id) and stamp > (0,0) and 0 <= stamp[1] < 1000000000
+                             and all(math.isfinite(v) for v in values) and sum(v*v for v in values[3:]) >= 1e-12
+                             and (self.offer_high_stamp is None or stamp > self.offer_high_stamp)
+                             and (self.latest_offer is None or received >= self.latest_offer[1]))
+                except (AttributeError,TypeError,ValueError): valid = False
+                if valid:
+                    self.offer_high_stamp = stamp; self.latest_offer = (msg,received)
+                    if self.waiting_goal is not None and self.waiting_goal[0] is None:
+                        self.waiting_goal[0] = (msg,received)
+                self.pending[kind] = (self.sequence,msg,received)
+            else:
+                pre = self.latest_offer
+                if pre is not None and not 0 <= received-pre[1] <= self.timeout: pre = None
+                waiting = [None] if pre is None else None
+                self.waiting_goal = waiting
+                self.pending[kind] = (self.sequence,msg,received,pre,waiting)
             self.wake.set()
 
     def _run(self):
@@ -130,14 +152,26 @@ class DisplayWorker:
                 with self.lock:
                     remaining = deadline-time.monotonic()
                     if self.closing or remaining <= 0:
-                        batch = sorted((seq,kind,msg,received) for kind,(seq,msg,received) in self.pending.items())
+                        batch = sorted((item[0],kind,item) for kind,item in self.pending.items())
+                        waiting = self.waiting_goal
+                        first = waiting[0] if waiting is not None else None
+                        if first is not None: self.waiting_goal = None
                         self.pending.clear(); self.wake.clear(); closing = self.closing
                         break
                     self.wake.clear()
                 self.wake.wait(remaining)
             if closing: return
-            for _,kind,msg,received in batch:
-                (self.observer.goal if kind=='goal' else self.observer.odometry)(msg,received)
+            has_goal = any(kind=='goal' for _,kind,_ in batch)
+            if first is not None and not has_goal: self.observer.odometry(*first)
+            for _,kind,item in batch:
+                _,msg,received,*extra = item
+                if kind=='goal':
+                    pre, goal_waiting = extra
+                    if pre is not None: self.observer.odometry(*pre)
+                    self.observer.goal(msg,received)
+                    if first is not None and goal_waiting is waiting: self.observer.odometry(*first)
+                else:
+                    self.observer.odometry(msg,received)
             flush = getattr(self.observer,'flush',None)
             if flush is not None: flush()
             deadline = time.monotonic()+.2
@@ -169,7 +203,7 @@ def attach_navigation_observer(source, target, classes, qos, timeout):
     observer = NavigationObserver(classes['pose'],classes['path'],
         publish_start,
         lambda p:pubs[1].publish(marker(p,1,(1.,0.,0.))),pubs[2].publish,timeout,defer_path=True)
-    worker = DisplayWorker(observer); worker.start()
+    worker = DisplayWorker(observer,timeout); worker.start()
     subs = [source.create_subscription(classes['odom'],'/Car/T3/localization/odometry',worker.offer_odom,qos['odom']),
             target.create_subscription(classes['pose'],'/goal_pose',worker.offer_goal,qos['goal'])]
     return worker,[*pubs,*subs]

@@ -309,3 +309,43 @@ def test_deferred_path_flush_coalesces_goal_and_odom():
     assert not paths
     o.flush();assert len(paths)==1 and len(paths[0].poses)==1
     o.flush();assert len(paths)==1
+
+
+@pytest.mark.parametrize('prior,first_stamp,first_frame,expected',[ (True,3,'map',3),(False,3,'map',3),(True,1,'other',2),(False,0,'other',3)])
+def test_worker_goal_freezes_nearest_legal_before_or_first_after(prior,first_stamp,first_frame,expected):
+    from scripts.simulation.p4_tcp_runtime import NavigationObserver,DisplayWorker
+    import threading
+    starts=[];barrier=threading.Event();release=threading.Event();done=threading.Event()
+    def pose():return S(header=None,pose=None)
+    def odom(t,frame='map'):
+        return S(header=S(frame_id=frame,stamp=S(sec=t,nanosec=0)),pose=S(pose=S(position=S(x=0.,y=0.,z=0.),orientation=S(x=0.,y=0.,z=0.,w=1.))))
+    o=NavigationObserver(pose,lambda:S(header=None,poses=[]),lambda p:starts.append(p),lambda _:None,lambda _:done.set(),4.5,defer_path=True)
+    class Block:
+        def odometry(self,msg,when):
+            if msg=='block':barrier.set();release.wait(2)
+            else:o.odometry(msg,when)
+        def goal(self,msg,when):o.goal(msg,when)
+        def flush(self):o.flush()
+    w=DisplayWorker(Block(),timeout=4.5);w.start()
+    if prior:
+        w.offer_odom(odom(2),0.);import time;time.sleep(.25)
+    w.offer_odom('block',.1);assert barrier.wait(1)
+    w.offer_odom(odom(first_stamp,first_frame),.2)
+    w.offer_goal(S(header=odom(1).header,pose=None),.3)
+    w.offer_odom(odom(4 if first_stamp==3 else 3),.4);w.offer_odom(odom(5),.5)
+    release.set();assert done.wait(2);w.stop()
+    assert [p for p in starts if p is not None][-1].header.stamp.sec==expected
+
+
+def test_worker_keeps_first_advance_after_already_processed_waiting_goal():
+    from scripts.simulation.p4_tcp_runtime import NavigationObserver,DisplayWorker
+    import threading
+    starts=[];goal_seen=threading.Event();done=threading.Event()
+    def odom(t):
+        return S(header=S(frame_id='map',stamp=S(sec=t,nanosec=0)),pose=S(pose=S(position=S(x=0.,y=0.,z=0.),orientation=S(x=0.,y=0.,z=0.,w=1.))))
+    o=NavigationObserver(lambda:S(header=None,pose=None),lambda:S(header=None,poses=[]),starts.append,lambda _:goal_seen.set(),lambda p:done.set() if p.poses else None,4.5,defer_path=True)
+    w=DisplayWorker(o,4.5);w.start();w.offer_goal(S(header=odom(1).header,pose=None),0.)
+    assert goal_seen.wait(1)
+    w.offer_odom(odom(2),.1);w.offer_odom(odom(3),.2)
+    assert done.wait(1);w.stop()
+    assert [p for p in starts if p is not None][0].header.stamp.sec==2
