@@ -37,7 +37,7 @@ def execute_action(action, measured):
     return VehicleState(*current[:5])
 
 
-def certified_command(result, measured, limits):
+def certified_command(result, measured, limits, *, command_hold_s=None, backend=None):
     """仅将已认证的当前短动作积分为速度设定值；不写回在线定位。"""
     if result is None or measured is None:
         return 0., 0.
@@ -53,4 +53,34 @@ def certified_command(result, measured, limits):
         return 0., 0.
     if not np.isfinite([predicted.v, predicted.w]).all():
         return 0., 0.
+    if command_hold_s is not None:
+        from .certification import certify
+        proof=command_hold_proof(action,result.grid,limits,command_hold_s)
+        certificate=certify(proof,result.grid,limits,candidate.route_version,backend=backend)
+        if not certificate.matches(proof,result.grid,limits,candidate.route_version):
+            return 0., 0.
     return float(predicted.v), float(predicted.w)
+
+
+def command_hold_proof(action, grid, limits, command_hold_s):
+    """P3采样初态的模型证明：短动作、有限末速持令、显式停车尾。
+
+    不补偿来源到发布之间的物理延迟，不代表绝对调度/执行安全保证。
+    """
+    if isinstance(command_hold_s,bool) or not np.isfinite(command_hold_s) or command_hold_s<=0:
+        raise ValueError('command_hold_s must be explicitly finite and positive')
+    from .contracts import LocalReference
+    from .seeds import brake_candidate, join_trajectories
+    current=action.states[-1].copy()
+    times=list(action.times);states=list(action.states);controls=list(action.controls)
+    remaining=float(command_hold_s)
+    while remaining>1e-12:
+        dt=min(.02,remaining)
+        control=np.zeros(3)
+        current=step(current,control,dt)
+        times.append(times[-1]+dt);states.append(current.copy());controls.append(control)
+        remaining-=dt
+    held=Trajectory(action.map_epoch,action.route_version,times,states,controls,action.mode,action.source)
+    reference=LocalReference(action.route_version,grid.epoch,[[current[0],current[1]]],[0.],current[5])
+    brake=brake_candidate(VehicleState(*current[:5]),grid,reference,limits)
+    return join_trajectories(held,brake)

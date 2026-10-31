@@ -53,3 +53,27 @@ def test_real_certificate_refuses_changed_execution_inputs(change):
         u=result.action.controls.copy();u[0,0]=100.
         result=replace(result,action=replace(result.action,controls=u))
     assert certified_command(result,measured,limits)==(0.,0.)
+
+
+@pytest.mark.parametrize('obstacle',[None,.9,1.15])
+def test_hold_and_explicit_stop_tail_certification(obstacle):
+    from dataclasses import replace
+    from types import SimpleNamespace as S
+    from scripts.navigation.one_cm.nav1cm.certification import certify
+    from scripts.navigation.one_cm.nav1cm.contracts import GridSnapshot, WheelLimits
+    from scripts.navigation.one_cm.nav1cm.execution import command_hold_proof
+    limits=WheelLimits(body_length_m=.2,body_width_m=.2,linear_speed_mps=1.,linear_accel_mps2=.5)
+    cells=np.zeros((500,500),dtype=np.int8)
+    if obstacle is not None:cells[245:255,int((obstacle+2.5)/.01)]=1
+    grid=GridSnapshot(1,(-2.5,-2.5),.01,cells)
+    measured=VehicleState(0,0,0,.5,0)
+    u=np.array([[0.,0.,0.]])
+    action=Trajectory(1,1,[0.,.05],rollout([0,0,0,.5,0,0],u,.05),u)
+    cert=certify(action,grid,limits,1)
+    assert cert.valid
+    result=S(candidate=action,certificate=cert,grid=grid,action=action,action_certificate=cert)
+    proof=command_hold_proof(action,grid,limits,1.8)
+    assert proof.states[-1,3] == pytest.approx(0.)
+    assert proof.times[-1] > 1.8
+    cmd=certified_command(result,measured,limits,command_hold_s=1.8)
+    assert cmd == ((.5,0.) if obstacle is None else (0.,0.))

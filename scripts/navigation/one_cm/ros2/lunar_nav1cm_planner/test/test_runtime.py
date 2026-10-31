@@ -244,7 +244,7 @@ def test_direct_control_brakes_from_measured_state_and_missing_input_zero():
     from nav1cm.contracts import VehicleState
     runtime, session, published, logs = build_runtime()
     commands=[]
-    runtime.configure_direct_control(lambda v,w:commands.append((v,w)))
+    runtime.configure_direct_control(lambda v,w:commands.append((v,w)),command_hold_s=1.2)
     runtime.enable_execution_contract()
     assert not runtime.tasks._feedback_required
     assert not runtime.execution_contract_enabled
@@ -266,7 +266,7 @@ def test_direct_control_old_generation_never_emits_movement():
     from nav1cm.contracts import VehicleState
     runtime, session, published, logs = build_runtime()
     commands=[]
-    runtime.configure_direct_control(lambda v,w:commands.append((v,w)))
+    runtime.configure_direct_control(lambda v,w:commands.append((v,w)),command_hold_s=1.2)
     session.offer_state(VehicleState(0,0,0,.1,0))
     runtime.tasks.submit('direct-a',(0,3,0),0.)
     original=session.tick
@@ -283,7 +283,7 @@ def test_direct_control_arrives_and_cancels_with_body_feedback_only():
     from nav1cm.contracts import VehicleState
     runtime, session, published, logs = build_runtime()
     commands=[]
-    runtime.configure_direct_control(lambda v,w:commands.append((v,w)))
+    runtime.configure_direct_control(lambda v,w:commands.append((v,w)),command_hold_s=1.2)
     runtime.tasks.submit('direct-a',(0,0,0),0.)
     feedback=NS(header=NS(frame_id='map',stamp=NS(sec=1,nanosec=0)),pose=NS(pose=pose().pose),
         twist=NS(twist=NS(linear=NS(x=0.),angular=NS(z=0.))))
@@ -306,7 +306,7 @@ def test_direct_control_arrives_and_cancels_with_body_feedback_only():
 def test_direct_rejects_map_replacement_after_tick():
     from nav1cm.contracts import VehicleState, WorldSnapshot, CellRect
     runtime, session, published, logs=build_runtime()
-    commands=[];runtime.configure_direct_control(lambda v,w:commands.append((v,w)))
+    commands=[];runtime.configure_direct_control(lambda v,w:commands.append((v,w)),command_hold_s=1.2)
     session.offer_state(VehicleState(0,0,0,.1,0))
     runtime.tasks.submit('direct-map',(0,3,0),0.)
     tick=session.tick
@@ -321,7 +321,7 @@ def test_direct_rejects_map_replacement_after_tick():
 
 def test_direct_duplicate_source_cannot_complete_task():
     runtime, session, published, logs=build_runtime()
-    runtime.configure_direct_control(lambda *args:None)
+    runtime.configure_direct_control(lambda *args:None,command_hold_s=1.2)
     runtime.tasks.submit('direct-duplicate',(0,0,0),0.)
     feedback=NS(header=NS(frame_id='map',stamp=NS(sec=0,nanosec=900000)),pose=NS(pose=pose().pose),
         twist=NS(twist=NS(linear=NS(x=0.),angular=NS(z=0.))))
@@ -334,7 +334,7 @@ def test_direct_duplicate_source_cannot_complete_task():
 def test_direct_publication_latest_map_window_and_body_state(changed):
     from nav1cm.contracts import VehicleState, WorldSnapshot, CellRect
     runtime,session,published,logs=build_runtime()
-    commands=[];runtime.configure_direct_control(lambda v,w:commands.append((v,w)))
+    commands=[];runtime.configure_direct_control(lambda v,w:commands.append((v,w)),command_hold_s=1.2)
     session.offer_state(VehicleState(0,0,0,.1,0));runtime.tasks.submit('race',(0,3,0),0.)
     tick=session.tick
     def raced(now):
@@ -349,3 +349,25 @@ def test_direct_publication_latest_map_window_and_body_state(changed):
     runtime._tick_once(0.)
     if changed:assert commands[-1]==(0.,0.)
     else:assert 0 < commands[-1][0] < .1
+
+
+@pytest.mark.parametrize('hold',[0.,-1.,float('nan'),float('inf'),True])
+def test_direct_requires_explicit_valid_hold(hold):
+    runtime,*_=build_runtime()
+    with pytest.raises(ValueError,match='command_hold_s'):
+        runtime.configure_direct_control(lambda *args:None,command_hold_s=hold)
+
+
+def test_direct_source_time_must_cover_arrival_hold():
+    runtime,session,*_=build_runtime()
+    runtime.configure_direct_control(lambda *args:None,command_hold_s=1.2)
+    runtime.tasks.submit('source-time',(0,0,0),0.)
+    feedback=NS(header=NS(frame_id='map',stamp=NS(sec=1,nanosec=0)),pose=NS(pose=pose().pose),
+        twist=NS(twist=NS(linear=NS(x=0.),angular=NS(z=0.))))
+    runtime.offer_odometry(feedback);runtime._tick_once(0.)
+    feedback.header.stamp.nanosec=1
+    runtime.offer_odometry(feedback);runtime._tick_once(.4)
+    assert runtime.tasks.active.outcome is None
+    feedback.header.stamp.nanosec=400000000
+    runtime.offer_odometry(feedback);runtime._tick_once(.8)
+    assert runtime.tasks.active.outcome=='GOAL_REACHED'

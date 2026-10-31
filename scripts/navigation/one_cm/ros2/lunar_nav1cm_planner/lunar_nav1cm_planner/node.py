@@ -111,7 +111,7 @@ class PlannerNode(Node):
             'tf_topic': '/tf', 'tf_static_topic': '/tf_static',
             'global_route_topic': '/Car/T4/planning/global_route', 'global_reference_topic': '',
             'local_path_topic': '/Car/T4/planning/local_path',
-            'control_backend':'path_mppi', 'enable_controller':False,
+            'control_backend':'path_mppi', 'enable_controller':False, 'command_hold_s':0.,
             'command_topic':'/Car/T4/control/cmd_vel',
             'execution_contract_enabled':False,'execution_feedback_timeout_s':2.,
             'odometry_timeout_s':.5,
@@ -121,6 +121,10 @@ class PlannerNode(Node):
         settings={name:self.declare_parameter(name,default).value for name,default in defaults.items()}
         if settings['control_backend'] not in ('path_mppi','mpcc_cmd_vel'):
             raise ValueError('invalid control_backend')
+        if settings['control_backend']=='mpcc_cmd_vel' and settings['enable_controller']:
+            hold=settings['command_hold_s']
+            if isinstance(hold,bool) or not math.isfinite(hold) or hold<=0:
+                raise ValueError('command_hold_s must be explicitly finite and positive')
         if not settings['global_reference_topic']:
             settings['global_reference_topic']=settings['global_route_topic']+'_reference'
             self.set_parameters([Parameter('global_reference_topic',value=settings['global_reference_topic'])])
@@ -154,7 +158,7 @@ class PlannerNode(Node):
         direct=settings['control_backend']=='mpcc_cmd_vel' and settings['enable_controller']
         if direct:
             self._command_publisher=self.create_publisher(Twist,settings['command_topic'],1)
-            self.runtime.configure_direct_control(self._publish_command)
+            self.runtime.configure_direct_control(self._publish_command,command_hold_s=float(settings['command_hold_s']))
         self.runtime.configure_pose_input(float(settings['odometry_timeout_s']))
         latest = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                             durability=DurabilityPolicy.VOLATILE)

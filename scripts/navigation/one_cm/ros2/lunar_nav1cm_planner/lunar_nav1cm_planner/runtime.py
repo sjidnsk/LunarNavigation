@@ -74,22 +74,33 @@ class PlannerRuntime:
         self.publish_command = None
         self._observed_pose_stamp_ns = None
 
-    def configure_direct_control(self, publish_command):
+    def configure_direct_control(self, publish_command, *, command_hold_s):
+        if isinstance(command_hold_s,bool) or not math.isfinite(command_hold_s) or command_hold_s<=0:
+            raise ValueError("command_hold_s must be explicitly finite and positive")
+        self.command_hold_s=float(command_hold_s)
         self.publish_command = publish_command
         self.session.direct_control = True
         self.execution_contract_enabled = False
         self.tasks.configure_execution_feedback(required=False)
 
-    def _command(self, packet):
+    def _command(self, packet, command):
         if self.publish_command is None:
             return
-        from nav1cm.execution import certified_command
-        command = certified_command(packet.result, self.session.state, self.session.coordinator.limits)
         self.publish_command(*command)
         self._notice('MPCC_COMMAND', json.dumps(dict(v=command[0], w=command[1],
             status=getattr(packet.result, 'status', None),
             source=getattr(packet.candidate, 'source', None),
-            mode=getattr(packet.candidate, 'mode', None), source_stamp_ns=self._pose_source_high_water)))
+            mode=getattr(packet.candidate, 'mode', None), command_hold_s=self.command_hold_s,
+            source_stamp_ns=self._pose_source_high_water,
+            source_age_s=None if self._pose_source_high_water is None else
+                (self.ros_now_ns()-self._pose_source_high_water)/1e9)))
+
+    def _body_observation_time(self, now_s):
+        if self.publish_command is None:return now_s
+        try:
+            stamp=self._odometry.header.stamp
+            return int(stamp.sec)+int(stamp.nanosec)/1e9
+        except (AttributeError,ValueError,TypeError):return now_s
 
     def _new_body_observation(self, sequence):
         if self.publish_command is None:
@@ -355,7 +366,7 @@ class PlannerRuntime:
             fault=self.tasks.check_execution_fault(now_s)
             if fault:self.tasks.fail_tracking(fault,now_s)
         packet = self.session.tick(now_s)
-        proposal = self.tasks.observe(packet, now_s,
+        proposal = self.tasks.observe(packet, self._body_observation_time(now_s),
                                       state_updated=self._new_body_observation(odometry_sequence),
                                       defer_commit=True)
         odometry_error = None
@@ -370,7 +381,7 @@ class PlannerRuntime:
                     except (ValueError,AttributeError,TypeError) as exc:odometry_error=exc
                     if self.session.state is None:
                         packet=self.session.tick(now_s)
-                        proposal=self.tasks.observe(packet,now_s,state_updated=False,defer_commit=True)
+                        proposal=self.tasks.observe(packet,self._body_observation_time(now_s),state_updated=False,defer_commit=True)
                 if proposal is not None and (odometry_sequence != self._odometry_sequence or
                                              tf_sequence != self._tf_sequence):
                     # 仅重做轻量位姿转换/纯观测，不因持续等价odom/TF而饿死反馈或终态。
@@ -383,7 +394,7 @@ class PlannerRuntime:
                             self.session.offer_state(None)
                             odometry_error = exc
                     odometry_sequence = self._odometry_sequence
-                    proposal = self.tasks.observe(packet, now_s,
+                    proposal = self.tasks.observe(packet, self._body_observation_time(now_s),
                         state_updated=self._new_body_observation(odometry_sequence),
                         defer_commit=True)
                 if self._world is proof_world and physical_map_current:
@@ -426,6 +437,12 @@ class PlannerRuntime:
                      packet.candidate,self.ros_now_ns(),self.map_frame,global_reference=packet.route)
         # ROS 时间仅给本次 Path 定 t0；调度/轨迹年龄始终使用单调时钟。
         published_brake = False
+        proof_state=self.session.state
+        command=(0.,0.)
+        if self.publish_command is not None:
+            from nav1cm.execution import certified_command
+            command=certified_command(packet.result,proof_state,self.session.coordinator.limits,
+                command_hold_s=self.command_hold_s,backend=self.session.coordinator.backend)
         with self._condition:
             if (self._pose_timeout_s is not None and not self._pose_source_current(
                     self._odometry,self._odometry_received_s,time.monotonic())[0]):
@@ -450,7 +467,7 @@ class PlannerRuntime:
                     # cancel_goal提升generation，执行身份仍固定在原接受任务上。
                     self.execution_context=(None if active is None else active.task_id,
                         self.session.accepted_generation if active is None else active.generation,intent)
-                self._command(packet)
+                self._command(packet,command if self.session.state==proof_state else (0.,0.))
                 self.publish(data)
                 published_brake = packet.candidate is not None and packet.candidate.source == 'brake'
             elif self.publish_command is not None:
