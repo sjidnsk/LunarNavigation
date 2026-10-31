@@ -31,7 +31,7 @@ def test_resource_configuration_validates_position_target_and_cleans(monkeypatch
     monkeypatch.setattr(module,'NativeDistanceField',lambda *args:None)
     monkeypatch.setattr(module,'AsyncNavigationCoordinator',lambda **kwargs:c)
     settings=dict(build_dir='',allow_unknown=False,smooth_global_reference=True,planning_period_s=.1,execution_period_s=.05,
-        global_period_s=1.,global_budget_s=1.,clearance_radius_m=.9,horizon_steps=20,horizon_dt_s=.2,
+        global_budget_s=1.,clearance_radius_m=.9,horizon_steps=20,horizon_dt_s=.2,
         goal_tolerance_m=.1,goal_yaw_tolerance_rad=.05,stopped_linear_mps=.01,stopped_angular_rps=.01,goal_position_target_m=target)
     if isinstance(target,(int,float)) and target>0. and math.isfinite(target):
         actual,_=module.create_resources(c.limits,None,settings)

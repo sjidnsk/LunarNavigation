@@ -86,10 +86,19 @@ bridge 与停车尾段都扣同一份有限弧长/转角预算，预留一个反
 |---|---|---|
 |`wheel_config`及`WheelLimits`同名参数（`linear_speed_mps`、`linear_accel_mps2`、`angular_speed_rps`、`motion_model`、车体/净空等）|加载的能力/地形判据、规划与认证模型|改启动配置并重启；不改则沿用原能力。只改规划器不等于跟踪器同步，部署仍须共用同一能力文件|
 |`build_dir`、`horizon_steps`、`horizon_dt_s`|acados生成/缓存目录及模型时域|重启重建相应资源；不改则使用原时域/缓存指纹|
-|`planning_period_s`、`execution_period_s`、`global_period_s`、`global_budget_s`|规划调度和预算|重启；不改则保持原调度节奏|
+|`planning_period_s`、`execution_period_s`、`global_budget_s`|规划调度和预算|重启；不改则保持原调度节奏|
 |`goal_tolerance_m`、`goal_position_target_m`、`goal_yaw_tolerance_rad`、`stopped_linear_mps`、`stopped_angular_rps`|目标/停稳合同；位置收敛目标仍受验收容差约束|重启；不改则保持原目标精度和停稳条件|
 |`allow_unknown`、`initial_travel_direction`、`clearance_radius_m`|地图策略、起步偏好及全局几何包络|重启；不改则保持原规划行为，起步偏好不等于全程禁止另一方向|
 |`map_frame`、所有`*_topic`、`map_qos_reliability`、`map_qos_durability`、`action_name`|坐标解释、真实订阅/发布和Action端点|重启重新接线；不改则仍连接原端点和QoS|
 |`odometry_timeout_s`、`execution_contract_enabled`、`execution_feedback_timeout_s`|定位持续更新检测、执行合同与反馈路径|重启；不改则保持原检测和合同，不引入源数据年龄停车规则|
 
 `minimum_clearance_m`与`clearance_radius_m`先按现有能力下限收敛，参数表回写最终值后才冻结，不能通过小覆盖绕过车体/净空要求。启动日志`startup_parameters`记录最终声明参数值（Action名另行记录），资源仍由原配置解析和factory建立；不新增热更新管理器。这些日志不是节点健康、规划成功或车辆到达证明。
+
+
+生产全局路线按事件更新：新目标、当前路线被真实障碍变化阻断、无路线时新的障碍几何变化，
+或实测位置确实无法投影回当前参考时，各触发一次全局请求。普通地图刷新、仅已知空闲区域变化、
+原地转向以及不影响现路线的障碍变化保留路线版本与进度。障碍移除后仍有效的绕行也保留，
+不自动追求新的最短路。无解或worker异常保留目标，等待新事件，不按秒重试。
+
+已删除生产参数 `global_period_s`，旧启动覆盖应移除；`global_budget_s` 继续限制单次求解预算。
+离线 `NavigationCoordinator` 的同名构造参数只在 `revalidate_current_map=False` 的原型模式下生效。

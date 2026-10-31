@@ -261,6 +261,8 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
             except ValueError as exc:
                 events.append({'kind': 'REFERENCE_REJECTED', 'reason': str(exc)})
                 self._pending_reason = 'REFERENCE_REENTRY'
+                if self.revalidate_current_map:
+                    self.route = self.progress = None
         timings['reference'] = (perf_counter()-stage)*1000
         stage = perf_counter()
         context = prepare_certification(grid, backend=self.backend)

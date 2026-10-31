@@ -40,6 +40,7 @@ class NavigationCoordinator:
         self.limits = WheelLimits() if limits is None else limits
         self.backend = backend
         self.allow_unknown = allow_unknown
+        # global_period_s 仅用于非 current-map 离线原型；生产全局规划由事件触发。
         self.local_period_s, self.global_period_s = local_period_s, global_period_s
         self.global_budget_s = global_budget_s
         self.clearance_radius_m = self.limits.global_clearance_radius(clearance_radius_m)
@@ -175,26 +176,6 @@ class NavigationCoordinator:
             return reference_clear(self._shaped_route,self._blocked_boxes)
         return all(_segment_clear(a, b, self._blocked_boxes) for a, b in zip(route.points[:-1], route.points[1:]))
 
-    @staticmethod
-    def _same_route_geometry(current, incoming):
-        """仅同一折线的前向后缀等价；不能吞掉障碍移除后的更短路线。"""
-        if current.goal != incoming.goal:
-            return False
-        vectors = np.diff(current.points, axis=0)
-        lengths = np.linalg.norm(vectors, axis=1)
-        arc = np.r_[0., np.cumsum(lengths)]
-        projected = []
-        for point in incoming.points:
-            fractions = np.clip(np.sum((point - current.points[:-1]) * vectors, axis=1) / lengths ** 2, 0., 1.)
-            distances = np.linalg.norm(current.points[:-1] + fractions[:, None] * vectors - point, axis=1)
-            index = int(np.argmin(distances))
-            if distances[index] > 1e-6:
-                return False
-            projected.append(arc[index] + fractions[index] * lengths[index])
-        return bool(np.all(np.diff(projected) >= -1e-6) and
-                    abs(sum(np.linalg.norm(np.diff(incoming.points, axis=0), axis=1)) -
-                        (projected[-1] - projected[0])) <= 1e-6)
-
     def goal_reached(self, state):
         """唯一位姿/停稳判据，同时用于实测状态与受限制动终点。"""
         return (self._goal is not None and state is not None and
@@ -220,7 +201,7 @@ class NavigationCoordinator:
         goal = self._goal
         blocked_changed = self._observe_world(world) if (self.revalidate_current_map or self.reference_smoothing) else False
         if world.epoch != self._epoch:
-            if not self.revalidate_current_map or blocked_changed:
+            if not self.revalidate_current_map:
                 self._pending_reason = 'MAP_CHANGED'
             events.append({'kind': 'MAP_CHANGED', 'epoch': world.epoch})
         if self.revalidate_current_map and blocked_changed and self.route is not None:
@@ -231,6 +212,9 @@ class NavigationCoordinator:
             else:
                 events.append({'kind': 'GLOBAL_CURRENT_MAP_REVALIDATED', 'version': self.route.version,
                                'requested_epoch': self.route.map_epoch, 'current_epoch': world.epoch})
+        if (self.revalidate_current_map and blocked_changed and self.route is None and
+                self._pending_reason not in ('INITIAL', 'GOAL_CHANGED')):
+            self._pending_reason = 'MAP_CHANGED'
         if self._policy is not None and self._policy != self.allow_unknown:
             events.append({'kind': 'UNKNOWN_POLICY_CHANGED', 'allow_unknown': self.allow_unknown})
         self._epoch, self._policy = world.epoch, self.allow_unknown
@@ -249,8 +233,7 @@ class NavigationCoordinator:
                         submitted['version'] != global_result['requested_version'] or
                         submitted['epoch'] != global_result['requested_epoch'] or
                         tuple(global_result['requested_goal']) != goal or
-                        (not self.revalidate_current_map and global_result['requested_epoch'] != world.epoch) or
-                        (self.revalidate_current_map and submitted.get('allow_unknown') != self.allow_unknown)):
+                        (not self.revalidate_current_map and global_result['requested_epoch'] != world.epoch)):
                     events.append({'kind': 'STALE_GLOBAL_RESULT', 'version': global_result['requested_version']})
                 elif route is not None:
                     current_clear = not self.revalidate_current_map or self._route_clear(route)
@@ -261,18 +244,22 @@ class NavigationCoordinator:
                     elif self.revalidate_current_map and route.map_epoch != world.epoch:
                         events.append({'kind': 'GLOBAL_CURRENT_MAP_REVALIDATED', 'version': route.version,
                                        'requested_epoch': route.map_epoch, 'current_epoch': world.epoch})
-                    # 同图周期重算保留现有路线，避免从移动起点裁短导致进度每秒清零。
+                    # 有效现有路线优先；迟到结果不能重置已推进的参考。
                     keep = (self.route is not None and route is not None and
-                            ((self.revalidate_current_map and self._same_route_geometry(self.raw_route, route)) or
+                            (self.revalidate_current_map or
                              (not self.revalidate_current_map and self.route.map_epoch == route.map_epoch and global_result.get('request_reason') == 'PERIODIC')))
                     if route is not None and not keep:
                         self._adopt_route(route,events,raw_verified=True)
                         events.append({'kind': 'ROUTE_ACCEPTED', 'version': route.version, 'map_epoch': route.map_epoch, 'points': route.points.tolist()})
                     elif route is not None:
                         events.append({'kind': 'ROUTE_CONTINUITY_RETAINED', 'version': self.route.version, 'computed_version': route.version})
+                    if self.revalidate_current_map and route is not None and self._pending_reason == 'MAP_CHANGED':
+                        # 此结果已按最新障碍复验；在途地图事件无需再重复求解。
+                        self._pending_reason = None
                 else:
                     events.append({'kind': 'GLOBAL_FAILED', 'reason': global_result['reason_code']})
         except Exception as exc:
+            self._global_inflight = None
             events.append({'kind': 'GLOBAL_ERROR', 'reason': type(exc).__name__, 'detail': str(exc)})
         if (self.revalidate_current_map and self._cached_goal_check is not None and
                 not blocked_changed and self._goal_check_key == self.goal_revision):
@@ -282,11 +269,9 @@ class NavigationCoordinator:
                           check_pose_goal(world, goal, self._goal_yaw, self.limits))
             self._goal_check_key, self._cached_goal_check = self.goal_revision, goal_check
         arrived_xy = np.linalg.norm(np.array(goal)-motion[:2]) <= self.position_target_tolerance_m
-        global_due = now_s + 1e-9 >= self._next_global
-        coalesced_map_update = (self.revalidate_current_map and self.route is not None and
-                                self._pending_reason == 'MAP_CHANGED' and not global_due)
+        global_due = not self.revalidate_current_map and now_s + 1e-9 >= self._next_global
         if (goal_check.accepted and not arrived_xy and not self.runner.busy and
-                not coalesced_map_update and (self._pending_reason or global_due)):
+                (self._pending_reason or global_due)):
             reason = self._pending_reason or 'PERIODIC'
             self._version += 1
             request = make_request(world, motion[:2], goal, self._version, self.limits, self.clearance_radius_m, self.global_budget_s)
@@ -294,8 +279,8 @@ class NavigationCoordinator:
             try:
                 self.runner.submit(request)
             except Exception as exc:
-                # 全局进程故障不打断本次执行；下次根据最新地图、目标与反馈重建请求。
-                self._pending_reason = reason
+                # 生产事件失败后等待新地图/目标事件，避免进程故障形成每tick热重试。
+                self._pending_reason = None if self.revalidate_current_map else reason
                 events.append({'kind': 'GLOBAL_SUBMIT_ERROR', 'reason': type(exc).__name__,
                                'detail': str(exc), 'request_reason': reason, 'version': self._version,
                                'epoch': world.epoch, 'goal': goal})
@@ -305,7 +290,8 @@ class NavigationCoordinator:
                                          'epoch': world.epoch, 'allow_unknown': self.allow_unknown,
                                          'accepted_generation': self._accepted_goal_generation}
                 self._pending_reason = None
-                self._next_global = now_s+self.global_period_s
+                if not self.revalidate_current_map:
+                    self._next_global = now_s+self.global_period_s
                 events.append({'kind': 'GLOBAL_SUBMITTED', 'reason': reason, 'version': self._version})
         return goal_check, arrived_xy, motion, global_result
 
@@ -334,6 +320,8 @@ class NavigationCoordinator:
             except ValueError as exc:
                 events.append({'kind': 'REFERENCE_REJECTED', 'reason': str(exc)})
                 self._pending_reason = 'REFERENCE_REENTRY'
+                if self.revalidate_current_map:
+                    self.route = self.progress = None
         timings['reference'] = (perf_counter()-stage)*1000
         candidate = certificate = None
         if not goal_check.accepted:

@@ -38,13 +38,14 @@ def test_adopted_route_is_shaped_but_original_geometry_is_preserved():
     assert c._route_clear(c.route)
 
 
-def test_periodic_raw_equivalent_keeps_shaped_geometry_and_progress():
+def test_event_mode_keeps_shaped_geometry_and_progress_without_periodic_request():
     c,r,w,s=build();adopt(c,r,w,s);shape=c.route
     c.progress=ProgressToken(shape.version,.2)
     c._update_route(w,s,(4,4),1.1,[]);r.ready=True;events=[]
     c._update_route(w,s,(4,4),1.2,events)
     assert c.route is shape and c.progress.s==.2
-    assert any(x['kind']=='ROUTE_CONTINUITY_RETAINED' for x in events)
+    assert len(r.requests)==1
+    assert not any(x['kind']=='GLOBAL_SUBMITTED' for x in events)
 
 
 def test_new_obstacle_only_in_curve_retires_reference_and_raw_publication():

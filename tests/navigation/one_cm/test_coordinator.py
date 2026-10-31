@@ -109,7 +109,7 @@ def test_goal_later_blocked_brakes_real_motion(setup):
     assert result.candidate.states[-1, 3] == pytest.approx(0.)
 
 
-def test_stationary_robot_uses_periodic_replanning_without_stall_clock(setup):
+def test_offline_prototype_keeps_periodic_replanning_compatibility(setup):
     world,runner,_,c=setup;c.local_period_s=.05;c.global_period_s=10.
     c.tick(world,VehicleState(0,0,0,0,0),(3,0),0.)
     runner.ready=True;c.tick(world,VehicleState(0,0,0,0,0),(3,0),.05)
@@ -158,7 +158,7 @@ def test_execution_brake_substeps_never_reverse_and_initial_state_checked(setup)
         action_prefix(result.candidate, VehicleState(1, 0, 0, .003, 0))
 
 
-def test_exact_twenty_hz_and_one_hz_default_schedule(setup):
+def test_offline_prototype_exact_twenty_hz_and_one_hz_schedule(setup):
     world, runner, _, c = setup
     c.local_period_s = .05
     state = VehicleState(0, 0, 0, 0, 0)
