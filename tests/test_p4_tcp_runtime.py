@@ -398,13 +398,15 @@ def test_new_arm_requires_fresh_telemetry_and_connection():
 def test_tcp_production_profile_overrides_only_speed_and_feeds_launch_and_relay():
     from pathlib import Path
     import yaml
+    from copy import deepcopy
     from scripts.simulation.p4_tcp_runtime import tcp_platform_profile, TcpCommandRelay
     root=Path(__file__).resolve().parents[1]
     base=yaml.safe_load((root/'config/wheel.yaml').read_text(encoding='utf-8'))
+    original=deepcopy(base)
     override=yaml.safe_load((root/'config/tcp_wheel_speed.yaml').read_text(encoding='utf-8'))
     merged=tcp_platform_profile(base,override)
     assert profile_command_limits_for_test(merged)==(.2,.2,.1)
-    assert base['capability']['maximum_forward_speed_mps']==.2
+    assert base==original
     for key in ('maximum_acceleration_mps2','maximum_braking_deceleration_mps2','maximum_yaw_acceleration_radps2'):
         assert merged['capability'][key]==base['capability'][key]==.5
     assert launch_settings('/p4/source','/p4/cache','/p4/final.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))['platform_config']=='/p4/final.yaml'

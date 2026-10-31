@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits
 from scripts.navigation.one_cm.nav1cm.local_mpcc import MpccPlanner
-from scripts.simulation.p4_tcp_runtime import command_ready
 
 
 def disposition():
@@ -34,7 +33,5 @@ def test_wait_recompute_and_failure_are_distinct(reason,expected):
     assert classify(reason,hard_failure=True)=='FAIL'
 
 
-def test_transport_only_requires_live_command_and_vehicle_feedback():
-    assert command_ready(.1)
-    assert command_ready(.55)
-    assert not command_ready(.61)
+# 已删除的固定指令龄门禁不再建立回归；转发/断连职责统一由
+# test_p4_tcp_runtime 的 TcpCommandRelay 行为测试覆盖。
