@@ -28,10 +28,29 @@ def action_prefix(candidate, measured, duration_s=.05):
 
 
 def execute_action(action, measured):
-    """调用方已认证 action；返回实测模型状态，不直接复制候选末态。"""
+    """调用方已认证 action；返回纯模型预测状态（不是实测反馈），不直接复制候选末态。"""
     current = np.array([measured.x, measured.y, measured.yaw, measured.v, measured.w, action.states[0, 5]])
     if not np.allclose(current[:5], action.states[0,:5], atol=1e-6, rtol=0):
         raise ValueError('INITIAL_STATE_MISMATCH')
     for index, control in enumerate(action.controls):
         current = step(current, control, float(action.times[index+1]-action.times[index]))
     return VehicleState(*current[:5])
+
+
+def certified_command(result, measured, limits):
+    """仅将已认证的当前短动作积分为速度设定值；不写回在线定位。"""
+    if result is None or measured is None:
+        return 0., 0.
+    candidate, action = result.candidate, result.action
+    if candidate is None or action is None or result.certificate is None or result.action_certificate is None:
+        return 0., 0.
+    if (not result.certificate.matches(candidate, result.grid, limits, candidate.route_version) or
+            not result.action_certificate.matches(action, result.grid, limits, candidate.route_version)):
+        return 0., 0.
+    try:
+        predicted = execute_action(action, measured)
+    except (ValueError, TypeError, IndexError):
+        return 0., 0.
+    if not np.isfinite([predicted.v, predicted.w]).all():
+        return 0., 0.
+    return float(predicted.v), float(predicted.w)

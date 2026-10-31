@@ -238,3 +238,64 @@ def test_brake_diagnostic_includes_worker_and_submit_errors():
     packet = NS(candidate=NS(source='brake', mode='drive', route_version=1), generation=2,
                 result=NS(status='WAITING_GLOBAL', reference=None, events=errors))
     assert module.brake_diagnostic(packet, 1., NS())['events'] == list(errors)
+
+
+def test_direct_control_brakes_from_measured_state_and_missing_input_zero():
+    from nav1cm.contracts import VehicleState
+    runtime, session, published, logs = build_runtime()
+    commands=[]
+    runtime.configure_direct_control(lambda v,w:commands.append((v,w)))
+    runtime.enable_execution_contract()
+    assert not runtime.tasks._feedback_required
+    assert not runtime.execution_contract_enabled
+    session.offer_state(VehicleState(0,0,0,.1,0))
+    runtime.tasks.submit('direct-a',(0,3,0),0.)
+    packet=runtime._tick_once(0.)
+    assert packet.result.action is not None
+    assert 0 < commands[-1][0] < .1
+    assert session.state.v == .1  # 模型积分不得推进在线实测状态。
+    runtime.request_cancel(runtime.tasks.active.task_id)
+    runtime._tick_once(.05)
+    assert 0 < commands[-1][0] < .1
+    session.offer_state(None)
+    runtime._tick_once(.1)
+    assert commands[-1] == (0.,0.)
+
+
+def test_direct_control_old_generation_never_emits_movement():
+    from nav1cm.contracts import VehicleState
+    runtime, session, published, logs = build_runtime()
+    commands=[]
+    runtime.configure_direct_control(lambda v,w:commands.append((v,w)))
+    session.offer_state(VehicleState(0,0,0,.1,0))
+    runtime.tasks.submit('direct-a',(0,3,0),0.)
+    original=session.tick
+    def racing_tick(now):
+        packet=original(now)
+        runtime.offer_goal(pose(0,-3))
+        return packet
+    session.tick=racing_tick
+    runtime._tick_once(0.)
+    assert commands == [(0.,0.)]
+
+
+def test_direct_control_arrives_and_cancels_with_body_feedback_only():
+    from nav1cm.contracts import VehicleState
+    runtime, session, published, logs = build_runtime()
+    commands=[]
+    runtime.configure_direct_control(lambda v,w:commands.append((v,w)))
+    runtime.tasks.submit('direct-a',(0,0,0),0.)
+    feedback=NS(header=NS(frame_id='map'),pose=NS(pose=pose().pose),
+        twist=NS(twist=NS(linear=NS(x=0.),angular=NS(z=0.))))
+    runtime.offer_odometry(feedback)
+    runtime._tick_once(0.)
+    runtime.offer_odometry(feedback)
+    runtime._tick_once(.4)
+    assert runtime.tasks.active.outcome == 'GOAL_REACHED'
+    runtime.tasks.submit('direct-a',(0,3,0),0.)
+    runtime._tick_once(.5)
+    runtime.request_cancel(runtime.tasks.active.task_id)
+    runtime.offer_odometry(feedback)
+    runtime._tick_once(.6)
+    assert runtime.tasks.active.outcome == 'CANCELED'
+    assert all(command == (0.,0.) for command in commands)

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from grid_map_msgs.msg import GridMap
 from nav_msgs.msg import Odometry, Path as PathMessage
 import rclpy
@@ -111,12 +111,16 @@ class PlannerNode(Node):
             'tf_topic': '/tf', 'tf_static_topic': '/tf_static',
             'global_route_topic': '/Car/T4/planning/global_route', 'global_reference_topic': '',
             'local_path_topic': '/Car/T4/planning/local_path',
+            'control_backend':'path_mppi', 'enable_controller':False,
+            'command_topic':'/Car/T4/control/cmd_vel',
             'execution_contract_enabled':False,'execution_feedback_timeout_s':2.,
             'odometry_timeout_s':.5,
             'execution_reference_topic':'/Car/T4/control/path_execution_reference',
             'tracking_status_topic':'/Car/T4/control/tracking_status',
         }
         settings={name:self.declare_parameter(name,default).value for name,default in defaults.items()}
+        if settings['control_backend'] not in ('path_mppi','mpcc_cmd_vel'):
+            raise ValueError('invalid control_backend')
         if not settings['global_reference_topic']:
             settings['global_reference_topic']=settings['global_route_topic']+'_reference'
             self.set_parameters([Parameter('global_reference_topic',value=settings['global_reference_topic'])])
@@ -147,6 +151,10 @@ class PlannerNode(Node):
                                       ros_now_ns=lambda: self.get_clock().now().nanoseconds,
                                       notice=lambda kind, detail: self.get_logger().info(f'{kind}: {detail}'),
                                       map_frame=frame_name(settings['map_frame']) or 'map')
+        direct=settings['control_backend']=='mpcc_cmd_vel' and settings['enable_controller']
+        if direct:
+            self._command_publisher=self.create_publisher(Twist,settings['command_topic'],1)
+            self.runtime.configure_direct_control(self._publish_command)
         self.runtime.configure_pose_input(float(settings['odometry_timeout_s']))
         latest = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                             durability=DurabilityPolicy.VOLATILE)
@@ -163,7 +171,7 @@ class PlannerNode(Node):
         self.get_logger().info(f'wheel={capability_file}; limits={limits}; local=0.01m/500x500; build={settings["build_dir"]}')
         self.get_logger().info('startup_parameters (read-only; restart required): '+json.dumps(
             {name:self.get_parameter(name).value for name in startup_names},ensure_ascii=False,sort_keys=True))
-        self._execution_contract_enabled=settings['execution_contract_enabled']
+        self._execution_contract_enabled=settings['execution_contract_enabled'] and settings['control_backend']=='path_mppi'
         self._execution_revision=0
         if self._execution_contract_enabled:
             from lunar_planning_msgs.msg import PathExecutionReference,TrackingStatus
@@ -173,6 +181,12 @@ class PlannerNode(Node):
             self._execution_publisher=self.create_publisher(PathExecutionReference,settings['execution_reference_topic'],10)
             self.create_subscription(TrackingStatus,settings['tracking_status_topic'],self._on_execution_status,10)
         self.runtime.start()
+
+    def _publish_command(self, v, w):
+        message=Twist()
+        message.linear.x=float(v)
+        message.angular.z=float(w)
+        self._command_publisher.publish(message)
 
     def _tf_input(self, message):
         try:

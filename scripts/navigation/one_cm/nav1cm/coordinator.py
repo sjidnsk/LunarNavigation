@@ -87,7 +87,7 @@ class NavigationCoordinator:
         self._global_inflight = None
         self._pending_reason = 'GOAL_CHANGED'
 
-    def cancel_tick(self, world, state, now_s):
+    def cancel_tick(self, world, state, now_s, *, need_action=False):
         """只认证从当前实测状态开始的受限制动，绝不续发旧目标路径。"""
         grid = extract_window(world, state, self.allow_unknown)
         reference = LocalReference(-1, grid.epoch, [[state.x, state.y]], [0.], 0.)
@@ -95,8 +95,15 @@ class NavigationCoordinator:
         certificate = certify(candidate, grid, self.limits, -1, backend=self.backend)
         if not certificate.matches(candidate, grid, self.limits, -1):
             candidate = None
+        action = action_certificate = None
+        if candidate is not None and need_action:
+            action = action_prefix(candidate, state, getattr(self, 'execution_period_s', self.local_period_s))
+            action_certificate = certify(action, grid, self.limits, -1, backend=self.backend)
+            if not action_certificate.matches(action, grid, self.limits, -1):
+                action = None
         return CycleResult('CANCEL_BRAKING' if candidate is not None else 'NO_CERTIFIED_ACTION',
-                           candidate=candidate, certificate=certificate, grid=grid, reference=reference)
+                           candidate=candidate, certificate=certificate, grid=grid, reference=reference,
+                           action=action, action_certificate=action_certificate)
 
     def replace_goal(self, goal, *, goal_yaw=None, generation):
         """会话接收事件入口；相同最终位姿也不能复活较早代际的结果。"""

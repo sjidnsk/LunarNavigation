@@ -71,6 +71,24 @@ class PlannerRuntime:
         self._pose_integrity_fault=None
         self._pose_waiting=False
         self._tracking_inputs=deque(maxlen=128)
+        self.publish_command = None
+
+    def configure_direct_control(self, publish_command):
+        self.publish_command = publish_command
+        self.session.direct_control = True
+        self.execution_contract_enabled = False
+        self.tasks.configure_execution_feedback(required=False)
+
+    def _command(self, packet):
+        if self.publish_command is None:
+            return
+        from nav1cm.execution import certified_command
+        command = certified_command(packet.result, self.session.state, self.session.coordinator.limits)
+        self.publish_command(*command)
+        self._notice('MPCC_COMMAND', json.dumps(dict(v=command[0], w=command[1],
+            status=getattr(packet.result, 'status', None),
+            source=getattr(packet.candidate, 'source', None),
+            mode=getattr(packet.candidate, 'mode', None), source_stamp_ns=self._pose_source_high_water)))
 
     def configure_pose_input(self,timeout_s):
         if isinstance(timeout_s,bool) or not math.isfinite(timeout_s) or timeout_s<=0:
@@ -135,6 +153,8 @@ class PlannerRuntime:
         self.session.offer_state(value)
 
     def enable_execution_contract(self,timeout_s=2.):
+        if self.publish_command is not None:
+            return
         self.execution_contract_enabled=True
         self.tasks.configure_execution_feedback(required=True,timeout_s=timeout_s)
 
@@ -393,8 +413,11 @@ class PlannerRuntime:
                     # cancel_goal提升generation，执行身份仍固定在原接受任务上。
                     self.execution_context=(None if active is None else active.task_id,
                         self.session.accepted_generation if active is None else active.generation,intent)
+                self._command(packet)
                 self.publish(data)
                 published_brake = packet.candidate is not None and packet.candidate.source == 'brake'
+            elif self.publish_command is not None:
+                self.publish_command(0., 0.)
         if published_brake:
             try:
                 record = brake_diagnostic(packet, now_s, self.session.coordinator.buffer)
@@ -416,6 +439,7 @@ class PlannerRuntime:
                 self._notice('TICK_ERROR', f'{type(exc).__name__}: {exc}')
                 with self._condition:
                     if not self._stopping:
+                        if self.publish_command is not None:self.publish_command(0., 0.)
                         self.publish(paths(None, None, self.ros_now_ns(), self.map_frame))
             # 输入唤醒可提前检查，协调器的单调周期门禁负责不补发历史动作。
             with self._condition:
@@ -427,6 +451,7 @@ class PlannerRuntime:
         if self._closed:
             return self._close_result
         with self._condition:
+            if self.publish_command is not None:self.publish_command(0., 0.)
             self._stopping = True
             self._condition.notify_all()
         deadline = time.monotonic() + timeout_s

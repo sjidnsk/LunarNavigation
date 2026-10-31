@@ -23,6 +23,7 @@ class NavigationSession:
         self.accepted_generation = 0
         self.last_goal_rejection = None
         self.canceling = False
+        self.direct_control = False
         self._arrival_evidence = None
 
     def set_world(self, world):
@@ -75,7 +76,7 @@ class NavigationSession:
 
     def tick(self, now_s):
         if self.canceling and self.world is not None and self.state is not None:
-            result = self.coordinator.cancel_tick(self.world, self.state, now_s)
+            result = self.coordinator.cancel_tick(self.world, self.state, now_s, need_action=self.direct_control)
             return SessionPacket(self.accepted_generation, result=result, candidate=result.candidate)
 
         waiting = tuple(name for name in ('world', 'state', 'goal') if getattr(self, name) is None)
@@ -83,7 +84,7 @@ class NavigationSession:
             self._arrival_evidence=None
             return SessionPacket(self.accepted_generation, waiting=waiting)
         result = self.coordinator.tick(self.world, self.state, (self.goal.x, self.goal.y),
-                                       now_s, goal_yaw=self.goal.yaw, need_action=False)
+                                       now_s, goal_yaw=self.goal.yaw, need_action=self.direct_control)
         candidate = result.candidate
         if (candidate is None or result.certificate is None or
                 not result.certificate.matches(candidate, result.grid, self.coordinator.limits, candidate.route_version)):
