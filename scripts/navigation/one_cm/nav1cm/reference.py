@@ -52,12 +52,10 @@ def _exit_fraction(start, end, minimum, maximum):
     return float(min(fractions))
 
 
-def extract_reference(
-    route: Route, state: VehicleState, grid: GridSnapshot, previous: ProgressToken | None = None,
-    *, terminal_yaw: float | None = None
-) -> tuple[LocalReference, ProgressToken]:
-    """同版进度最多向前 0.25 m；换版从整条路线重新投影。"""
-    arc = _arc_lengths(route.points)
+def project_progress(route: Route, state: VehicleState, previous: ProgressToken | None = None,
+                     *, arc=None) -> ProgressToken:
+    """与局部参考共用的单调有界投影；同版进度最多向前0.25m。"""
+    arc = _arc_lengths(route.points) if arc is None else arc
     total = float(arc[-1])
     if previous is not None and previous.route_version == route.version:
         if not np.isfinite(previous.s) or previous.s < 0 or previous.s > total:
@@ -69,7 +67,18 @@ def extract_reference(
     projected = _project(route.points, arc, np.array([state.x, state.y]), low, high)
     if previous is not None and previous.route_version == route.version:
         projected = max(previous.s, projected)
-    token = ProgressToken(route.version, projected)
+    return ProgressToken(route.version, projected)
+
+
+def extract_reference(
+    route: Route, state: VehicleState, grid: GridSnapshot, previous: ProgressToken | None = None,
+    *, terminal_yaw: float | None = None
+) -> tuple[LocalReference, ProgressToken]:
+    """同版进度最多向前 0.25 m；换版从整条路线重新投影。"""
+    arc = _arc_lengths(route.points)
+    total = float(arc[-1])
+    token = project_progress(route, state, previous, arc=arc)
+    projected = token.s
     minimum = np.array(grid.origin_xy, dtype=float)
     maximum = minimum + np.array([grid.cells.shape[1], grid.cells.shape[0]]) * grid.resolution_m
     start = _point_at(route.points, arc, projected)

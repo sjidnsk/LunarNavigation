@@ -363,3 +363,111 @@ def test_local_unknown_policy_change_does_not_reject_global_geometry():
     result = c.tick(world(2, extent=2100), state, (3, 0), .1)
     assert c.route is not None and len(runner.requests) == 1
     assert not any(e['kind'] == 'STALE_GLOBAL_RESULT' for e in result.events)
+
+
+@pytest.mark.parametrize('smooth', [False, True])
+@pytest.mark.parametrize('side', ['rear', 'front'])
+def test_existing_route_map_revalidation_only_checks_untravelled_suffix(smooth, side):
+    from scripts.navigation.one_cm.nav1cm.contracts import ProgressToken
+    from scripts.navigation.one_cm.nav1cm.coordinator import NavigationCoordinator
+    runner = Runner()
+    c = NavigationCoordinator(None, runner=runner, revalidate_current_map=True, reference_smoothing=smooth)
+    c._set_goal((10, 0), None)
+    c._observe_world(world())
+    c._adopt_route(Route(7, 1, [[0, 0], [10, 0]], (10, 0)), [])
+    c._pending_reason = None
+    route = c.route
+    progress = ProgressToken(7, 5.)
+    c.progress = progress
+    obstacle = CellRect(100, -10, 110, 10) if side == 'rear' else CellRect(700, -10, 710, 10)
+    events = []
+    c._update_route(world(2, (obstacle,)), VehicleState(5, 0, 0, 0, 0), (10, 0), .1, events)
+    if side == 'rear':
+        assert c.route is route and c.progress is progress
+        assert not runner.requests
+    else:
+        assert c.route is None and c.progress is None
+        assert len(runner.requests) == 1 and runner.requests[0]['request_reason'] == 'MAP_CHANGED'
+
+
+@pytest.mark.parametrize('progress_version,progress_s', [(None, 5.), (8, 5.), (7, float('nan')), (7, -1.), (7, 11.), (7, 0.)])
+def test_invalid_or_lagging_progress_cannot_skip_unverified_route_prefix(progress_version, progress_s):
+    from scripts.navigation.one_cm.nav1cm.contracts import ProgressToken
+    from scripts.navigation.one_cm.nav1cm.coordinator import NavigationCoordinator
+    c = NavigationCoordinator(None, runner=Runner(), revalidate_current_map=True)
+    c._set_goal((10, 0), None)
+    c._observe_world(world())
+    c._adopt_route(Route(7, 1, [[0, 0], [10, 0]], (10, 0)), [])
+    c._pending_reason = None
+    c.progress = None if progress_version is None else ProgressToken(progress_version, progress_s)
+    c._update_route(world(2, (CellRect(100, -10, 110, 10),)), VehicleState(5, 0, 0, 0, 0), (10, 0), .1, [])
+    assert c.route is None and c.progress is None
+
+
+def test_bounded_progress_projection_matches_reference_when_progress_lags_slightly():
+    from scripts.navigation.one_cm.nav1cm.contracts import ProgressToken, WheelLimits
+    from scripts.navigation.one_cm.nav1cm.coordinator import NavigationCoordinator
+    c = NavigationCoordinator(None, runner=Runner(), revalidate_current_map=True,
+        limits=WheelLimits(body_length_m=.01, body_width_m=.01, minimum_clearance_m=0), clearance_radius_m=.01)
+    c._set_goal((10, 0), None)
+    c._observe_world(world())
+    c._adopt_route(Route(7, 1, [[0, 0], [10, 0]], (10, 0)), [])
+    c._pending_reason = None
+    route = c.route
+    progress = ProgressToken(7, 4.8)
+    c.progress = progress
+    c._update_route(world(2, (CellRect(482, -1, 484, 1),)), VehicleState(5, 0, 0, 0, 0), (10, 0), .1, [])
+    assert c.route is route and c.progress is progress
+
+
+@pytest.mark.parametrize('points,state,progress_s,obstacle', [
+    ([[0,0],[4,4],[0,4],[4,0]], (2,2), 2.8, CellRect(295,95,305,105)),
+    ([[0,0],[6,0],[0,0],[0,6]], (3,0), 3., CellRect(95,-5,105,5)),
+])
+def test_future_crossing_and_return_legs_are_not_dropped_as_history(points, state, progress_s, obstacle):
+    from scripts.navigation.one_cm.nav1cm.contracts import ProgressToken, WheelLimits
+    from scripts.navigation.one_cm.nav1cm.coordinator import NavigationCoordinator
+    c = NavigationCoordinator(None, runner=Runner(), revalidate_current_map=True,
+        limits=WheelLimits(body_length_m=.01, body_width_m=.01, minimum_clearance_m=0), clearance_radius_m=.01)
+    goal = tuple(points[-1])
+    c._set_goal(goal, None)
+    c._observe_world(world())
+    c._adopt_route(Route(7, 1, points, goal), [])
+    c._pending_reason = None
+    c.progress = ProgressToken(7, progress_s)
+    c._update_route(world(2, (obstacle,)), VehicleState(*state, 0, 0, 0), goal, .1, [])
+    assert c.route is None and c.progress is None
+
+
+def test_passed_shaped_curve_proof_does_not_retire_remaining_sampled_reference():
+    import numpy as np
+    from scripts.navigation.one_cm.nav1cm.contracts import ProgressToken
+    from scripts.navigation.one_cm.nav1cm.coordinator import NavigationCoordinator
+    from scripts.navigation.one_cm.nav1cm.reference import _arc_lengths, _point_at
+    c = NavigationCoordinator(None, runner=Runner(), revalidate_current_map=True, reference_smoothing=True)
+    c._set_goal((10, 10), None)
+    c._observe_world(world())
+    c._adopt_route(Route(7, 1, [[0,0],[10,0],[10,10]], (10,10)), [])
+    c._pending_reason = None
+    route = c.route
+    assert len(route.points) > 3 and len(c._shaped_route.proof_boxes) > 0
+    arc = _arc_lengths(route.points)
+    progress = ProgressToken(7, float(arc[-1] - 3.))
+    c.progress = progress
+    xy = _point_at(route.points, arc, progress.s)
+    box = np.mean(c._shaped_route.proof_boxes[0].reshape(2,2), axis=0)
+    obstacle = CellRect(int(box[0]*100), int(box[1]*100), int(box[0]*100)+1, int(box[1]*100)+1)
+    c._update_route(world(2, (obstacle,)), VehicleState(*xy, 0, 0, 0), (10,10), .1, [])
+    assert c.route is route and c.progress is progress
+
+
+def test_incoming_global_candidate_is_checked_in_full_even_after_vehicle_advanced():
+    runner = Runner()
+    c = AsyncNavigationCoordinator(local_worker=ManualLocal(), global_runner=runner, revalidate_current_map=True)
+    c.tick(world(), VehicleState(0, 0, 0, 0, 0), (10, 0), 0.)
+    runner.ready = True
+    result = c.tick(world(2, (CellRect(100, -10, 110, 10),)),
+                    VehicleState(5, 0, 0, 0, 0), (10, 0), .1)
+    assert c.route is None and c.progress is None
+    assert any(e['kind'] == 'GLOBAL_CURRENT_MAP_REJECTED' for e in result.events)
+    assert len(runner.requests) == 2

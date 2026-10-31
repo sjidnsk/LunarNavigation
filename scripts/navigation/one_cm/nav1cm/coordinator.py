@@ -5,7 +5,7 @@ import numpy as np
 
 from .contracts import LocalReference, WheelLimits, VehicleState
 from .maps import extract_window, DistanceFieldCache
-from .reference import extract_reference
+from .reference import extract_reference, project_progress, _arc_lengths, _point_at
 from .certification import certify, prepare_certification
 from .seeds import brake_candidate
 from .global_planner import AdaptiveGlobalPlanner, GoalCheck, _segment_clear
@@ -170,7 +170,15 @@ class NavigationCoordinator:
                 map_epoch=route.map_epoch,changed=shaped.changed,reason=shaped.reason,
                 raw_points=len(route.points),reference_points=len(self.route.points)))
 
-    def _route_clear(self, route):
+    def _route_clear(self, route, *, start_s=None):
+        if start_s is not None:
+            # 当前参考执行的是采样折线；只检查从本次有界投影开始的剩余段。
+            # 新来源默认仍全验，整形构造的连续曲线凸包证明也不改变。
+            arc = _arc_lengths(route.points)
+            points = np.vstack((_point_at(route.points, arc, start_s),
+                                route.points[np.searchsorted(arc, start_s, side='right'):]))
+            return all(_segment_clear(a, b, self._blocked_boxes)
+                       for a, b in zip(points[:-1], points[1:]))
         if self._shaped_route is not None and self._shaped_route.route is route:
             from .reference_smoothing import reference_clear
             return reference_clear(self._shaped_route,self._blocked_boxes)
@@ -205,7 +213,14 @@ class NavigationCoordinator:
                 self._pending_reason = 'MAP_CHANGED'
             events.append({'kind': 'MAP_CHANGED', 'epoch': world.epoch})
         if self.revalidate_current_map and blocked_changed and self.route is not None:
-            if not self._route_clear(self.route):
+            start_s = 0.
+            if self.progress is not None and self.progress.route_version == self.route.version:
+                try:
+                    start_s = project_progress(self.route, state, self.progress).s
+                except ValueError:
+                    # 非法进度不提供历史段豁免；后续extract_reference仍走原重入处理。
+                    pass
+            if not self._route_clear(self.route, start_s=start_s):
                 events.append({'kind': 'GLOBAL_CURRENT_MAP_REJECTED', 'version': self.route.version,
                                'requested_epoch': self.route.map_epoch, 'current_epoch': world.epoch})
                 self.route = self.progress = None
