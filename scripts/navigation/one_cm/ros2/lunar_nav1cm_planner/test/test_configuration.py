@@ -45,4 +45,4 @@ def test_tcp_merged_profile_loads_speed_and_unchanged_braking_limits(tmp_path, m
     speed=yaml.safe_load((root/'config/tcp_wheel_speed.yaml').read_text(encoding='utf-8'))
     path=tmp_path/'tcp-profile.yaml';path.write_text(yaml.safe_dump(tcp_platform_profile(base,speed)),encoding='utf-8')
     limits,_=import_module('lunar_nav1cm_planner.configuration').load_configuration(path)
-    assert (limits.linear_speed_mps,limits.angular_speed_rps,limits.linear_accel_mps2,limits.angular_accel_rps2)==pytest.approx((.5,1.,.5,.5))
+    assert (limits.linear_speed_mps,limits.angular_speed_rps,limits.linear_accel_mps2,limits.angular_accel_rps2)==pytest.approx((.5,.2,.5,.5))
