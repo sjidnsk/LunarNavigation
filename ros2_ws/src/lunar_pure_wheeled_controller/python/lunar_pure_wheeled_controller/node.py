@@ -229,10 +229,10 @@ class PureWheeledControllerNode(Node):
                     float(policy_values[key]), float(capability[source])
                 )
         if self._standard_mode:
-            for name in ("max_linear_mps", "max_reverse_mps"):
+            for name in ("max_linear_mps", "max_reverse_mps", "max_angular_radps"):
                 if name not in self._parameter_overrides:
                     policy_values[name] = float(capability[names[name]])
-            for name,value in dict(max_angular_radps=1.,goal_position_tolerance_m=.1,goal_yaw_tolerance_rad=.05,stopped_angular_radps=.01).items():
+            for name,value in dict(goal_position_tolerance_m=.1,goal_yaw_tolerance_rad=.05,stopped_angular_radps=.01).items():
                 if name not in self._parameter_overrides:
                     policy_values[name]=min(value,float(capability[names[name]])) if platform_path and name in names else value
         from lunar_pure_wheeled_controller.motion_configuration import resolve_motion_model
