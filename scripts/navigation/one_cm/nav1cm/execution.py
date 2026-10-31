@@ -47,18 +47,26 @@ def certified_command(result, measured, limits, *, command_hold_s=None, backend=
     if (not result.certificate.matches(candidate, result.grid, limits, candidate.route_version) or
             not result.action_certificate.matches(action, result.grid, limits, candidate.route_version)):
         return 0., 0.
-    try:
-        predicted = execute_action(action, measured)
-    except (ValueError, TypeError, IndexError):
-        return 0., 0.
-    if not np.isfinite([predicted.v, predicted.w]).all():
-        return 0., 0.
+    observed=np.array([measured.x,measured.y,measured.yaw,measured.v,measured.w])
+    if not np.allclose(observed,action.states[0,:5],atol=1e-6,rtol=0):
+        return 0.,0.
     if command_hold_s is not None:
         from .certification import certify
-        proof=command_hold_proof(action,result.grid,limits,command_hold_s)
+        # 容差内实测也不得借用候选末态：从同一真实采样初态重积分短段。
+        current=np.array([measured.x,measured.y,measured.yaw,measured.v,measured.w,action.states[0,5]])
+        states=[current.copy()]
+        for index,control in enumerate(action.controls):
+            current=step(current,control,float(action.times[index+1]-action.times[index]))
+            states.append(current.copy())
+        integrated=Trajectory(action.map_epoch,action.route_version,action.times,states,
+            action.controls,action.mode,action.source)
+        proof=command_hold_proof(integrated,result.grid,limits,command_hold_s)
         certificate=certify(proof,result.grid,limits,candidate.route_version,backend=backend)
         if not certificate.matches(proof,result.grid,limits,candidate.route_version):
             return 0., 0.
+        return float(current[3]),float(current[4])
+    predicted=execute_action(action,measured)
+    if not np.isfinite([predicted.v,predicted.w]).all():return 0.,0.
     return float(predicted.v), float(predicted.w)
 
 
@@ -83,4 +91,5 @@ def command_hold_proof(action, grid, limits, command_hold_s):
     held=Trajectory(action.map_epoch,action.route_version,times,states,controls,action.mode,action.source)
     reference=LocalReference(action.route_version,grid.epoch,[[current[0],current[1]]],[0.],current[5])
     brake=brake_candidate(VehicleState(*current[:5]),grid,reference,limits)
-    return join_trajectories(held,brake)
+    from dataclasses import replace
+    return replace(join_trajectories(held,brake),mode=action.mode,source=action.source)

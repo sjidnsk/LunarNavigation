@@ -77,3 +77,44 @@ def test_hold_and_explicit_stop_tail_certification(obstacle):
     assert proof.times[-1] > 1.8
     cmd=certified_command(result,measured,limits,command_hold_s=1.8)
     assert cmd == ((.5,0.) if obstacle is None else (0.,0.))
+
+
+def test_hold_retains_certified_forward_metadata_after_translation_stops():
+    from types import SimpleNamespace as S
+    from scripts.navigation.one_cm.nav1cm.certification import certify
+    from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits
+    from tests.navigation.one_cm.test_certification import free_grid
+    from scripts.navigation.one_cm.nav1cm.execution import command_hold_proof
+    limits=WheelLimits(motion_model='differential_drive');grid=free_grid()
+    state=VehicleState(0,0,0,.025,.1)
+    u=np.array([[-.5,0.,.01]])
+    action=Trajectory(1,1,[0.,.05],rollout([0,0,0,.025,.1,0],u,.05),u,'forward','mpcc')
+    cert=certify(action,grid,limits,1)
+    assert cert.valid
+    proof=command_hold_proof(action,grid,limits,1.2)
+    assert proof.mode==action.mode and proof.source==action.source
+    assert certify(proof,grid,limits,1).valid
+    result=S(candidate=action,certificate=cert,action=action,action_certificate=cert,grid=grid)
+    assert certified_command(result,state,limits,command_hold_s=1.2)==pytest.approx((0.,.1))
+
+
+def test_hold_proof_and_command_share_exact_measured_integration(monkeypatch):
+    from types import SimpleNamespace as S
+    from scripts.navigation.one_cm.nav1cm import execution
+    from scripts.navigation.one_cm.nav1cm.certification import certify
+    from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits
+    from tests.navigation.one_cm.test_certification import free_grid
+    limits=WheelLimits();grid=free_grid()
+    measured=VehicleState(0,0,0,.1000005,0)
+    u=np.array([[0.,0.,0.]])
+    action=Trajectory(1,1,[0.,.05],rollout([0,0,0,.1,0,0],u,.05),u,'forward','mpcc')
+    cert=certify(action,grid,limits,1);assert cert.valid
+    result=S(candidate=action,certificate=cert,action=action,action_certificate=cert,grid=grid)
+    proofs=[];original=execution.command_hold_proof
+    def capture(*args,**kwargs):
+        proof=original(*args,**kwargs);proofs.append(proof);return proof
+    monkeypatch.setattr(execution,'command_hold_proof',capture)
+    command=execution.certified_command(result,measured,limits,command_hold_s=1.2)
+    assert command[0]==measured.v
+    assert proofs[0].states[0,3]==measured.v
+    assert proofs[0].states[1,3]==command[0]
