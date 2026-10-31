@@ -39,6 +39,61 @@ def input_bridge(source,target,classes,qos):
     return handles
 
 
+class NavigationObserver:
+    """只记录源定位，不参与导航决策。"""
+    def __init__(self, make_pose, make_path, publish_start, publish_goal, publish_path):
+        self.make_pose, self.make_path = make_pose, make_path
+        self.publish_start, self.publish_goal, self.publish_path = publish_start, publish_goal, publish_path
+        self.latest = None
+        self.stamps = {}
+        self.active = False
+        self.start = None
+        self.poses = []
+
+    def goal(self, msg):
+        self.active = True
+        self.start = deepcopy(self.latest)
+        self.poses = [] if self.start is None else [deepcopy(self.start)]
+        self.publish_goal(msg)
+        # 空 frame 的消息清除上一次起点；不虚构当前位置。
+        self.publish_start(self.start if self.start is not None else self.make_pose())
+        self._path()
+
+    def odometry(self, msg):
+        h, p = msg.header, msg.pose.pose
+        stamp = (h.stamp.sec, h.stamp.nanosec)
+        values = (p.position.x,p.position.y,p.position.z,p.orientation.x,p.orientation.y,p.orientation.z,p.orientation.w)
+        if (not h.frame_id or stamp <= (0,0) or not all(math.isfinite(v) for v in values)
+                or sum(v*v for v in values[3:]) < 1e-12): return
+        if stamp <= self.stamps.get(h.frame_id,(0,0)): return
+        self.stamps[h.frame_id] = stamp
+        pose = self.make_pose(); pose.header = deepcopy(h); pose.pose = deepcopy(p)
+        self.latest = pose
+        if not self.active: return
+        if self.start is None:
+            self.start = deepcopy(pose); self.publish_start(self.start)
+        if self.poses and self.poses[-1].header.frame_id != h.frame_id:
+            self.poses = []
+        self.poses.append(pose)
+        self.poses = self.poses[-2000:]
+        self._path()
+
+    def _path(self):
+        path = self.make_path()
+        if self.poses: path.header = deepcopy(self.poses[-1].header)
+        path.poses = deepcopy(self.poses)
+        self.publish_path(path)
+
+
+def attach_navigation_observer(source, target, classes, qos):
+    pubs = [target.create_publisher(classes[kind], PREFIX+topic, qos['display']) for kind,topic in
+            [('pose','/start_pose'),('pose','/goal_pose_display'),('path','/actual_path')]]
+    observer = NavigationObserver(classes['pose'],classes['path'],*(p.publish for p in pubs))
+    subs = [source.create_subscription(classes['odom'],'/Car/T3/localization/odometry',observer.odometry,qos['odom']),
+            target.create_subscription(classes['pose'],'/goal_pose',observer.goal,qos['goal'])]
+    return [observer,*pubs,*subs]
+
+
 def command_ready(command_age,telemetry_age):
     # 平台只检查传输活性，不重新解释规划参考的接管状态。
     return 0<=command_age<=TRANSPORT_TIMEOUT_S and 0<=telemetry_age<=TRANSPORT_TIMEOUT_S
@@ -153,8 +208,8 @@ def main():
     import rclpy
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import QoSProfile,ReliabilityPolicy,DurabilityPolicy
-    from geometry_msgs.msg import Twist
-    from nav_msgs.msg import Odometry
+    from geometry_msgs.msg import Twist,PoseStamped
+    from nav_msgs.msg import Odometry,Path as RosPath
     from grid_map_msgs.msg import GridMap
     from tf2_msgs.msg import TFMessage
     from std_msgs.msg import Bool,String
@@ -172,6 +227,10 @@ def main():
              odom_output=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE),
              tf_static=QoSProfile(depth=100,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL))
     handles=input_bridge(source,target,dict(map=GridMap,odom=Odometry,tf=TFMessage),qos)
+    if options.rviz_config is not None and not options.check_only:
+        qos['display']=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        qos['goal']=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE)
+        handles.extend(attach_navigation_observer(source,target,dict(pose=PoseStamped,path=RosPath,odom=Odometry),qos))
     source_counts={};relay=None;lease=None;mode=None;vel=None
     for topic,cls in [('/Car/T3/mapping/grid_map',GridMap),('/Car/T3/localization/odometry',Odometry),('/tf',TFMessage),('/tf_static',TFMessage)]:
         def received(msg,key=topic):source_counts[key]=source_counts.get(key,0)+1

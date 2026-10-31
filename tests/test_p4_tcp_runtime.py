@@ -187,3 +187,40 @@ def test_cleanup_discards_invalid_queued_commands_and_releases_lease(bad):
     r.release()
     assert events[-1]==('lease',False) and not r.leased
     assert not r.receive(bad)
+
+
+def test_observer_tracks_unique_stamped_source_and_resets_goal():
+    from scripts.simulation.p4_tcp_runtime import NavigationObserver
+    def pose(): return S(header=S(frame_id='',stamp=S(sec=0,nanosec=0)),pose=None)
+    def path(): return S(header=None,poses=[])
+    def odom(t,frame='map'):
+        return S(header=S(frame_id=frame,stamp=S(sec=t,nanosec=0)),pose=S(pose=S(position=S(x=1.,y=2.,z=0.),orientation=S(x=0.,y=0.,z=0.,w=1.))))
+    starts=[];goals=[];paths=[]
+    o=NavigationObserver(pose,path,starts.append,goals.append,paths.append)
+    o.odometry(odom(1));o.goal('goal1');o.odometry(odom(2));o.odometry(odom(2));o.odometry(odom(1))
+    assert starts[-1].header.stamp.sec==1 and len(paths[-1].poses)==2
+    o.odometry(odom(1,'odom'));assert len(paths[-1].poses)==1 and paths[-1].header.frame_id=='odom'
+    o.poses = o.poses * 2000
+    o.odometry(odom(2,'odom'))
+    assert len(paths[-1].poses)==2000
+    o.goal('goal2');assert len(paths[-1].poses)==1 and starts[-1].header.stamp.sec==2
+    assert goals==['goal1','goal2']
+
+
+def test_observer_waits_for_first_valid_pose():
+    from scripts.simulation.p4_tcp_runtime import NavigationObserver
+    starts=[];paths=[]
+    o=NavigationObserver(lambda:S(header=S(frame_id=''),pose=None),lambda:S(header=None,poses=[]),starts.append,lambda _:None,paths.append)
+    o.goal('goal');assert starts[-1].header.frame_id=='' and not paths[-1].poses
+
+
+def test_observer_is_enabled_only_for_active_rviz():
+    import ast
+    from pathlib import Path
+    source=(Path(__file__).resolve().parents[1]/'scripts/simulation/p4_tcp_runtime.py').read_text(encoding='utf-8')
+    tree=ast.parse(source)
+    condition=next(n.test for n in ast.walk(tree) if isinstance(n,ast.If) and any(isinstance(x,ast.Call) and isinstance(x.func,ast.Name) and x.func.id=='attach_navigation_observer' for x in ast.walk(n)))
+    expr=compile(ast.Expression(condition),'<condition>','eval')
+    assert eval(expr,{},dict(options=S(rviz_config='config',check_only=False)))
+    assert not eval(expr,{},dict(options=S(rviz_config=None,check_only=False)))
+    assert not eval(expr,{},dict(options=S(rviz_config='config',check_only=True)))
