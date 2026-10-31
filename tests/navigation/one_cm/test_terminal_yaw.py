@@ -169,6 +169,6 @@ def test_real_solver_approach_and_certified_terminal_pose(goal):
     else:
         pytest.fail(f'real solver terminal pose did not converge: {state}, {reasons[-20:]}')
     assert 'mpcc:acados-sqp-rti' in sources
-    assert abs(api().angle_error(.1, state.yaw)) <= .05
+    assert abs(api().angle_error(.1, state.yaw)) <= c.goal_yaw_tolerance_rad
     assert np.linalg.norm(np.array(goal) - [state.x, state.y]) <= .1
     assert abs(state.v) <= .01 and abs(state.w) <= .01
