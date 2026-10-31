@@ -137,7 +137,7 @@ def test_mpcc_terminal_reference_uses_body_yaw_without_reverse_pi():
     states = np.zeros((3, 6))
     states[-1, 5] = ref.s[-1]
     params = planner._parameters(states, np.zeros((2, 3)), ref,
-                                 build_distance_field(grid), 0., float(ref.s[-1]))
+                                 build_distance_field(grid), 0., float(ref.s[-1]), mode="reverse")
     assert params[-1][5] == pytest.approx(.2)
     assert 0. < params[0][5] < .2  # 短末段已开始平滑调整，终点仍为真实车体yaw。
 

@@ -85,21 +85,20 @@ def _travel_direction(state, reference, approach_distance_m, *, initial_travel_d
 
 
 def travel_target_yaw(state, reference, mode, approach_distance_m, *, initial_travel_direction=""):
-    """行进对准spin只对准路线，已开始的末段转向只制动残余角速度。"""
+    """spin固定对准行进车体方向，减速期间不以实时yaw重置目标。"""
     heading, desired = _travel_direction(state, reference, approach_distance_m,initial_travel_direction=initial_travel_direction)
     if mode == 'reverse' or (mode == 'spin' and desired == 'reverse'):
         heading += np.pi
     yaw = state.yaw + _wrap(heading-state.yaw)
-    if mode == 'spin' and (abs(_wrap(yaw-state.yaw)) <= (.08 if initial_travel_direction else .3) or
-            (not initial_travel_direction and _continuing_approach(state, reference, yaw, approach_distance_m))):
-        yaw = state.yaw
+    if mode == 'spin' and not initial_travel_direction and _continuing_approach(state, reference, yaw, approach_distance_m):
+        yaw = state.yaw + angle_error(_approach_yaw(reference, reference.progress_s, yaw, approach_distance_m), state.yaw)
     return yaw
 
 
 def select_mode(state, reference, *, approach_distance_m=.8, initial_travel_direction="",initial_stopped_angular_rps=.01):
     if len(reference.points)<2:
         if reference.terminal_yaw is not None and abs(state.v) <= 1e-10:
-            return 'spin' if abs(angle_error(reference.terminal_yaw, state.yaw)) > .05 or abs(state.w) > 1e-10 else 'brake'
+            return 'spin' if abs(angle_error(reference.terminal_yaw, state.yaw)) > .05 or abs(state.w) > initial_stopped_angular_rps else 'brake'
         return 'brake'
     heading, desired = _travel_direction(state, reference, approach_distance_m,initial_travel_direction=initial_travel_direction)
     error = _wrap(heading-state.yaw)
@@ -110,7 +109,7 @@ def select_mode(state, reference, *, approach_distance_m=.8, initial_travel_dire
     if abs(state.v)>1e-8:
         current='forward' if state.v>0 else 'reverse'
         return current if current==desired else 'brake'
-    if abs(state.w)>1e-8:
+    if abs(state.w)>initial_stopped_angular_rps:
         return 'spin'
     aligned=_wrap(error-(np.pi if desired=='reverse' else 0.))
     travel_yaw = state.yaw + aligned
@@ -222,11 +221,14 @@ class MpccPlanner:
             tangent=(reference.points[i+1]-reference.points[i])/(reference.s[i+1]-reference.s[i])
             xy=reference.points[i]+tangent*(s-reference.s[i])
             desired_yaw = target_yaw
-            if mode != 'spin' and not initial_travel_direction:
-                desired_yaw = _approach_yaw(reference, s, target_yaw,
-                    self.N * self.dt * self.limits.linear_speed_mps)
-            # spin仅对准行进车体方向/制动；moving在末段逐点平滑趋向最终车体yaw。
-            # 方向选择已经体现在target_yaw中，最终yaw不再叠加倒车pi。
+            if mode != 'spin':
+                desired_yaw = float(np.arctan2(tangent[1], tangent[0]))
+                if mode == 'reverse':
+                    desired_yaw += np.pi
+                if not initial_travel_direction:
+                    desired_yaw = _approach_yaw(reference, s, desired_yaw,
+                        self.N * self.dt * self.limits.linear_speed_mps)
+            # 各节点使用本段车体切线；末段融合绝对最终yaw，spin保持固定目标。
             yaw=z[2]+angle_error(desired_yaw,z[2])
             p=np.zeros(self.parameter_count); p[:6]=[*xy,*tangent,s,yaw]
             p[6:9]=controls[min(k,len(controls)-1)]

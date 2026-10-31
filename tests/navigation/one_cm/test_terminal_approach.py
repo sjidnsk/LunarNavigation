@@ -65,7 +65,10 @@ def test_reverse_final_body_yaw_is_not_shifted_by_pi():
 
 def test_shortest_rotation_crosses_pi_without_full_turn():
     heading=math.pi-.2
-    yaw=np.array([p[5] for p in parameters(reference(-math.pi+.2),heading=heading)])
+    ref = reference(-math.pi+.2)
+    # 路线切线才是moving yaw来源，预测状态heading只决定连续角度分支。
+    ref = LocalReference(1,1,[[0.,0.],[.8*math.cos(heading),.8*math.sin(heading)]],[0.,.8],0.,ref.terminal_yaw)
+    yaw=np.array([p[5] for p in parameters(ref,heading=heading)])
     assert np.all(np.diff(yaw)>0.)
     assert yaw[-1]-yaw[0]==pytest.approx(.4)
 
@@ -80,7 +83,7 @@ def test_residual_angular_motion_in_approach_is_braked_without_tangent_reset():
     from scripts.navigation.one_cm.nav1cm import local_mpcc as module
     assert hasattr(module,'travel_target_yaw')
     state=VehicleState(0,0,.5,0,.03)
-    assert module.travel_target_yaw(state,reference(1.,progress=.6),'spin',.8)==pytest.approx(.5)
+    assert module.travel_target_yaw(state,reference(1.,progress=.6),'spin',.8)==pytest.approx(.84375)
     # 错侧朝向仍需对准真实路线，不因末端目标获准提前旋转。
     wrong=VehicleState(0,0,-.5,0,.03)
     assert module.travel_target_yaw(wrong,reference(1.,progress=.6),'spin',.8)==pytest.approx(0.)
@@ -93,6 +96,6 @@ def test_small_tracking_overshoot_does_not_undo_terminal_turn(angular_speed):
     ref=reference(1.,progress=.6)
     assert select_mode(state,ref)==('spin' if angular_speed else 'forward')
     if angular_speed:
-        assert travel_target_yaw(state,ref,'spin',.8)==pytest.approx(.85)
+        assert travel_target_yaw(state,ref,'spin',.8)==pytest.approx(.84375)
     # 大幅超调仍须回到真实行进方向，不能无限扩大放行区间。
     assert select_mode(VehicleState(0,0,1.2,0,0),ref)=='spin'
