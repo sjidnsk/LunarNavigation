@@ -1,5 +1,5 @@
 """P3 导航会话：无 ROS，目标校验与协调器始终由同一个 tick 线程写入。"""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .contracts import WorldSnapshot
 from .pose_goal import angle_error, check_pose_goal
@@ -74,7 +74,7 @@ class NavigationSession:
                 result.certificate.matches(result.candidate,result.grid,self.coordinator.limits,
                                            result.candidate.route_version))
 
-    def tick(self, now_s):
+    def tick(self, now_s, *, planning_state=None):
         if self.canceling and self.world is not None and self.state is not None:
             result = self.coordinator.cancel_tick(self.world, self.state, now_s, need_action=False)
             return SessionPacket(self.accepted_generation, result=result, candidate=result.candidate)
@@ -85,8 +85,13 @@ class NavigationSession:
             return SessionPacket(self.accepted_generation, waiting=waiting)
         if hasattr(self.coordinator, 'velocity_reference'):
             self.coordinator.velocity_reference = self.direct_control
-        result = self.coordinator.tick(self.world, self.state, (self.goal.x, self.goal.y),
+        # 规划可消费延迟补偿后的当前估计；self.state 始终保留 P3 实测。
+        state = planning_state if self.direct_control and planning_state is not None else self.state
+        result = self.coordinator.tick(self.world, state, (self.goal.x, self.goal.y),
                                        now_s, goal_yaw=self.goal.yaw, need_action=False)
+        # 预测终态只能请求保持/制动；真实 P3 未到达不能提交任务完成证据。
+        if result.status == 'ARRIVED' and not self.coordinator.goal_reached(self.state):
+            result = replace(result, status='GOAL_BRAKING')
         candidate = result.candidate
         velocity_source = (self.direct_control and result.reference_phase_s is not None and
                            result.status == 'BUFFER_EXECUTING')

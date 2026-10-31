@@ -134,3 +134,55 @@ def test_direct_coordinator_still_constructs_and_certifies_action(monkeypatch):
     session, Goal=make_session(); assert session.offer_goal(Goal(0,0,0))
     result=session.coordinator.tick(session.world,session.state,(0,0),0.,goal_yaw=0.)
     assert calls and result.action is not None and result.action_certificate.valid
+
+
+def test_predicted_goal_cannot_replace_measured_arrival_evidence():
+    session, Goal = make_session()
+    session.direct_control = True
+    measured = VehicleState(0, 0, 0, 0, 0)
+    predicted = VehicleState(1, 0, 0, 0, 0)
+    session.offer_state(measured)
+    assert session.offer_goal(Goal(1, 0, 0))
+    packet = session.tick(0., planning_state=predicted)
+    assert session.state is measured
+    assert packet.result.status == 'GOAL_BRAKING'
+    assert not session.arrival_current(packet)
+    assert session._arrival_evidence is None
+
+
+def test_prediction_plans_without_mutating_measured_pose(monkeypatch):
+    session, Goal = make_session()
+    session.direct_control = True
+    measured = session.state
+    predicted = VehicleState(.2, 0, 0, .1, 0)
+    assert session.offer_goal(Goal(0, 2, 0))
+    seen = []
+    original = session.coordinator.tick
+    def tick(world, state, goal, now, **kwargs):
+        seen.append(state)
+        return original(world, state, goal, now, **kwargs)
+    monkeypatch.setattr(session.coordinator, 'tick', tick)
+    session.tick(0., planning_state=predicted)
+    assert seen == [predicted]
+    assert session.state is measured
+
+
+def test_prediction_never_substitutes_missing_p3():
+    session, Goal = make_session()
+    session.direct_control = True
+    assert session.offer_goal(Goal(1, 0, 0))
+    session.offer_state(None)
+    packet = session.tick(0., planning_state=VehicleState(1, 0, 0, 0, 0))
+    assert 'state' in packet.waiting
+    assert not session.arrival_current(packet)
+
+
+def test_measured_and_predicted_goal_can_complete_together():
+    session, Goal = make_session()
+    session.direct_control = True
+    goal_state = VehicleState(0, 0, 0, 0, 0)
+    assert session.offer_goal(Goal(0, 0, 0))
+    session.offer_state(goal_state)
+    packet = session.tick(0., planning_state=goal_state)
+    assert packet.result.status == 'ARRIVED'
+    assert session.arrival_current(packet)
