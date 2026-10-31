@@ -23,20 +23,6 @@ def _travel(speed, acceleration, duration):
     return abs((speed + end) * duration / 2)
 
 
-def _stopping_geometry(vector, limits, reaction_s):
-    """与既有 brake_candidate 的两阶段减速相同，保留转弯停车时的曲率。"""
-    v, w = abs(float(vector[3])), abs(float(vector[4]))
-    a, alpha = limits.linear_accel_mps2, limits.angular_accel_rps2
-    if v > 1e-10 and w > 1e-10:
-        first_a = min(a, alpha * v / w)
-        first_t = w / alpha
-        remaining_v = max(0., v - first_a * first_t)
-        distance = v * first_t - first_a * first_t ** 2 / 2 + remaining_v ** 2 / (2 * a)
-    else:
-        distance = v * v / (2 * a)
-    return v * reaction_s + distance, w * reaction_s + w * w / (2 * alpha)
-
-
 def _at(source, phase):
     index = min(max(0, int(np.searchsorted(source.times, phase, side='right') - 1)), len(source.controls) - 1)
     expected = source.states[index].copy()
@@ -113,10 +99,9 @@ class ReferenceProposal:
 
 
 class ReferenceTrajectoryBuffer:
-    def __init__(self, tolerance=None, *, reaction_s=.05):
+    def __init__(self, tolerance=None):
         self._conditioner = TrajectoryBuffer(tolerance)
         self.tolerance = self._conditioner.tolerance
-        self.reaction_s = float(reaction_s)
         self.clear()
 
     def clear(self):
@@ -176,49 +161,24 @@ class ReferenceTrajectoryBuffer:
         active_distance, active_angle = distance > 1e-10, angle > 1e-10
         if not active_distance and not active_angle:
             raise ValueError('BUFFER_SOURCE_EXHAUSTED')
-        reserve_d, reserve_a = _stopping_geometry(np.r_[observed, 0.], limits, self.reaction_s)
-        if ((active_distance and distance < reserve_d - 1e-9) or
-                (active_angle and angle < reserve_a - 1e-9)):
-            raise ValueError('BUFFER_BRAKING_RESERVE')
         raw = self._conditioner.reanchor(source, state, 1e-9, limits,
                                         source_phase_s=phase, reference_velocity=True)
         alignment = dict(self._conditioner.last_alignment, request_identity=dict(identity),
                          source_phase_floor_s=floor, remaining_source_distance_m=distance,
-                         remaining_source_angle_rad=angle, remaining_source_time_s=float(source.times[-1]-phase),
-                         stopping_reserve_distance_m=reserve_d, stopping_reserve_angle_rad=reserve_a)
-        derived = self._finite(raw, distance, angle, active_distance, active_angle, limits)
+                         remaining_source_angle_rad=angle, remaining_source_time_s=float(source.times[-1]-phase))
+        derived = self._finite(raw, limits)
         alignment['derived_distance_m'] = sum(_travel(derived.states[i, 3], u[0], dt)
             for i, (u, dt) in enumerate(zip(derived.controls, np.diff(derived.times))))
         alignment['derived_angle_rad'] = sum(_travel(derived.states[i, 4], u[1], dt)
             for i, (u, dt) in enumerate(zip(derived.controls, np.diff(derived.times))))
         return ReferenceProposal(source, dict(identity), phase, derived, alignment, dict(self._conditioner.last_error))
 
-    def _finite(self, raw, distance, angle, active_distance, active_angle, limits):
-        """bridge 和源控制都花同一预算，尾部前追加既有受限制动。"""
-        current = raw.states[0].copy()
-        states, controls, times = [current.copy()], [], [0.]
-        spent_d = spent_a = 0.
-        cut = False
-        for control, duration in zip(raw.controls, np.diff(raw.times)):
-            remaining = float(duration)
-            while remaining > 1e-12:
-                dt = min(self.reaction_s, remaining)
-                next_state = step(current, control, dt)
-                next_d = spent_d + _travel(current[3], control[0], dt)
-                next_a = spent_a + _travel(current[4], control[1], dt)
-                brake_d, brake_a = _stopping_geometry(next_state, limits, self.reaction_s)
-                if ((active_distance and next_d + brake_d > distance + 1e-9) or
-                        (active_angle and next_a + brake_a > angle + 1e-9)):
-                    cut = True
-                    break
-                current = next_state
-                states.append(current.copy()); controls.append(control); times.append(times[-1] + dt)
-                spent_d, spent_a = next_d, next_a
-                remaining -= dt
-            if cut:
-                break
-        if not controls:
-            raise ValueError('BUFFER_BRAKING_RESERVE')
+    def _finite(self, raw, limits):
+        """保留有限重锚后缀，并显式追加已有制动候选；调用方认证整段。"""
+        current = raw.states[-1].copy()
+        states = [state.copy() for state in raw.states]
+        controls = [control.copy() for control in raw.controls]
+        times = list(raw.times)
         tail = brake_candidate(VehicleState(*current[:5]), SimpleNamespace(epoch=raw.map_epoch),
                                SimpleNamespace(route_version=raw.route_version, progress_s=current[5]), limits)
         for control, dt in zip(tail.controls, np.diff(tail.times)):

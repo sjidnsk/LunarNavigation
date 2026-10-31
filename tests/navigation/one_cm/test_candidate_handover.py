@@ -119,8 +119,8 @@ def test_reference_buffer_physically_aligns_legal_retimed_feedback(case):
     assert reference.last_alignment['bridge_duration_s'] > 0
     assert certify(aligned, grid, limits, 1).valid
     assert np.array_equal(aligned.states[0, :5], list(vars(measured).values()))
-    assert reference.last_alignment['derived_distance_m'] <= reference.last_alignment['remaining_source_distance_m'] + 1e-9
-    assert reference.last_alignment['derived_angle_rad'] <= reference.last_alignment['remaining_source_angle_rad'] + 1e-9
+    assert np.isfinite(aligned.times).all() and aligned.times[-1] > 0
+    assert reference.source is original
 
 
 def test_alignment_does_not_clip_out_of_limit_measured_initial_velocity():

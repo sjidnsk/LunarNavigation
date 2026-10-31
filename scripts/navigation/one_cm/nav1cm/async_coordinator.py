@@ -27,7 +27,7 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         self.local_worker=local_worker if local_worker is not None else LocalWorker(self.limits,build_dir,planner_options=planner_options,field_backend=kwargs.get("field_backend"))
         self.planning_period_s=planning_period_s
         self.execution_period_s=execution_period_s
-        self.buffer=(ReferenceTrajectoryBuffer(feedback_tolerance,reaction_s=execution_period_s)
+        self.buffer=(ReferenceTrajectoryBuffer(feedback_tolerance)
                      if self.revalidate_current_map else TrajectoryBuffer(feedback_tolerance))
         self.initial_travel_direction=initial_travel_direction
         self._initial_direction_pending=bool(initial_travel_direction)

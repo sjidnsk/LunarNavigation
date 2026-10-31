@@ -38,7 +38,7 @@ def make_source_coordinator(original):
     return c, world
 
 
-def test_long_half_speed_source_tail_is_finite_and_brakes_before_original_end():
+def test_long_half_speed_source_stays_fixed_and_eventually_exhausts():
     original = source()
     c, world = make_source_coordinator(original)
     state = VehicleState(0, 0, 0, .2, 0)
@@ -56,10 +56,11 @@ def test_long_half_speed_source_tail_is_finite_and_brakes_before_original_end():
             stopping = True
             if first_stop is None: first_stop = (now, state.x)
         else:
-            assert result.candidate.states[-1, 0] <= original.states[-1, 0] + 1e-6
+            assert c.buffer.source is original
+            assert np.isfinite(result.candidate.times).all()
+            assert np.allclose(result.candidate.states[-1,3:5],0.,atol=1e-9)
     assert first_stop is not None
-    assert first_stop[1] < original.states[-1, 0]
-    assert state.x <= original.states[-1, 0] + 1e-6 and abs(state.v) < 1e-10
+    assert abs(state.v) < 1e-10
 
 
 def test_original_corner_does_not_stay_in_the_future_after_physical_progress():
@@ -124,7 +125,8 @@ def test_reference_spin_retimed_velocity_uses_physical_bridge_and_finite_angle()
     derived = buffer.current(state, 20., .05, limits=limits)
     assert np.array_equal(derived.states[0, :5], list(vars(state).values()))
     assert np.any(derived.controls[:, 1] > 0)
-    assert derived.states[-1, 2] <= original.states[-1, 2] + 1e-6
+    assert buffer.source is original and np.isfinite(derived.times).all()
+    assert derived.states[-1, 4] == pytest.approx(0., abs=1e-9)
     assert certify(derived, grid, limits, 1).valid
 
 
@@ -143,16 +145,58 @@ def test_new_obstacle_and_new_goal_retire_fixed_source():
     assert c.buffer.source is None
 
 
-@pytest.mark.parametrize('v,w', [(.2, 0.), (-.2, 0.), (0., .4), (.2, .2), (.05, -.03)])
-def test_source_reserve_matches_existing_physical_brake(v, w):
-    buffer_api()
-    from scripts.navigation.one_cm.nav1cm.reference_buffer import _stopping_geometry, _travel
-    from scripts.navigation.one_cm.nav1cm.seeds import brake_candidate
-    from types import SimpleNamespace
-    limits = WheelLimits(angular_speed_rps=1.)
-    actual = VehicleState(0, 0, 0, v, w)
-    tail = brake_candidate(actual, SimpleNamespace(epoch=1), SimpleNamespace(route_version=1, progress_s=0.), limits)
-    distance = sum(_travel(tail.states[i, 3], u[0], dt) for i, (u, dt) in enumerate(zip(tail.controls, np.diff(tail.times))))
-    angle = sum(_travel(tail.states[i, 4], u[1], dt) for i, (u, dt) in enumerate(zip(tail.controls, np.diff(tail.times))))
-    reserve = _stopping_geometry(np.r_[list(vars(actual).values()), 0.], limits, .05)
-    assert reserve == pytest.approx((abs(v) * .05 + distance, abs(w) * .05 + angle), abs=1e-12)
+@pytest.mark.parametrize('case', ['spin_entry','tiny_source_yaw'])
+def test_certified_reference_does_not_require_source_geometry_braking_reserve(case):
+    from types import SimpleNamespace as NS
+    from scripts.navigation.one_cm.nav1cm.seeds import braking_prefix, join_trajectories
+    from tests.navigation.one_cm.test_certification import free_grid
+    limits=WheelLimits(motion_model='differential_drive');grid=free_grid()
+    if case=='spin_entry':
+        actual=VehicleState(0,0,0,.002,.05)
+        pre=braking_prefix(actual,grid,NS(route_version=1,progress_s=0),limits,retain_angular=True)
+        u=np.array([0.,0.,0.]);end=step(pre.states[-1],u,1.)
+        continuation=Trajectory(1,1,[0.,1.],[pre.states[-1],end],[u],'spin','spin-source')
+        original=join_trajectories(pre,continuation)
+    else:
+        actual=VehicleState(0,0,0,.05,.02)
+        initial=np.array([0.,0.,0.,.05,1e-6,0.]);u=np.zeros(3)
+        original=Trajectory(1,1,[0.,2.],[initial,step(initial,u,2.)],[u],'forward','yaw-source')
+    assert certify(original,grid,limits,1).valid
+    proposal=buffer_api()().prepare_source(original,actual,.05,limits)
+    assert certify(proposal.candidate,grid,limits,1).valid
+    assert np.allclose(proposal.candidate.states[-1,3:5],0.,atol=1e-9)
+
+
+def test_bridge_can_extend_past_source_end_without_replacing_or_recharging_source():
+    initial=np.array([0.,0.,0.,.1,0.,0.]);u=np.zeros(3)
+    original=Trajectory(1,1,[0.,1.],[initial,step(initial,u,1.)],[u],'forward','finite-source')
+    buffer=buffer_api()();buffer.install(original,0.);digest=original.digest()
+    derived=buffer.current(VehicleState(.099,0,0,0,0),1.,.05,limits=WheelLimits(motion_model='differential_drive'))
+    assert derived.states[-1,0] > original.states[-1,0]
+    assert np.isfinite(derived.times).all() and derived.times[-1] < 1.
+    phase=buffer.source_phase_s;buffer.update_derived(derived,1.)
+    assert buffer.source is original and original.digest()==digest and buffer.source_phase_s==phase
+
+
+def test_explicit_tail_remains_subject_to_current_map_collision_check():
+    from scripts.navigation.one_cm.nav1cm.contracts import CellState, GridSnapshot, CertificationReason
+    limits=WheelLimits(motion_model='differential_drive',body_length_m=.1,body_width_m=.1)
+    initial=np.array([0.,0.,0.,.1,0.,0.]);u=np.zeros(3)
+    original=Trajectory(1,1,[0.,.05],[initial,step(initial,u,.05)],[u],'forward','tail-check')
+    derived=buffer_api()().prepare_source(original,VehicleState(0,0,0,.1,0),.05,limits).candidate
+    cells=np.zeros((500,500),dtype=np.int8);cells[200:300,308]=CellState.BLOCKED
+    grid=GridSnapshot(1,(-.25,-.25),.001,cells,False)
+    assert certify(original,grid,limits,1).reason == CertificationReason.BRAKING_COLLISION
+    assert certify(derived,grid,limits,1).reason == CertificationReason.COLLISION
+
+
+def test_fixed_source_exhaustion_discontinuity_and_overspeed_remain_rejected():
+    from tests.navigation.one_cm.test_certification import free_grid
+    limits=WheelLimits(motion_model='differential_drive');original=source();buffer=buffer_api()()
+    buffer.install(original,0.)
+    with pytest.raises(ValueError,match='FEEDBACK_DISCONTINUITY'):
+        buffer.current(VehicleState(0,3,0,.2,0),1.,.05,limits=limits)
+    with pytest.raises(ValueError,match='BUFFER_SOURCE_EXHAUSTED'):
+        buffer.current(VehicleState(original.states[-1,0],0,0,.2,0),1.,.05,limits=limits)
+    candidate=buffer.prepare_source(original,VehicleState(0,0,0,.25,0),.05,limits).candidate
+    assert certify(candidate,free_grid(),limits,1).reason.value == 'LIMIT'

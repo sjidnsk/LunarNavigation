@@ -138,7 +138,7 @@ def test_new_obstacle_rejects_delayed_local_even_if_global_route_cached():
     assert result.candidate is None or result.candidate.source == 'brake'
 
 
-def test_production_buffer_brakes_with_physical_reserve_before_exhaustion():
+def test_production_buffer_preserves_short_source_and_certifies_explicit_tail():
     worker = ManualLocal()
     c = AsyncNavigationCoordinator(local_worker=worker, global_runner=PendingGlobal(), revalidate_current_map=True)
     c._set_goal((3., 0.), 0.)
@@ -149,13 +149,15 @@ def test_production_buffer_brakes_with_physical_reserve_before_exhaustion():
     worker.ready = True
     result = c.tick(world(), state, (3, 0), .05, goal_yaw=0.)
     assert result.candidate.source != 'brake'
-    # 剩余 0.15s，而当前v需要0.35s刹停，必须提前转为完整认证制动。
+    # 来源短于停车时间时保留有限后缀，并认证附加的实际制动尾。
     candidate = action_prefix(result.candidate, state, .15)
     assert certify(candidate, result.grid, c.limits, 1).valid
     c.buffer.install(candidate, .05)
     result = c.tick(world(), state, (3, 0), .1, goal_yaw=0.)
-    assert result.candidate.source == 'brake'
-    assert any(e['kind'] == 'BRAKE_REQUIRED' and 'RESERVE' in e['reason'] for e in result.events)
+    assert result.candidate.source == candidate.source
+    assert c.buffer.source is candidate and result.certificate.valid
+    assert result.candidate.states[-1,3] == pytest.approx(0., abs=1e-9)
+    assert not any(e['kind'] == 'BRAKE_REQUIRED' for e in result.events)
 
 @pytest.mark.parametrize('offset', [0., .01])
 def test_compatible_route_refresh_keeps_finite_certified_source(offset):
