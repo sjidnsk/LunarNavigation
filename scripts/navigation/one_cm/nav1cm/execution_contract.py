@@ -58,7 +58,7 @@ class ExecutionReference:
     intent: int
     stamp_ns: int
     position_tolerance_m: float = .1
-    yaw_tolerance_rad: float = .05
+    yaw_tolerance_rad: float = .08726646259971647
     stopped_linear_mps: float = .01
     stopped_angular_rps: float = .01
 

@@ -288,3 +288,13 @@ def test_terminal_braking_prefix_collision_is_still_rejected():
     c=terminal_candidate(state,grid,reference,limits)
     assert c.source.startswith('terminal-yaw:bounded')
     assert certify(c,grid,limits,1).reason==CertificationReason.COLLISION
+
+
+@pytest.mark.parametrize('asynchronous',[False,True])
+@pytest.mark.parametrize('degrees,reached',[(4.,True),(5.,True),(5.01,False),(-4.,True),(-5.,True),(-5.01,False)])
+def test_default_terminal_yaw_acceptance_is_five_degrees(asynchronous,degrees,reached):
+    c=coordinator(asynchronous)
+    state=VehicleState(.08,0.,np.deg2rad(degrees),0.,0.)
+    result=c.tick(world(),state,(0.,0.),0.,goal_yaw=0.)
+    assert c.goal_reached(state)==reached
+    assert (result.status=='ARRIVED')==reached

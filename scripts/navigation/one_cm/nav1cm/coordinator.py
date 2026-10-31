@@ -46,7 +46,7 @@ class NavigationCoordinator:
         self.clearance_radius_m = self.limits.global_clearance_radius(clearance_radius_m)
         self.goal_tolerance_m = .1
         self.goal_position_target_m = None
-        self.goal_yaw_tolerance_rad = .05
+        self.goal_yaw_tolerance_rad = .08726646259971647
         self.stopped_linear_mps = self.stopped_angular_rps = .01
         self.route = self.progress = None
         if type(reference_smoothing) is not bool:raise ValueError("reference_smoothing must be bool")
