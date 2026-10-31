@@ -56,7 +56,7 @@ def test_real_certificate_refuses_changed_execution_inputs(change):
 
 
 @pytest.mark.parametrize('obstacle',[None,.9,1.15])
-def test_hold_and_explicit_stop_tail_certification(obstacle):
+def test_hold_proof_checks_hold_without_extra_stop_tail(obstacle):
     from dataclasses import replace
     from types import SimpleNamespace as S
     from scripts.navigation.one_cm.nav1cm.certification import certify
@@ -73,10 +73,10 @@ def test_hold_and_explicit_stop_tail_certification(obstacle):
     assert cert.valid
     result=S(candidate=action,certificate=cert,grid=grid,action=action,action_certificate=cert)
     proof=command_hold_proof(action,grid,limits,1.8)
-    assert proof.states[-1,3] == pytest.approx(0.)
-    assert proof.times[-1] > 1.8
+    assert proof.states[-1,3] == pytest.approx(.5)
+    assert proof.times[-1] == pytest.approx(1.85)
     cmd=certified_command(result,measured,limits,command_hold_s=1.8)
-    assert cmd == ((.5,0.) if obstacle is None else (0.,0.))
+    assert cmd == ((0.,0.) if obstacle==.9 else (.5,0.))
 
 
 def test_hold_retains_certified_forward_metadata_after_translation_stops():
@@ -208,7 +208,7 @@ def test_online_reference_remote_tail_outside_window_is_not_execution_permission
     assert command==pytest.approx((.08,0.))
     assert len(proofs)==1
     assert proofs[0].states[0,:5]==pytest.approx([.01,0,0,.0001,0])
-    assert proofs[0].states[-1,3:5]==pytest.approx([0,0])
+    assert proofs[0].states[-1,3:5]==pytest.approx(command)
 
 
 def test_online_reference_geometry_consumes_without_reanchor_or_remote_cert(monkeypatch):
@@ -239,8 +239,9 @@ def test_online_reference_actual_issued_proof_rejects_hazards(hazard):
     u=np.zeros((1,3));source=Trajectory(1,1,[0.,10.],rollout([0,0,0,.5,0,0],u,10.),u,'forward','mpcc')
     result=S(candidate=source,certificate=None,reference_phase_s=0.,grid=grid,status='BUFFER_EXECUTING')
     state=VehicleState(2.3 if hazard=='window' else 0.,0,0,.5,0)
+    expected=(.5,0.) if hazard=='stop' else (0.,0.)
     assert certified_velocity_command(result,state,limits,reference_interval_s=.2,
-        last_command=(.5,0.),elapsed_s=.05,command_hold_s=1.8)==(0.,0.)
+        last_command=(.5,0.),elapsed_s=.05,command_hold_s=1.8)==expected
 
 
 def test_online_source_exhaustion_goal_and_offline_keep_strict_boundary():

@@ -279,11 +279,20 @@ class Certification:
     trajectory_digest: str = ""
     grid_digest: str = ""
     limits_digest: str = ""
+    # False只证明轨迹本体，不包含末端停车保障，不能满足默认完整认证消费端。
+    braking_tail_checked: bool = True
+
+    def __post_init__(self):
+        if type(self.braking_tail_checked) is not bool:
+            raise TypeError('braking_tail_checked must be bool')
 
     def matches(self, trajectory: Trajectory, grid: GridSnapshot,
-                limits: WheelLimits, route_version: int) -> bool:
-        """唯一可复用门禁：成功状态与轨迹、完整地图、约束均须完全相同。"""
+                limits: WheelLimits, route_version: int, *, check_braking_tail: bool = True) -> bool:
+        """绑定轨迹/地图/约束；默认还要求停车尾，False不承诺末端停车。"""
+        if type(check_braking_tail) is not bool:
+            raise TypeError('check_braking_tail must be bool')
         return bool(self.valid and self.reason == CertificationReason.VALID and
+                    (not check_braking_tail or self.braking_tail_checked) and
                     self.map_epoch == grid.epoch and self.route_version == route_version and
                     self.trajectory_digest == trajectory.digest() and
                     self.grid_digest == grid.digest() and

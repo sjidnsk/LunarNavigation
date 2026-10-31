@@ -225,8 +225,8 @@ def _brake_tail(last, context, limits, mode):
 
 
 def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimits,
-                  current_route_version: int, backend=None, context=None) -> Certification:
-    """版本、数值、动力学、约束、整车连续扫掠与制动尾段全部通过才有效。"""
+                  current_route_version: int, backend=None, context=None, check_braking_tail=True) -> Certification:
+    """检查版本、数值、动力学、约束与整车连续扫掠；默认还检查末端制动尾。"""
     if trajectory.map_epoch != grid.epoch:
         return _reject(CertificationReason.EPOCH_MISMATCH, 0)
     if trajectory.route_version != current_route_version:
@@ -302,6 +302,8 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
         checked += 1
         if collision is not None:
             return _reject(collision, checked)
+    if not check_braking_tail:
+        return Certification(True, CertificationReason.VALID, checked_poses=checked)
     tail_mode = prefix_mode if prefix_end == len(states) else trajectory.mode
     collision, brake_time, count = _brake_tail(states[-1], context, limits, tail_mode)
     checked += count
@@ -322,15 +324,17 @@ def prepare_certification(grid: GridSnapshot, *, backend=None):
 
 
 def certify(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimits,
-            current_route_version: int, *, backend=None, context=None) -> Certification:
-    """返回与完整地图、车体约束、路线版本和轨迹内容绑定的认证。"""
+            current_route_version: int, *, backend=None, context=None, check_braking_tail=True) -> Certification:
+    """绑定完整地图/约束/轨迹；默认检查停车尾，False仅检查实际轨迹本体。"""
+    if type(check_braking_tail) is not bool:
+        raise TypeError('check_braking_tail must be bool')
     if context is not None:
         if not isinstance(context, _CollisionContext) or context.grid_digest != grid.digest():
             raise ValueError("certification context grid mismatch")
         if context.backend is not backend:
             raise ValueError("certification context backend mismatch")
-    result = _certify_impl(trajectory, grid, limits, current_route_version, backend, context)
-    return replace(result, map_epoch=trajectory.map_epoch,
+    result = _certify_impl(trajectory, grid, limits, current_route_version, backend, context, check_braking_tail)
+    return replace(result, braking_tail_checked=check_braking_tail, map_epoch=trajectory.map_epoch,
                    route_version=trajectory.route_version,
                    trajectory_source=trajectory.source,
                    trajectory_digest=trajectory.digest(),

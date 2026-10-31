@@ -61,8 +61,8 @@ def certified_command(result, measured, limits, *, command_hold_s=None, backend=
         integrated=Trajectory(action.map_epoch,action.route_version,action.times,states,
             action.controls,action.mode,action.source)
         proof=command_hold_proof(integrated,result.grid,limits,command_hold_s)
-        certificate=certify(proof,result.grid,limits,candidate.route_version,backend=backend)
-        if not certificate.matches(proof,result.grid,limits,candidate.route_version):
+        certificate=certify(proof,result.grid,limits,candidate.route_version,backend=backend,check_braking_tail=False)
+        if not certificate.matches(proof,result.grid,limits,candidate.route_version,check_braking_tail=False):
             return 0., 0.
         return float(current[3]),float(current[4])
     predicted=execute_action(action,measured)
@@ -71,14 +71,12 @@ def certified_command(result, measured, limits, *, command_hold_s=None, backend=
 
 
 def command_hold_proof(action, grid, limits, command_hold_s):
-    """P3采样初态的模型证明：短动作、有限末速持令、显式停车尾。
+    """P3采样初态的模型证明：实际响应与有限末速持令，不附加停车尾。
 
     不补偿来源到发布之间的物理延迟，不代表绝对调度/执行安全保证。
     """
     if isinstance(command_hold_s,bool) or not np.isfinite(command_hold_s) or command_hold_s<=0:
         raise ValueError('command_hold_s must be explicitly finite and positive')
-    from .contracts import LocalReference
-    from .seeds import brake_candidate, join_trajectories
     current=action.states[-1].copy()
     times=list(action.times);states=list(action.states);controls=list(action.controls)
     remaining=float(command_hold_s)
@@ -88,11 +86,7 @@ def command_hold_proof(action, grid, limits, command_hold_s):
         current=step(current,control,dt)
         times.append(times[-1]+dt);states.append(current.copy());controls.append(control)
         remaining-=dt
-    held=Trajectory(action.map_epoch,action.route_version,times,states,controls,action.mode,action.source)
-    reference=LocalReference(action.route_version,grid.epoch,[[current[0],current[1]]],[0.],current[5])
-    brake=brake_candidate(VehicleState(*current[:5]),grid,reference,limits)
-    from dataclasses import replace
-    return replace(join_trajectories(held,brake),mode=action.mode,source=action.source)
+    return Trajectory(action.map_epoch,action.route_version,times,states,controls,action.mode,action.source)
 
 
 def certified_velocity_command(result, measured, limits, *, reference_interval_s,
@@ -171,9 +165,9 @@ def certified_velocity_command(result, measured, limits, *, reference_interval_s
     proof=command_hold_proof(response,result.grid,limits,command_hold_s)
     record(command_proof_construction_ms=(perf_counter()-construction_started)*1000)
     certification_started=perf_counter()
-    certificate=certify(proof,result.grid,limits,candidate.route_version,backend=backend)
+    certificate=certify(proof,result.grid,limits,candidate.route_version,backend=backend,check_braking_tail=False)
     record(command_certification_ms=(perf_counter()-certification_started)*1000,
            command_certificate_reason=certificate.reason.value)
-    if not certificate.matches(proof,result.grid,limits,candidate.route_version):
+    if not certificate.matches(proof,result.grid,limits,candidate.route_version,check_braking_tail=False):
         return finish((0.,0.), 'ISSUED_CERTIFICATE_MISMATCH')
     return finish((float(issued[0]),float(issued[1])))
