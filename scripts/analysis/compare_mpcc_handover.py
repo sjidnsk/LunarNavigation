@@ -66,9 +66,9 @@ def summarize(rows):
     return dict(issued_jump=dist('issued_jump'),raw_jump=dist('raw_jump'),handover_target_jump=dist('handover_target_jump'),zero_insertions=sum(r['zero_insertion'] for r in rows),nearzero_recovery_proxies=sum(r['restart'] for r in rows),strict_zero_insertions=sum(r['strict_zero_insertion'] for r in rows),initial_start_completed=sum(e['kind']=='INITIAL_START_COMPLETED' for r in rows for e in r['events']),command_rejections=dict(reasons),events=dict(events))
 
 
-def simulate(planner,scenario,*,duration=12.,dt=.05,plan_period=.1,result_delay=0.,feedback_delay=0.,refresh_period=2.,command_hold_s=1.2,backend=None,field_backend=None):
+def simulate(planner,scenario,*,duration=12.,dt=.05,plan_period=.1,result_delay=0.,feedback_delay=0.,refresh_period=2.,command_hold_s=1.2,backend=None,field_backend=None,initial_travel_direction="forward"):
     worker=ScheduledLocal(planner,result_delay,field_backend)
-    c=AsyncNavigationCoordinator(local_worker=worker,global_runner=PendingGlobal(),limits=planner.limits,planning_period_s=plan_period,execution_period_s=dt,revalidate_current_map=True,backend=backend,field_backend=field_backend)
+    c=AsyncNavigationCoordinator(local_worker=worker,global_runner=PendingGlobal(),limits=planner.limits,planning_period_s=plan_period,execution_period_s=dt,revalidate_current_map=True,backend=backend,field_backend=field_backend,initial_travel_direction=initial_travel_direction)
     c.velocity_reference=True
     points={'straight':[[0.,0.],[8.,0.]],'curve':[[0.,0.],[1.,0.],[2.,.3],[3.,.9],[5.,2.],[8.,3.]],'spin':[[0.,0.],[0.,8.]],'refresh':[[0.,0.],[8.,0.]]}[scenario]
     goal=tuple(points[-1]);c._goal=goal
@@ -112,6 +112,7 @@ def main(argv=None):
     parser.add_argument('--result-delay',type=float,default=0.)
     parser.add_argument('--n',type=int,default=20)
     parser.add_argument('--command-hold',type=float,default=1.2)
+    parser.add_argument('--initial-travel-direction',choices=['forward','reverse',''],default='forward')
     parser.add_argument('--geometry-lib')
     parser.add_argument('--field-lib')
     parser.add_argument('--scenarios',nargs='+',choices=['straight','curve','spin','refresh'],default=['straight','curve','spin','refresh'])
@@ -121,7 +122,7 @@ def main(argv=None):
     for name in ('async_coordinator','coordinator','reference_buffer','execution','certification'):
         result['shared'][name]=identity(ROOT/'scripts/navigation/one_cm/nav1cm'/(name+'.py'))
     limits=WheelLimits(**json.loads(Path(a.limits_json).read_text(encoding='utf-8')))
-    result.update(limits=vars(limits),limits_file=identity(a.limits_json),command_hold_s=a.command_hold,nearzero_analysis_threshold=.005,strict_zero_threshold=1e-7,restart_semantics='nearzero recovery proxy, not INITIAL_START_COMPLETED')
+    result.update(limits=vars(limits),limits_file=identity(a.limits_json),command_hold_s=a.command_hold,initial_travel_direction=a.initial_travel_direction,nearzero_analysis_threshold=.005,strict_zero_threshold=1e-7,restart_semantics='nearzero recovery proxy, not INITIAL_START_COMPLETED')
     backend=field_backend=None
     if a.geometry_lib:
         from scripts.navigation.one_cm.nav1cm.geometry_native import NativeGeometry
@@ -131,7 +132,7 @@ def main(argv=None):
         field_backend=NativeDistanceField(a.field_lib);result['field_library']=identity(a.field_lib)
     for arm in ('baseline','warm'):
         cls,info=load_planner(getattr(a,arm+'_module'),arm)
-        runs=[simulate(cls(limits,Path(a.build_dir),n=a.n,dt=.2),s,duration=a.duration,result_delay=a.result_delay,feedback_delay=a.feedback_delay,command_hold_s=a.command_hold,backend=backend,field_backend=field_backend) for s in a.scenarios]
+        runs=[simulate(cls(limits,Path(a.build_dir),n=a.n,dt=.2),s,duration=a.duration,result_delay=a.result_delay,feedback_delay=a.feedback_delay,command_hold_s=a.command_hold,backend=backend,field_backend=field_backend,initial_travel_direction=a.initial_travel_direction) for s in a.scenarios]
         result['arms'][arm]=dict(module=info,runs=runs)
     path=Path(a.output);path.parent.mkdir(parents=True,exist_ok=True)
     path.write_bytes(json.dumps(result,ensure_ascii=False,indent=2).encode('utf-8'))

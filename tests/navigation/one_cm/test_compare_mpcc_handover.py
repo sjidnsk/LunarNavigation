@@ -73,6 +73,7 @@ def test_cli_freezes_limits_hold_and_exports_json(monkeypatch,tmp_path):
     result=json.loads(output.read_text(encoding='utf-8'))
     assert builds==[tmp_path/'build',tmp_path/'build']
     assert result['evidence']=='MODEL_SIMULATION'
+    assert result['initial_travel_direction']=='forward'
     assert result['command_hold_s']==1.2
     assert set(hold)=={1.2}
     assert result['limits']==vars(ProbePlanner.limits)
@@ -80,3 +81,14 @@ def test_cli_freezes_limits_hold_and_exports_json(monkeypatch,tmp_path):
     assert result['shared']['coordinator']['sha256']
     assert result['arms']['baseline']['runs'][0]['rows']
     assert 'nearzero_recovery_proxies' in result['arms']['warm']['runs'][0]['summary']
+
+
+def test_forward_initial_start_completes_once_across_rolling_sources():
+    result=simulate(ProbePlanner(),'straight',duration=1.2,initial_travel_direction='forward')
+    assert sum(r['accepted'] for r in result['rows'])>3
+    assert result['summary']['initial_start_completed']==1
+
+
+def test_explicit_generic_start_has_no_initial_start_evidence():
+    result=simulate(ProbePlanner(),'straight',duration=.6,initial_travel_direction='')
+    assert result['summary']['initial_start_completed']==0
