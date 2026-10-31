@@ -475,3 +475,25 @@ def test_tcp_hold_contract_is_single_profile_source():
     profile=yaml.safe_load((Path(__file__).resolve().parents[1]/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
     assert profile['command_hold_s']==1.2
     assert float(launch_settings('/source','/cache','/tcp.yaml',profile)['command_hold_s'])==1.2
+
+
+def test_stock_interface_optional_connection_diagnostic():
+    r,events,clock=relay_fixture()
+    r._connected=None  # 原生接口没有扩展诊断topic。
+    r.acquire();r.update_telemetry(S(vx=0.,vy=0.,wz=0.))
+    assert r.receive(message(.02)) and r.heartbeat()
+    clock[0]=2.
+    assert r.receive(message(.02)) and r.heartbeat()  # 已接管不增加遥测龄门禁。
+    r.update_connected(S(data=False))
+    assert not r.armed and not r.receive(message(.02))
+    assert not r.heartbeat()
+
+
+def test_stock_interface_still_requires_fresh_initial_body_and_command():
+    r,events,clock=relay_fixture();r._connected=None
+    r.acquire();r.update_telemetry(S(vx=0.,vy=0.,wz=0.));clock[0]=1.01
+    assert not r.receive(message(.02))
+    r.update_telemetry(S(vx=0.,vy=0.,wz=0.))
+    assert r.receive(message(.02))
+    clock[0]+=.601
+    assert not r.heartbeat() and not r.armed

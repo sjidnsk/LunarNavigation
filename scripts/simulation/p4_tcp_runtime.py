@@ -272,7 +272,7 @@ class TcpCommandRelay:
         self._zero,self._clock=make_zero,clock
         self.leased=self.armed=self._stopping=False
         self._command_s=self._telemetry=None
-        self._connected=False
+        self._connected=None
         self.forwarded_nonzero=self.forwarded_zero=0
 
     def acquire(self):
@@ -296,7 +296,7 @@ class TcpCommandRelay:
 
     def update_connected(self,message):
         self._connected=bool(message.data)
-        if not self._connected:self.park()
+        if self._connected is False:self.park()
 
     def receive(self,message):
         # 收尾/未接管时不再处理运动输入，非法队列消息也不得打断释放与结果保存。
@@ -309,7 +309,7 @@ class TcpCommandRelay:
         self._command_s=self._clock()
         if abs(v)+abs(w)<1e-7:
             self._velocity(message);self.forwarded_zero+=1;return False
-        if not self._connected or (not self.armed and (self._telemetry is None or not 0<=self._clock()-self._telemetry[0]<=1.)):
+        if self._connected is False or (not self.armed and (self._telemetry is None or not 0<=self._clock()-self._telemetry[0]<=1.)):
             self.park();return False
         if not self.armed:self._mode('auto');self.armed=True
         self._velocity(message);self.forwarded_nonzero+=1
@@ -318,7 +318,7 @@ class TcpCommandRelay:
     def heartbeat(self):
         if not self.leased:return False
         self._lease(True);now=self._clock()
-        ready=(self._connected and self._command_s is not None and command_ready(now-self._command_s))
+        ready=(self._connected is not False and self._command_s is not None and command_ready(now-self._command_s))
         if self._stopping or not ready:self.park();return False
         return True
 
