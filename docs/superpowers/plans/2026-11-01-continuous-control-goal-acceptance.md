@@ -1,0 +1,9 @@
+# 持续控制与终点完成容差
+
+原任务P4-DIRECT-MPCC-CONTROL-20261031的独立稳定子批，owner integration/pure-planner-orin公共算法 / app/orin-unreal-simulation应用。新专题hk/tcp-continuous-handoff-20261101，工作树D:/CodexDownloads/lunar_navigation/tcp-continuous-handoff-20261101，基线为当前已部署9f43f65；原tcp-combined专题的暖启动/投影成果保留，不夹带进入本批。
+
+用户确认：控制持续、参考滚动更新；每次更新不重新起步。终点完成不应被2厘米优化目标硬卡住。保留goal_position_target_m=0.02用于移动时的位置收敛；goal_tolerance_m=0.1作为实测完成位置容差。进入验收范围且平移已停时转入最终朝向，不为几厘米残差重新起步；朝向/实测停稳及任务新观测确认保留。不新增阶段实体或计时器，不放宽碰撞与动力学。
+
+顺序：先TDD复现3/8/9.9厘米无法完成、2厘米边界来回触发局部重启；最小修改共享完成/阶段条件。保护普通地图/路线更新旧参考续用不插零；独立复审后Humble构建、包测、实际DDS及同目标车辆复测。ROOT唯一源码整合/216部署，其他项目只读。
+
+当前状态：源码e7a57cf/551ab08已提交待目标机验证/部署；本机109通过/5跳过、独立复审28通过无阻断。到达依照当前实测容差/停稳与新观测保持，移除额外预测停车尾不得越目标边缘的重复验收，制动碰撞认证保留。SSH/ping再次不可达，未部署；最后确认运行9f43f65、正反0.2m/s角速0.1rad/s。详docs/validation/2026-11-01-continuous-goal-acceptance.md，车辆自然到达未验收。
