@@ -209,9 +209,9 @@ def attach_navigation_observer(source, target, classes, qos, timeout):
     return worker,[*pubs,*subs]
 
 
-def command_ready(command_age,telemetry_age):
+def command_ready(command_age):
     # 平台只检查传输活性，不重新解释规划参考的接管状态。
-    return 0<=command_age<=COMMAND_TIMEOUT_S and 0<=telemetry_age<=TRANSPORT_TIMEOUT_S
+    return 0<=command_age<=COMMAND_TIMEOUT_S
 
 
 def profile_command_limits(profile):
@@ -252,6 +252,7 @@ class TcpCommandRelay:
         self._zero,self._clock=make_zero,clock
         self.leased=self.armed=self._stopping=False
         self._command_s=self._telemetry=None
+        self._connected=False
         self.forwarded_nonzero=self.forwarded_zero=0
 
     def acquire(self):
@@ -273,6 +274,10 @@ class TcpCommandRelay:
     def update_telemetry(self,message):
         self._telemetry=(self._clock(),message)
 
+    def update_connected(self,message):
+        self._connected=bool(message.data)
+        if not self._connected:self.park()
+
     def receive(self,message):
         # 收尾/未接管时不再处理运动输入，非法队列消息也不得打断释放与结果保存。
         if not self.leased:return False
@@ -284,7 +289,7 @@ class TcpCommandRelay:
         self._command_s=self._clock()
         if abs(v)+abs(w)<1e-7:
             self._velocity(message);self.forwarded_zero+=1;return False
-        if self._telemetry is None or not command_ready(0.,self._clock()-self._telemetry[0]):
+        if not self._connected or (not self.armed and (self._telemetry is None or not 0<=self._clock()-self._telemetry[0]<=1.)):
             self.park();return False
         if not self.armed:self._mode('auto');self.armed=True
         self._velocity(message);self.forwarded_nonzero+=1
@@ -293,8 +298,7 @@ class TcpCommandRelay:
     def heartbeat(self):
         if not self.leased:return False
         self._lease(True);now=self._clock()
-        ready=(self._command_s is not None and self._telemetry is not None and
-               command_ready(now-self._command_s,now-self._telemetry[0]))
+        ready=(self._connected and self._command_s is not None and command_ready(now-self._command_s))
         if self._stopping or not ready:self.park();return False
         return True
 
@@ -383,6 +387,7 @@ def main():
                 publish_mode=lambda value:mode.publish(String(data=value)),
                 publish_lease=lambda value:lease.publish(Bool(data=value)),make_zero=Twist)
             handles.append(target.create_subscription(VehicleTelemetry,'/car/telemetry',relay.update_telemetry,qos['odom']))
+            handles.append(target.create_subscription(Bool,'/car/ue_connected',relay.update_connected,qos['map']))
             handles.append(target.create_subscription(Twist,PREFIX+'/cmd_vel',relay.receive,qos['odom']))
             relay.acquire();spin(.3)
         (out/'pids.json').write_text(json.dumps(dict(operator=os.getpid(),children={name:c.pid for name,c in children})))

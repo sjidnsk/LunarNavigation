@@ -30,10 +30,9 @@ def test_input_bridge_preserves_messages_stamps_and_latched_tf():
     assert subscriptions[-1][0]=='/tf_static' and subscriptions[-1][2]=='latched-static'
 
 
-@pytest.mark.parametrize('command_age,telemetry_age,expected',[
-    (.1,.1,True),(.55,.1,True),(.6,.1,True),(.601,.1,False),(.1,.51,False),(-.1,.1,False)])
-def test_relay_rejects_transport_gaps(command_age,telemetry_age,expected):
-    assert command_ready(command_age,telemetry_age)==expected
+@pytest.mark.parametrize('command_age,expected',[(.1,True),(.55,True),(.6,True),(.601,False),(-.1,False)])
+def test_relay_rejects_transport_gaps(command_age,expected):
+    assert command_ready(command_age)==expected
 
 
 def test_tf_output_accepts_reliable_rviz_without_changing_source_subscription():
@@ -77,6 +76,7 @@ def relay_fixture():
         publish_mode=lambda mode:events.append(('mode',mode)),
         publish_lease=lambda active:events.append(('lease',active)),
         make_zero=message,clock=lambda:clock[0])
+    relay.update_connected(S(data=True))
     return relay,events,clock
 
 
@@ -116,7 +116,7 @@ def test_invalid_command_parks_and_is_never_forwarded(bad):
     assert r.forwarded_nonzero==0
 
 
-@pytest.mark.parametrize('kind',['command','telemetry'])
+@pytest.mark.parametrize('kind',['command'])
 def test_transport_gap_parks_using_the_same_existing_budget(kind):
     r,events,clock=relay_fixture();r.acquire();r.update_telemetry(telemetry());r.receive(message(.02))
     clock[0]=.61 if kind=='command' else .51
@@ -170,7 +170,7 @@ def test_reverse_limit_and_environment_come_from_shared_configuration():
     events=[]
     r=TcpCommandRelay(low_speed_profile(source),publish_velocity=lambda m:events.append(m),
         publish_mode=lambda m:None,publish_lease=lambda b:None,make_zero=message,clock=lambda:0.)
-    r.acquire();r.update_telemetry(telemetry())
+    r.update_connected(S(data=True));r.acquire();r.update_telemetry(telemetry())
     assert r.receive(message(-.02))
     with pytest.raises(ValueError):r.receive(message(-.04))
     env=runtime_environment('/home/yanfa/P4','/home/yanfa/P4/run/test')
@@ -377,3 +377,20 @@ def test_duplicate_or_older_odom_cannot_refresh_goal_start(late_stamp,late_frame
     release.set();assert done.wait(1);assert starts[-1] is None
     done.clear();w.offer_odom(odom(11),4.7);assert done.wait(1);w.stop()
     assert starts[-1].header.stamp.sec==11
+
+
+def test_connected_relay_keeps_running_through_telemetry_gap():
+    r, events, clock = relay_fixture()
+    r.update_connected(S(data=True)); r.acquire(); r.update_telemetry(telemetry())
+    assert r.receive(message(.02))
+    clock[0] = 1.1
+    assert r.receive(message(.02)) and r.heartbeat() and r.armed
+    r.update_connected(S(data=False))
+    assert not r.armed and not r.receive(message(.02))
+
+
+def test_new_arm_requires_fresh_telemetry_and_connection():
+    r, events, clock = relay_fixture(); r.update_connected(S(data=False)); r.acquire(); r.update_telemetry(telemetry())
+    assert not r.receive(message(.02))
+    r.update_connected(S(data=True)); clock[0] = 1.01
+    assert not r.receive(message(.02))

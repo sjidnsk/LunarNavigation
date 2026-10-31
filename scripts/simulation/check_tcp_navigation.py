@@ -80,6 +80,7 @@ def callback(kind,msg):
 for topic,cls,kind in [('/Car/T3/localization/odometry',Odometry,'odom'),('/Car/T3/mapping/grid_map',GridMap,'map'),(PREFIX+'/exploration_map',OccupancyGrid,'exploration_map'),(PREFIX+'/control/diagnostics',String,'diag'),(PREFIX+'/tracking_status',TrackingStatus,'tracking'),(PREFIX+'/local_path',RosPath,'local_path'),(PREFIX+'/global_route',RosPath,'global_path')]:
  subs.append(control_node.create_subscription(cls,topic,lambda msg,k=kind:callback(k,msg),map_qos if kind=='map' else q))
 subs.append(control_node.create_subscription(VehicleTelemetry,'/car/telemetry',lambda msg:callback('telemetry',msg),q))
+subs.append(control_node.create_subscription(Bool,'/car/ue_connected',relay.update_connected,map_qos))
 def command_input(msg):
  global nonzero
  counts['controller_commands']+=1;event('controller_command',v=msg.linear.x,w=msg.angular.z)
