@@ -229,3 +229,50 @@ def test_braking_entry_must_not_accelerate_away_before_stopping():
     for u,dt in zip(controls,intervals):states.append(step(states[-1],u,dt))
     candidate=Trajectory(1,1,np.r_[0.,np.cumsum(intervals)],np.array(states),controls,'spin')
     assert not certify(candidate,free_grid(),WheelLimits(motion_model='differential_drive'),1).valid
+
+
+@pytest.mark.parametrize('v,mode', [(.1,'spin'),(-.1,'spin'),(.1,'reverse'),(-.1,'forward')])
+@pytest.mark.parametrize('duration', [.05,.1,.2])
+def test_incomplete_real_braking_entry_and_zero_node(v, mode, duration):
+    candidate = trajectory([0.,0.,0.,v,0.,0.], [[-np.sign(v)*.5,0.,0.]], dt=duration, mode=mode)
+    result = certify(candidate, free_grid(), WheelLimits(motion_model='differential_drive'), 1)
+    assert result.valid, result.reason
+    assert candidate.states[0,3] == pytest.approx(v)
+    assert result.brake_time_s == pytest.approx(max(0., abs(v)/.5-duration))
+
+
+@pytest.mark.parametrize('v,mode',[(.1,'forward'),(-.1,'reverse')])
+def test_same_direction_short_deceleration_remains_valid(v,mode):
+    t=trajectory([0.,0.,0.,v,0.,0.],[[-np.sign(v)*.5,0.,0.]],dt=.05,mode=mode)
+    assert certify(t,free_grid(),WheelLimits(motion_model='differential_drive'),1).valid
+
+
+@pytest.mark.parametrize('control,dt,reason',[([.1,0.,0.],.05,CertificationReason.MODE),
+    ([-.5,0.,.1],.05,CertificationReason.MODE), ([-.5,0.,0.],.25,CertificationReason.MODE),
+    ([-.6,0.,0.],.05,CertificationReason.LIMIT)])
+def test_incomplete_entry_rejects_invalid_motion(control,dt,reason):
+    t=trajectory([0.,0.,0.,.1,0.,0.],[control],dt=dt,mode='spin')
+    assert certify(t,free_grid(),WheelLimits(motion_model='differential_drive'),1).reason == reason
+
+
+def test_incomplete_entry_still_checks_dynamics_and_both_collision_phases():
+    limits=WheelLimits(motion_model='differential_drive')
+    t=trajectory([0.,0.,0.,.1,0.,0.],[[-.5,0.,0.]],dt=.05,mode='spin')
+    states=t.states.copy();states[1,0]+=.01
+    bad=Trajectory(1,1,t.times,states,t.controls,t.mode)
+    assert certify(bad,free_grid(),limits,1).reason == CertificationReason.DYNAMICS
+    cells=np.zeros((500,500),dtype=np.int8);cells[250,250]=CellState.BLOCKED
+    assert certify(t,GridSnapshot(1,(-2.5,-2.5),.01,cells,False),limits,1).reason == CertificationReason.COLLISION
+    limits=WheelLimits(motion_model='differential_drive',body_length_m=.1,body_width_m=.1)
+    cells=np.zeros((500,500),dtype=np.int8);cells[200:300,308]=CellState.BLOCKED
+    assert certify(t,GridSnapshot(1,(-.25,-.25),.001,cells,False),limits,1).reason == CertificationReason.BRAKING_COLLISION
+
+
+def test_incomplete_entry_cannot_remain_at_constant_wrong_mode_speed():
+    t=trajectory([0.,0.,0.,.1,0.,0.],[[0.,0.,0.]],dt=.05,mode='spin')
+    assert certify(t,free_grid(),WheelLimits(motion_model='differential_drive'),1).reason == CertificationReason.MODE
+
+
+def test_incomplete_entry_still_obeys_curvature_limit():
+    t=trajectory([0.,0.,0.,.1,.2,0.],[[-.5,0.,0.]],dt=.05,mode='spin')
+    assert certify(t,free_grid(),WheelLimits(motion_model='curvature_limited'),1).reason == CertificationReason.LIMIT

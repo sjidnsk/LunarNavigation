@@ -234,17 +234,20 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
                  trajectory.mode=='spin' and np.any(np.abs(controls[:,0])>1e-9))
     if needs_entry:
         zero=np.flatnonzero(np.abs(states[1:,3])<=1e-9)
-        if not len(zero) or states[0,3]==0.:
+        if states[0,3]==0. or not len(controls):
             return _reject(CertificationReason.MODE,0)
-        prefix_end=int(zero[0])+1
+        # 截断段可在制动尚未完成时结束；该段末端和制动尾仍按实际方向认证。
+        prefix_end=int(zero[0])+1 if len(zero) else len(states)
         sign=float(np.sign(states[0,3]));speeds=states[:prefix_end+1,3]
-        if (np.any(sign*speeds<-1e-9) or np.any(np.diff(np.abs(speeds))>1e-12) or
+        if (prefix_end == len(states) and abs(speeds[0])-abs(speeds[-1]) <= 1e-12 or
+                np.any(sign*speeds<-1e-9) or np.any(np.diff(np.abs(speeds))>1e-12) or
                 np.any(sign*controls[:prefix_end,0]>1e-12) or
                 np.any(np.abs(controls[:prefix_end,2])>1e-12)):
             return _reject(CertificationReason.MODE,0)
         prefix_mode='forward' if sign>0 else 'reverse'
-        reason=_state_limit_reason(states[prefix_end],limits,prefix_mode)
-        if reason is not None:return _reject(reason,0)
+        if prefix_end < len(states):
+            reason=_state_limit_reason(states[prefix_end],limits,prefix_mode)
+            if reason is not None:return _reject(reason,0)
     if trajectory.mode == 'spin' and np.any(np.abs(controls[prefix_end:,0])>1e-9):
         return _reject(CertificationReason.MODE,0)
     if context is None:
@@ -280,7 +283,8 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
         checked += 1
         if collision is not None:
             return _reject(collision, checked)
-    collision, brake_time, count = _brake_tail(states[-1], context, limits, trajectory.mode)
+    tail_mode = prefix_mode if prefix_end == len(states) else trajectory.mode
+    collision, brake_time, count = _brake_tail(states[-1], context, limits, tail_mode)
     checked += count
     if collision is not None:
         braking_reasons = {

@@ -273,3 +273,25 @@ def test_real_async_solver_starts_and_arrives_with_moving_late_plan(direction):
     assert max(v * direction for v in velocities) > .05
     assert min(v * direction for v in velocities) >= -1e-9
     assert any(e['kind'] == 'LOCAL_ACCEPTED' and e['age_s'] >= .25 for e in events)
+
+
+def test_async_existing_buffer_braking_entry_publishes_certified_short_action():
+    limits=WheelLimits(motion_model='differential_drive')
+    worker=PulseWorker();worker.pending={'held':True}
+    coordinator=AsyncNavigationCoordinator(local_worker=worker,global_runner=PendingGlobal(),limits=limits)
+    coordinator._set_goal((.6,0),0.)
+    coordinator.route=Route(1,1,[[0,0],[.6,0]],(.6,0))
+    world,grid=scene(); measured=VehicleState(0,0,0,.1,0)
+    initial=np.array([0.,0.,0.,.1,0.,0.]); controls=np.array([[-.5,0.,0.],[0.,0.,0.]])
+    states=[initial]
+    for control in controls: states.append(step(states[-1],control,.2))
+    candidate=Trajectory(1,1,[0.,.2,.4],states,controls,'spin','old-buffer')
+    assert certify(candidate,grid,limits,1).valid
+    coordinator._policy=coordinator.allow_unknown
+    coordinator.buffer.install(candidate,0.)
+    result=coordinator.tick(world,measured,(.6,0),0.,goal_yaw=0.)
+    assert result.status == 'BUFFER_EXECUTING', result.events
+    assert result.candidate.source == 'old-buffer' and result.action.source != 'brake'
+    assert result.action.states[-1,3] == pytest.approx(.075)
+    assert result.action_certificate.valid
+    assert not any(e['kind'] in ('ACTION_REJECTED','BRAKE_REQUIRED') for e in result.events)
