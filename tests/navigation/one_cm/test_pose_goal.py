@@ -58,12 +58,13 @@ def test_final_yaw_satisfied_stops_and_requires_stillness(asynchronous):
 
 @pytest.mark.parametrize('asynchronous', [False, True])
 @pytest.mark.parametrize('boundary', ['yaw', 'position'])
-def test_arrival_requires_braking_endpoint_inside_pose_tolerances(asynchronous, boundary):
+def test_observed_stop_inside_tolerance_does_not_require_predicted_tail(asynchronous, boundary):
     c = coordinator(asynchronous)
     state = (VehicleState(0, 0, .04999, 0, .009) if boundary == 'yaw' else
              VehicleState(.09999, 0, 0, .009, 0))
     r = c.tick(world(), state, (0, 0), 0., goal_yaw=0.)
-    assert r.status == 'GOAL_BRAKING'
+    # 按实测位姿与既有停稳阈值验收，不用预测停车尾收紧容差。
+    assert r.status == 'ARRIVED'
     assert r.action.source == 'brake'
     assert np.array_equal(r.action.states[0, :5], list(vars(state).values()))
 
