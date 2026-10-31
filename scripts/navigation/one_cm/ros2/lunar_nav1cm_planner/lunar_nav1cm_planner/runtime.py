@@ -72,6 +72,7 @@ class PlannerRuntime:
         self._pose_waiting=False
         self._tracking_inputs=deque(maxlen=128)
         self.publish_command = None
+        self._observed_pose_stamp_ns = None
 
     def configure_direct_control(self, publish_command):
         self.publish_command = publish_command
@@ -89,6 +90,33 @@ class PlannerRuntime:
             status=getattr(packet.result, 'status', None),
             source=getattr(packet.candidate, 'source', None),
             mode=getattr(packet.candidate, 'mode', None), source_stamp_ns=self._pose_source_high_water)))
+
+    def _new_body_observation(self, sequence):
+        if self.publish_command is None:
+            return sequence != self._observed_odometry_sequence
+        try:
+            stamp=self._odometry.header.stamp
+            source=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
+        except (AttributeError,ValueError,TypeError):
+            return False
+        return source>0 and (self._observed_pose_stamp_ns is None or source>self._observed_pose_stamp_ns)
+
+    def _observe_body_stamp(self):
+        if self.publish_command is None:return
+        try:
+            stamp=self._odometry.header.stamp
+            source=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
+            if source>0:self._observed_pose_stamp_ns=max(source,self._observed_pose_stamp_ns or source)
+        except (AttributeError,ValueError,TypeError):pass
+
+    def _physical_map_current(self, packet, world):
+        if self.publish_command is None or packet.result is None or packet.result.grid is None:
+            return True
+        from nav1cm.maps import rasterize_world
+        import numpy as np
+        grid=packet.result.grid
+        return world is not None and np.array_equal(
+            rasterize_world(world,grid.origin_xy,grid.cells.shape),grid.cells)
 
     def configure_pose_input(self,timeout_s):
         if isinstance(timeout_s,bool) or not math.isfinite(timeout_s) or timeout_s<=0:
@@ -328,9 +356,12 @@ class PlannerRuntime:
             if fault:self.tasks.fail_tracking(fault,now_s)
         packet = self.session.tick(now_s)
         proposal = self.tasks.observe(packet, now_s,
-                                      state_updated=odometry_sequence != self._observed_odometry_sequence,
+                                      state_updated=self._new_body_observation(odometry_sequence),
                                       defer_commit=True)
         odometry_error = None
+        with self._condition:
+            proof_world=self._world
+        physical_map_current=self._physical_map_current(packet,proof_world)
         with self._condition:
             # 目标、最新测量和内部事件提交共享线性化点；不执行规划或外部回调。
             if not self._stopping and input_sequence == self._goal_sequence:
@@ -353,9 +384,11 @@ class PlannerRuntime:
                             odometry_error = exc
                     odometry_sequence = self._odometry_sequence
                     proposal = self.tasks.observe(packet, now_s,
-                        state_updated=odometry_sequence != self._observed_odometry_sequence,
+                        state_updated=self._new_body_observation(odometry_sequence),
                         defer_commit=True)
-                self.tasks.commit_observation(proposal)
+                if self._world is proof_world and physical_map_current:
+                    self.tasks.commit_observation(proposal)
+                    self._observe_body_stamp()
         self._observed_odometry_sequence = odometry_sequence
         self._deliver_task_events()
         if odometry_error is not None:
@@ -399,9 +432,13 @@ class PlannerRuntime:
                 self._enter_pose_wait()
                 packet=self.session.tick(now_s)
                 data=paths(None,None,self.ros_now_ns(),self.map_frame)
+            if self.publish_command is not None and self._odometry is not None:
+                try:self._apply_pose_input(self._odometry,self._odometry_received_s,time.monotonic(),self._transforms)
+                except (ValueError,AttributeError,TypeError):self.session.offer_state(None)
             if (not self._stopping and input_sequence == self._goal_sequence and
                     packet.generation == self.session.accepted_generation and
-                    (packet.waiting or self.session.publication_current(packet))):
+                    (packet.waiting or self.session.publication_current(packet)) and
+                    (self.publish_command is None or self._world is proof_world and physical_map_current)):
                 if self.execution_contract_enabled:
                     from nav1cm.execution_contract import FOLLOW,BRAKE,HOLD,FINAL_ALIGN,INVALIDATED
                     active=self.tasks.active

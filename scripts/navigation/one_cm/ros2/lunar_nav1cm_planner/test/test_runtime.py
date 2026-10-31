@@ -285,17 +285,67 @@ def test_direct_control_arrives_and_cancels_with_body_feedback_only():
     commands=[]
     runtime.configure_direct_control(lambda v,w:commands.append((v,w)))
     runtime.tasks.submit('direct-a',(0,0,0),0.)
-    feedback=NS(header=NS(frame_id='map'),pose=NS(pose=pose().pose),
+    feedback=NS(header=NS(frame_id='map',stamp=NS(sec=1,nanosec=0)),pose=NS(pose=pose().pose),
         twist=NS(twist=NS(linear=NS(x=0.),angular=NS(z=0.))))
     runtime.offer_odometry(feedback)
     runtime._tick_once(0.)
+    feedback.header.stamp.sec=2
     runtime.offer_odometry(feedback)
     runtime._tick_once(.4)
     assert runtime.tasks.active.outcome == 'GOAL_REACHED'
     runtime.tasks.submit('direct-a',(0,3,0),0.)
     runtime._tick_once(.5)
     runtime.request_cancel(runtime.tasks.active.task_id)
+    feedback.header.stamp.sec=3
     runtime.offer_odometry(feedback)
     runtime._tick_once(.6)
     assert runtime.tasks.active.outcome == 'CANCELED'
     assert all(command == (0.,0.) for command in commands)
+
+
+def test_direct_rejects_map_replacement_after_tick():
+    from nav1cm.contracts import VehicleState, WorldSnapshot, CellRect
+    runtime, session, published, logs=build_runtime()
+    commands=[];runtime.configure_direct_control(lambda v,w:commands.append((v,w)))
+    session.offer_state(VehicleState(0,0,0,.1,0))
+    runtime.tasks.submit('direct-map',(0,3,0),0.)
+    tick=session.tick
+    def changed(now):
+        packet=tick(now)
+        runtime._world=WorldSnapshot(2,(CellRect(-20,-20,20,20),),session.world.known_free)
+        return packet
+    session.tick=changed
+    runtime._tick_once(0.)
+    assert commands[-1] == (0.,0.)
+
+
+def test_direct_duplicate_source_cannot_complete_task():
+    runtime, session, published, logs=build_runtime()
+    runtime.configure_direct_control(lambda *args:None)
+    runtime.tasks.submit('direct-duplicate',(0,0,0),0.)
+    feedback=NS(header=NS(frame_id='map',stamp=NS(sec=0,nanosec=900000)),pose=NS(pose=pose().pose),
+        twist=NS(twist=NS(linear=NS(x=0.),angular=NS(z=0.))))
+    runtime.offer_odometry(feedback);runtime._tick_once(0.)
+    runtime.offer_odometry(feedback);runtime._tick_once(.32)
+    assert runtime.tasks.active.outcome is None
+
+
+@pytest.mark.parametrize('changed',[False,True])
+def test_direct_publication_latest_map_window_and_body_state(changed):
+    from nav1cm.contracts import VehicleState, WorldSnapshot, CellRect
+    runtime,session,published,logs=build_runtime()
+    commands=[];runtime.configure_direct_control(lambda v,w:commands.append((v,w)))
+    session.offer_state(VehicleState(0,0,0,.1,0));runtime.tasks.submit('race',(0,3,0),0.)
+    tick=session.tick
+    def raced(now):
+        packet=tick(now)
+        runtime._world=WorldSnapshot(2,session.world.blocked+(CellRect(8000,8000,8010,8010),),session.world.known_free)
+        if changed:
+            feedback=NS(header=NS(frame_id='map',stamp=NS(sec=1,nanosec=0)),pose=NS(pose=pose(.3).pose),
+                twist=NS(twist=NS(linear=NS(x=.1),angular=NS(z=0.))))
+            runtime.offer_odometry(feedback)
+        return packet
+    session.tick=raced
+    runtime._tick_once(0.)
+    if changed:assert commands[-1]==(0.,0.)
+    else:assert 0 < commands[-1][0] < .1
