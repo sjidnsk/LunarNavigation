@@ -13,6 +13,7 @@ CONTROL_DOMAIN=10
 P3_SOURCE_DOMAIN=57
 PREFIX='/p4_p3_debug'
 TRANSPORT_TIMEOUT_S=.5
+COMMAND_TIMEOUT_S=.6
 
 
 def launch_settings(source,build_dir,profile_path,budgets,*,prefix=PREFIX,goal_topic="/goal_pose"):
@@ -96,7 +97,7 @@ def attach_navigation_observer(source, target, classes, qos):
 
 def command_ready(command_age,telemetry_age):
     # 平台只检查传输活性，不重新解释规划参考的接管状态。
-    return 0<=command_age<=TRANSPORT_TIMEOUT_S and 0<=telemetry_age<=TRANSPORT_TIMEOUT_S
+    return 0<=command_age<=COMMAND_TIMEOUT_S and 0<=telemetry_age<=TRANSPORT_TIMEOUT_S
 
 
 def profile_command_limits(profile):

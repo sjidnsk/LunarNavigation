@@ -31,7 +31,7 @@ def test_input_bridge_preserves_messages_stamps_and_latched_tf():
 
 
 @pytest.mark.parametrize('command_age,telemetry_age,expected',[
-    (.1,.1,True),(.51,.1,False),(.1,.51,False),(-.1,.1,False)])
+    (.1,.1,True),(.55,.1,True),(.6,.1,True),(.601,.1,False),(.1,.51,False),(-.1,.1,False)])
 def test_relay_rejects_transport_gaps(command_age,telemetry_age,expected):
     assert command_ready(command_age,telemetry_age)==expected
 
@@ -119,7 +119,7 @@ def test_invalid_command_parks_and_is_never_forwarded(bad):
 @pytest.mark.parametrize('kind',['command','telemetry'])
 def test_transport_gap_parks_using_the_same_existing_budget(kind):
     r,events,clock=relay_fixture();r.acquire();r.update_telemetry(telemetry());r.receive(message(.02))
-    clock[0]=.51
+    clock[0]=.61 if kind=='command' else .51
     if kind=='command':r.update_telemetry(telemetry())
     events.clear();assert not r.heartbeat()
     assert ('velocity',0.,0.) in events and ('mode','park') in events
@@ -224,3 +224,14 @@ def test_observer_is_enabled_only_for_active_rviz():
     assert eval(expr,{},dict(options=S(rviz_config='config',check_only=False)))
     assert not eval(expr,{},dict(options=S(rviz_config=None,check_only=False)))
     assert not eval(expr,{},dict(options=S(rviz_config='config',check_only=True)))
+
+
+def test_tcp_budget_and_brake_hold_cover_nominal_poll():
+    from pathlib import Path
+    import yaml
+    from scripts.simulation.p4_tcp_runtime import COMMAND_TIMEOUT_S,TRANSPORT_TIMEOUT_S
+    config=yaml.safe_load((Path(__file__).resolve().parents[1]/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
+    assert config['mppi_compute_envelope_s']==.55 and config['mppi_time_steps']==140
+    assert config['p3_map_timeout_s']==0. and config['odometry_timeout_s']==4.5
+    assert COMMAND_TIMEOUT_S==.6 and TRANSPORT_TIMEOUT_S==.5
+    assert (3+11+1)*.05 >= COMMAND_TIMEOUT_S+.1

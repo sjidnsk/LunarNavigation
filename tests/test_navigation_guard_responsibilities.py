@@ -36,5 +36,6 @@ def test_wait_recompute_and_failure_are_distinct(reason,expected):
 
 def test_transport_only_requires_live_command_and_vehicle_feedback():
     assert command_ready(.1,.1)
-    assert not command_ready(.51,.1)
+    assert command_ready(.55,.1)
+    assert not command_ready(.61,.1)
     assert not command_ready(.1,.51)

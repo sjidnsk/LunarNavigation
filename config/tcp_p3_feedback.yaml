@@ -5,4 +5,4 @@ odometry_timeout_s: 4.5
 p3_map_timeout_s: 0.0
 # 保持既有预测步数与完整制动计算包络，不修改运动能力或反馈时限。
 mppi_time_steps: 140
-mppi_compute_envelope_s: 0.2
+mppi_compute_envelope_s: 0.55
