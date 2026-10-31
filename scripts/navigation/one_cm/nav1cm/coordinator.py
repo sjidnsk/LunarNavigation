@@ -32,7 +32,7 @@ class CycleResult:
 
 class NavigationCoordinator:
     def __init__(self, planner, *, runner=None, limits=None, backend=None,
-                 allow_unknown=False, local_period_s=.05, global_period_s=1.,
+                 allow_unknown=False, local_period_s=.05, global_period_s=15.,
                  global_budget_s=1., clearance_radius_m=.9, field_backend=None,
                  revalidate_current_map=False, reference_smoothing=False):
         self.planner = planner
@@ -40,7 +40,7 @@ class NavigationCoordinator:
         self.limits = WheelLimits() if limits is None else limits
         self.backend = backend
         self.allow_unknown = allow_unknown
-        # global_period_s 仅用于非 current-map 离线原型；生产全局规划由事件触发。
+        # 全局低频后台刷新；目标和参考失效事件无需等待周期。
         self.local_period_s, self.global_period_s = local_period_s, global_period_s
         self.global_budget_s = global_budget_s
         self.clearance_radius_m = self.limits.global_clearance_radius(clearance_radius_m)
@@ -184,6 +184,26 @@ class NavigationCoordinator:
             return reference_clear(self._shaped_route,self._blocked_boxes)
         return all(_segment_clear(a, b, self._blocked_boxes) for a, b in zip(route.points[:-1], route.points[1:]))
 
+    @staticmethod
+    def _same_route_geometry(current, incoming):
+        """仅同一折线的前向后缀等价；不能吞掉障碍移除后的更短路线。"""
+        if current.goal != incoming.goal:
+            return False
+        vectors = np.diff(current.points, axis=0)
+        lengths = np.linalg.norm(vectors, axis=1)
+        arc = np.r_[0., np.cumsum(lengths)]
+        projected = []
+        for point in incoming.points:
+            fractions = np.clip(np.sum((point - current.points[:-1]) * vectors, axis=1) / lengths ** 2, 0., 1.)
+            distances = np.linalg.norm(current.points[:-1] + fractions[:, None] * vectors - point, axis=1)
+            index = int(np.argmin(distances))
+            if distances[index] > 1e-6:
+                return False
+            projected.append(arc[index] + fractions[index] * lengths[index])
+        return bool(np.all(np.diff(projected) >= -1e-6) and
+                    abs(sum(np.linalg.norm(np.diff(incoming.points, axis=0), axis=1)) -
+                        (projected[-1] - projected[0])) <= 1e-6)
+
     def goal_reached(self, state):
         """唯一位姿/停稳判据，同时用于实测状态与受限制动终点。"""
         return (self._goal is not None and state is not None and
@@ -259,9 +279,9 @@ class NavigationCoordinator:
                     elif self.revalidate_current_map and route.map_epoch != world.epoch:
                         events.append({'kind': 'GLOBAL_CURRENT_MAP_REVALIDATED', 'version': route.version,
                                        'requested_epoch': route.map_epoch, 'current_epoch': world.epoch})
-                    # 有效现有路线优先；迟到结果不能重置已推进的参考。
+                    # 同几何前向后缀保留版本和进度；不同合法路线可接替。
                     keep = (self.route is not None and route is not None and
-                            (self.revalidate_current_map or
+                            (self.revalidate_current_map and self._same_route_geometry(self.raw_route, route) or
                              (not self.revalidate_current_map and self.route.map_epoch == route.map_epoch and global_result.get('request_reason') == 'PERIODIC')))
                     if route is not None and not keep:
                         self._adopt_route(route,events,raw_verified=True)
@@ -284,18 +304,19 @@ class NavigationCoordinator:
                           check_pose_goal(world, goal, self._goal_yaw, self.limits))
             self._goal_check_key, self._cached_goal_check = self.goal_revision, goal_check
         arrived_xy = np.linalg.norm(np.array(goal)-motion[:2]) <= self.position_target_tolerance_m
-        global_due = not self.revalidate_current_map and now_s + 1e-9 >= self._next_global
+        global_due = now_s + 1e-9 >= self._next_global
         if (goal_check.accepted and not arrived_xy and not self.runner.busy and
                 (self._pending_reason or global_due)):
             reason = self._pending_reason or 'PERIODIC'
             self._version += 1
             request = make_request(world, motion[:2], goal, self._version, self.limits, self.clearance_radius_m, self.global_budget_s)
             request['request_reason'] = reason
+            # 每次尝试都消费事件并推进既有周期，submit异常也不能每tick重试。
+            self._pending_reason = None
+            self._next_global = now_s + self.global_period_s
             try:
                 self.runner.submit(request)
             except Exception as exc:
-                # 生产事件失败后等待新地图/目标事件，避免进程故障形成每tick热重试。
-                self._pending_reason = None if self.revalidate_current_map else reason
                 events.append({'kind': 'GLOBAL_SUBMIT_ERROR', 'reason': type(exc).__name__,
                                'detail': str(exc), 'request_reason': reason, 'version': self._version,
                                'epoch': world.epoch, 'goal': goal})
@@ -305,8 +326,6 @@ class NavigationCoordinator:
                                          'epoch': world.epoch, 'allow_unknown': self.allow_unknown,
                                          'accepted_generation': self._accepted_goal_generation}
                 self._pending_reason = None
-                if not self.revalidate_current_map:
-                    self._next_global = now_s+self.global_period_s
                 events.append({'kind': 'GLOBAL_SUBMITTED', 'reason': reason, 'version': self._version})
         return goal_check, arrived_xy, motion, global_result
 

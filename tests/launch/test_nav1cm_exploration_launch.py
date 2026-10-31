@@ -192,3 +192,16 @@ def test_command_hold_is_explicit_and_only_planner_receives_it(monkeypatch):
     assert g[1]['parameters'][0]['command_hold_s']==1.2
     assert 'command_hold_s' not in g[0]['parameters'][0]
     assert nodes(graph(monkeypatch))[1]['parameters'][0]['command_hold_s']==0.
+
+
+def test_global_refresh_default_and_startup_override_reach_planner(monkeypatch):
+    for value in (None, '27.0'):
+        options = {} if value is None else dict(global_period_s=value)
+        planner = nodes(graph(monkeypatch, **options))[1]['parameters'][0]
+        assert planner['global_period_s'] == (15. if value is None else 27.)
+
+
+@pytest.mark.parametrize('value', ['0', '-1', 'nan', 'inf'])
+def test_global_refresh_period_must_be_finite_positive(monkeypatch, value):
+    with pytest.raises(ValueError, match='global_period_s'):
+        graph(monkeypatch, global_period_s=value)

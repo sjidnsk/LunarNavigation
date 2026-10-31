@@ -20,10 +20,10 @@ TRANSPORT_TIMEOUT_S=.5
 def launch_settings(source,build_dir,profile_path,budgets,*,prefix=PREFIX,goal_topic="/goal_pose"):
     try:from .debug_p3_planning import launch_arguments
     except ImportError:from debug_p3_planning import launch_arguments
-    args=launch_arguments(source,build_dir,profile={k:v for k,v in budgets.items() if k != "command_hold_s"},allow_unknown=True)
+    args=launch_arguments(source,build_dir,profile={k:v for k,v in budgets.items() if k not in ("command_hold_s", "global_period_s")},allow_unknown=True)
     args={key:(prefix+value[len(PREFIX):] if isinstance(value,str) and value.startswith(PREFIX+'/') else value)
           for key,value in args.items()}
-    args.update(command_hold_s=str(budgets['command_hold_s']),control_backend='mpcc_cmd_vel',enable_controller='true',exploration_strategy='none',
+    args.update(global_period_s=str(budgets.get('global_period_s',15.)),command_hold_s=str(budgets['command_hold_s']),control_backend='mpcc_cmd_vel',enable_controller='true',exploration_strategy='none',
                 platform_config=str(profile_path),command_topic=prefix+'/cmd_vel',goal_topic=goal_topic,
                 initial_travel_direction='forward')
     return args

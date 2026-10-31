@@ -18,7 +18,7 @@ def configured_node():
     try:
         prefix='/startup_parameters_test'
         overrides={'build_dir':'/unused-startup-parameter-test','linear_speed_mps':.07,
-            'planning_period_s':.27,'map_topic':prefix+'/map','goal_topic':prefix+'/goal',
+            'global_period_s':27.,'planning_period_s':.27,'map_topic':prefix+'/map','goal_topic':prefix+'/goal',
             'odometry_topic':prefix+'/odom','tf_topic':prefix+'/tf','tf_static_topic':prefix+'/tf_static',
             'local_path_topic':prefix+'/local','global_route_topic':prefix+'/global',
             'action_name':prefix+'/navigate','minimum_clearance_m':.01,'clearance_radius_m':.409}
@@ -35,6 +35,8 @@ def test_startup_overrides_reach_resources_and_endpoints(configured_node):
     node,observed=configured_node
     assert observed['limits'].linear_speed_mps==.07
     assert observed['settings']['planning_period_s']==.27
+    assert observed['settings']['global_period_s']==27.
+    assert node.describe_parameter('global_period_s').read_only
     assert '/startup_parameters_test/map' in [s.topic_name for s in node.subscriptions]
     assert node.get_parameter('action_name').value=='/startup_parameters_test/navigate'
 

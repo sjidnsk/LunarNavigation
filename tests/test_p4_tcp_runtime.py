@@ -504,3 +504,15 @@ def test_zero_before_first_command_does_not_enter_auto_and_initial_telemetry_req
     assert events==[('velocity',0.,0.)]
     events.clear();assert not r.receive(message(.02))
     assert ('mode','auto') not in events
+
+
+def test_global_period_uses_shared_tcp_profile_in_both_entries():
+    from pathlib import Path
+    import yaml
+    settings = yaml.safe_load((Path(__file__).resolve().parents[1]/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
+    assert settings['global_period_s'] == 15.
+    for prefix in ('/p4_p3_debug', '/bounded'):
+        args = launch_settings('/p4/source', '/p4/cache', '/p4/wheel.yaml', settings, prefix=prefix)
+        assert float(args['global_period_s']) == 15.
+    settings['global_period_s'] = 27.
+    assert float(launch_settings('/p4/source', '/p4/cache', '/p4/wheel.yaml', settings)['global_period_s']) == 27.

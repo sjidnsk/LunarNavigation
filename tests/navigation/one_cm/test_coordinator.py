@@ -41,7 +41,7 @@ class RejectPlanner:
 def setup():
     world = WorldSnapshot(1, (), (CellRect(-2000, -2000, 2000, 2000),))
     runner, planner = Runner(), RejectPlanner()
-    coordinator = NavigationCoordinator(planner, runner=runner, local_period_s=10.)
+    coordinator = NavigationCoordinator(planner, runner=runner, local_period_s=10., global_period_s=1.)
     return world, runner, planner, coordinator
 
 
@@ -374,5 +374,6 @@ def test_global_submit_failure_still_returns_certified_brake(setup):
     r=c.tick(world,VehicleState(0,0,0,.1,0),(3,0),0)
     assert r.action.source=='brake'
     assert r.action_certificate.matches(r.action,r.grid,c.limits,-1)
-    assert c._pending_reason is not None
+    assert c._pending_reason is None
+    assert c._next_global == c.global_period_s
     assert any(e['kind']=='GLOBAL_SUBMIT_ERROR' for e in r.events)

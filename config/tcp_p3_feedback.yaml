@@ -9,3 +9,6 @@ mppi_compute_envelope_s: 0.55
 
 # 既有车辆watchdog 1s + 5Hz检查周期0.2s；MPCC认证覆盖此执行保持期，不改变传输超时。
 command_hold_s: 1.2
+
+# 全局有效路线在后台低频刷新；目标/真实阻塞/参考重入立即重算。
+global_period_s: 15.0

@@ -50,7 +50,7 @@ def test_new_obstacle_rejects_old_global_geometry_and_old_goal_always_rejected()
     assert any(e['kind'] == 'STALE_GLOBAL_RESULT' for e in result.events)
 
 
-def test_removed_obstacle_preserves_valid_detour_without_shortcut_refresh():
+def test_removed_obstacle_preserves_valid_detour_until_periodic_shortcut_refresh():
     runner = Runner()
     c = AsyncNavigationCoordinator(local_worker=ManualLocal(), global_runner=runner, revalidate_current_map=True)
     state = VehicleState(0, 0, 0, 0, 0)
@@ -60,13 +60,18 @@ def test_removed_obstacle_preserves_valid_detour_without_shortcut_refresh():
     c.tick(obstructed, state, (3, 0), .05, goal_yaw=0.)
     detour, progress = c.route, c.progress
     assert detour is not None and len(detour.points) > 2
-    for now in (.1, 1., 10., 60.):
+    for now in (.1, 1., 10., 14.9):
         c.tick(world(2), state, (3, 0), now, goal_yaw=0.)
     assert c.route is detour and c.progress == progress
     assert len(runner.requests) == 1
+    c.tick(world(2), state, (3, 0), 15., goal_yaw=0.)
+    assert c.route is detour and c.progress == progress
+    runner.ready = True
+    c.tick(world(2), state, (3, 0), 15.05, goal_yaw=0.)
+    assert c.route is not detour and len(c.route.points) == 2
 
 
-def test_static_turning_free_only_and_unrelated_block_changes_never_refresh_route():
+def test_static_turning_free_only_and_unrelated_block_changes_wait_for_periodic_refresh():
     runner = Runner()
     c = AsyncNavigationCoordinator(local_worker=ManualLocal(), global_runner=runner, revalidate_current_map=True)
     state = VehicleState(0, 0, 0, 0, 0)
@@ -74,7 +79,7 @@ def test_static_turning_free_only_and_unrelated_block_changes_never_refresh_rout
     runner.ready = True
     c.tick(world(), state, (3, 0), .05, goal_yaw=0.)
     route, progress = c.route, c.progress
-    for i in range(1, 601):
+    for i in range(1, 150):
         scene = world(2 + i, () if i < 300 else (CellRect(1000 + i, 1000, 1100 + i, 1100),), extent=2000 + i)
         c.tick(scene, VehicleState(0, 0, i * .01, 0, .1), (3, 0), i * .1, goal_yaw=0.)
         assert c.route is route and c.progress == progress
@@ -136,11 +141,11 @@ def test_global_failure_consumes_event_without_hot_retry_and_keeps_goal(failure)
     state = VehicleState(0, 0, 0, 0, 0)
     c.tick(world(), state, (3, 0), 0.)
     runner.ready = True
-    for i, now in enumerate((.1, 1., 10., 60.)):
+    for i, now in enumerate((.1, 1., 10., 14.9)):
         c.tick(world(2 + i, extent=2000 + i), state, (3, 0), now)
     assert len(runner.requests) == 1
     assert c._goal == (3., 0.) and c.route is None
-    c.tick(world(2, (CellRect(1000, 1000, 1100, 1100),)), state, (3, 0), 61.)
+    c.tick(world(6, extent=2004), state, (3, 0), 15.)
     assert len(runner.requests) == 2
 
 
@@ -318,7 +323,7 @@ def test_inflight_event_binds_latest_goal_and_revalidates_latest_map(change):
         runner.ready = True
         c.tick(scene, state, goal, .3)
         assert c.route is not None
-    for now in (1., 10., 60.):
+    for now in (1., 10., 14.9):
         c.tick(scene, state, goal, now)
     assert len(runner.requests) == (1 if change == 'irrelevant' else 2)
 
@@ -342,15 +347,18 @@ def test_failed_old_request_does_not_retire_existing_valid_route():
     assert c.route is route and len(runner.requests) == 1
 
 
-def test_production_global_period_removed_from_factory_defaults_and_config():
+def test_production_global_period_default_and_factory_forwarding():
     import ast
     from pathlib import Path
     root = Path(__file__).resolve().parents[3] / 'scripts/navigation/one_cm/ros2/lunar_nav1cm_planner'
-    node = (root / 'lunar_nav1cm_planner/node.py').read_text(encoding='utf-8')
-    tree = ast.parse(node)
-    assert not any(isinstance(n, ast.Constant) and n.value == 'global_period_s' for n in ast.walk(tree))
-    assert not any(isinstance(n, ast.keyword) and n.arg == 'global_period_s' for n in ast.walk(tree))
-    assert 'global_period_s:' not in (root / 'config/planner.yaml').read_text(encoding='utf-8')
+    tree = ast.parse((root / 'lunar_nav1cm_planner/node.py').read_text(encoding='utf-8'))
+    defaults = next(n.value for n in ast.walk(tree)
+                    if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == 'defaults' for t in n.targets))
+    assert any(isinstance(k, ast.Constant) and k.value == 'global_period_s' and
+               ast.literal_eval(v) == 15. for k, v in zip(defaults.keys, defaults.values))
+    assert any(isinstance(n, ast.keyword) and n.arg == 'global_period_s' and
+               ast.unparse(n.value) == "settings['global_period_s']" for n in ast.walk(tree))
+    assert 'global_period_s: 15.0' in (root / 'config/planner.yaml').read_text(encoding='utf-8')
 
 
 def test_local_unknown_policy_change_does_not_reject_global_geometry():
@@ -376,6 +384,7 @@ def test_existing_route_map_revalidation_only_checks_untravelled_suffix(smooth, 
     c._observe_world(world())
     c._adopt_route(Route(7, 1, [[0, 0], [10, 0]], (10, 0)), [])
     c._pending_reason = None
+    c._next_global = 15.
     route = c.route
     progress = ProgressToken(7, 5.)
     c.progress = progress
@@ -399,6 +408,7 @@ def test_invalid_or_lagging_progress_cannot_skip_unverified_route_prefix(progres
     c._observe_world(world())
     c._adopt_route(Route(7, 1, [[0, 0], [10, 0]], (10, 0)), [])
     c._pending_reason = None
+    c._next_global = 15.
     c.progress = None if progress_version is None else ProgressToken(progress_version, progress_s)
     c._update_route(world(2, (CellRect(100, -10, 110, 10),)), VehicleState(5, 0, 0, 0, 0), (10, 0), .1, [])
     assert c.route is None and c.progress is None
@@ -413,6 +423,7 @@ def test_bounded_progress_projection_matches_reference_when_progress_lags_slight
     c._observe_world(world())
     c._adopt_route(Route(7, 1, [[0, 0], [10, 0]], (10, 0)), [])
     c._pending_reason = None
+    c._next_global = 15.
     route = c.route
     progress = ProgressToken(7, 4.8)
     c.progress = progress
@@ -434,6 +445,7 @@ def test_future_crossing_and_return_legs_are_not_dropped_as_history(points, stat
     c._observe_world(world())
     c._adopt_route(Route(7, 1, points, goal), [])
     c._pending_reason = None
+    c._next_global = 15.
     c.progress = ProgressToken(7, progress_s)
     c._update_route(world(2, (obstacle,)), VehicleState(*state, 0, 0, 0), goal, .1, [])
     assert c.route is None and c.progress is None
@@ -449,6 +461,7 @@ def test_passed_shaped_curve_proof_does_not_retire_remaining_sampled_reference()
     c._observe_world(world())
     c._adopt_route(Route(7, 1, [[0,0],[10,0],[10,10]], (10,10)), [])
     c._pending_reason = None
+    c._next_global = 15.
     route = c.route
     assert len(route.points) > 3 and len(c._shaped_route.proof_boxes) > 0
     arc = _arc_lengths(route.points)
@@ -471,3 +484,96 @@ def test_incoming_global_candidate_is_checked_in_full_even_after_vehicle_advance
     assert c.route is None and c.progress is None
     assert any(e['kind'] == 'GLOBAL_CURRENT_MAP_REJECTED' for e in result.events)
     assert len(runner.requests) == 2
+
+
+def test_periodic_refresh_retains_route_progress_and_single_inflight_then_same_suffix():
+    from scripts.navigation.one_cm.nav1cm.coordinator import NavigationCoordinator
+    from scripts.navigation.one_cm.nav1cm.contracts import ProgressToken
+    runner = Runner()
+    c = NavigationCoordinator(None, runner=runner, revalidate_current_map=True)
+    state = VehicleState(0, 0, 0, 0, 0)
+    c._update_route(world(), state, (10, 0), 0., [])
+    runner.ready = True
+    c._update_route(world(), state, (10, 0), .05, [])
+    route = c.route
+    progress = c.progress = ProgressToken(route.version, 2.)
+    state = VehicleState(2, 0, .5, 0, .1)
+    for now in (1., 10., 14.99):
+        c._update_route(world(), state, (10, 0), now, [])
+    assert len(runner.requests) == 1
+    c._update_route(world(), state, (10, 0), 15., [])
+    assert len(runner.requests) == 2 and runner.requests[-1]['request_reason'] == 'PERIODIC'
+    assert c.route is route and c.progress is progress
+    for now in (15.05, 16., 29.9):
+        c._update_route(world(), state, (10, 0), now, [])
+    assert len(runner.requests) == 2
+    runner.ready = True
+    events = []
+    c._update_route(world(2, extent=2100), state, (10, 0), 29.95, events)
+    assert c.route is route and c.progress is progress
+    assert any(e['kind'] == 'ROUTE_CONTINUITY_RETAINED' for e in events)
+    c._update_route(world(2), state, (10, 0), 30., [])
+    assert len(runner.requests) == 3
+
+
+@pytest.mark.parametrize('failure', ['submit', 'poll', 'no_route'])
+def test_failed_periodic_refresh_keeps_valid_route_and_retries_at_next_period(failure):
+    from scripts.navigation.one_cm.nav1cm.coordinator import NavigationCoordinator
+    runner = Runner()
+    c = NavigationCoordinator(None, runner=runner, revalidate_current_map=True)
+    state = VehicleState(0, 0, 0, 0, 0)
+    c._update_route(world(), state, (3, 0), 0., [])
+    runner.ready = True
+    c._update_route(world(), state, (3, 0), .05, [])
+    route = c.route
+    submit, poll = runner.submit, runner.poll
+    def fail_submit(request):
+        runner.requests.append(request)
+        raise RuntimeError('submit failed')
+    def fail_poll():
+        if runner.pending is None: return None
+        if failure == 'poll':
+            runner.pending = None
+            raise RuntimeError('worker failed')
+        runner.ready = True
+        result = poll()
+        result.update(route=None, has_reference=False, reason_code='NO_PATH')
+        return result
+    if failure == 'submit': runner.submit = fail_submit
+    else: runner.poll = fail_poll
+    c._update_route(world(), state, (3, 0), 15., [])
+    for now in (15.05, 16., 20., 29.99):
+        c._update_route(world(), state, (3, 0), now, [])
+        assert c.route is route and c._goal == (3., 0.)
+    assert len(runner.requests) == 2 and c._pending_reason is None
+    c._update_route(world(), state, (3, 0), 30., [])
+    assert len(runner.requests) == 3
+
+
+@pytest.mark.parametrize('change', ['goal', 'blocked', 'irrelevant'])
+def test_periodic_inflight_result_validates_latest_goal_and_full_map(change):
+    from scripts.navigation.one_cm.nav1cm.coordinator import NavigationCoordinator
+    runner = Runner()
+    c = NavigationCoordinator(None, runner=runner, revalidate_current_map=True)
+    state = VehicleState(0, 0, 0, 0, 0)
+    c._update_route(world(), state, (3, 0), 0., [])
+    runner.ready = True
+    c._update_route(world(), state, (3, 0), .05, [])
+    route = c.route
+    c._update_route(world(), state, (3, 0), 15., [])
+    assert len(runner.requests) == 2
+    goal = (0, 3) if change == 'goal' else (3, 0)
+    obstacle = CellRect(145, -10, 155, 10) if change == 'blocked' else CellRect(1000, 1000, 1100, 1100)
+    scene = world(2, (obstacle,))
+    c._update_route(scene, state, goal, 15.05, [])
+    assert len(runner.requests) == 2
+    runner.ready = True
+    events = []
+    c._update_route(scene, state, goal, 15.1, events)
+    if change == 'irrelevant':
+        assert c.route is route and len(runner.requests) == 2
+    else:
+        assert c.route is None and len(runner.requests) == 3
+        assert runner.requests[-1]['goal'] == list(goal)
+        assert runner.requests[-1]['world']['epoch'] == 2
+        assert any(e['kind'] in ('STALE_GLOBAL_RESULT', 'GLOBAL_CURRENT_MAP_REJECTED') for e in events)

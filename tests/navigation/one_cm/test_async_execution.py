@@ -237,7 +237,7 @@ def test_missed_execution_slots_are_reported_without_catchup_actions():
     assert c.tick(world,state,(3,0),.261).action is None
 
 
-def test_global_submit_error_preserves_old_buffer_and_latest_pending_goal():
+def test_global_submit_error_preserves_old_buffer_and_latest_goal_until_next_period():
     c,w,world=make_coordinator(); state=VehicleState(0,0,0,.1,0)
     state=execute_action(c.tick(world,state,(3,0),0).action,state)
     w.ready=True
@@ -251,10 +251,12 @@ def test_global_submit_error_preserves_old_buffer_and_latest_pending_goal():
     assert r.action.source!='brake'
     assert r.action_certificate.matches(r.action,r.grid,c.limits,1)
     assert any(e['kind']=='GLOBAL_SUBMIT_ERROR' for e in r.events)
-    assert c._pending_reason is not None
+    assert c._pending_reason is None
+    assert c._next_global == pytest.approx(.1+c.global_period_s)
     r=c.tick(world,state,(0,3),.15)
     assert r.action.source=='brake'
-    assert c._goal==(0.,3.) and c._pending_reason=='GOAL_CHANGED'
+    assert c._goal==(0.,3.) and c._pending_reason is None
+    assert c._next_global == pytest.approx(.15+c.global_period_s)
 
 
 @pytest.mark.parametrize('direction,target,velocity',[('forward',0.,.02),('reverse',np.pi,-.02)])

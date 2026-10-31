@@ -10,7 +10,7 @@ from launch_ros.actions import Node
 
 # 这些值只属于新入口；既有 exploration_navigation 和训练默认保持原样。
 DEFAULTS = {
-    "command_hold_s": "0.0", "control_backend": "path_mppi", "exploration_strategy": "none", "enable_controller": "false", "drl_actor": "",
+    "global_period_s": "15.0", "command_hold_s": "0.0", "control_backend": "path_mppi", "exploration_strategy": "none", "enable_controller": "false", "drl_actor": "",
     "allow_unknown": "false",
     "build_dir": "", "platform_config": "", "use_sim_time": "false",
     "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
@@ -35,6 +35,9 @@ DEFAULTS = {
 
 def _compose(context):
     values = {k: LaunchConfiguration(k).perform(context).strip() or v for k,v in DEFAULTS.items()}
+    values["global_period_s"] = float(values["global_period_s"])
+    if not isfinite(values["global_period_s"]) or values["global_period_s"] <= 0:
+        raise ValueError("global_period_s must be finite and positive")
     values["p3_map_timeout_s"] = float(values["p3_map_timeout_s"])
     if not isfinite(values["p3_map_timeout_s"]) or values["p3_map_timeout_s"] < 0:
         raise ValueError("p3_map_timeout_s must be finite and nonnegative")
@@ -78,6 +81,7 @@ def _compose(context):
             "coarse_resolution_m": float(values["coarse_resolution_m"])}),
         node("lunar_nav1cm_planner", "navigation_task_node", {
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
+            "global_period_s":values["global_period_s"],
             "command_hold_s":float(values["command_hold_s"]),
             "control_backend":values["control_backend"],
             "enable_controller":values["enable_controller"]=="true",
