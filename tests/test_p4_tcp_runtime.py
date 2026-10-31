@@ -6,7 +6,7 @@ from scripts.simulation.p4_tcp_runtime import CONTROL_DOMAIN, P3_SOURCE_DOMAIN, 
 
 def test_control_launch_uses_existing_wheel_limits_and_private_adapter_input():
     assert (CONTROL_DOMAIN,P3_SOURCE_DOMAIN)==(10,57)
-    args=launch_settings('/p4/source','/p4/cache','/p4/test-wheel.yaml',dict(odometry_timeout_s=4.5,p3_map_timeout_s=6.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
+    args=launch_settings('/p4/source','/p4/cache','/p4/test-wheel.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=6.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
     assert args['command_topic']=='/p4_p3_debug/cmd_vel'
     assert args['goal_topic']=='/goal_pose'
     assert args['enable_controller']=='true' and args['exploration_strategy']=='none'
@@ -91,7 +91,7 @@ def test_low_speed_profile_is_shared_capped_and_does_not_mutate_source():
 
 
 def test_private_launch_uses_same_controller_budgets_and_initial_direction():
-    budgets=dict(odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2)
+    budgets=dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2)
     args=launch_settings('/p4/source','/p4/cache','/p4/wheel',budgets,prefix='/check',goal_topic='/check/goal')
     assert args['command_topic']=='/check/cmd_vel' and args['action_name']=='/check/navigate_to_pose'
     assert args['initial_travel_direction']=='forward'
@@ -408,7 +408,7 @@ def test_tcp_production_profile_overrides_only_speed_and_feeds_launch_and_relay(
     assert base['capability']['maximum_forward_speed_mps']==.2
     for key in ('maximum_acceleration_mps2','maximum_braking_deceleration_mps2','maximum_yaw_acceleration_radps2'):
         assert merged['capability'][key]==base['capability'][key]==.5
-    assert launch_settings('/p4/source','/p4/cache','/p4/final.yaml',dict(odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))['platform_config']=='/p4/final.yaml'
+    assert launch_settings('/p4/source','/p4/cache','/p4/final.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))['platform_config']=='/p4/final.yaml'
     relay=TcpCommandRelay(merged,publish_velocity=lambda x:None,publish_mode=lambda x:None,publish_lease=lambda x:None,make_zero=message)
     assert relay.limits==(.5,.5,1.)
 
@@ -444,8 +444,9 @@ def test_both_tcp_entries_load_same_configured_limits():
 
 
 def test_direct_settings_and_body_only_telemetry():
-    args=launch_settings('/source','/cache','/tcp.yaml',dict(odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
+    args=launch_settings('/source','/cache','/tcp.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
     assert args['control_backend']=='mpcc_cmd_vel'
+    assert float(args['command_hold_s'])==1.2
     r,events,clock=relay_fixture()
     r.update_telemetry(S(vx=0.,vy=0.,wz=0.))
     assert r.measured_stopped()
@@ -466,3 +467,11 @@ def test_bounded_direct_entry_has_no_mppi_service_or_wheel_feedback():
     relay_tree=ast.parse((root/'scripts/simulation/p4_tcp_runtime.py').read_text(encoding='utf-8'))
     relay=next(n for n in relay_tree.body if isinstance(n,ast.ClassDef) and n.name=='TcpCommandRelay')
     assert not any(isinstance(n,ast.Attribute) and n.attr.startswith(('wheel_speed','steer')) for n in ast.walk(relay))
+
+
+def test_tcp_hold_contract_is_single_profile_source():
+    from pathlib import Path
+    import yaml
+    profile=yaml.safe_load((Path(__file__).resolve().parents[1]/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
+    assert profile['command_hold_s']==1.2
+    assert float(launch_settings('/source','/cache','/tcp.yaml',profile)['command_hold_s'])==1.2

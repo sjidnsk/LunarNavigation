@@ -10,7 +10,7 @@ from launch_ros.actions import Node
 
 # 这些值只属于新入口；既有 exploration_navigation 和训练默认保持原样。
 DEFAULTS = {
-    "control_backend": "path_mppi", "exploration_strategy": "none", "enable_controller": "false", "drl_actor": "",
+    "command_hold_s": "0.0", "control_backend": "path_mppi", "exploration_strategy": "none", "enable_controller": "false", "drl_actor": "",
     "allow_unknown": "false",
     "build_dir": "", "platform_config": "", "use_sim_time": "false",
     "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
@@ -78,6 +78,7 @@ def _compose(context):
             "coarse_resolution_m": float(values["coarse_resolution_m"])}),
         node("lunar_nav1cm_planner", "navigation_task_node", {
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
+            "command_hold_s":float(values["command_hold_s"]),
             "control_backend":values["control_backend"],
             "enable_controller":values["enable_controller"]=="true",
             "command_topic":values["command_topic"],

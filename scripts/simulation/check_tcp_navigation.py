@@ -46,7 +46,7 @@ assert launch_source.count(needle)==1
 launch_source=launch_source.replace(needle,'return Node(package=package, executable=executable, namespace="/p4_tcp_navigation_check", output="screen", parameters=[{**params,**clock}])')
 private_launch=OUT/'isolated.launch.py';private_launch.write_text(launch_source)
 command=['ros2','launch',str(private_launch)]+[k+':='+str(v) for k,v in args.items()]
-contexts=[];nodes=[];executors=[];subs=[];process=None;handle=None;terminal=None;nonzero=0;latest={};counts=collections.Counter();reasons=collections.Counter();positions=[];feedback=[];telemetry_positions=[];reference_accepted=False;initial_pose=None;goal=None
+contexts=[];nodes=[];executors=[];subs=[];process=None;handle=None;terminal=None;nonzero=0;latest={};counts=collections.Counter();reasons=collections.Counter();positions=[];feedback=[];reference_accepted=False;initial_pose=None;goal=None
 for domain in (CONTROL_DOMAIN,):
  c=rclpy.Context();rclpy.init(context=c,domain_id=domain);contexts.append(c);n=rclpy.create_node('p4_tcp_closedloop_'+str(domain),context=c);nodes.append(n);e=SingleThreadedExecutor(context=c);e.add_node(n);executors.append(e)
 control_node=nodes[0];vel=control_node.create_publisher(Twist,'/car/cmd_vel',10);lease=control_node.create_publisher(Bool,'/car/external_control_lease',10);mode=control_node.create_publisher(String,'/car/set_mode',10)
@@ -128,7 +128,7 @@ try:
  if options.preflight_only:raise PreflightOnlyComplete()
  tel=latest.get('telemetry',(None,None))[1]
  assert relay.measured_stopped(),'telemetry not fresh and stopped'
- od=latest['odom'][1];p=od.pose.pose.position;initial_pose=(p.x,p.y,p.z)
+ od=latest['odom'][1];p=od.pose.pose.position;initial_pose=(p.x,p.y,p.z);positions.clear();positions.append(initial_pose)
  q0=od.pose.pose.orientation;yaw=math.atan2(2*(q0.w*q0.z+q0.x*q0.y),1-2*(q0.y*q0.y+q0.z*q0.z))
  goal=(p.x+.5*math.cos(yaw),p.y+.5*math.sin(yaw));result['goal']=goal;result['initial_pose']=initial_pose;result['goal_policy']='0.5m forward in explicitly authorized UNKNOWN; known BLOCKED still vetoed by planner/controller'
  gui_publishers=[i.node_name for i in control_node.get_publishers_info_by_topic('/car/cmd_vel')];assert all(x in ('lunar_car_gui_node','p4_tcp_closedloop_10') for x in gui_publishers),gui_publishers;result['vehicle_command_publishers']=gui_publishers
@@ -143,7 +143,7 @@ try:
   if was_armed and not ready:event('relay_transport_gap_park')
   spin(.1)
   if process.poll() is not None:raise RuntimeError('navigation launch exited')
-  if positions and math.dist(positions[0],positions[-1])>.8:raise RuntimeError('test displacement exceeded 0.8m bound')
+  if positions and math.dist(initial_pose,positions[-1])>.8:raise RuntimeError('test displacement exceeded 0.8m bound')
   if terminal.done():
    m=terminal.result();result['action_result']={'status':m.status,'outcome':m.result.outcome,'reason_code':m.result.reason_code};result['reached']=m.result.outcome==NavigateToPose.Result.GOAL_REACHED;break
   elapsed=time.monotonic()-attempt
@@ -173,8 +173,8 @@ finally:
  result['input_timing_statistics']={k:timing_statistics(samples.get(k),control_node.get_clock().now().nanoseconds,time.monotonic()) for k in ('odom','map')}
  counts['forwarded_zero']=relay.forwarded_zero
  result.update(counts=dict(counts),diagnostic_reasons=dict(reasons),controller_nonzero_commands=nonzero,forwarded_nonzero_commands=relay.forwarded_nonzero,auto_mode_entered=relay.forwarded_nonzero>0,reference_accepted=reference_accepted)
- if positions:result['p3_displacement_max_m']=max(math.dist(positions[0],p) for p in positions);result['final_p3_pose']=positions[-1]
- if telemetry_positions:result['tcp_displacement_max_m']=max(math.dist(telemetry_positions[0],p) for p in telemetry_positions)
+ if positions:result['final_p3_pose']=positions[-1]
+ if initial_pose is not None and positions:result['p3_displacement_max_m']=max(math.dist(initial_pose,p) for p in positions)
  if goal and positions:result['final_p3_goal_error_m']=math.hypot(positions[-1][0]-goal[0],positions[-1][1]-goal[1])
  result['stage_results']={'start':('NOT_RUN' if handle is None else 'PASS' if relay.forwarded_nonzero and result.get('p3_displacement_max_m',0)>.02 else 'FAIL'),'tracking':'PASS' if counts['local_path_nonempty'] and relay.forwarded_nonzero else 'NOT_RUN','arrival':'PASS' if result['reached'] else 'NOT_REACHED','stop':'PASS' if result['measured_stopped'] else 'UNCONFIRMED'}
  (OUT/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result,indent=2),flush=True);events.close()

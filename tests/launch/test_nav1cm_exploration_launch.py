@@ -185,3 +185,10 @@ def test_disabled_legacy_has_no_velocity_owner(monkeypatch):
 def test_unknown_control_backend_rejected(monkeypatch):
     with pytest.raises(RuntimeError,match='control_backend'):
         graph(monkeypatch,control_backend='other')
+
+
+def test_command_hold_is_explicit_and_only_planner_receives_it(monkeypatch):
+    g=nodes(graph(monkeypatch,control_backend='mpcc_cmd_vel',enable_controller='true',command_hold_s='1.2'))
+    assert g[1]['parameters'][0]['command_hold_s']==1.2
+    assert 'command_hold_s' not in g[0]['parameters'][0]
+    assert nodes(graph(monkeypatch))[1]['parameters'][0]['command_hold_s']==0.
