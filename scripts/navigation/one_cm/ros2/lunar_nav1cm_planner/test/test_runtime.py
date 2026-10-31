@@ -504,3 +504,41 @@ def test_command_skipped_certification_has_reason(monkeypatch,canceling,reason):
     assert len(records)==1
     assert records[0]['command_reject_reason']==reason
     assert records[0]['actual_published_vw']==[0.,0.]
+
+
+@pytest.mark.parametrize('branch',['goal','stop'])
+@pytest.mark.parametrize('failure',['notice','clock'])
+def test_final_zero_diagnostic_failure_does_not_repeat_publish(monkeypatch,branch,failure):
+    import nav1cm.execution as execution
+    from nav1cm.contracts import VehicleState
+    runtime,session,*_=build_runtime(); commands=[]
+    runtime.configure_direct_control(lambda *command:commands.append(command),command_hold_s=.1)
+    session.offer_state(VehicleState(0,0,0,0,0))
+    runtime._pose_source_high_water=0
+    original_notice=runtime._notice
+    failures=[]
+    def fail():
+        failures.append(1)
+        raise RuntimeError('diagnostic only')
+    def notice(kind,detail):
+        if kind=='MPCC_COMMAND': fail()
+        return original_notice(kind,detail)
+    def command(*args,**kwargs):
+        if branch=='goal': runtime._goal_sequence+=1
+        else: runtime._stopping=True
+        if failure=='notice': runtime._notice=notice
+        else: runtime.ros_now_ns=fail
+        return (.07,.03)
+    monkeypatch.setattr(execution,'certified_velocity_command',command)
+    runtime.offer_goal(pose(0,3));runtime._tick_once(0.)
+    assert commands==[(0.,0.)]
+    assert failures==[1]
+
+
+def test_command_publisher_failure_is_not_swallowed():
+    runtime,session,*_=build_runtime()
+    def publish(*args): raise RuntimeError('publisher failed')
+    runtime.configure_direct_control(publish,command_hold_s=.1)
+    packet=NS(result=None,candidate=None)
+    with pytest.raises(RuntimeError,match='publisher failed'):
+        runtime._command(packet,(0.,0.))

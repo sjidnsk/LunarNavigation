@@ -102,17 +102,20 @@ class PlannerRuntime:
         if self.publish_command is None:
             return
         self._publish_issued(command)
-        diagnostics=dict(diagnostics or {})
-        diagnostics['actual_published_vw']=list(command)
-        diagnostics.setdefault('final_publish_override_reason',None)
-        self._notice('MPCC_COMMAND', json.dumps(dict(v=command[0], w=command[1],
-            status=getattr(packet.result, 'status', None),
-            source=getattr(packet.candidate, 'source', None),
-            mode=getattr(packet.candidate, 'mode', None), command_hold_s=self.command_hold_s,
-            reference_dt_s=self.reference_interval_s, previous_issued=self._command_previous,
-            source_stamp_ns=source_stamp,
-            source_age_s=None if source_stamp is None else
-                (self.ros_now_ns()-source_stamp)/1e9, **(diagnostics or {}))))
+        try:
+            diagnostics=dict(diagnostics or {})
+            diagnostics['actual_published_vw']=list(command)
+            diagnostics.setdefault('final_publish_override_reason',None)
+            self._notice('MPCC_COMMAND', json.dumps(dict(v=command[0], w=command[1],
+                status=getattr(packet.result, 'status', None),
+                source=getattr(packet.candidate, 'source', None),
+                mode=getattr(packet.candidate, 'mode', None), command_hold_s=self.command_hold_s,
+                reference_dt_s=self.reference_interval_s, previous_issued=self._command_previous,
+                source_stamp_ns=source_stamp,
+                source_age_s=None if source_stamp is None else
+                    (self.ros_now_ns()-source_stamp)/1e9, **(diagnostics or {}))))
+        except Exception:
+            pass  # 发布后的诊断失败不能触发再次发布或改变控制流程。
 
     def _body_observation_time(self, now_s):
         if self.publish_command is None:return now_s
