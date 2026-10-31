@@ -208,7 +208,7 @@ class NavigationCoordinator:
         """唯一位姿/停稳判据，同时用于实测状态与受限制动终点。"""
         return (self._goal is not None and state is not None and
                 abs(state.v)<=self.stopped_linear_mps and abs(state.w)<=self.stopped_angular_rps and
-                np.hypot(state.x-self._goal[0],state.y-self._goal[1])<=self.position_target_tolerance_m and
+                np.hypot(state.x-self._goal[0],state.y-self._goal[1])<=self.goal_tolerance_m and
                 (self._goal_yaw is None or abs(angle_error(self._goal_yaw,state.yaw))<=self.goal_yaw_tolerance_rad))
 
     def _terminal_plan(self, state, grid, reference):
@@ -303,7 +303,11 @@ class NavigationCoordinator:
             goal_check = (self._goal_checker.check_goal(world, goal) if self._goal_yaw is None else
                           check_pose_goal(world, goal, self._goal_yaw, self.limits))
             self._goal_check_key, self._cached_goal_check = self.goal_revision, goal_check
-        arrived_xy = np.linalg.norm(np.array(goal)-motion[:2]) <= self.position_target_tolerance_m
+        distance = np.linalg.norm(np.array(goal)-motion[:2])
+        # 移动时继续收敛到位置目标；验收范围内已停下则完成位置阶段，
+        # 避免P3厘米级波动反复把最终朝向切回起步对准。
+        arrived_xy = (distance <= self.position_target_tolerance_m or
+                      distance <= self.goal_tolerance_m and abs(motion[3]) <= self.stopped_linear_mps)
         global_due = now_s + 1e-9 >= self._next_global
         if (goal_check.accepted and not arrived_xy and not self.runner.busy and
                 (self._pending_reason or global_due)):
