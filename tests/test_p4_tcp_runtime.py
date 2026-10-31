@@ -64,7 +64,7 @@ def message(v=0.,w=0.):return S(linear=S(x=v),angular=S(z=w))
 
 
 def telemetry(**changes):
-    values=dict(vx=0.,vy=0.,wheel_speed_fl=0.,wheel_speed_fr=0.,wheel_speed_rl=0.,wheel_speed_rr=0.)
+    values=dict(vx=0.,vy=0.,wz=0.)
     values.update(changes);return S(**values)
 
 
@@ -135,7 +135,7 @@ def test_zero_command_and_cleanup_cannot_reenter_auto():
     r.release();events.clear();assert not r.receive(message(.02)) and not events
 
 
-@pytest.mark.parametrize('changes,age,stopped',[({},0.,True),({},.5,False),({},.51,False),({'vy':.02},0.,False),({'wheel_speed_rr':.06},0.,False)])
+@pytest.mark.parametrize('changes,age,stopped',[({},0.,True),({},.5,False),({},.51,False),({'vy':.02},0.,False),({'wz':.06},0.,False)])
 def test_measured_stop_uses_shared_real_telemetry(changes,age,stopped):
     r,events,clock=relay_fixture();r.update_telemetry(telemetry(**changes));clock[0]=age
     assert r.measured_stopped()==stopped
@@ -158,7 +158,7 @@ def test_bounded_runner_routes_command_through_shared_adapter_without_reference_
 
 
 
-@pytest.mark.parametrize('changes',[{'vy':float('nan')},{'wheel_speed_rr':float('nan')}])
+@pytest.mark.parametrize('changes',[{'vy':float('nan')},{'wz':float('nan')}])
 def test_invalid_telemetry_is_not_measured_stop(changes):
     r,events,clock=relay_fixture();r.update_telemetry(telemetry(**changes))
     assert not r.measured_stopped()
@@ -441,3 +441,28 @@ def test_both_tcp_entries_load_same_configured_limits():
     from scripts.simulation.p4_tcp_runtime import load_tcp_platform_profile
     root=Path(__file__).resolve().parents[1]
     assert profile_command_limits_for_test(load_tcp_platform_profile(root))==(.5,.5,1.)
+
+
+def test_direct_settings_and_body_only_telemetry():
+    args=launch_settings('/source','/cache','/tcp.yaml',dict(odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
+    assert args['control_backend']=='mpcc_cmd_vel'
+    r,events,clock=relay_fixture()
+    r.update_telemetry(S(vx=0.,vy=0.,wz=0.))
+    assert r.measured_stopped()
+    r.acquire()
+    assert r.receive(message(.02))
+
+
+def test_bounded_direct_entry_has_no_mppi_service_or_wheel_feedback():
+    import ast
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    text=(root/'scripts/simulation/check_tcp_navigation.py').read_text(encoding='utf-8')
+    tree=ast.parse(text)
+    assert not any(isinstance(n,ast.Attribute) and n.attr.startswith(('wheel_speed','steer')) for n in ast.walk(tree))
+    assert "params('lunar_pure_wheeled_controller'" not in text
+    assert "['control_backend']=='mpcc_cmd_vel'" in text
+    assert text.index('if options.preflight_only:raise PreflightOnlyComplete()')<text.index('relay.acquire()')
+    relay_tree=ast.parse((root/'scripts/simulation/p4_tcp_runtime.py').read_text(encoding='utf-8'))
+    relay=next(n for n in relay_tree.body if isinstance(n,ast.ClassDef) and n.name=='TcpCommandRelay')
+    assert not any(isinstance(n,ast.Attribute) and n.attr.startswith(('wheel_speed','steer')) for n in ast.walk(relay))

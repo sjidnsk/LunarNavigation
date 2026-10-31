@@ -163,3 +163,25 @@ def test_explicit_tcp_profile_is_shared_by_planner_and_follower(monkeypatch):
     planner=next(n for n in g if n['package']=='lunar_nav1cm_planner')['parameters'][0]
     follower=next(n for n in g if n['package']=='lunar_pure_wheeled_controller')['parameters'][0]
     assert planner['wheel_config']==follower['platform_config']=='/outside/tcp-final.yaml'
+
+
+@pytest.mark.parametrize('enabled', ['true','false'])
+def test_direct_backend_has_single_planner_command_owner(monkeypatch, enabled):
+    g=nodes(graph(monkeypatch, control_backend='mpcc_cmd_vel',enable_controller=enabled,command_topic='/private/cmd'))
+    assert len(g)==2
+    p=g[1]['parameters'][0]
+    assert p['control_backend']=='mpcc_cmd_vel'
+    assert p['enable_controller'] is (enabled=='true')
+    assert p['command_topic']=='/private/cmd'
+    assert p['execution_contract_enabled'] is False
+    assert p['odometry_topic']=='/Car/T3/localization/odometry'
+
+
+def test_disabled_legacy_has_no_velocity_owner(monkeypatch):
+    g=nodes(graph(monkeypatch,control_backend='path_mppi',enable_controller='false'))
+    assert len(g)==2 and g[1]['parameters'][0]['enable_controller'] is False
+
+
+def test_unknown_control_backend_rejected(monkeypatch):
+    with pytest.raises(RuntimeError,match='control_backend'):
+        graph(monkeypatch,control_backend='other')

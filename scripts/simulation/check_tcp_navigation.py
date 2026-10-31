@@ -76,7 +76,7 @@ def callback(kind,msg):
   reference_accepted=bool(handle is not None and handle.accepted and bytes(msg.session_id.uuid)==bytes(handle.goal_id.uuid) and msg.reference_accepted);event(kind,state=msg.state,reason=msg.reason,reference_accepted=msg.reference_accepted,cross_track=msg.cross_track_m,progress=msg.progress_m)
  elif kind in ('local_path','global_path'):event(kind,poses=len(msg.poses));counts[kind+'_nonempty']+=int(bool(msg.poses))
  elif kind=='telemetry':
-  relay.update_telemetry(msg);telemetry_positions.append((msg.x,msg.y,msg.z));event(kind,vx=msg.vx,vy=msg.vy,wz=msg.wz,wheels=[msg.wheel_speed_fl,msg.wheel_speed_fr,msg.wheel_speed_rl,msg.wheel_speed_rr])
+  relay.update_telemetry(msg);event(kind,vx=msg.vx,vy=msg.vy,wz=msg.wz)
 for topic,cls,kind in [('/Car/T3/localization/odometry',Odometry,'odom'),('/Car/T3/mapping/grid_map',GridMap,'map'),(PREFIX+'/exploration_map',OccupancyGrid,'exploration_map'),(PREFIX+'/control/diagnostics',String,'diag'),(PREFIX+'/tracking_status',TrackingStatus,'tracking'),(PREFIX+'/local_path',RosPath,'local_path'),(PREFIX+'/global_route',RosPath,'global_path')]:
  subs.append(control_node.create_subscription(cls,topic,lambda msg,k=kind:callback(k,msg),map_qos if kind=='map' else q))
 subs.append(control_node.create_subscription(VehicleTelemetry,'/car/telemetry',lambda msg:callback('telemetry',msg),q))
@@ -99,17 +99,19 @@ def params(name,keys):
 try:
  with (OUT/'launch.log').open('w') as log:process=subprocess.Popen(command,cwd=OUT,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
  (OUT/'pids.json').write_text(json.dumps({'supervisor':os.getpid(),'launch':process.pid}));spin(5)
- result['planner_params']=params('lunar_nav1cm_planner',['allow_unknown','linear_speed_mps','angular_speed_rps','execution_contract_enabled'])
- result['controller_params']=params('lunar_pure_wheeled_controller',['allow_unknown','mppi_compute_envelope_s','odometry_timeout_s','p3_map_timeout_s','mppi_time_steps','execution_contract_enabled','platform_config'])
- assert result['planner_params']['allow_unknown'] is True and result['controller_params']['allow_unknown'] is True
- assert result['planner_params']['execution_contract_enabled'] and result['controller_params']['execution_contract_enabled']
+ result['planner_params']=params('lunar_nav1cm_planner',['allow_unknown','linear_speed_mps','angular_speed_rps','execution_contract_enabled','control_backend','enable_controller','command_topic','odometry_topic','odometry_timeout_s'])
+ assert result['planner_params']['allow_unknown'] is True
+ assert result['planner_params']['control_backend']=='mpcc_cmd_vel' and result['planner_params']['enable_controller']
+ assert not result['planner_params']['execution_contract_enabled']
+ assert result['planner_params']['command_topic']==PREFIX+'/cmd_vel'
+ assert result['planner_params']['odometry_topic']=='/Car/T3/localization/odometry'
  assert abs(result['planner_params']['linear_speed_mps']-min(limits[:2]))<1e-9 and abs(result['planner_params']['angular_speed_rps']-limits[2])<1e-9
  end=time.monotonic()+15
  while not all(k in latest for k in ('odom','exploration_map','telemetry')) and time.monotonic()<end:spin(.1)
  assert all(k in latest for k in ('odom','exploration_map','telemetry')),'missing inputs'
  # 使用实际参数回读，定位源龄/接收龄、direct_p3地图接收龄与运行时一致。
- measured_budget=dict(odometry_timeout_s=result['controller_params']['odometry_timeout_s'],
-                      p3_map_timeout_s=result['controller_params']['p3_map_timeout_s'])
+ measured_budget=dict(odometry_timeout_s=result['planner_params']['odometry_timeout_s'],
+                      p3_map_timeout_s=feedback_budget['p3_map_timeout_s'])
  result['planner_pose_budget']=params('lunar_nav1cm_planner',['odometry_timeout_s'])
  assert result['planner_pose_budget']['odometry_timeout_s']==measured_budget['odometry_timeout_s']
  result['preflight_time_contract']=dict(measured_budget,map_source_age_gate=False,extra_recovery_wait_s=0.,odometry_continuity_check=True,odometry_source_age_gate=False)
@@ -141,7 +143,7 @@ try:
   if was_armed and not ready:event('relay_transport_gap_park')
   spin(.1)
   if process.poll() is not None:raise RuntimeError('navigation launch exited')
-  if telemetry_positions and math.dist(telemetry_positions[0],telemetry_positions[-1])>.8:raise RuntimeError('test displacement exceeded 0.8m bound')
+  if positions and math.dist(positions[0],positions[-1])>.8:raise RuntimeError('test displacement exceeded 0.8m bound')
   if terminal.done():
    m=terminal.result();result['action_result']={'status':m.status,'outcome':m.result.outcome,'reason_code':m.result.reason_code};result['reached']=m.result.outcome==NavigateToPose.Result.GOAL_REACHED;break
   elapsed=time.monotonic()-attempt
@@ -174,7 +176,7 @@ finally:
  if positions:result['p3_displacement_max_m']=max(math.dist(positions[0],p) for p in positions);result['final_p3_pose']=positions[-1]
  if telemetry_positions:result['tcp_displacement_max_m']=max(math.dist(telemetry_positions[0],p) for p in telemetry_positions)
  if goal and positions:result['final_p3_goal_error_m']=math.hypot(positions[-1][0]-goal[0],positions[-1][1]-goal[1])
- result['stage_results']={'start':('NOT_RUN' if handle is None else 'PASS' if relay.forwarded_nonzero and result.get('tcp_displacement_max_m',0)>.02 else 'FAIL'),'tracking':'PASS' if counts['local_path_nonempty'] and relay.forwarded_nonzero else 'NOT_RUN','arrival':'PASS' if result['reached'] else 'NOT_REACHED','stop':'PASS' if result['measured_stopped'] else 'UNCONFIRMED'}
+ result['stage_results']={'start':('NOT_RUN' if handle is None else 'PASS' if relay.forwarded_nonzero and result.get('p3_displacement_max_m',0)>.02 else 'FAIL'),'tracking':'PASS' if counts['local_path_nonempty'] and relay.forwarded_nonzero else 'NOT_RUN','arrival':'PASS' if result['reached'] else 'NOT_REACHED','stop':'PASS' if result['measured_stopped'] else 'UNCONFIRMED'}
  (OUT/'result.json').write_text(json.dumps(result,indent=2));print(json.dumps(result,indent=2),flush=True);events.close()
  for e in executors:e.shutdown()
  for n in nodes:n.destroy_node()

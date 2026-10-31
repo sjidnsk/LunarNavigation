@@ -24,7 +24,7 @@ def launch_settings(source,build_dir,profile_path,budgets,*,prefix=PREFIX,goal_t
     args=launch_arguments(source,build_dir,profile=budgets,allow_unknown=True)
     args={key:(prefix+value[len(PREFIX):] if isinstance(value,str) and value.startswith(PREFIX+'/') else value)
           for key,value in args.items()}
-    args.update(enable_controller='true',exploration_strategy='none',
+    args.update(control_backend='mpcc_cmd_vel',enable_controller='true',exploration_strategy='none',
                 platform_config=str(profile_path),command_topic=prefix+'/cmd_vel',goal_topic=goal_topic,
                 initial_travel_direction='forward')
     return args
@@ -325,11 +325,10 @@ class TcpCommandRelay:
     def measured_stopped(self):
         if self._telemetry is None:return False
         received,tel=self._telemetry
-        velocity=(tel.vx,tel.vy)
-        wheels=tuple(getattr(tel,name) for name in ('wheel_speed_fl','wheel_speed_fr','wheel_speed_rl','wheel_speed_rr'))
+        velocity=(tel.vx,tel.vy,tel.wz)
         return (0<=self._clock()-received<TRANSPORT_TIMEOUT_S and
-                all(math.isfinite(v) for v in (*velocity,*wheels)) and
-                max(map(abs,velocity))<.01 and max(map(abs,wheels))<.05)
+                all(math.isfinite(v) for v in velocity) and
+                max(map(abs,velocity))<.01)
 
 
 def main():

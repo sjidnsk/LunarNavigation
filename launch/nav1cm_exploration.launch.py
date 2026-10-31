@@ -10,7 +10,7 @@ from launch_ros.actions import Node
 
 # 这些值只属于新入口；既有 exploration_navigation 和训练默认保持原样。
 DEFAULTS = {
-    "exploration_strategy": "none", "enable_controller": "false", "drl_actor": "",
+    "control_backend": "path_mppi", "exploration_strategy": "none", "enable_controller": "false", "drl_actor": "",
     "allow_unknown": "false",
     "build_dir": "", "platform_config": "", "use_sim_time": "false",
     "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
@@ -51,6 +51,8 @@ def _compose(context):
     values['mppi_compute_envelope_s'] = float(values['mppi_compute_envelope_s'])
     if not isfinite(values['mppi_compute_envelope_s']) or values['mppi_compute_envelope_s'] <= 0:
         raise ValueError('mppi_compute_envelope_s must be finite and positive')
+    if values["control_backend"] not in {"path_mppi", "mpcc_cmd_vel"}:
+        raise RuntimeError("control_backend 必须为 path_mppi/mpcc_cmd_vel")
     strategy = values["exploration_strategy"]
     if strategy not in {"none", "frontier", "drl"}:
         raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
@@ -76,7 +78,10 @@ def _compose(context):
             "coarse_resolution_m": float(values["coarse_resolution_m"])}),
         node("lunar_nav1cm_planner", "navigation_task_node", {
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
-            "execution_contract_enabled":values["enable_controller"]=="true",
+            "control_backend":values["control_backend"],
+            "enable_controller":values["enable_controller"]=="true",
+            "command_topic":values["command_topic"],
+            "execution_contract_enabled":values["enable_controller"]=="true" and values["control_backend"]=="path_mppi",
             "odometry_timeout_s":values["odometry_timeout_s"],
             "initial_travel_direction":values["initial_travel_direction"],
             "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
@@ -95,7 +100,7 @@ def _compose(context):
         actions.append(node("lunar_drl_exploration", "lunar_drl_inference_node", {
             **shared_policy, "navigation_backend": "nav1cm", "actor_path": values["drl_actor"],
             **{k: values[k] for k in ("action_name","policy_map_service","tf_static_topic","global_route_topic")}}))
-    if values["enable_controller"] == "true":
+    if values["enable_controller"] == "true" and values["control_backend"] == "path_mppi":
         actions.append(node("lunar_pure_wheeled_controller", "lunar_pure_wheeled_controller_node.py", {
             **frames, **qos, **{k: values[k] for k in ("odometry_topic","tf_topic","tf_static_topic","command_topic")},
             "platform_config": config, "input_mode": "incremental_path", "controller_backend": "mppi_path_follower",
