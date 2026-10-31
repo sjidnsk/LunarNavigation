@@ -229,6 +229,9 @@ class PureWheeledControllerNode(Node):
                     float(policy_values[key]), float(capability[source])
                 )
         if self._standard_mode:
+            for name in ("max_linear_mps", "max_reverse_mps"):
+                if name not in self._parameter_overrides:
+                    policy_values[name] = float(capability[names[name]])
             for name,value in dict(max_angular_radps=1.,goal_position_tolerance_m=.1,goal_yaw_tolerance_rad=.05,stopped_angular_radps=.01).items():
                 if name not in self._parameter_overrides:
                     policy_values[name]=min(value,float(capability[names[name]])) if platform_path and name in names else value
@@ -241,7 +244,9 @@ class PureWheeledControllerNode(Node):
             from rclpy.parameter import Parameter
             self._minimum_clearance_m=resolve_minimum_clearance(capability.get('minimum_clearance_m',0.0),
                 self.get_parameter('minimum_clearance_m').value)
-            self.set_parameters([Parameter('minimum_clearance_m',value=self._minimum_clearance_m)])
+            self.set_parameters([Parameter('minimum_clearance_m',value=self._minimum_clearance_m),
+                *[Parameter(name,value=getattr(self._policy,name)) for name in
+                  ('max_linear_mps','max_reverse_mps','max_angular_radps')]])
             dimensions=capability['body_extent_m'][:2]
             self._body_dimensions=tuple(float(self.get_parameter(name).value) or float(default)
                 for name,default in zip(('body_length_m','body_width_m'),dimensions))
