@@ -36,10 +36,11 @@ def test_package_installs_core_native_config_and_three_path_outputs():
     assert 'execution_contract_enabled' in node
 
 
-def test_tcp_merged_profile_loads_speed_and_unchanged_braking_limits(tmp_path):
+def test_tcp_merged_profile_loads_speed_and_unchanged_braking_limits(tmp_path, monkeypatch):
     import yaml
-    from scripts.simulation.p4_tcp_runtime import tcp_platform_profile
     root=PACKAGE.parents[4]
+    monkeypatch.syspath_prepend(str(root))
+    from scripts.simulation.p4_tcp_runtime import tcp_platform_profile
     base=yaml.safe_load((root/'config/wheel.yaml').read_text(encoding='utf-8'))
     speed=yaml.safe_load((root/'config/tcp_wheel_speed.yaml').read_text(encoding='utf-8'))
     path=tmp_path/'tcp-profile.yaml';path.write_text(yaml.safe_dump(tcp_platform_profile(base,speed)),encoding='utf-8')
