@@ -44,10 +44,11 @@ def input_bridge(source,target,classes,qos):
 
 class NavigationObserver:
     """只在显示线程处理真实源观测；绝不参与导航。"""
-    def __init__(self, make_pose, make_path, publish_start, publish_goal, publish_path, timeout):
+    def __init__(self, make_pose, make_path, publish_start, publish_goal, publish_path, timeout, defer_path=False):
         self.make_pose, self.make_path = make_pose, make_path
         self.publish_start, self.publish_goal, self.publish_path = publish_start, publish_goal, publish_path
         self.timeout = float(timeout)
+        self.defer_path = defer_path; self.pending_header = None
         self.latest = self.last_advance = self.high_stamp = self.path_header = None
         self.active = False
         self.start = None
@@ -83,6 +84,17 @@ class NavigationObserver:
         self._path(h)
 
     def _path(self, fallback_header):
+        if self.defer_path:
+            self.pending_header = fallback_header
+            return
+        self._publish_path(fallback_header)
+
+    def flush(self):
+        if self.pending_header is not None:
+            header = self.pending_header; self.pending_header = None
+            self._publish_path(header)
+
+    def _publish_path(self, fallback_header):
         path = self.make_path()
         header = self.poses[-1].header if self.poses else (self.path_header or fallback_header)
         if not header.frame_id: return
@@ -111,14 +123,24 @@ class DisplayWorker:
             self.wake.set()
 
     def _run(self):
+        deadline = 0.
         while True:
             self.wake.wait()
-            with self.lock:
-                batch = sorted((seq,kind,msg,received) for kind,(seq,msg,received) in self.pending.items())
-                self.pending.clear(); self.wake.clear(); closing = self.closing
+            while True:
+                with self.lock:
+                    remaining = deadline-time.monotonic()
+                    if self.closing or remaining <= 0:
+                        batch = sorted((seq,kind,msg,received) for kind,(seq,msg,received) in self.pending.items())
+                        self.pending.clear(); self.wake.clear(); closing = self.closing
+                        break
+                    self.wake.clear()
+                self.wake.wait(remaining)
+            if closing: return
             for _,kind,msg,received in batch:
                 (self.observer.goal if kind=='goal' else self.observer.odometry)(msg,received)
-            if closing: return
+            flush = getattr(self.observer,'flush',None)
+            if flush is not None: flush()
+            deadline = time.monotonic()+.2
 
     def stop(self):
         with self.lock: self.closing = True; self.wake.set()
@@ -146,7 +168,7 @@ def attach_navigation_observer(source, target, classes, qos, timeout):
         if m is not None: pubs[0].publish(m)
     observer = NavigationObserver(classes['pose'],classes['path'],
         publish_start,
-        lambda p:pubs[1].publish(marker(p,1,(1.,0.,0.))),pubs[2].publish,timeout)
+        lambda p:pubs[1].publish(marker(p,1,(1.,0.,0.))),pubs[2].publish,timeout,defer_path=True)
     worker = DisplayWorker(observer); worker.start()
     subs = [source.create_subscription(classes['odom'],'/Car/T3/localization/odometry',worker.offer_odom,qos['odom']),
             target.create_subscription(classes['pose'],'/goal_pose',worker.offer_goal,qos['goal'])]

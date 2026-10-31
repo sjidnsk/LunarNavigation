@@ -209,16 +209,17 @@ def test_observer_stale_goal_global_watermark_and_frame_transition():
 def test_display_mailbox_coalesces_without_blocking_publish_or_old_path_after_goal():
     from scripts.simulation.p4_tcp_runtime import DisplayWorker
     import threading
-    entered=threading.Event();release=threading.Event();events=[]
+    entered=threading.Event();release=threading.Event();done=threading.Event();events=[]
     class Observer:
         def odometry(self,msg,when):
             if msg=='blocked': entered.set();release.wait(2)
             events.append(('path',msg))
+            if msg=='new':done.set()
         def goal(self,msg,when): events.append(('goal',msg))
     worker=DisplayWorker(Observer());worker.start();worker.offer_odom('blocked',0.)
     assert entered.wait(1)
     worker.offer_odom('old',1.);worker.offer_goal('old goal',2.);worker.offer_goal('new goal',3.);worker.offer_odom('new',4.)
-    release.set();worker.stop()
+    release.set();assert done.wait(1);worker.stop()
     assert ('goal','old goal') not in events and ('path','old') not in events
     assert events[-2:]==[('goal','new goal'),('path','new')]
 
@@ -273,3 +274,38 @@ def test_marker_delete_is_explicit_and_topics_use_marker_protocol():
     assert len(deletes)==1 and deletes[0].header.frame_id=='map'
     assert [m.action for topic,m in events if topic.endswith('/goal_marker')]==[Marker.ADD,Marker.ADD]
     assert events[-1][1].header.frame_id=='map' and events[-1][1].poses==[]
+
+
+def test_display_worker_limits_batches_and_stop_wakes_without_period_wait():
+    from scripts.simulation.p4_tcp_runtime import DisplayWorker
+    import threading,time
+    seen=[]; first=threading.Event(); second=threading.Event()
+    class Observer:
+        def odometry(self,msg,when):
+            seen.append((msg,time.monotonic()))
+            (first if len(seen)==1 else second).set()
+        def goal(self,msg,when): pass
+    worker=DisplayWorker(Observer());worker.start();worker.offer_odom(0)
+    assert first.wait(1)
+    for n in range(1,50):worker.offer_odom(n)
+    assert second.wait(1)
+    assert [x[0] for x in seen]==[0,49]
+    assert seen[1][1]-seen[0][1]>=.19
+    worker.offer_odom(50)
+    before=time.monotonic();worker.stop();assert time.monotonic()-before<.15
+    assert [x[0] for x in seen]==[0,49]
+
+
+def test_deferred_path_flush_coalesces_goal_and_odom():
+    from scripts.simulation.p4_tcp_runtime import NavigationObserver
+    paths=[]
+    def pose():return S(header=None,pose=None)
+    def path():return S(header=None,poses=[])
+    header=lambda t:S(frame_id='map',stamp=S(sec=t,nanosec=0))
+    p=S(position=S(x=0.,y=0.,z=0.),orientation=S(x=0.,y=0.,z=0.,w=1.))
+    o=NavigationObserver(pose,path,lambda _:None,lambda _:None,paths.append,4.5,defer_path=True)
+    o.goal(S(header=header(1),pose=p),0.)
+    o.odometry(S(header=header(2),pose=S(pose=p)),.1)
+    assert not paths
+    o.flush();assert len(paths)==1 and len(paths[0].poses)==1
+    o.flush();assert len(paths)==1
