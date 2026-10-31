@@ -179,8 +179,8 @@ def test_normal_pose_update_keeps_cycle_command_snapshot(monkeypatch,arrival):
     message=S()
     monkeypatch.setattr(module,'state_from_odometry',lambda *a:updated)
     original=session.tick
-    def tick(now):
-        packet=original(now)
+    def tick(now, **kwargs):
+        packet=original(now, **kwargs)
         if arrival=='tick':runtime.offer_odometry(message)
         return packet
     monkeypatch.setattr(session,'tick',tick)

@@ -270,8 +270,8 @@ def test_direct_control_old_generation_never_emits_movement():
     session.offer_state(VehicleState(0,0,0,.1,0))
     runtime.tasks.submit('direct-a',(0,3,0),0.)
     original=session.tick
-    def racing_tick(now):
-        packet=original(now)
+    def racing_tick(now, **kwargs):
+        packet=original(now, **kwargs)
         runtime.offer_goal(pose(0,-3))
         return packet
     session.tick=racing_tick
@@ -310,7 +310,7 @@ def test_direct_rejects_map_replacement_after_tick():
     session.offer_state(VehicleState(0,0,0,.1,0))
     runtime.tasks.submit('direct-map',(0,3,0),0.)
     tick=session.tick
-    def changed(now):
+    def changed(now, **kwargs):
         packet=tick(now)
         runtime._world=WorldSnapshot(2,(CellRect(-20,-20,20,20),),session.world.known_free)
         return packet
@@ -337,7 +337,7 @@ def test_direct_publication_latest_map_window_and_body_state(changed):
     commands=[];runtime.configure_direct_control(lambda v,w:commands.append((v,w)),command_hold_s=1.2)
     session.offer_state(VehicleState(0,0,0,.1,0));runtime.tasks.submit('race',(0,3,0),0.)
     tick=session.tick
-    def raced(now):
+    def raced(now, **kwargs):
         packet=tick(now)
         runtime._world=WorldSnapshot(2,session.world.blocked+(CellRect(8000,8000,8010,8010),),session.world.known_free)
         if changed:
@@ -384,7 +384,7 @@ def test_direct_safe_changed_window_recertifies_once_without_braking():
         accepted=original_proof(packet,world);proofs.append(accepted[1]);return accepted
     runtime._publication_map_proof=check
     tick=session.tick
-    def raced(now):
+    def raced(now, **kwargs):
         packet=tick(now)
         # 窗口内变化，但远离整车、短动作、有限持令和停车尾。
         runtime._world=WorldSnapshot(2,session.world.blocked+(CellRect(190,190,200,200),),session.world.known_free)
@@ -429,7 +429,7 @@ def test_direct_sampled_map_update_does_not_insert_zero_and_next_cycle_blocks():
     source=Trajectory(1,1,[0.,.2],rollout([0,0,0,0,0,0],u,.2),u,'spin','mpcc')
     c.buffer.install(source,0.)
     tick=session.tick
-    def raced(now):
+    def raced(now, **kwargs):
         packet=tick(now)
         runtime._world=WorldSnapshot(2,(CellRect(-20,-20,20,20),),session.world.known_free)
         return packet

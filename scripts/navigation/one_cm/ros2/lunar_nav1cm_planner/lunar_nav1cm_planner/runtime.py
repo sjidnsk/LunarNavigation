@@ -4,6 +4,7 @@
 输入、不可变地图及发布 guard 时短暂加锁；不会持锁执行 native 地图计算。
 """
 from collections import deque
+from .command_prediction import CommandPrediction
 import json
 import math
 import threading
@@ -75,6 +76,7 @@ class PlannerRuntime:
         self._last_issued_command=(0.,0.)
         self._last_issued_s=None
         self._observed_pose_stamp_ns = None
+        self._command_prediction = CommandPrediction()
 
     def configure_direct_control(self, publish_command, *, command_hold_s, reference_interval_s=.2):
         if isinstance(command_hold_s,bool) or not math.isfinite(command_hold_s) or command_hold_s<=0:
@@ -93,6 +95,7 @@ class PlannerRuntime:
         self.publish_command(*command)
         self._last_issued_command=tuple(command)
         self._last_issued_s=time.monotonic()
+        self._command_prediction.issue(self._last_issued_s, command)
 
     def _command(self, packet, command, source_stamp=None):
         if self.publish_command is None:
@@ -200,6 +203,13 @@ class PlannerRuntime:
             self._pose_waiting=False
             self._notice('ODOMETRY_RECOVERED','valid_pose_replanning')
         self.session.offer_state(value)
+        if self.publish_command is not None:
+            try:
+                source=message.header.stamp
+                source_ns=int(source.sec)*1_000_000_000+int(source.nanosec)
+            except (AttributeError,ValueError,TypeError):
+                return
+            self._command_prediction.correct(value,source_ns,now_s,self.ros_now_ns())
 
     def enable_execution_contract(self,timeout_s=2.):
         if self.publish_command is not None:
@@ -232,6 +242,15 @@ class PlannerRuntime:
 
     def offer_odometry(self, message):
         with self._condition:
+            if self.publish_command is not None and self._odometry is not None:
+                try:
+                    old=self._odometry.header.stamp
+                    new=message.header.stamp
+                    if (int(new.sec)*1_000_000_000+int(new.nanosec) <=
+                            int(old.sec)*1_000_000_000+int(old.nanosec)):
+                        return
+                except (AttributeError,ValueError,TypeError):
+                    pass
             self._odometry = message
             self._odometry_received_s=time.monotonic()
             self._odometry_sequence += 1
@@ -377,8 +396,23 @@ class PlannerRuntime:
             if fault:self.tasks.fail_tracking(fault,now_s)
         # 本周期认证使用实际采样快照；终态观测仍可读取随后推进的定位。
         proof_state=self.session.state
+        if self.publish_command is not None and proof_state is not None and not self.session.canceling:
+            proof_state=self._command_prediction.predict(now_s,self.session.coordinator.limits) or proof_state
         proof_stamp=self._pose_source_high_water
-        packet = self.session.tick(now_s)
+        if self.publish_command is not None:
+            def state_values(value):
+                return None if value is None else [value.x,value.y,value.yaw,value.v,value.w]
+            self._notice('COMMAND_STATE_ESTIMATE',json.dumps(dict(
+                prediction_applied=proof_state != self.session.state,
+                history_covered=self._command_prediction.covered(now_s),
+                measured_state=state_values(self.session.state),
+                estimated_state=state_values(proof_state),source_stamp_ns=proof_stamp,
+                proof_basis='command_response_model_estimate')))
+        # session.state 始终是实测；仅规划和候选投影接收估计。
+        if self.publish_command is not None and proof_state != self.session.state:
+            packet = self.session.tick(now_s, planning_state=proof_state)
+        else:
+            packet = self.session.tick(now_s)
         proposal = self.tasks.observe(packet, self._body_observation_time(now_s),
                                       state_updated=self._new_body_observation(odometry_sequence),
                                       defer_commit=True)
