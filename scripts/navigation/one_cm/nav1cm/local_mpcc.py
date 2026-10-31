@@ -8,6 +8,8 @@ from .contracts import CellState, Trajectory, VehicleState, circumscribed_radius
 from .maps import build_distance_field
 from .seeds import braking_prefix, join_trajectories, initial_seed, rollout
 from .pose_goal import angle_error, terminal_candidate
+from .reference_buffer import _project, _at
+from .trajectory_buffer import FeedbackTolerance
 
 
 # 固定 SDK acados-get-stats-source.txt 实际支持；时间值保留 SDK 原始秒单位。
@@ -213,6 +215,30 @@ class MpccPlanner:
     def parameter_count(self):
         return 9+4*len(self.offsets)+1
 
+    def _warm_seed(self, initial, key):
+        """只复用优化初值：按实际pose/yaw消费，不以地图身份或墙钟推进相位。"""
+        if self._warm is None or self._warm[0] != key:
+            return None
+        _, old_states, old_controls, floor = self._warm
+        source = Trajectory(0, key[0], np.arange(len(old_states))*self.dt,
+                            old_states, old_controls, key[1], 'mpcc:warm-seed')
+        phase = _project(source, initial, floor, FeedbackTolerance())
+        self._warm = (key, old_states, old_controls, phase)
+        controls = np.zeros((self.N, 3))
+        for k in range(self.N):
+            sample = phase + k*self.dt
+            if sample < source.times[-1] - 1e-10:
+                _, index = _at(source, sample)
+                stop = min(sample + self.dt, float(source.times[-1]))
+                # 对旧ZOH区间积分后投到新shooting步，避免把剩余半段加速重放整步。
+                while sample < stop - 1e-12:
+                    boundary = min(stop, float(source.times[index + 1]))
+                    controls[k] += source.controls[index] * ((boundary - sample) / self.dt)
+                    sample = boundary
+                    index += 1
+        # 尾部零加速度只是不外推旧加速；不是停稳保证，整段仍须按新图验证。
+        return rollout(initial, controls, self.dt), controls
+
     def _parameters(self, states, controls, reference, field, target_yaw, end, *, mode="forward", initial_travel_direction=""):
         params=[]
         for k,z in enumerate(states):
@@ -289,16 +315,15 @@ class MpccPlanner:
         initial=np.array([state.x,state.y,state.yaw,state.v,state.w,reference.progress_s])
         initial_circle_feasible=all(field.sample(state.x+offset*np.cos(state.yaw),
             state.y+offset*np.sin(state.yaw))[0]>=self.radius+.003 for offset in self.offsets)
-        key=(grid.digest(),reference.route_version,mode)
-        if reference.terminal_yaw is not None:
-            key+=(reference.terminal_yaw,)
+        key=(reference.route_version,mode,reference.terminal_yaw)
         timing['reference']=(perf_counter()-t)*1000
         solver=self._solvers[mode]
         for attempt,side in enumerate((0,1,-1)):
             t=perf_counter()
-            warmed=attempt==0 and self._warm is not None and self._warm[0]==key
+            warm=self._warm_seed(initial,key) if attempt==0 else None
+            warmed=warm is not None
             if warmed:
-                controls=self._warm[2].copy(); states=rollout(initial,controls,self.dt)
+                states,controls=warm
             else: states,controls=initial_seed(initial,mode,self.limits,yaw,side,n=self.N,dt=self.dt)
             params=self._parameters(states,controls,reference,field,yaw,end,mode=mode,initial_travel_direction=initial_travel_direction)
             timing['seed']+=(perf_counter()-t)*1000
@@ -349,7 +374,7 @@ class MpccPlanner:
             row['reason']=reason
             if reason!='CANDIDATE': continue
             candidate=Trajectory(grid.epoch,reference.route_version,np.arange(self.N+1)*self.dt,xs,us,mode,'mpcc:acados-sqp-rti')
-            self._warm=(key,xs,us)
+            self._warm=(key,xs,us,0.)
             return finish(candidate,'CANDIDATE_UNCERTIFIED')
         self._warm=None
         return finish(None,'NO_FEASIBLE_MPCC_CANDIDATE')

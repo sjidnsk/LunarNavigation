@@ -36,18 +36,34 @@ def _project(source, observed, floor, tolerance):
     """只以几何/yaw 投影；参考速度不同不代表消费进度不同。"""
     scale = np.maximum([tolerance.position_m, tolerance.position_m, tolerance.yaw_rad], 1e-9)
 
-    def score(phase):
-        expected, _ = _at(source, phase)
-        delta = observed[:3] - expected[:3]
-        delta[2] = math.atan2(math.sin(delta[2]), math.cos(delta[2]))
-        return float(np.sum((delta / scale) ** 2))
+    states, scores = {}, {}
+    last = len(source.controls) - 1
+
+    def expected(phase, index):
+        if phase not in states:
+            # 与_at的side=right边界一致；不一致端态也不能以旧段积分替代下一节点。
+            if index < last and phase >= source.times[index + 1]:
+                index += 1
+            value = source.states[index].copy()
+            duration = float(phase - source.times[index])
+            if duration > 1e-12:
+                value = step(value, source.controls[index], duration)
+            states[phase] = value
+        return states[phase]
+
+    def score(phase, index):
+        if phase not in scores:
+            delta = observed[:3] - expected(phase, index)[:3]
+            delta[2] = math.atan2(math.sin(delta[2]), math.cos(delta[2]))
+            scores[phase] = float(np.sum((delta / scale) ** 2))
+        return scores[phase]
 
     best = (float('inf'), floor, 0)
     for index, control in enumerate(source.controls):
         lo, hi = max(float(source.times[index]), floor), float(source.times[index + 1])
         if lo > hi:
             continue
-        start, _ = _at(source, lo)
+        start = expected(lo, index)
         delta = observed[:3] - start[:3]
         delta[2] = math.atan2(math.sin(delta[2]), math.cos(delta[2]))
         vector = source.states[index + 1, :3] - start[:3]
@@ -56,7 +72,7 @@ def _project(source, observed, floor, tolerance):
         norm = float(vector @ vector)
         fraction = 0. if norm <= 1e-20 else float(np.clip((delta / scale) @ vector / norm, 0., 1.))
         for phase in (lo, hi, lo + fraction * (hi - lo)):
-            value = score(phase)
+            value = score(phase, index)
             if value < best[0] - 1e-12:
                 best = value, phase, index
     _, phase, index = best
@@ -64,16 +80,16 @@ def _project(source, observed, floor, tolerance):
     # 只细化已选的小段；精确 step 的加速位移不是线性插值。
     ratio = (math.sqrt(5.) - 1.) / 2
     left, right = hi - ratio * (hi - lo), lo + ratio * (hi - lo)
-    fl, fr = score(left), score(right)
+    fl, fr = score(left, index), score(right, index)
     for _ in range(24):
         if fl < fr:
             hi, right, fr = right, left, fl
-            left = hi - ratio * (hi - lo); fl = score(left)
+            left = hi - ratio * (hi - lo); fl = score(left, index)
         else:
             lo, left, fl = left, right, fr
-            right = lo + ratio * (hi - lo); fr = score(right)
+            right = lo + ratio * (hi - lo); fr = score(right, index)
     refined = (lo + hi) / 2
-    return max(floor, refined if score(refined) < best[0] - 1e-12 else phase)
+    return max(floor, refined if score(refined, index) < best[0] - 1e-12 else phase)
 
 
 def _remaining(source, phase):
