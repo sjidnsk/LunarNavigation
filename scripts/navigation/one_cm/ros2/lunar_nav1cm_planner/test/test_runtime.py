@@ -347,8 +347,7 @@ def test_direct_publication_latest_map_window_and_body_state(changed):
         return packet
     session.tick=raced
     runtime._tick_once(0.)
-    if changed:assert commands[-1]==(0.,0.)
-    else:assert 0 < commands[-1][0] < .1
+    assert 0 < commands[-1][0] < .1
 
 
 @pytest.mark.parametrize('hold',[0.,-1.,float('nan'),float('inf'),True])

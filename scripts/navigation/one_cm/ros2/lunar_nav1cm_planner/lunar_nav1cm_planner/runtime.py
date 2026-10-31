@@ -387,6 +387,8 @@ class PlannerRuntime:
             # 定位有效性由自身输入流判定；迟到的控制器等待不得覆盖恢复后的新定位。
             fault=self.tasks.check_execution_fault(now_s)
             if fault:self.tasks.fail_tracking(fault,now_s)
+        # 本周期认证使用实际采样快照；终态观测仍可读取随后推进的定位。
+        proof_state=self.session.state
         packet = self.session.tick(now_s)
         proposal = self.tasks.observe(packet, self._body_observation_time(now_s),
                                       state_updated=self._new_body_observation(odometry_sequence),
@@ -459,7 +461,6 @@ class PlannerRuntime:
                      packet.candidate,self.ros_now_ns(),self.map_frame,global_reference=packet.route)
         # ROS 时间仅给本次 Path 定 t0；调度/轨迹年龄始终使用单调时钟。
         published_brake = False
-        proof_state=self.session.state
         command=(0.,0.)
         if self.publish_command is not None:
             from nav1cm.execution import certified_command
@@ -489,7 +490,8 @@ class PlannerRuntime:
                     # cancel_goal提升generation，执行身份仍固定在原接受任务上。
                     self.execution_context=(None if active is None else active.task_id,
                         self.session.accepted_generation if active is None else active.generation,intent)
-                self._command(packet,command if self.session.state==proof_state else (0.,0.))
+                self._command(packet,command if self.session.state is not None and
+                              self._pose_integrity_fault is None else (0.,0.))
                 self.publish(data)
                 published_brake = packet.candidate is not None and packet.candidate.source == 'brake'
             elif self.publish_command is not None:

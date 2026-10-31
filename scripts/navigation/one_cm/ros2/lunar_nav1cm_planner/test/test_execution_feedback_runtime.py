@@ -163,3 +163,33 @@ def test_delayed_pose_continuity_and_duplicate_stream_timeout(monkeypatch):
     clock[0]=108_000_000_000
     runtime._apply_pose_input(message,18.,18.,S())
     assert session.state is None, '持续接收重复旧帧不能维持定位有效'
+
+@pytest.mark.parametrize('arrival',['tick','certify'])
+def test_normal_pose_update_keeps_cycle_command_snapshot(monkeypatch,arrival):
+    from test_runtime import pose
+    import nav1cm.execution as execution
+    import lunar_nav1cm_planner.runtime as module
+    runtime,session,_,_=build_runtime()
+    commands=[];runtime.configure_direct_control(lambda *v:commands.append(v),command_hold_s=.1)
+    runtime._world=session.world
+    initial=VehicleState(0.,0.,0.,0.,0.)
+    updated=VehicleState(.01,0.,0.,0.,0.)
+    session.offer_state(initial)
+    runtime.offer_goal(pose(0.,3.))
+    message=S()
+    monkeypatch.setattr(module,'state_from_odometry',lambda *a:updated)
+    original=session.tick
+    def tick(now):
+        packet=original(now)
+        if arrival=='tick':runtime.offer_odometry(message)
+        return packet
+    monkeypatch.setattr(session,'tick',tick)
+    measured=[]
+    def certify(result,state,*args,**kwargs):
+        measured.append(state)
+        if arrival=='certify':runtime.offer_odometry(message)
+        return (.02,0.)
+    monkeypatch.setattr(execution,'certified_command',certify)
+    runtime._tick_once(time.monotonic())
+    assert measured==[initial]
+    assert commands[-1]==(.02,0.)
