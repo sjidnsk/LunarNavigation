@@ -1,5 +1,6 @@
 """任务结果必须来自真实位姿/停稳，不能来自段尾或传输状态。"""
 from dataclasses import replace
+import pytest
 from importlib import import_module, util
 from tests.navigation.one_cm.test_p3_session import make_session
 from tests.navigation.one_cm.test_coordinator import Runner
@@ -253,3 +254,57 @@ def test_certified_arrival_survives_not_due_but_not_new_world():
     session.set_world(WorldSnapshot(2,(CellRect(-20,-20,20,20),),(CellRect(-1000,-1000,1000,1000),)))
     task.observe(session.tick(.31),.31)
     assert task.active.outcome is None
+
+
+def test_map_refresh_between_low_rate_pose_samples_does_not_starve_arrival():
+    session,Goal=make_session();session.direct_control=True
+    session.coordinator.local_period_s=.1
+    task=task_api(session);task.submit('map-arrival',Goal(0.,0.,0.),0.)
+    session.offer_state(VehicleState(.08,0.,0.,0.,0.))
+    task.observe(session.tick(0.),0.,state_updated=True)
+    assert task._arrived_since==0.
+    session.set_world(replace(session.world,epoch=session.world.epoch+1))
+    pending=session.tick(.05)
+    assert pending.result.status=='NOT_DUE'
+    assert not session.arrival_current(pending)  # 新图不可复用旧证明。
+    task.observe(pending,.05,state_updated=False)
+    assert task._arrived_since==0.
+    assert task.active.outcome is None
+    task.observe(session.tick(.1),.1,state_updated=False)
+    assert task.active.outcome is None  # 新证明仍不能代替新P3。
+    session.offer_state(VehicleState(.08,0.,0.,0.,0.))
+    task.observe(session.tick(1.5),1.5,state_updated=True)
+    assert task.active.outcome=='GOAL_REACHED'
+
+
+@pytest.mark.parametrize('state',[
+    VehicleState(.11,0.,0.,0.,0.),VehicleState(.08,0.,.1,0.,0.),
+    VehicleState(.08,0.,0.,.02,0.),VehicleState(.08,0.,0.,0.,.02)])
+def test_not_due_new_negative_pose_still_clears_arrival_hold(state):
+    session,Goal=make_session();session.direct_control=True
+    session.coordinator.local_period_s=.1
+    task=task_api(session);task.submit('negative',Goal(0.,0.,0.),0.)
+    session.offer_state(VehicleState(.08,0.,0.,0.,0.))
+    task.observe(session.tick(0.),0.,state_updated=True)
+    session.offer_state(state)
+    pending=session.tick(.05)
+    assert pending.result.status=='NOT_DUE'
+    task.observe(pending,.05,state_updated=True)
+    assert task._arrived_since is None and task.active.outcome is None
+
+
+def test_pending_map_proof_cannot_finish_and_blocked_goal_resets_hold():
+    from scripts.navigation.one_cm.nav1cm.contracts import CellRect
+    session,Goal=make_session();session.direct_control=True
+    session.coordinator.local_period_s=1.
+    task=task_api(session);task.submit('blocked-map',Goal(0.,0.,0.),0.)
+    session.offer_state(VehicleState(.08,0.,0.,0.,0.))
+    task.observe(session.tick(0.),0.,state_updated=True)
+    session.set_world(replace(session.world,epoch=session.world.epoch+1,
+                              blocked=session.world.blocked+(CellRect(-10,-10,10,10),)))
+    pending=session.tick(.4)
+    assert pending.result.status=='NOT_DUE' and not session.arrival_current(pending)
+    task.observe(pending,.4,state_updated=False)
+    assert task.active.outcome is None
+    task.observe(session.tick(1.),1.,state_updated=False)
+    assert task._arrived_since is None and task.active.outcome is None

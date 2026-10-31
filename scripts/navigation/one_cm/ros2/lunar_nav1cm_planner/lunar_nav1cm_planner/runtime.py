@@ -453,7 +453,9 @@ class PlannerRuntime:
                         defer_commit=True)
                 if physical_map_current:
                     self.tasks.commit_observation(proposal)
-                    self._observe_body_stamp()
+                    # 尚未重算证明时保留新源帧的完成观察机会；接收判活不受影响。
+                    if getattr(packet.result,'status',None)!='NOT_DUE':
+                        self._observe_body_stamp()
         self._observed_odometry_sequence = odometry_sequence
         self._deliver_task_events()
         if odometry_error is not None:
