@@ -21,8 +21,12 @@
 
 ## 部署与恢复
 
-源码两次明确本地提交，未合并推送。目标机SSH连续TCP/banner超时，ping2/2丢包；未完成源码上传，更未替换运行版。Humble构建/包测/DDS与实际车辆验收：NOT_RUN，不能以本机结果称车辆自然到达。
+源码551ab085487958a95130e26be9e06bac403c637c已在远程P4内完成隔离验证并部署，未合并推送。126个选定输入逐文件SHA匹配；Humble构建通过，271 passed/5 skipped，11/11 CTest与域169实际DDS检查通过。早期打包遗漏入口及测试依赖导致的失败日志保留，补齐原提交文件后重新验证，未修改断言。
 
-必要源码与测试上传包已冻结在D:/CodexDownloads/lunar_navigation/continuous-goal-upload-551ab08.json，只含代码/配置/必要包README及测试，不含模型、数据、设计文档或密钥；用于断线重试，验证部署完成后可单独删除。另有e7a57cf旧包，仅历史重试来源，可确认无需恢复后单独删除，未自动删除。
+验证回执：/home/yanfa/P4/artifacts/continuous-goal-validation-551ab08-20261101.json。部署回执：/home/yanfa/P4/artifacts/deploy-continuous-goal-551ab08-20261101.json。当前运行目录/home/yanfa/P4/run/tcp-interactive-continuous-goal-551ab08-20261101，启动PID122384；仅替换coordinator.py并使用新隔离overlay。正反线速度0.2m/s、角速度0.1rad/s、完成容差0.1m、收敛目标0.02m已读取确认。
 
-恢复先确认192.168.100.216及P4当前身份（最后确认9f43f65诊断运行，正反0.2m/s角速0.1rad/s），上传551ab08到P4全新隔离源目录，构建planner、运行定向与11组CTest/DDS，再逐文件哈希核对并仅部署coordinator.py及新overlay。P3不重启时保留同一坐标系当前目标；若P3已重启，则清旧目标，避免跨原点重放。只写P4，不改其他项目。
+P3未重启，坐标原点保持。原目标被新RViz目标中断，故观察到位置误差0.00669m、朝向误差0.000792rad、低速停稳也不能宣布同一目标自然完成。现场自然到达仍未验收，Orin/实体车辆NOT_RUN。
+
+## 后续隔离对比
+
+用户建议更长局部段。先用相同0.2秒离散步长比较N20（4秒）与N30（6秒），不更改生产参数、不发布车辆指令；结果保存在P4/artifacts/horizon-compare-4s-6s-20261101.json。注意N变化也影响现有末段朝向融合距离，不能把结果解释成纯段长变化。控制持续、参考滚动更新，不以整段执行完成作为换参考前提。认证几何复用由独立子任务检查，未证明收益前不得声明已提速或部署。
