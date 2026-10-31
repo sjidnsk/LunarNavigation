@@ -78,11 +78,12 @@ class PlannerRuntime:
         self._observed_pose_stamp_ns = None
         self._command_prediction = CommandPrediction()
 
-    def configure_direct_control(self, publish_command, *, command_hold_s, reference_interval_s=.2):
+    def configure_direct_control(self, publish_command, *, command_hold_s, reference_interval_s=.2, command_spin_prepare_s=0.):
         if isinstance(command_hold_s,bool) or not math.isfinite(command_hold_s) or command_hold_s<=0:
             raise ValueError("command_hold_s must be explicitly finite and positive")
         if isinstance(reference_interval_s,bool) or not math.isfinite(reference_interval_s) or reference_interval_s<=0:
             raise ValueError("reference_interval_s must be finite and positive")
+        self._command_prediction=CommandPrediction(spin_prepare_s=command_spin_prepare_s)
         self.reference_interval_s=float(reference_interval_s)
         self.command_hold_s=float(command_hold_s)
         self.publish_command = publish_command

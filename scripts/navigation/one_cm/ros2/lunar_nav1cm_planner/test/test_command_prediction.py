@@ -81,3 +81,73 @@ def test_runtime_planning_estimate_keeps_measured_state(monkeypatch):
     assert calls[0].x==pytest.approx(.16)
     assert calls[0].v==pytest.approx(.2)
     assert session.state==s
+
+
+def test_spin_prepare_does_not_invent_yaw_and_same_direction_keeps_start():
+    p=CommandPrediction(spin_prepare_s=3.); l=WheelLimits()
+    p.issue(0.,(0.,.5)); p.correct(VehicleState(0,0,0,0,0),1000000000,0.,1000000000)
+    assert p.predict(2.,l).yaw==0
+    p.issue(2.,(0.,.8))
+    assert p.predict(3.,l).yaw==0
+    assert p.predict(4.,l).yaw==pytest.approx(.25)
+
+
+def test_p3_correction_does_not_restart_preparation():
+    p=CommandPrediction(spin_prepare_s=3.); l=WheelLimits()
+    p.issue(0.,(0.,.5)); p.correct(VehicleState(0,0,0,0,0),1000000000,0.,1000000000)
+    p.correct(VehicleState(1,0,0,0,0),3000000000,2.,3000000000)
+    assert p.predict(4.,l).yaw==pytest.approx(.25)
+
+
+def test_zero_and_sign_flip_restart_but_drive_has_no_prepare():
+    p=CommandPrediction(spin_prepare_s=3.); l=WheelLimits()
+    p.issue(0.,(0.,.5)); p.issue(2.,(0.,-.5))
+    p.correct(VehicleState(0,0,0,0,0),1000000000,0.,1000000000)
+    assert p.predict(5.,l).yaw==0
+    p.issue(5.,(0.,0.));p.issue(6.,(0.,.5))
+    assert p.predict(8.,l).yaw==0
+    p.issue(8.,(.2,0.))
+    assert p.predict(9.,l).x==pytest.approx(.16)
+
+
+def test_truncated_history_keeps_prepare_metadata_and_missing_history_falls_back():
+    p=CommandPrediction(max_commands=2,spin_prepare_s=3.);l=WheelLimits()
+    p.issue(0.,(0.,.5));p.issue(1.,(0.,.6));p.issue(2.,(0.,.7))
+    s=VehicleState(0,0,0,0,0)
+    p.correct(s,1000000000,0.,1000000000)
+    assert p.predict(4.,l)==s
+    p.correct(s,3000000000,2.,3000000000)
+    assert p.predict(3.,l).yaw==0
+    assert p.predict(4.,l).yaw==pytest.approx(.25)
+
+
+def test_runtime_ros_clock_reset_remains_integrity_fault(monkeypatch):
+    from types import SimpleNamespace as S
+    from test_runtime import build_runtime
+    import lunar_nav1cm_planner.runtime as module
+    runtime,session,_,_=build_runtime()
+    runtime.configure_direct_control(lambda *a:None,command_hold_s=.1)
+    runtime.configure_pose_input(2.)
+    clock=[2000000000];runtime.ros_now_ns=lambda:clock[0]
+    msg=S(header=S(stamp=S(sec=1,nanosec=0)))
+    monkeypatch.setattr(module,'state_from_odometry',lambda *a:VehicleState(0,0,0,0,0))
+    runtime._apply_pose_input(msg,0.,0.,runtime._transforms)
+    clock[0]=1500000000
+    runtime._apply_pose_input(msg,.1,.1,runtime._transforms)
+    assert runtime._pose_integrity_fault=='POSE_CLOCK_ROLLBACK'
+    assert session.state is None
+
+
+@pytest.mark.parametrize('value',[-1.,float('nan'),float('inf'),True])
+def test_invalid_spin_prepare_rejected(value):
+    with pytest.raises(ValueError):CommandPrediction(spin_prepare_s=value)
+
+
+def test_runtime_configures_platform_prepare_without_changing_issued_command():
+    from test_runtime import build_runtime
+    runtime,_,_,_=build_runtime(); sent=[]
+    runtime.configure_direct_control(lambda *cmd:sent.append(cmd),command_hold_s=.1,
+                                     command_spin_prepare_s=3.)
+    runtime._publish_issued((0.,.5))
+    assert sent==[(0.,.5)]
+    assert runtime._command_prediction.spin_prepare_s==3.
