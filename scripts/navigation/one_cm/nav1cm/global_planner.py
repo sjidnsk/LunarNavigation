@@ -341,17 +341,22 @@ class AdaptiveGlobalPlanner:
             old_length = sum(math.dist(a, b) for a, b in zip(points[:-1], points[1:]))
             new_length = sum(math.dist(a, b) for a, b in zip(candidate[:-1], candidate[1:]))
             valid = new_length <= old_length
-            for a, b in zip(candidate[:-1], candidate[1:]):
-                check()
-                valid &= _segment_clear(a, b, physical)
-                valid &= all(xmin < p[0] < xmax and ymin < p[1] < ymax for p in (a, b))
             if valid:
+                for a, b in zip(candidate[:-1], candidate[1:]):
+                    check()
+                    if (not all(xmin < p[0] < xmax and ymin < p[1] < ymax for p in (a, b))
+                            or not _segment_clear(a, b, physical)):
+                        valid = False
+                        break
+            if valid:
+                # 已在同一physical几何上逐段认证，复用证据而不重复扫描。
                 points = candidate
-            # 独立于图的最终连续碰撞门禁；任何数值边界问题均不发布参考。
-            for a, b in zip(points[:-1], points[1:]):
-                check()
-                if not _segment_clear(a, b, physical):
-                    return finish("GEOMETRY_REJECTED")
+            else:
+                # 候选不可证时只认证既有greedy结果；不发布不安全参考。
+                for a, b in zip(points[:-1], points[1:]):
+                    check()
+                    if not _segment_clear(a, b, physical):
+                        return finish("GEOMETRY_REJECTED")
             route = Route(version, world.epoch, np.asarray(points), goal)
             timing["shortcut_validate_s"] = time.perf_counter() - shortcut_began
             check()
