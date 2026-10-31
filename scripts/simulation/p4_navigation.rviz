@@ -87,26 +87,22 @@ Visualization Manager:
     Color: 0; 220; 255
     Line Style: Billboards
     Line Width: 0.07
-  - Class: rviz_default_plugins/Pose
+  - Class: rviz_default_plugins/Marker
     Name: Start from P3 (waiting if absent)
     Enabled: true
     Topic:
-      Value: /p4_p3_debug/start_pose
+      Value: /p4_p3_debug/start_marker
       Reliability Policy: Reliable
       Durability Policy: Transient Local
       Depth: 1
-    Color: 0; 255; 0
-    Shape: Arrow
-  - Class: rviz_default_plugins/Pose
+  - Class: rviz_default_plugins/Marker
     Name: Selected goal (not arrival)
     Enabled: true
     Topic:
-      Value: /p4_p3_debug/goal_pose_display
+      Value: /p4_p3_debug/goal_marker
       Reliability Policy: Reliable
       Durability Policy: Transient Local
       Depth: 1
-    Color: 255; 0; 0
-    Shape: Arrow
   - Class: rviz_default_plugins/Path
     Name: Actual P3 observations
     Enabled: true

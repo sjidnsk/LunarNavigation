@@ -189,29 +189,38 @@ def test_cleanup_discards_invalid_queued_commands_and_releases_lease(bad):
     assert not r.receive(bad)
 
 
-def test_observer_tracks_unique_stamped_source_and_resets_goal():
+def test_observer_stale_goal_global_watermark_and_frame_transition():
     from scripts.simulation.p4_tcp_runtime import NavigationObserver
-    def pose(): return S(header=S(frame_id='',stamp=S(sec=0,nanosec=0)),pose=None)
+    starts=[];paths=[];goals=[]
+    def pose(): return S(header=None,pose=None)
     def path(): return S(header=None,poses=[])
     def odom(t,frame='map'):
         return S(header=S(frame_id=frame,stamp=S(sec=t,nanosec=0)),pose=S(pose=S(position=S(x=1.,y=2.,z=0.),orientation=S(x=0.,y=0.,z=0.,w=1.))))
-    starts=[];goals=[];paths=[]
-    o=NavigationObserver(pose,path,starts.append,goals.append,paths.append)
-    o.odometry(odom(1));o.goal('goal1');o.odometry(odom(2));o.odometry(odom(2));o.odometry(odom(1))
-    assert starts[-1].header.stamp.sec==1 and len(paths[-1].poses)==2
-    o.odometry(odom(1,'odom'));assert len(paths[-1].poses)==1 and paths[-1].header.frame_id=='odom'
-    o.poses = o.poses * 2000
-    o.odometry(odom(2,'odom'))
-    assert len(paths[-1].poses)==2000
-    o.goal('goal2');assert len(paths[-1].poses)==1 and starts[-1].header.stamp.sec==2
-    assert goals==['goal1','goal2']
+    o=NavigationObserver(pose,path,starts.append,goals.append,paths.append,4.5)
+    o.odometry(odom(10),0.);o.goal(S(header=odom(10).header,pose=None),5.)
+    assert starts[-1] is None and paths[-1].poses==[]
+    o.odometry(odom(9,'odom'),5.1);assert starts[-1] is None
+    o.odometry(odom(11,'odom'),5.2);assert starts[-1].header.frame_id=='odom'
+    o.odometry(odom(12,'map'),5.3);assert len(paths[-1].poses)==1 and paths[-1].header.frame_id=='map'
+    o.poses=o.poses*2000;o.odometry(odom(13),5.4);assert len(paths[-1].poses)==2000
+    o.goal(S(header=odom(13).header,pose=None),5.5);assert starts[-1].header.stamp.sec==13
 
 
-def test_observer_waits_for_first_valid_pose():
-    from scripts.simulation.p4_tcp_runtime import NavigationObserver
-    starts=[];paths=[]
-    o=NavigationObserver(lambda:S(header=S(frame_id=''),pose=None),lambda:S(header=None,poses=[]),starts.append,lambda _:None,paths.append)
-    o.goal('goal');assert starts[-1].header.frame_id=='' and not paths[-1].poses
+def test_display_mailbox_coalesces_without_blocking_publish_or_old_path_after_goal():
+    from scripts.simulation.p4_tcp_runtime import DisplayWorker
+    import threading
+    entered=threading.Event();release=threading.Event();events=[]
+    class Observer:
+        def odometry(self,msg,when):
+            if msg=='blocked': entered.set();release.wait(2)
+            events.append(('path',msg))
+        def goal(self,msg,when): events.append(('goal',msg))
+    worker=DisplayWorker(Observer());worker.start();worker.offer_odom('blocked',0.)
+    assert entered.wait(1)
+    worker.offer_odom('old',1.);worker.offer_goal('old goal',2.);worker.offer_goal('new goal',3.);worker.offer_odom('new',4.)
+    release.set();worker.stop()
+    assert ('goal','old goal') not in events and ('path','old') not in events
+    assert events[-2:]==[('goal','new goal'),('path','new')]
 
 
 def test_observer_is_enabled_only_for_active_rviz():
@@ -219,7 +228,7 @@ def test_observer_is_enabled_only_for_active_rviz():
     from pathlib import Path
     source=(Path(__file__).resolve().parents[1]/'scripts/simulation/p4_tcp_runtime.py').read_text(encoding='utf-8')
     tree=ast.parse(source)
-    condition=next(n.test for n in ast.walk(tree) if isinstance(n,ast.If) and any(isinstance(x,ast.Call) and isinstance(x.func,ast.Name) and x.func.id=='attach_navigation_observer' for x in ast.walk(n)))
+    condition=next(n.test for n in ast.walk(tree) if isinstance(n,ast.If) and any(isinstance(x,ast.Assign) and any(isinstance(v,ast.Call) and isinstance(v.func,ast.Name) and v.func.id=='attach_navigation_observer' for v in ast.walk(x)) for x in n.body))
     expr=compile(ast.Expression(condition),'<condition>','eval')
     assert eval(expr,{},dict(options=S(rviz_config='config',check_only=False)))
     assert not eval(expr,{},dict(options=S(rviz_config=None,check_only=False)))
@@ -235,3 +244,32 @@ def test_tcp_budget_and_brake_hold_cover_nominal_poll():
     assert config['p3_map_timeout_s']==0. and config['odometry_timeout_s']==4.5
     assert COMMAND_TIMEOUT_S==.6 and TRANSPORT_TIMEOUT_S==.5
     assert (3+11+1)*.05 >= COMMAND_TIMEOUT_S+.1
+
+
+def test_marker_delete_is_explicit_and_topics_use_marker_protocol():
+    from scripts.simulation.p4_tcp_runtime import attach_navigation_observer
+    import threading
+    events=[]; ready=threading.Event()
+    class Marker:
+        DELETE=2; ADD=0; ARROW=0
+        def __init__(self):
+            self.scale=S(x=0.,y=0.,z=0.); self.color=S(r=0.,g=0.,b=0.,a=0.)
+    class Node:
+        def create_publisher(self,cls,topic,qos):
+            def publish(msg):
+                events.append((topic,msg))
+                if topic.endswith('goal_marker'):ready.set()
+            return S(publish=publish)
+        def create_subscription(self,cls,topic,callback,qos): return callback
+    worker,handles=attach_navigation_observer(Node(),Node(),dict(marker=Marker,path=lambda:S(header=None,poses=[]),pose=lambda:S(header=None,pose=None),odom=object),dict(display=1,odom=2,goal=3),4.5)
+    header=S(frame_id='map',stamp=S(sec=1,nanosec=0))
+    position=S(x=1.,y=2.,z=0.);orientation=S(x=0.,y=0.,z=0.,w=1.)
+    worker.offer_odom(S(header=header,pose=S(pose=S(position=position,orientation=orientation))),0.)
+    worker.offer_goal(S(header=header,pose=S()),1.)
+    assert ready.wait(1); ready.clear()
+    worker.offer_goal(S(header=header,pose=S()),6.)
+    assert ready.wait(1);worker.stop()
+    deletes=[m for topic,m in events if topic.endswith('/start_marker') and m.action==Marker.DELETE]
+    assert len(deletes)==1 and deletes[0].header.frame_id=='map'
+    assert [m.action for topic,m in events if topic.endswith('/goal_marker')]==[Marker.ADD,Marker.ADD]
+    assert events[-1][1].header.frame_id=='map' and events[-1][1].poses==[]

@@ -8,6 +8,8 @@ from pathlib import Path
 import signal
 import subprocess
 import time
+import threading
+from collections import deque
 
 CONTROL_DOMAIN=10
 P3_SOURCE_DOMAIN=57
@@ -41,58 +43,114 @@ def input_bridge(source,target,classes,qos):
 
 
 class NavigationObserver:
-    """只记录源定位，不参与导航决策。"""
-    def __init__(self, make_pose, make_path, publish_start, publish_goal, publish_path):
+    """只在显示线程处理真实源观测；绝不参与导航。"""
+    def __init__(self, make_pose, make_path, publish_start, publish_goal, publish_path, timeout):
         self.make_pose, self.make_path = make_pose, make_path
         self.publish_start, self.publish_goal, self.publish_path = publish_start, publish_goal, publish_path
-        self.latest = None
-        self.stamps = {}
+        self.timeout = float(timeout)
+        self.latest = self.last_advance = self.high_stamp = self.path_header = None
         self.active = False
         self.start = None
-        self.poses = []
+        self.poses = deque(maxlen=2000)
 
-    def goal(self, msg):
+    def goal(self, msg, received):
         self.active = True
-        self.start = deepcopy(self.latest)
-        self.poses = [] if self.start is None else [deepcopy(self.start)]
+        fresh = self.latest is not None and 0 <= received-self.last_advance <= self.timeout
+        self.start = deepcopy(self.latest) if fresh else None
+        self.poses.clear()
+        if self.start is not None: self.poses.append(deepcopy(self.start))
+        self.publish_start(self.start)  # None 明确发送 Marker DELETE。
         self.publish_goal(msg)
-        # 空 frame 的消息清除上一次起点；不虚构当前位置。
-        self.publish_start(self.start if self.start is not None else self.make_pose())
-        self._path()
+        self._path(msg.header)
 
-    def odometry(self, msg):
+    def odometry(self, msg, received):
         h, p = msg.header, msg.pose.pose
         stamp = (h.stamp.sec, h.stamp.nanosec)
         values = (p.position.x,p.position.y,p.position.z,p.orientation.x,p.orientation.y,p.orientation.z,p.orientation.w)
-        if (not h.frame_id or stamp <= (0,0) or not all(math.isfinite(v) for v in values)
+        if (not h.frame_id or stamp <= (0,0) or not 0 <= stamp[1] < 1000000000
+                or not all(math.isfinite(v) for v in values)
                 or sum(v*v for v in values[3:]) < 1e-12): return
-        if stamp <= self.stamps.get(h.frame_id,(0,0)): return
-        self.stamps[h.frame_id] = stamp
+        if self.high_stamp is not None and stamp <= self.high_stamp: return
+        if self.last_advance is not None and received < self.last_advance: return
+        self.high_stamp, self.last_advance = stamp, received
         pose = self.make_pose(); pose.header = deepcopy(h); pose.pose = deepcopy(p)
         self.latest = pose
         if not self.active: return
         if self.start is None:
             self.start = deepcopy(pose); self.publish_start(self.start)
-        if self.poses and self.poses[-1].header.frame_id != h.frame_id:
-            self.poses = []
+        if self.poses and self.poses[-1].header.frame_id != h.frame_id: self.poses.clear()
         self.poses.append(pose)
-        self.poses = self.poses[-2000:]
-        self._path()
+        self._path(h)
 
-    def _path(self):
+    def _path(self, fallback_header):
         path = self.make_path()
-        if self.poses: path.header = deepcopy(self.poses[-1].header)
-        path.poses = deepcopy(self.poses)
+        header = self.poses[-1].header if self.poses else (self.path_header or fallback_header)
+        if not header.frame_id: return
+        path.header = deepcopy(header)
+        self.path_header = deepcopy(header)
+        path.poses = deepcopy(list(self.poses))
         self.publish_path(path)
 
 
-def attach_navigation_observer(source, target, classes, qos):
+class DisplayWorker:
+    """两个单槽邮箱：主线程仅交换引用，显示工作不持锁。"""
+    def __init__(self, observer):
+        self.observer = observer
+        self.lock = threading.Lock(); self.wake = threading.Event()
+        self.sequence = 0; self.pending = {}; self.closing = False
+        self.thread = threading.Thread(target=self._run, name='p4-display', daemon=True)
+
+    def start(self): self.thread.start()
+    def offer_odom(self, msg, received=None): self._offer('odom',msg,received)
+    def offer_goal(self, msg, received=None): self._offer('goal',msg,received)
+    def _offer(self, kind, msg, received):
+        received = time.monotonic() if received is None else received
+        with self.lock:
+            self.sequence += 1
+            self.pending[kind] = (self.sequence, msg, received)
+            self.wake.set()
+
+    def _run(self):
+        while True:
+            self.wake.wait()
+            with self.lock:
+                batch = sorted((seq,kind,msg,received) for kind,(seq,msg,received) in self.pending.items())
+                self.pending.clear(); self.wake.clear(); closing = self.closing
+            for _,kind,msg,received in batch:
+                (self.observer.goal if kind=='goal' else self.observer.odometry)(msg,received)
+            if closing: return
+
+    def stop(self):
+        with self.lock: self.closing = True; self.wake.set()
+        self.thread.join()
+
+
+def attach_navigation_observer(source, target, classes, qos, timeout):
     pubs = [target.create_publisher(classes[kind], PREFIX+topic, qos['display']) for kind,topic in
-            [('pose','/start_pose'),('pose','/goal_pose_display'),('path','/actual_path')]]
-    observer = NavigationObserver(classes['pose'],classes['path'],*(p.publish for p in pubs))
-    subs = [source.create_subscription(classes['odom'],'/Car/T3/localization/odometry',observer.odometry,qos['odom']),
-            target.create_subscription(classes['pose'],'/goal_pose',observer.goal,qos['goal'])]
-    return [observer,*pubs,*subs]
+            [('marker','/start_marker'),('marker','/goal_marker'),('path','/actual_path')]]
+    start_header = [None]
+    def marker(pose, index, color):
+        m = classes['marker'](); m.ns='p4_navigation'; m.id=index
+        if pose is None:
+            if start_header[0] is None: return None
+            m.header=deepcopy(start_header[0]); m.action=m.DELETE
+        else:
+            m.header=deepcopy(pose.header); m.pose=deepcopy(pose.pose)
+            if index==0: start_header[0]=deepcopy(pose.header)
+            m.type=m.ARROW; m.action=m.ADD
+            m.scale.x=.8; m.scale.y=.18; m.scale.z=.18
+            m.color.r,m.color.g,m.color.b=color; m.color.a=1.
+        return m
+    def publish_start(pose):
+        m=marker(pose,0,(0.,1.,0.))
+        if m is not None: pubs[0].publish(m)
+    observer = NavigationObserver(classes['pose'],classes['path'],
+        publish_start,
+        lambda p:pubs[1].publish(marker(p,1,(1.,0.,0.))),pubs[2].publish,timeout)
+    worker = DisplayWorker(observer); worker.start()
+    subs = [source.create_subscription(classes['odom'],'/Car/T3/localization/odometry',worker.offer_odom,qos['odom']),
+            target.create_subscription(classes['pose'],'/goal_pose',worker.offer_goal,qos['goal'])]
+    return worker,[*pubs,*subs]
 
 
 def command_ready(command_age,telemetry_age):
@@ -211,6 +269,7 @@ def main():
     from rclpy.qos import QoSProfile,ReliabilityPolicy,DurabilityPolicy
     from geometry_msgs.msg import Twist,PoseStamped
     from nav_msgs.msg import Odometry,Path as RosPath
+    from visualization_msgs.msg import Marker
     from grid_map_msgs.msg import GridMap
     from tf2_msgs.msg import TFMessage
     from std_msgs.msg import Bool,String
@@ -228,10 +287,7 @@ def main():
              odom_output=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE),
              tf_static=QoSProfile(depth=100,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL))
     handles=input_bridge(source,target,dict(map=GridMap,odom=Odometry,tf=TFMessage),qos)
-    if options.rviz_config is not None and not options.check_only:
-        qos['display']=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        qos['goal']=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE)
-        handles.extend(attach_navigation_observer(source,target,dict(pose=PoseStamped,path=RosPath,odom=Odometry),qos))
+    display_worker=None
     source_counts={};relay=None;lease=None;mode=None;vel=None
     for topic,cls in [('/Car/T3/mapping/grid_map',GridMap),('/Car/T3/localization/odometry',Odometry),('/tf',TFMessage),('/tf_static',TFMessage)]:
         def received(msg,key=topic):source_counts[key]=source_counts.get(key,0)+1
@@ -249,6 +305,11 @@ def main():
             profile=low_speed_profile(yaml.safe_load((root/'source/config/wheel.yaml').read_text()))
             config=out/'test-wheel.yaml';config.write_text(yaml.safe_dump(profile,sort_keys=False))
             budgets=yaml.safe_load((root/'source/config/tcp_p3_feedback.yaml').read_text())
+            if options.rviz_config is not None and not options.check_only:
+                qos['display']=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
+                qos['goal']=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE)
+                display_worker,display_handles=attach_navigation_observer(source,target,dict(pose=PoseStamped,path=RosPath,odom=Odometry,marker=Marker),qos,budgets['odometry_timeout_s'])
+                handles.extend(display_handles)
             args=launch_settings(root/'source',root/'.cache/nav1cm',config,budgets)
             env=runtime_environment(root,out)
             commands=[('navigation',['ros2','launch','lunar_pure_exploration_ros','nav1cm_exploration.launch.py']+[k+':='+str(v) for k,v in args.items()])]
@@ -293,6 +354,7 @@ def main():
         result.update(source_counts=source_counts,forwarded_nonzero=0 if relay is None else relay.forwarded_nonzero,children={name:c.poll() for name,c in children})
         (out/'result.json').write_text(json.dumps(result,indent=2))
         for log in logs:log.close()
+        if display_worker is not None:display_worker.stop()
         for executor in executors:executor.shutdown()
         for node in nodes:node.destroy_node()
         for context in contexts:rclpy.shutdown(context=context)
