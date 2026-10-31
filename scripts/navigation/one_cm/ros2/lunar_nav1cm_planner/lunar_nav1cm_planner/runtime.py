@@ -74,7 +74,6 @@ class PlannerRuntime:
         self.publish_command = None
         self._last_issued_command=(0.,0.)
         self._last_issued_s=None
-        self._command_generation=None
         self._observed_pose_stamp_ns = None
 
     def configure_direct_control(self, publish_command, *, command_hold_s, reference_interval_s=.2):
@@ -147,21 +146,16 @@ class PlannerRuntime:
         if world is None:return packet, False
         cells=rasterize_world(world,grid.origin_xy,grid.cells.shape)
         if np.array_equal(cells,grid.cells):return packet, True
-        if result.candidate is None or result.action is None:return packet, False
+        if result.candidate is None:return packet, False
         grid=GridSnapshot(world.epoch,grid.origin_xy,grid.resolution_m,cells,grid.allow_unknown)
         candidate=replace(result.candidate,map_epoch=grid.epoch)
-        action=replace(result.action,map_epoch=grid.epoch)
         coordinator=self.session.coordinator
         context=prepare_certification(grid,backend=coordinator.backend)
         certificate=certify(candidate,grid,coordinator.limits,candidate.route_version,
             backend=coordinator.backend,context=context)
-        action_certificate=certify(action,grid,coordinator.limits,candidate.route_version,
-            backend=coordinator.backend,context=context)
-        if (not certificate.matches(candidate,grid,coordinator.limits,candidate.route_version) or
-                not action_certificate.matches(action,grid,coordinator.limits,candidate.route_version)):
+        if not certificate.matches(candidate,grid,coordinator.limits,candidate.route_version):
             return packet, False
-        result=replace(result,grid=grid,candidate=candidate,certificate=certificate,
-            action=action,action_certificate=action_certificate)
+        result=replace(result,grid=grid,candidate=candidate,certificate=certificate)
         return replace(packet,result=result,candidate=candidate), True
 
     def configure_pose_input(self,timeout_s):
@@ -478,10 +472,6 @@ class PlannerRuntime:
         command=(0.,0.)
         if self.publish_command is not None:
             from nav1cm.execution import certified_velocity_command
-            if self._command_generation != packet.generation:
-                self._last_issued_command=(0.,0.)
-                self._last_issued_s=None
-                self._command_generation=packet.generation
             command_now=time.monotonic()
             elapsed=(self.session.coordinator.execution_period_s if self._last_issued_s is None
                      else max(0.,command_now-self._last_issued_s))

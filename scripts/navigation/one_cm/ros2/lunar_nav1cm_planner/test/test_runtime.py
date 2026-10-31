@@ -251,7 +251,7 @@ def test_direct_control_brakes_from_measured_state_and_missing_input_zero():
     session.offer_state(VehicleState(0,0,0,.1,0))
     runtime.tasks.submit('direct-a',(0,3,0),0.)
     packet=runtime._tick_once(0.)
-    assert packet.result.action is not None
+    assert packet.result.action is None
     assert commands[-1] == (0.,0.)  # brake候选只发布零目标，实测速度仍保留
     assert session.state.v == .1  # 模型积分不得推进在线实测状态。
     runtime.request_cancel(runtime.tasks.active.task_id)
@@ -377,6 +377,12 @@ def test_direct_safe_changed_window_recertifies_once_without_braking():
     runtime,session,*_=build_runtime();commands=[]
     runtime.configure_direct_control(lambda v,w:commands.append((v,w)),command_hold_s=1.2)
     session.offer_state(VehicleState(0,0,0,.1,0));runtime.tasks.submit('safe-map',(0,3,0),0.)
+    proofs=[]
+    original_proof=runtime._publication_map_proof
+    def check(packet,world):
+        assert packet.result.action is None and packet.result.action_certificate is None
+        accepted=original_proof(packet,world);proofs.append(accepted[1]);return accepted
+    runtime._publication_map_proof=check
     tick=session.tick
     def raced(now):
         packet=tick(now)
@@ -384,4 +390,26 @@ def test_direct_safe_changed_window_recertifies_once_without_braking():
         runtime._world=WorldSnapshot(2,session.world.blocked+(CellRect(190,190,200,200),),session.world.known_free)
         return packet
     session.tick=raced;runtime._tick_once(0.)
+    assert proofs==[True]
     assert commands[-1] == (0.,0.)  # brake候选只发布零目标，实测速度仍保留
+
+def test_goal_replacement_retains_actual_last_command_and_zero_publish_resets(monkeypatch):
+    import nav1cm.execution as execution
+    from nav1cm.contracts import VehicleState
+    runtime,session,*_=build_runtime();commands=[];seen=[]
+    runtime.configure_direct_control(lambda *command:commands.append(command),command_hold_s=.1)
+    session.offer_state(VehicleState(0,0,0,0,0))
+    runtime._publish_issued((.06,.02))
+    stamp=runtime._last_issued_s
+    def command(result,state,*args,**kwargs):
+        seen.append(kwargs['last_command']);return (.07,.03)
+    monkeypatch.setattr(execution,'certified_velocity_command',command)
+    runtime.offer_goal(pose(0,3));runtime._tick_once(0.)
+    assert seen[-1]==(.06,.02)
+    assert runtime._last_issued_command==commands[-1]==(.07,.03)
+    assert runtime._last_issued_s>=stamp
+    runtime.offer_goal(pose(0,4));runtime._tick_once(.1)
+    assert seen[-1]==(.07,.03)
+    runtime._publish_issued((0.,0.))
+    runtime.offer_goal(pose(0,5));runtime._tick_once(.2)
+    assert seen[-1]==(0.,0.)

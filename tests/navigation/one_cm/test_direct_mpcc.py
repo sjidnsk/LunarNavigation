@@ -20,17 +20,17 @@ def test_current_short_control(v,w,a,b):
     result.action_certificate=None
     assert certified_command(result,measured,object()) == (0.,0.)
 
-def test_direct_session_requests_action_and_cancel_prefix():
+def test_direct_session_does_not_request_legacy_action_or_cancel_prefix():
     session,Goal=make_session()
     session.direct_control=True
     session.offer_goal(Goal(0,2,0))
     packet=session.tick(0.)
-    assert packet.result.action is not None
+    assert packet.result.action is None
+    assert packet.result.action_certificate is None
     session.cancel_goal()
     packet=session.tick(.05)
-    assert packet.result.action is not None
-    assert packet.result.action.times[-1] == pytest.approx(.05)
-    assert packet.result.action_certificate.matches(packet.result.action,packet.result.grid,session.coordinator.limits,-1)
+    assert packet.result.action is None
+    assert packet.result.action_certificate is None
 
 
 @pytest.mark.parametrize("change",['state','map','limits','version','controls'])
@@ -41,7 +41,7 @@ def test_real_certificate_refuses_changed_execution_inputs(change):
     session.direct_control=True
     session.offer_state(VehicleState(0,0,0,.1,0))
     session.cancel_goal()
-    result=session.tick(0.).result
+    result=session.coordinator.cancel_tick(session.world,session.state,0.,need_action=True)
     measured=session.state
     limits=session.coordinator.limits
     assert 0 < certified_command(result,measured,limits)[0] < .1

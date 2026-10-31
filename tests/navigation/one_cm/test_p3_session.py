@@ -117,6 +117,7 @@ def test_identical_periodic_goal_does_not_change_generation_or_retire_result():
 def test_session_publishes_full_terminal_reference_without_constructing_offline_action(monkeypatch):
     import scripts.navigation.one_cm.nav1cm.async_coordinator as async_module
     session, Goal = make_session()
+    session.direct_control=True
     assert session.offer_goal(Goal(0, 0, 0))
     def forbidden(*args, **kwargs): raise AssertionError('production must not build action')
     monkeypatch.setattr(async_module, 'action_prefix', forbidden)
