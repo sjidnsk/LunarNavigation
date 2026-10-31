@@ -54,3 +54,136 @@ def test_p4_profile_has_no_map_time_expiry_and_preflight_uses_same_policy():
     assert float(args['p3_map_timeout_s'])==0.
     sample=record_sample(None,95_000_000_000,100_000_000_000,10.)
     assert runtime_input_health('map',sample,1100_000_000_000,1010.,odometry_timeout_s=4.5,p3_map_timeout_s=profile['p3_map_timeout_s'])['ready']
+
+
+
+def profile():
+    return {'capability':{'maximum_forward_speed_mps':.2,'maximum_reverse_speed_mps':.2,'maximum_spin_rate_radps':1.}}
+
+
+def message(v=0.,w=0.):return S(linear=S(x=v),angular=S(z=w))
+
+
+def telemetry(**changes):
+    values=dict(vx=0.,vy=0.,wheel_speed_fl=0.,wheel_speed_fr=0.,wheel_speed_rl=0.,wheel_speed_rr=0.)
+    values.update(changes);return S(**values)
+
+
+def relay_fixture():
+    from scripts.simulation import p4_tcp_runtime as m
+    events=[];clock=[0.]
+    relay=m.TcpCommandRelay(m.low_speed_profile(profile()),
+        publish_velocity=lambda msg:events.append(('velocity',msg.linear.x,msg.angular.z)),
+        publish_mode=lambda mode:events.append(('mode',mode)),
+        publish_lease=lambda active:events.append(('lease',active)),
+        make_zero=message,clock=lambda:clock[0])
+    return relay,events,clock
+
+
+def test_low_speed_profile_is_shared_capped_and_does_not_mutate_source():
+    from scripts.simulation.p4_tcp_runtime import low_speed_profile
+    original=profile();run=low_speed_profile(original);test=low_speed_profile(original,linear_mps=.05,angular_rps=.1)
+    assert run['capability']['maximum_forward_speed_mps']==.1
+    assert test['capability']['maximum_forward_speed_mps']==.05
+    assert original['capability']['maximum_forward_speed_mps']==.2
+    original['capability']['maximum_reverse_speed_mps']=.03
+    assert low_speed_profile(original)['capability']['maximum_reverse_speed_mps']==.03
+
+
+def test_private_launch_uses_same_controller_budgets_and_initial_direction():
+    budgets=dict(odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2)
+    args=launch_settings('/p4/source','/p4/cache','/p4/wheel',budgets,prefix='/check',goal_topic='/check/goal')
+    assert args['command_topic']=='/check/cmd_vel' and args['action_name']=='/check/navigate_to_pose'
+    assert args['initial_travel_direction']=='forward'
+    assert float(args['p3_map_timeout_s'])==0. and args['goal_topic']=='/check/goal'
+
+
+def test_relay_preflight_publishes_nothing_and_execution_needs_no_task_status():
+    r,events,clock=relay_fixture();r.update_telemetry(telemetry())
+    assert not r.receive(message(.02)) and not events
+    r.acquire();events.clear()
+    assert r.receive(message(.02))
+    assert events==[('mode','auto'),('velocity',.02,0.)]
+    assert r.receive(message(.03)) and r.forwarded_nonzero==2
+    assert events.count(('mode','auto'))==1
+
+
+@pytest.mark.parametrize('bad',[message(.11),message(-.11),message(0.,.3),message(float('nan')),message(0.,float('inf'))])
+def test_invalid_command_parks_and_is_never_forwarded(bad):
+    r,events,clock=relay_fixture();r.acquire();r.update_telemetry(telemetry());events.clear()
+    with pytest.raises(ValueError):r.receive(bad)
+    assert events==[('velocity',0.,0.),('mode','park')]
+    assert r.forwarded_nonzero==0
+
+
+@pytest.mark.parametrize('kind',['command','telemetry'])
+def test_transport_gap_parks_using_the_same_existing_budget(kind):
+    r,events,clock=relay_fixture();r.acquire();r.update_telemetry(telemetry());r.receive(message(.02))
+    clock[0]=.51
+    if kind=='command':r.update_telemetry(telemetry())
+    events.clear();assert not r.heartbeat()
+    assert ('velocity',0.,0.) in events and ('mode','park') in events
+    assert not r.armed
+
+
+def test_zero_command_and_cleanup_cannot_reenter_auto():
+    r,events,clock=relay_fixture();r.acquire();r.update_telemetry(telemetry());r.receive(message(.02))
+    assert not r.receive(message()) and events[-1]==('velocity',0.,0.)
+    r.begin_stop();before=r.forwarded_nonzero;events.clear()
+    assert not r.receive(message(.02));r.heartbeat()
+    assert r.forwarded_nonzero==before and ('mode','auto') not in events
+    r.release();events.clear();assert not r.receive(message(.02)) and not events
+
+
+@pytest.mark.parametrize('changes,age,stopped',[({},0.,True),({},.5,False),({},.51,False),({'vy':.02},0.,False),({'wheel_speed_rr':.06},0.,False)])
+def test_measured_stop_uses_shared_real_telemetry(changes,age,stopped):
+    r,events,clock=relay_fixture();r.update_telemetry(telemetry(**changes));clock[0]=age
+    assert r.measured_stopped()==stopped
+
+
+def test_bounded_runner_routes_command_through_shared_adapter_without_reference_gate():
+    import ast,collections,math,time
+    from pathlib import Path
+    path=Path(__file__).resolve().parents[1]/'scripts/simulation/check_tcp_navigation.py'
+    tree=ast.parse(path.read_text(encoding='utf-8'))
+    callback=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='command_input')
+    module=ast.fix_missing_locations(ast.Module(body=[callback],type_ignores=[]))
+    seen=[]
+    scope=dict(relay=S(armed=False,receive=lambda msg:seen.append(msg)),counts=collections.Counter(),
+               event=lambda *a,**k:None,time=time,math=math,armed=False,nonzero=0,forwarded_nonzero=0,
+               last_command=None,leased=True,handle=None,reference_accepted=False)
+    exec(compile(module,str(path),'exec'),scope)
+    command=message(.02);scope['command_input'](command)
+    assert seen==[command]
+
+
+
+@pytest.mark.parametrize('changes',[{'vy':float('nan')},{'wheel_speed_rr':float('nan')}])
+def test_invalid_telemetry_is_not_measured_stop(changes):
+    r,events,clock=relay_fixture();r.update_telemetry(telemetry(**changes))
+    assert not r.measured_stopped()
+
+
+def test_reverse_limit_and_environment_come_from_shared_configuration():
+    from scripts.simulation.p4_tcp_runtime import TcpCommandRelay,low_speed_profile,runtime_environment
+    source=profile();source['capability']['maximum_reverse_speed_mps']=.03
+    events=[]
+    r=TcpCommandRelay(low_speed_profile(source),publish_velocity=lambda m:events.append(m),
+        publish_mode=lambda m:None,publish_lease=lambda b:None,make_zero=message,clock=lambda:0.)
+    r.acquire();r.update_telemetry(telemetry())
+    assert r.receive(message(-.02))
+    with pytest.raises(ValueError):r.receive(message(-.04))
+    env=runtime_environment('/home/yanfa/P4','/home/yanfa/P4/run/test')
+    assert env['ROS_DOMAIN_ID']=='10' and env['ROS_LOG_DIR'].replace(chr(92),'/').endswith('test/ros-log')
+    assert env['NAV1CM_BUILD_DIR'].replace(chr(92),'/').endswith('.cache/nav1cm')
+
+
+
+@pytest.mark.parametrize('bad',[message(float('nan')),message(.2)])
+def test_cleanup_discards_invalid_queued_commands_and_releases_lease(bad):
+    r,events,clock=relay_fixture();r.acquire();r.update_telemetry(telemetry())
+    r.begin_stop()
+    assert not r.receive(bad)
+    r.release()
+    assert events[-1]==('lease',False) and not r.leased
+    assert not r.receive(bad)
