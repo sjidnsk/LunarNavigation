@@ -140,7 +140,7 @@ try:
  while time.monotonic()-attempt<75:
   was_armed=relay.armed
   ready=relay.heartbeat()
-  if was_armed and not ready:event('relay_transport_gap_park')
+  if was_armed and not ready:event('relay_stopped_or_disconnected')
   spin(.1)
   if process.poll() is not None:raise RuntimeError('navigation launch exited')
   if positions and math.dist(initial_pose,positions[-1])>.8:raise RuntimeError('test displacement exceeded 0.8m bound')

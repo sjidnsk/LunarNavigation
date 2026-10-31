@@ -15,7 +15,6 @@ CONTROL_DOMAIN=10
 P3_SOURCE_DOMAIN=57
 PREFIX='/p4_p3_debug'
 TRANSPORT_TIMEOUT_S=.5
-COMMAND_TIMEOUT_S=.6
 
 
 def launch_settings(source,build_dir,profile_path,budgets,*,prefix=PREFIX,goal_topic="/goal_pose"):
@@ -209,11 +208,6 @@ def attach_navigation_observer(source, target, classes, qos, timeout):
     return worker,[*pubs,*subs]
 
 
-def command_ready(command_age):
-    # 平台只检查传输活性，不重新解释规划参考的接管状态。
-    return 0<=command_age<=COMMAND_TIMEOUT_S
-
-
 def profile_command_limits(profile):
     capability=profile['capability']
     values=tuple(float(capability[name]) for name in
@@ -271,7 +265,7 @@ class TcpCommandRelay:
         self._velocity,self._mode,self._lease=publish_velocity,publish_mode,publish_lease
         self._zero,self._clock=make_zero,clock
         self.leased=self.armed=self._stopping=False
-        self._command_s=self._telemetry=None
+        self._telemetry=None
         self._connected=None
         self.forwarded_nonzero=self.forwarded_zero=0
 
@@ -306,21 +300,20 @@ class TcpCommandRelay:
         forward,reverse,angular=self.limits
         if not all(math.isfinite(x) for x in (v,w)) or not -reverse-1e-6<=v<=forward+1e-6 or abs(w)>angular+1e-6:
             self.park();raise ValueError('invalid_or_over_limit_controller_command')
-        self._command_s=self._clock()
         if abs(v)+abs(w)<1e-7:
             self._velocity(message);self.forwarded_zero+=1;return False
         if self._connected is False or (not self.armed and (self._telemetry is None or not 0<=self._clock()-self._telemetry[0]<=1.)):
             self.park();return False
-        if not self.armed:self._mode('auto');self.armed=True
+        # 既有租约唯一 owner 重申幂等 auto，使底盘 watchdog 停车后可随新输入恢复。
+        self._mode('auto');self.armed=True
         self._velocity(message);self.forwarded_nonzero+=1
         return True
 
     def heartbeat(self):
         if not self.leased:return False
-        self._lease(True);now=self._clock()
-        ready=(self._connected is not False and self._command_s is not None and command_ready(now-self._command_s))
-        if self._stopping or not ready:self.park();return False
-        return True
+        self._lease(True)
+        # 指令间隔不参与停车；真实断连与明确停止由各自事件处理。
+        return not self._stopping and self._connected is not False
 
     def measured_stopped(self):
         if self._telemetry is None:return False

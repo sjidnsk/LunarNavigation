@@ -1,7 +1,7 @@
 """P4域10接线与车辆租约回归；不依赖ROS。"""
 from types import SimpleNamespace as S
 import pytest
-from scripts.simulation.p4_tcp_runtime import CONTROL_DOMAIN, P3_SOURCE_DOMAIN, input_bridge, launch_settings, command_ready
+from scripts.simulation.p4_tcp_runtime import CONTROL_DOMAIN, P3_SOURCE_DOMAIN, input_bridge, launch_settings
 
 
 def test_control_launch_uses_existing_wheel_limits_and_private_adapter_input():
@@ -28,11 +28,6 @@ def test_input_bridge_preserves_messages_stamps_and_latched_tf():
         msg=S(header=S(stamp=123));callback(msg)
         assert published[-1]==(topic,msg,qos)
     assert subscriptions[-1][0]=='/tf_static' and subscriptions[-1][2]=='latched-static'
-
-
-@pytest.mark.parametrize('command_age,expected',[(.1,True),(.55,True),(.6,True),(.601,False),(-.1,False)])
-def test_relay_rejects_transport_gaps(command_age,expected):
-    assert command_ready(command_age)==expected
 
 
 def test_tf_output_accepts_reliable_rviz_without_changing_source_subscription():
@@ -105,7 +100,7 @@ def test_relay_preflight_publishes_nothing_and_execution_needs_no_task_status():
     assert r.receive(message(.02))
     assert events==[('mode','auto'),('velocity',.02,0.)]
     assert r.receive(message(.03)) and r.forwarded_nonzero==2
-    assert events.count(('mode','auto'))==1
+    assert events.count(('mode','auto'))==2
 
 
 @pytest.mark.parametrize('bad',[message(.11),message(-.11),message(0.,.3),message(float('nan')),message(0.,float('inf'))])
@@ -116,14 +111,19 @@ def test_invalid_command_parks_and_is_never_forwarded(bad):
     assert r.forwarded_nonzero==0
 
 
-@pytest.mark.parametrize('kind',['command'])
-def test_transport_gap_parks_using_the_same_existing_budget(kind):
-    r,events,clock=relay_fixture();r.acquire();r.update_telemetry(telemetry());r.receive(message(.02))
-    clock[0]=.61 if kind=='command' else .51
-    if kind=='command':r.update_telemetry(telemetry())
-    events.clear();assert not r.heartbeat()
-    assert ('velocity',0.,0.) in events and ('mode','park') in events
-    assert not r.armed
+@pytest.mark.parametrize('gap',[.601,2.,600.])
+def test_command_gap_heartbeat_only_renews_lease_and_next_command_recovers(gap):
+    r,events,clock=relay_fixture();r.acquire()
+    events.clear();clock[0]=gap
+    assert r.heartbeat()
+    assert events==[('lease',True)]
+    r.update_telemetry(telemetry());assert r.receive(message(.02))
+    clock[0]+=gap;events.clear()
+    assert r.heartbeat() and r.armed
+    assert events==[('lease',True)]
+    # 底盘 watchdog 已自行 park，relay 无模式反馈；下一条有效输入重申 auto。
+    events.clear();assert r.receive(message(.03))
+    assert events==[('mode','auto'),('velocity',.03,0.)]
 
 
 def test_zero_command_and_cleanup_cannot_reenter_auto():
@@ -244,12 +244,11 @@ def test_observer_is_enabled_only_for_active_rviz():
 def test_tcp_budget_and_brake_hold_cover_nominal_poll():
     from pathlib import Path
     import yaml
-    from scripts.simulation.p4_tcp_runtime import COMMAND_TIMEOUT_S,TRANSPORT_TIMEOUT_S
+    from scripts.simulation.p4_tcp_runtime import TRANSPORT_TIMEOUT_S
     config=yaml.safe_load((Path(__file__).resolve().parents[1]/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
     assert config['mppi_compute_envelope_s']==.55 and config['mppi_time_steps']==140
     assert config['p3_map_timeout_s']==0. and config['odometry_timeout_s']==4.5
-    assert COMMAND_TIMEOUT_S==.6 and TRANSPORT_TIMEOUT_S==.5
-    assert (3+11+1)*.05 >= COMMAND_TIMEOUT_S+.1
+    assert TRANSPORT_TIMEOUT_S==.5
 
 
 def test_marker_delete_is_explicit_and_topics_use_marker_protocol():
@@ -496,4 +495,12 @@ def test_stock_interface_still_requires_fresh_initial_body_and_command():
     r.update_telemetry(S(vx=0.,vy=0.,wz=0.))
     assert r.receive(message(.02))
     clock[0]+=.601
-    assert not r.heartbeat() and not r.armed
+    assert r.heartbeat() and r.armed
+
+
+def test_zero_before_first_command_does_not_enter_auto_and_initial_telemetry_required():
+    r,events,clock=relay_fixture();r.acquire();events.clear()
+    assert not r.receive(message())
+    assert events==[('velocity',0.,0.)]
+    events.clear();assert not r.receive(message(.02))
+    assert ('mode','auto') not in events
