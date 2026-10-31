@@ -8,6 +8,7 @@ from dataclasses import replace
 import numpy as np
 from .path_geometry import Polyline, angle
 from .mppi import MppiExecutor
+from .speed_slew import speed_slew, speed_slew_times
 
 
 class MppiPathFollower(MppiExecutor):
@@ -28,13 +29,12 @@ class MppiPathFollower(MppiExecutor):
             return np.ones(len(actual),dtype=bool)
         v=np.concatenate((np.full((len(actual),1),state.linear_mps),actual[:,:-1,0]),axis=1)
         w=np.concatenate((np.full((len(actual),1),state.angular_radps),actual[:,:-1,1]),axis=1)
-        av=np.where(abs(tv)>abs(v),p.max_linear_accel_mps2,p.max_linear_decel_mps2)*np.sign(tv-v)
+        zero_time,goal_time=speed_slew_times(v,tv,p.max_linear_accel_mps2,p.max_linear_decel_mps2)
         aw=p.max_angular_accel_radps2*np.sign(tw-w)
-        safe_av=np.where(av==0,1.,av);safe_aw=np.where(aw==0,1.,aw)
-        times=np.stack((np.zeros_like(v),np.full_like(v,dt),
-            (tv-v)/safe_av,(tw-w)/safe_aw,-v/safe_av),axis=-1)
+        safe_aw=np.where(aw==0,1.,aw)
+        times=np.stack((np.zeros_like(v),np.full_like(v,dt),zero_time,goal_time,(tw-w)/safe_aw),axis=-1)
         times=np.clip(times,0.,dt)
-        vv=v[:,:,None]+np.sign(tv-v)[:,:,None]*np.minimum(abs(tv-v)[:,:,None],abs(av)[:,:,None]*times)
+        vv=speed_slew(v[:,:,None],tv[:,:,None],times,p.max_linear_accel_mps2,p.max_linear_decel_mps2)
         ww=w[:,:,None]+np.sign(tw-w)[:,:,None]*np.minimum(abs(tw-w)[:,:,None],abs(aw)[:,:,None]*times)
         # 停稳容差用于完成判定，不能豁免非零平移的曲率。
         curvature=abs(ww)<=abs(vv)*p.max_curvature_per_m+1e-9
@@ -59,32 +59,6 @@ class MppiPathFollower(MppiExecutor):
     # Weighted output and sampled fallback both use MppiExecutor's continuous
     # arc/closed-segment certificate and complete delayed braking tail. The
     # point-free proposal score above is an objective, never safety authority.
-
-    def _project_targets(self,raw,step):
-        """Batch time-independent intent limits; retain slew recurrence order."""
-        p=self.policy
-        if p.motion_model == "differential_drive":
-            return super()._project_targets(raw,step)
-        output=np.empty(raw.shape,dtype=float)
-        intent_v=raw[:,:,0];intent_w=raw[:,:,1]
-        curvature=abs(intent_v)*p.max_curvature_per_m
-        intent_w=np.where(abs(intent_v)>p.stopped_linear_mps,
-            np.minimum(np.maximum(intent_w,-curvature),curvature),intent_w)
-        pv=np.full(len(raw),self._last_command[0]);pw=np.full(len(raw),self._last_command[1])
-        for t in range(raw.shape[1]):
-            interval=min(self._first_target_step,step) if t==0 else step
-            v=pv+np.minimum(np.maximum(intent_v[:,t]-pv,-p.max_linear_decel_mps2*interval),p.max_linear_accel_mps2*interval)
-            target_w=np.where((abs(intent_v[:,t])<=p.stopped_linear_mps)&(abs(pv)>p.stopped_linear_mps),0.,intent_w[:,t])
-            bound=p.max_angular_accel_radps2*interval
-            w=pw+np.minimum(np.maximum(target_w-pw,-bound),bound)
-            curvature=abs(v)*p.max_curvature_per_m
-            lo=np.maximum(-curvature,pw-bound);hi=np.minimum(curvature,pw+bound)
-            moving=abs(v)>p.stopped_linear_mps
-            w=np.where(moving&(lo<=hi),np.minimum(np.maximum(w,lo),hi),w)
-            stop=moving&(lo>hi)
-            pv=np.where(stop,0.,v);pw=np.where(stop,0.,w)
-            output[:,t,0]=pv;output[:,t,1]=pw
-        return output
 
     lateral_error_scale_m = .01
     heading_error_scale_rad = .05

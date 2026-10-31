@@ -12,6 +12,7 @@ import numpy as np
 from .execution import ExecutionResult
 from .path_geometry import Polyline, angle
 from .tracking import TrackingCommand, TrackingPolicy, _valid_policy
+from .speed_slew import speed_slew, prepare_targets, target_step
 
 
 @dataclass(frozen=True)
@@ -172,8 +173,7 @@ class MppiExecutor:
         tw=np.clip(targets[:,:,1],-p.max_angular_radps,p.max_angular_radps)
         integrated=actual if actual.dtype==np.float64 else np.empty(actual.shape,dtype=float)
         for t in range(h):
-            accel=np.where(abs(tv[:,t])>abs(v),p.max_linear_accel_mps2,p.max_linear_decel_mps2)
-            v=v+np.clip(tv[:,t]-v,-accel*dt,accel*dt)
+            v=speed_slew(v,tv[:,t],dt,p.max_linear_accel_mps2,p.max_linear_decel_mps2)
             w=w+np.clip(tw[:,t]-w,-p.max_angular_accel_radps2*dt,p.max_angular_accel_radps2*dt)
             integrated[:,t,0]=v;integrated[:,t,1]=w
         if integrated is not actual:actual[:]=integrated
@@ -264,32 +264,14 @@ class MppiExecutor:
     def _limit_target_step(self,previous,raw,step):
         # Rate limits belong to successive published targets, not a delayed
         # measurement of the actuator. The rollout models physical slew below.
-        p=self.policy
-        pv,pw=previous[:,0],previous[:,1]
-        if p.motion_model == 'differential_drive':
-            # 指令各轴独立限幅；测量原值仅交由物理预测和停车认证处理。
-            target_v=np.clip(raw[:,0],-p.max_reverse_mps if p.allow_reverse else 0.,p.max_linear_mps)
-            target_w=np.clip(raw[:,1],-p.max_angular_radps,p.max_angular_radps)
-            v=pv+np.clip(target_v-pv,-p.max_linear_decel_mps2*step,p.max_linear_accel_mps2*step)
-            w=pw+np.clip(target_w-pw,-p.max_angular_accel_radps2*step,p.max_angular_accel_radps2*step)
-            return np.stack((np.clip(v,-p.max_reverse_mps if p.allow_reverse else 0.,p.max_linear_mps),
-                             np.clip(w,-p.max_angular_radps,p.max_angular_radps)),axis=1)
-        v=pv+np.clip(raw[:,0]-pv,-p.max_linear_decel_mps2*step,p.max_linear_accel_mps2*step)
-        tw=np.where(abs(raw[:,0])>p.stopped_linear_mps,np.clip(raw[:,1],-abs(raw[:,0])*p.max_curvature_per_m,abs(raw[:,0])*p.max_curvature_per_m),raw[:,1])
-        tw=np.where((abs(raw[:,0])<=p.stopped_linear_mps)&(abs(pv)>p.stopped_linear_mps),0.,tw)
-        w=pw+np.clip(tw-pw,-p.max_angular_accel_radps2*step,p.max_angular_accel_radps2*step)
-        lo=np.maximum(-abs(v)*p.max_curvature_per_m,pw-p.max_angular_accel_radps2*step)
-        hi=np.minimum(abs(v)*p.max_curvature_per_m,pw+p.max_angular_accel_radps2*step)
-        moving=abs(v)>p.stopped_linear_mps
-        w=np.where(moving&(lo<=hi),np.clip(w,lo,hi),w)
-        stop=moving&(lo>hi)
-        return np.stack((np.where(stop,0.,v),np.where(stop,0.,w)),axis=1)
+        return target_step(previous,prepare_targets(raw,self.policy),step,self.policy)
 
     def _project_targets(self,raw,step):
         projected=np.empty(raw.shape,dtype=float)
+        intents=prepare_targets(raw,self.policy)
         previous=np.broadcast_to(self._last_command,(len(raw),2))
         for t in range(raw.shape[1]):
-            previous=self._limit_target_step(previous,raw[:,t],min(self._first_target_step,step) if t==0 else step)
+            previous=target_step(previous,intents[:,t],min(self._first_target_step,step) if t==0 else step,self.policy)
             projected[:,t]=previous
         return projected
 
