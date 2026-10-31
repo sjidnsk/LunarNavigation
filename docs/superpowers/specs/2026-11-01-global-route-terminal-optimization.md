@@ -21,4 +21,4 @@
 
 标准通道/直线路径分离可参考Detour findStraightPath：https://github.com/recastnavigation/recastnavigation/blob/main/Detour/Source/DetourNavMeshQuery.cpp 。仅参考职责和算法思路，不引入整个库。
 
-当前草案待用户选择范围及确认；生产算法尚未修改。
+2026-11-01 用户已明确选择方案A，按现有草案范围实施；方案B不实施。5度子批84537f4已提交并隔离验证，未部署。
