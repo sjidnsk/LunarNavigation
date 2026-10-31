@@ -171,3 +171,27 @@ def test_actual_grid_and_original_global_success_fields_are_logged_separately():
     assert results[0]['has_reference'] is True
     assert results[0]['requested_epoch'] == 1
     assert results[0]['accepted_generation'] == 1
+
+
+def test_brake_diagnostic_keeps_real_rejection_and_snapshot():
+    module = runtime_api()
+    candidate = NS(source='brake', mode='spin', route_version=7)
+    result = NS(status='BRAKING', reference=NS(route_version=8), events=(
+        {'kind':'LOCAL_REJECTED','reason':'COLLISION'},
+        {'kind':'EXECUTION_TICK','buffer_remaining_s':0.2,'local_busy':True}))
+    packet = NS(candidate=candidate, result=result, generation=3)
+    record = module.brake_diagnostic(packet, 12.5, NS(source_phase_s=0.4))
+    assert record['events'] == [{'kind':'LOCAL_REJECTED','reason':'COLLISION'}]
+    assert record['planning_route_version'] == 8 and record['candidate_route_version'] == 7
+    assert record['buffer_remaining_s'] == .2 and record['source_phase_s'] == .4
+    assert record['local_busy'] is True and record['cycle_s'] == 12.5
+
+
+def test_brake_diagnostic_marks_missing_events_and_nonfinite_values():
+    module = runtime_api()
+    packet = NS(candidate=NS(source='brake', mode='drive', route_version=1), generation=2,
+                result=NS(status='BRAKING', reference=None, events=(
+                    {'kind':'EXECUTION_TICK','buffer_remaining_s':float('nan'),'local_busy':False},)))
+    record = module.brake_diagnostic(packet, 2., NS(source_phase_s=float('inf')))
+    assert record['events'] == [] and record['event_state'] == 'none'
+    assert record['buffer_remaining_s'] is None and record['source_phase_s'] is None

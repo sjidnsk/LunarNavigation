@@ -16,6 +16,25 @@ from nav1cm.ros_conversion import (
 )
 
 
+def brake_diagnostic(packet, cycle_s, buffer):
+    """只整理本周期既有事件，不推断制动原因。"""
+    import math
+    result, candidate = packet.result, packet.candidate
+    tick = next ( (e for e in reversed(result.events) if e.get('kind') == 'EXECUTION_TICK'), {} )
+    kinds = {'LOCAL_REJECTED', 'BRAKE_REQUIRED', 'LOCAL_FAILED', 'STALE_LOCAL_RESULT',
+             'CANDIDATE_REJECTED', 'ACTION_REJECTED', 'GOAL_REJECTED', 'BRAKE_REJECTED', 'BRAKE_ACTION_REJECTED'}
+    events = [dict(e) for e in result.events if e.get('kind') in kinds]
+    def finite(value):
+        return value if isinstance(value, (int, float)) and math.isfinite(value) else None
+    return dict(cycle_s=cycle_s, accepted_generation=packet.generation, status=result.status,
+                candidate_mode=candidate.mode, candidate_source=candidate.source,
+                planning_route_version=getattr(result.reference, 'route_version', None),
+                candidate_route_version=candidate.route_version,
+                buffer_remaining_s=finite(tick.get('buffer_remaining_s')),
+                source_phase_s=finite(getattr(buffer, 'source_phase_s', None)),
+                local_busy=tick.get('local_busy'), events=events, event_state='present' if events else 'none')
+
+
 class PlannerRuntime:
     """factory/消息回调注入只用于内部验证，不构成对外延迟或控制协议。"""
     def __init__(self, session, map_store, *, publish, ros_now_ns, notice=None, map_frame='map', event_sink=None):
@@ -349,6 +368,7 @@ class PlannerRuntime:
         data = paths(packet.raw_route if packet.raw_route is not None else packet.route,
                      packet.candidate,self.ros_now_ns(),self.map_frame,global_reference=packet.route)
         # ROS 时间仅给本次 Path 定 t0；调度/轨迹年龄始终使用单调时钟。
+        published_brake = False
         with self._condition:
             if (self._pose_timeout_s is not None and not self._pose_source_current(
                     self._odometry,self._odometry_received_s,time.monotonic())[0]):
@@ -370,6 +390,13 @@ class PlannerRuntime:
                     self.execution_context=(None if active is None else active.task_id,
                         self.session.accepted_generation if active is None else active.generation,intent)
                 self.publish(data)
+                published_brake = packet.candidate is not None and packet.candidate.source == 'brake'
+        if published_brake:
+            try:
+                record = brake_diagnostic(packet, now_s, self.session.coordinator.buffer)
+                self._notice('EXECUTION_BRAKE', json.dumps(record, sort_keys=True, default=str))
+            except Exception:
+                pass  # 诊断故障不能影响已发布的控制参考。
         return packet
 
     def _tick_loop(self):
