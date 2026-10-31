@@ -13,6 +13,7 @@ class SessionPacket:
     result: object = None
     waiting: tuple = ()
     candidate: object = None
+    raw_route: object = None
 
 
 class NavigationSession:
@@ -90,7 +91,8 @@ class NavigationSession:
         if result.status!='NOT_DUE':
             self._arrival_evidence=((self.world,self.state,self.goal,self.accepted_generation,result)
                                     if result.status=='ARRIVED' and candidate is not None else None)
-        return SessionPacket(self.accepted_generation, self.coordinator.route, result, candidate=candidate)
+        return SessionPacket(self.accepted_generation, self.coordinator.route, result, candidate=candidate,
+                             raw_route=self.coordinator.raw_route)
 
     def publication_current(self, packet):
         return bool(packet.generation == self.accepted_generation and not packet.waiting and

@@ -340,13 +340,14 @@ class PlannerRuntime:
                     self._notice('LOCAL_PLAN_STATUS',json.dumps(dict(reason=event.get('reason'),
                         mode=event.get('candidate_mode'),attempt_reasons=[r.get('reason') for r in event.get('attempts',())]),sort_keys=True))
                 if event['kind'] in ('GLOBAL_CURRENT_MAP_REVALIDATED', 'GLOBAL_CURRENT_MAP_REJECTED',
-                                      'LOCAL_CURRENT_MAP_REVALIDATED', 'INITIAL_START_COMPLETED'):
+                                      'LOCAL_CURRENT_MAP_REVALIDATED', 'INITIAL_START_COMPLETED', 'GLOBAL_REFERENCE_SHAPED'):
                     self._notice(event['kind'], json.dumps(event, sort_keys=True))
         if packet.waiting:
             self._notice('WAITING_INPUT', ','.join(packet.waiting))
         elif packet.result.status == 'NOT_DUE':
             return packet
-        data = paths(packet.route, packet.candidate, self.ros_now_ns(), self.map_frame)
+        data = paths(packet.raw_route if packet.raw_route is not None else packet.route,
+                     packet.candidate,self.ros_now_ns(),self.map_frame,global_reference=packet.route)
         # ROS 时间仅给本次 Path 定 t0；调度/轨迹年龄始终使用单调时钟。
         with self._condition:
             if (self._pose_timeout_s is not None and not self._pose_source_current(
