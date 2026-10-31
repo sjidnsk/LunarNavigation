@@ -19,7 +19,7 @@ DEFAULTS = {
     'tracking_status_topic':'/Car/T4/control/tracking_status',
     'motion_model':'', 'allow_unknown':'false', 'linear_speed_mps':'0.2', 'angular_speed_rps':'1.0',
     'linear_accel_mps2':'0.5', 'angular_accel_rps2':'0.5', 'curvature_inv_m':'1.0',
-    'goal_tolerance_m':'0.1', 'goal_yaw_tolerance_rad':'0.05',
+    'goal_tolerance_m':'0.1', 'goal_yaw_tolerance_rad':'0.08726646259971647',
     'stopped_linear_mps':'0.01', 'stopped_angular_rps':'0.01',
     'mppi_nominal_response_time_s':'0.15', 'p3_map_timeout_s':'3.0',
 }

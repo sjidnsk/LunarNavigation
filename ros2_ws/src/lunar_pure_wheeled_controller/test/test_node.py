@@ -928,6 +928,7 @@ def test_standard_path_policy_and_executor_use_platform_speed_cap(tmp_path, cap,
             assert policy.max_angular_radps == pytest.approx(angular)
             assert policy.max_linear_accel_mps2 == pytest.approx(.5)
             assert policy.max_linear_decel_mps2 == pytest.approx(.5)
+            assert policy.goal_yaw_tolerance_rad == pytest.approx(math.radians(5.))
         assert node.get_parameter('max_linear_mps').value == pytest.approx(expected)
         assert node.get_parameter('max_reverse_mps').value == pytest.approx(expected)
         assert node.get_parameter('max_angular_radps').value == pytest.approx(angular)

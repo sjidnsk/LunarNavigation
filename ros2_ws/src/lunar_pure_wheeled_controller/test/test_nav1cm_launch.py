@@ -29,7 +29,7 @@ def test_navigation_only_and_shared_limits():
     expected=min(12.,configured['capability']['maximum_spin_rate_radps'])
     assert planner['angular_speed_rps']==follower['max_angular_radps']==expected
     assert planner['motion_model']==follower['motion_model']=='differential_drive'
-    assert planner['goal_yaw_tolerance_rad']==follower['goal_yaw_tolerance_rad']==0.05
+    assert planner['goal_yaw_tolerance_rad']==follower['goal_yaw_tolerance_rad']==0.08726646259971647
     for key in ('tf_topic','tf_static_topic','map_frame','allow_unknown','odometry_topic'): assert planner[key]==follower[key]
     assert follower['mppi_nominal_response_time_s']==0.15
     assert follower['standard_map_source']=='direct_p3'
