@@ -19,16 +19,18 @@
 - ROS实际MPCC输入与RViz平滑显示一致；取消/等待/目标替换不会残留旧图形。
 
 ### Task 1: 几何整形（独立agent工作树）
-- [ ] tests/navigation/one_cm/test_reference_smoothing.py先失败，覆盖安全/回退/连续性/版本/预算。
-- [ ] 新建scripts/navigation/one_cm/nav1cm/reference_smoothing.py，不改搜索/动力学；接口shape_route与reference_clear。
-- [ ] 运行纯几何回归、独立审查、显式提交。
+- [x] tests/navigation/one_cm/test_reference_smoothing.py先失败，覆盖安全/回退/连续性/版本/预算。
+- [x] 新建scripts/navigation/one_cm/nav1cm/reference_smoothing.py，不改搜索/动力学；接口shape_route与reference_clear。
+- [x] 运行纯几何回归、独立审查、显式提交。
 
 ### Task 2: 参考链路与ROS（主工作树）
-- [ ] coordinator/async/session/ros_conversion回归先失败；接入raw_route和shape证据，当前图重验/版本退休。
-- [ ] ROS node/runtime发布raw与actual global reference；参数显式启用、真实ROS回归。
-- [ ] Windows适用测试、216候选完整相关包构建/测试、独立整体审查。
+- [x] coordinator/async/session/ros_conversion回归先失败；接入raw_route和shape证据，当前图重验/版本退休。
+- [x] ROS node/runtime发布raw与actual global reference；参数显式启用、真实ROS回归。
+- [x] Windows适用测试、216候选完整相关包构建/测试、独立整体审查。
 
 ### Task 3: 部署/RViz与收尾
 - [ ] 记录216原文件、PID、参数及当前目标；仅精确替换受影响文件并重启planner，控制器PID不变。
 - [ ] RViz接入青色全局参考/黄色局部，核对正式PLAN_FOUND、话题非空、整形诊断与实际局部参考。
 - [ ] 更新任务登记、验证报告、提交；源码/ARM/ROS/运行视觉和完整导航闭环证据分别记录。
+
+范围更新：用户授权TCP统一最终生产部署/重启/车辆复测；Task3改为精确候选交付。已交付产品2338d7b、manifest和overlay；生产/RViz/车辆步骤不由本会话执行，待TCP验收。不要把未勾选的现场步骤标成通过。参考验证报告。
