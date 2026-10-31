@@ -12,3 +12,6 @@ command_hold_s: 1.2
 
 # 全局有效路线在后台低频刷新；目标/真实阻塞/参考重入立即重算。
 global_period_s: 15.0
+
+# 复用现有TCP底盘原地转向准备时间，仅用于预测响应，不延迟或拦截命令。
+command_spin_prepare_s: 3.0

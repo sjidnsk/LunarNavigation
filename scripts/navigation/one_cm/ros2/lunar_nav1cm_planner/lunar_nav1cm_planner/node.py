@@ -111,7 +111,7 @@ class PlannerNode(Node):
             'tf_topic': '/tf', 'tf_static_topic': '/tf_static',
             'global_route_topic': '/Car/T4/planning/global_route', 'global_reference_topic': '',
             'local_path_topic': '/Car/T4/planning/local_path',
-            'control_backend':'path_mppi', 'enable_controller':False, 'command_hold_s':0.,
+            'control_backend':'path_mppi', 'enable_controller':False, 'command_hold_s':0., 'command_spin_prepare_s':0.,
             'command_topic':'/Car/T4/control/cmd_vel',
             'execution_contract_enabled':False,'execution_feedback_timeout_s':2.,
             'odometry_timeout_s':.5,
@@ -159,7 +159,8 @@ class PlannerNode(Node):
         if direct:
             self._command_publisher=self.create_publisher(Twist,settings['command_topic'],1)
             self.runtime.configure_direct_control(self._publish_command,command_hold_s=float(settings['command_hold_s']),
-                reference_interval_s=float(settings['horizon_dt_s']))
+                reference_interval_s=float(settings['horizon_dt_s']),
+                command_spin_prepare_s=float(settings['command_spin_prepare_s']))
         self.runtime.configure_pose_input(float(settings['odometry_timeout_s']))
         latest = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                             durability=DurabilityPolicy.VOLATILE)

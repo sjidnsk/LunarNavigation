@@ -205,3 +205,16 @@ def test_global_refresh_default_and_startup_override_reach_planner(monkeypatch):
 def test_global_refresh_period_must_be_finite_positive(monkeypatch, value):
     with pytest.raises(ValueError, match='global_period_s'):
         graph(monkeypatch, global_period_s=value)
+
+
+def test_command_spin_prepare_response_model_parameter(monkeypatch):
+    planner = nodes(graph(monkeypatch, control_backend='mpcc_cmd_vel', enable_controller='true',
+                          command_hold_s='1.2', command_spin_prepare_s='3.0'))[1]['parameters'][0]
+    assert planner['command_spin_prepare_s'] == 3.
+    assert nodes(graph(monkeypatch))[1]['parameters'][0]['command_spin_prepare_s'] == 0.
+
+
+@pytest.mark.parametrize('value', ['-1', 'nan', 'inf'])
+def test_command_spin_prepare_rejects_invalid_values(monkeypatch, value):
+    with pytest.raises(ValueError, match='command_spin_prepare_s'):
+        graph(monkeypatch, command_spin_prepare_s=value)

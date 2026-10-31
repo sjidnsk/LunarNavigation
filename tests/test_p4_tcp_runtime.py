@@ -516,3 +516,12 @@ def test_global_period_uses_shared_tcp_profile_in_both_entries():
         assert float(args['global_period_s']) == 15.
     settings['global_period_s'] = 27.
     assert float(launch_settings('/p4/source', '/p4/cache', '/p4/wheel.yaml', settings)['global_period_s']) == 27.
+
+
+def test_tcp_spin_response_delay_from_shared_feedback_config():
+    from pathlib import Path
+    import yaml
+    root=Path(__file__).resolve().parents[1]
+    budget=yaml.safe_load((root/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
+    assert budget['command_spin_prepare_s'] == 3.
+    assert launch_settings(root,root/'cache',root/'profile.yaml',budget)['command_spin_prepare_s'] == '3.0'
