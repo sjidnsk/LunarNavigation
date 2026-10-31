@@ -112,3 +112,24 @@ def test_identical_periodic_goal_does_not_change_generation_or_retire_result():
     assert session.publication_current(packet)
     runner.ready = True
     assert session.tick(.05).route is not None
+
+
+def test_session_publishes_full_terminal_reference_without_constructing_offline_action(monkeypatch):
+    import scripts.navigation.one_cm.nav1cm.async_coordinator as async_module
+    session, Goal = make_session()
+    assert session.offer_goal(Goal(0, 0, 0))
+    def forbidden(*args, **kwargs): raise AssertionError('production must not build action')
+    monkeypatch.setattr(async_module, 'action_prefix', forbidden)
+    packet=session.tick(0.)
+    assert packet.candidate is not None and packet.result.certificate.valid
+    assert packet.result.action is None and packet.result.action_certificate is None
+
+
+def test_direct_coordinator_still_constructs_and_certifies_action(monkeypatch):
+    import scripts.navigation.one_cm.nav1cm.async_coordinator as async_module
+    real=async_module.action_prefix; calls=[]
+    def track(*args,**kwargs): calls.append(True); return real(*args,**kwargs)
+    monkeypatch.setattr(async_module,'action_prefix',track)
+    session, Goal=make_session(); assert session.offer_goal(Goal(0,0,0))
+    result=session.coordinator.tick(session.world,session.state,(0,0),0.,goal_yaw=0.)
+    assert calls and result.action is not None and result.action_certificate.valid

@@ -268,11 +268,27 @@ def test_incomplete_entry_still_checks_dynamics_and_both_collision_phases():
     assert certify(t,GridSnapshot(1,(-.25,-.25),.001,cells,False),limits,1).reason == CertificationReason.BRAKING_COLLISION
 
 
-def test_incomplete_entry_cannot_remain_at_constant_wrong_mode_speed():
+def test_incomplete_entry_allows_constant_speed_before_later_braking():
     t=trajectory([0.,0.,0.,.1,0.,0.],[[0.,0.,0.]],dt=.05,mode='spin')
-    assert certify(t,free_grid(),WheelLimits(motion_model='differential_drive'),1).reason == CertificationReason.MODE
+    assert certify(t,free_grid(),WheelLimits(motion_model='differential_drive'),1).valid
 
 
 def test_incomplete_entry_still_obeys_curvature_limit():
     t=trajectory([0.,0.,0.,.1,.2,0.],[[-.5,0.,0.]],dt=.05,mode='spin')
     assert certify(t,free_grid(),WheelLimits(motion_model='curvature_limited'),1).reason == CertificationReason.LIMIT
+
+
+@pytest.mark.parametrize('delta', [0., -1e-7])
+def test_entry_prefix_consistent_with_full_trajectory_under_dynamics_tolerance(delta):
+    from scripts.navigation.one_cm.nav1cm.execution import action_prefix
+    from scripts.navigation.one_cm.nav1cm.contracts import VehicleState
+    controls=np.array([[0.,0.,0.],[-.5,0.,0.],[0.,0.,0.]])
+    times=[0.,.05,.25,.30]; states=[np.array([0.,0.,0.,.1,0.,0.])]
+    for control, dt in zip(controls,np.diff(times)): states.append(step(states[-1],control,dt))
+    if delta:
+        states[1][3]+=delta
+    t=Trajectory(1,1,times,states,controls,'spin')
+    limits=WheelLimits(motion_model='differential_drive')
+    assert certify(t,free_grid(),limits,1).valid
+    action=action_prefix(t,VehicleState(0,0,0,.1,0))
+    assert certify(action,free_grid(),limits,1).valid

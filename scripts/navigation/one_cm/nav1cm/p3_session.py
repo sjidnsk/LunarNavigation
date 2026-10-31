@@ -83,7 +83,7 @@ class NavigationSession:
             self._arrival_evidence=None
             return SessionPacket(self.accepted_generation, waiting=waiting)
         result = self.coordinator.tick(self.world, self.state, (self.goal.x, self.goal.y),
-                                       now_s, goal_yaw=self.goal.yaw)
+                                       now_s, goal_yaw=self.goal.yaw, need_action=False)
         candidate = result.candidate
         if (candidate is None or result.certificate is None or
                 not result.certificate.matches(candidate, result.grid, self.coordinator.limits, candidate.route_version)):

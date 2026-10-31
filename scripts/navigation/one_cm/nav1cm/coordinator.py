@@ -301,7 +301,7 @@ class NavigationCoordinator:
                 events.append({'kind': 'GLOBAL_SUBMITTED', 'reason': reason, 'version': self._version})
         return goal_check, arrived_xy, motion, global_result
 
-    def tick(self, world, state, goal, now_s, *, goal_yaw=None):
+    def tick(self, world, state, goal, now_s, *, goal_yaw=None, need_action=True):
         started = perf_counter()
         self._set_goal(goal, goal_yaw)
         if now_s + 1e-9 < self._next_local:
@@ -363,7 +363,7 @@ class NavigationCoordinator:
                 candidate = certificate = None
         timings['certification_identity'] = (perf_counter()-stage)*1000
         action = action_certificate = None
-        if candidate is not None:
+        if candidate is not None and need_action:
             stage = perf_counter()
             try:
                 action = action_prefix(candidate, state)
@@ -375,7 +375,7 @@ class NavigationCoordinator:
                 events.append({'kind': 'ACTION_REJECTED', 'reason': 'ACTION_PREFIX_INVALID', 'detail': str(exc)})
                 candidate = action = None
             timings['action_gate'] = (perf_counter()-stage)*1000
-        # 软周期只观测耗时；候选和前缀已独立认证，时间不能改变动作选择。
+        # 软周期只观测耗时；完整候选均须认证，离线消费动作时前缀另行认证。
         if candidate is None:
             stage = perf_counter()
             candidate = brake_candidate(state, grid, reference, self.limits)
@@ -385,7 +385,7 @@ class NavigationCoordinator:
                 candidate = None
                 status = 'NO_CERTIFIED_ACTION'
             action = action_certificate = None
-            if candidate is not None:
+            if candidate is not None and need_action:
                 action = action_prefix(candidate, state)
                 action_certificate = certify(action, grid, self.limits, version, backend=self.backend, context=context)
                 if not action_certificate.matches(action, grid, self.limits, version):

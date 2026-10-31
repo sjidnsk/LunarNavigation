@@ -239,8 +239,7 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
         # 截断段可在制动尚未完成时结束；该段末端和制动尾仍按实际方向认证。
         prefix_end=int(zero[0])+1 if len(zero) else len(states)
         sign=float(np.sign(states[0,3]));speeds=states[:prefix_end+1,3]
-        if (prefix_end == len(states) and abs(speeds[0])-abs(speeds[-1]) <= 1e-12 or
-                np.any(sign*speeds<-1e-9) or np.any(np.diff(np.abs(speeds))>1e-12) or
+        if (np.any(sign*speeds<-1e-9) or np.any(np.diff(np.abs(speeds))>1e-12) or
                 np.any(sign*controls[:prefix_end,0]>1e-12) or
                 np.any(np.abs(controls[:prefix_end,2])>1e-12)):
             return _reject(CertificationReason.MODE,0)
