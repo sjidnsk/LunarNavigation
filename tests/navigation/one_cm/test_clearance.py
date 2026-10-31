@@ -74,7 +74,8 @@ def test_explicit_clearance_floor_validation_and_certificate_identity(tmp_path):
 
 @pytest.mark.parametrize('margin',[.2,.4])
 def test_clearance_reaches_braking_tail_and_unknown(tmp_path,margin):
-    limits=selected(tmp_path,margin)
+    # 本例固定0.2m/s能力以检查制动净空，避免应用基础低速档先触发LIMIT。
+    limits=replace(selected(tmp_path,margin),linear_speed_mps=.2)
     # 停车距离 .04m；当前车体+净空无碰撞，制动尾段违反净空。
     front=round(limits.body_length_m/2+margin+.02,2)
     result=certify(stationary(.2),wall_grid(front),limits,1)
