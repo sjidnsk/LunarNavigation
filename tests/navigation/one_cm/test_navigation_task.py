@@ -214,14 +214,25 @@ def test_goal_blocked_after_acceptance_cannot_report_arrived():
     assert task.active.outcome is None
 
 
-def test_task_uses_braking_endpoint_for_arrival():
+def test_task_uses_observed_stop_tolerance_at_acceptance_edge():
     session,Goal=make_session();task=task_api(session)
     task.submit('a',Goal(0,0,0),0.)
     session.offer_state(VehicleState(.09999,0,0,.009,0))
     for now in (0.,.4):
         packet=session.tick(now)
-        assert packet.result.status=='GOAL_BRAKING'
+        assert packet.result.status=='ARRIVED'
         task.observe(packet,now)
+    assert task.active.outcome == 'GOAL_REACHED'
+
+
+def test_new_observation_outside_acceptance_resets_arrival_hold():
+    session,Goal=make_session();task=task_api(session)
+    task.submit('a',Goal(0,0,0),0.)
+    session.offer_state(VehicleState(.09999,0,0,.009,0))
+    task.observe(session.tick(0.),0.)
+    assert task.active.outcome is None
+    session.offer_state(VehicleState(.1001,0,0,0,0))
+    task.observe(session.tick(.4),.4)
     assert task.active.outcome is None
 
 

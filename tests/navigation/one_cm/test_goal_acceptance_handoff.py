@@ -78,3 +78,18 @@ def test_map_and_route_refresh_continue_existing_finite_reference():
     command = certified_velocity_command(refreshed,state,c.limits,reference_interval_s=.2,
         last_command=(.2,0.),elapsed_s=.05,command_hold_s=1.2)
     assert command[0] > 0
+
+
+def test_acceptance_edge_uses_same_observed_stop_rule_with_prediction():
+    results=[]
+    for predicted in (False, True):
+        session, Goal = make_session()
+        session.direct_control=True
+        session.coordinator.goal_position_target_m=.02
+        assert session.offer_goal(Goal(0,0,0))
+        measured=VehicleState(.09999,0,0,.0099,0)
+        session.offer_state(measured)
+        kwargs={'planning_state':VehicleState(.09999,0,0,0,0)} if predicted else {}
+        packet=session.tick(0.,**kwargs)
+        results.append((packet.result.status,session.arrival_current(packet)))
+    assert results == [('ARRIVED',True),('ARRIVED',True)]

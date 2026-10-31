@@ -205,7 +205,7 @@ class NavigationCoordinator:
                         (projected[-1] - projected[0])) <= 1e-6)
 
     def goal_reached(self, state):
-        """唯一位姿/停稳判据，同时用于实测状态与受限制动终点。"""
+        """统一位姿/停稳判据；任务完成仍由P3新实测观测确认。"""
         return (self._goal is not None and state is not None and
                 abs(state.v)<=self.stopped_linear_mps and abs(state.w)<=self.stopped_angular_rps and
                 np.hypot(state.x-self._goal[0],state.y-self._goal[1])<=self.goal_tolerance_m and
@@ -215,10 +215,10 @@ class NavigationCoordinator:
         yaw_satisfied = (self._goal_yaw is None or
                          abs(angle_error(self._goal_yaw, state.yaw)) <= self.goal_yaw_tolerance_rad)
         if yaw_satisfied:
-            # 低于停稳阈值仍有真实运动；到达状态不能紧接着被自身制动带出容差。
+            # 已有停稳阈值定义可接受的残余速度；不再用预测停车点
+            # 二次收紧完成范围，后续新实测越界仍会清除到达保持证据。
             candidate = brake_candidate(state, grid, reference, self.limits)
-            last = candidate.states[-1]
-            arrived=self.goal_reached(state) and self.goal_reached(VehicleState(*last[:5]))
+            arrived=self.goal_reached(state)
             return candidate, 'ARRIVED' if arrived else 'GOAL_BRAKING'
         candidate = terminal_candidate(state, grid, reference, self.limits)
         return candidate, 'GOAL_TURNING' if candidate.source.startswith('terminal-yaw:bounded') else 'GOAL_BRAKING'
