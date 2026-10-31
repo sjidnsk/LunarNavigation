@@ -31,3 +31,11 @@ TCP快照发现两条6668连接：52191（P4_legacy接口，域10）与151018（
 切换停车辅助脚本初次因显式Context却使用默认executor而失败，车已停车；仅P4脚本移除无必要的spin_once后继续交接。旧失败回执envx-domain10-handover-first-failure-20261101.json保留。最终回执envx-domain10-handover-20261101.json确认两个旧PID退出、唯一新连接和motion_test_run=false。用户已明确后续自行测试，未继续验证。
 
 源码/配置与本记录已提交，待长期线合入；没有merge/push或删除工作树。TCP仿真/P3组件证据不等于Orin/实体车辆验收。后续恢复从当前Env_X单接口配置继续，不能重启旧部署脚本里的52191或恢复双连接。
+
+## 2026-11-01 TCP、P3、P4整套重启
+
+按用户明确重启请求，运行目录更新为 `/home/yanfa/P4/run/restart-tcp-p3-p4-20261101-053837`。Env_X原始车辆接口PID156544、采集156545、P3 pipeline156548/relay156550/monitor156552/viewer156553、P4 operator156555。控制与原始采集域10，P3融合域57，由现有relay完成10→57图像归一化及传感器桥接。
+
+首轮053402错误复用采集域57，导致relay源域10收不到图像；虽收到31帧雷达融合，之后视觉无输入、定位失效。已保留首轮证据，纠正P4启动脚本的采集域为10后整套重新初始化，避免续用失去视觉期间的融合状态。第二轮实读localization_valid=true、continuous_visual_pose、视觉已锚定，relay融合计数20→22、地图已生成14帧，RViz收到地图。TCP6665和6668各一条ESTAB。未修改P3或Env_X文件，未改变算法、运动上限和1.2秒持令配置。
+
+无自动目标、无旧目标重放、无自主运动复测；RViz日志出现用户新选目标。启动回执 `P4/artifacts/restart-tcp-p3-p4-latest-20261101.json`，修正启动脚本 `P4/artifacts/restart_tcp_p3_p4_envx_source10_20261101.py`。此处仅证明重启与数据恢复，不新增导航到达验收。
