@@ -278,3 +278,11 @@ def test_invalid_initial_direction_fails_before_creating_resources(monkeypatch):
     import scripts.navigation.one_cm.nav1cm.async_coordinator as module
     monkeypatch.setattr(module.NavigationCoordinator,'__init__',lambda *a,**kw:pytest.fail('must validate before resource creation'))
     with pytest.raises(ValueError):AsyncNavigationCoordinator(initial_travel_direction='sideways')
+
+
+def test_ordinary_alignment_request_uses_configured_stop_tolerance():
+    c, worker, world = make_coordinator()
+    c.stopped_angular_rps = .025
+    c.tick(world, VehicleState(0,0,0,0,.02), (3,0), 0., need_action=False)
+    assert worker.requests[-1]['initial_stopped_angular_rps'] == .025
+    assert not worker.requests[-1].get('initial_travel_direction')

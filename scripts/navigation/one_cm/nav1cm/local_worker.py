@@ -46,7 +46,8 @@ def run_request(request):
     options={}
     if request.get('initial_travel_direction'):
         options['initial_travel_direction']=request['initial_travel_direction']
-        options['initial_stopped_angular_rps']=request.get('initial_stopped_angular_rps',.01)
+    if 'initial_stopped_angular_rps' in request:
+        options['initial_stopped_angular_rps']=request['initial_stopped_angular_rps']
     result=_planner.plan(request['state'],grid,request['reference'],distance_field=field,field_grid_digest=grid.digest(),**options)
     return dict(request_identity=request['identity'],candidate=result.candidate,reason=result.reason,
                 timings_ms=result.timings_ms,attempts=result.attempts,worker_pid=os.getpid(),

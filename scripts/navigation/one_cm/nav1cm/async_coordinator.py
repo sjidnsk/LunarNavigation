@@ -172,10 +172,10 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
                                 allow_unknown=self.allow_unknown,feedback_s=now_s,submitted_s=now_s,
                                 submitted_wall_s=perf_counter())
             try:
-                request=dict(identity=self._inflight,state=state,grid=grid,reference=reference)
+                request=dict(identity=self._inflight,state=state,grid=grid,reference=reference,
+                             initial_stopped_angular_rps=self.stopped_angular_rps)
                 if initial_direction:
                     request['initial_travel_direction']=initial_direction
-                    request['initial_stopped_angular_rps']=self.stopped_angular_rps
                 self.local_worker.submit(request)
                 events.append({'kind':'LOCAL_SUBMITTED',**self._inflight,'initial_travel_direction':initial_direction})
             except Exception as exc:
