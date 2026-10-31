@@ -93,3 +93,54 @@ def command_hold_proof(action, grid, limits, command_hold_s):
     brake=brake_candidate(VehicleState(*current[:5]),grid,reference,limits)
     from dataclasses import replace
     return replace(join_trajectories(held,brake),mode=action.mode,source=action.source)
+
+
+def certified_velocity_command(result, measured, limits, *, reference_interval_s,
+                               last_command, elapsed_s, command_hold_s, backend=None):
+    """首 shooting 区间速度参考；发布记忆只决定 slew，证明始终起于真实 P3。"""
+    from .certification import certify
+    from .contracts import LocalReference
+    from .seeds import braking_prefix, join_trajectories
+    if result is None or measured is None or result.candidate is None:
+        return 0., 0.
+    candidate=result.candidate
+    if (candidate.source=='brake' or getattr(result,'status',None)=='ARRIVED' or
+            result.certificate is None or not result.certificate.matches(
+                candidate,result.grid,limits,candidate.route_version)):
+        return 0., 0.
+    if not np.isfinite([reference_interval_s,elapsed_s]).all() or min(reference_interval_s,elapsed_s)<=0:
+        return 0., 0.
+    try:
+        reference=action_prefix(candidate,measured,reference_interval_s).states[-1,3:5]
+    except ValueError:
+        return 0.,0.
+    previous=np.asarray(last_command,dtype=float)
+    if previous.shape!=(2,) or not np.isfinite(previous).all():return 0.,0.
+    # 反向先归零，避免把一个周期跨过零速的目标解释为瞬时反向。
+    target=reference.copy()
+    target=np.where(previous*target<0.,0.,target)
+    rates=np.array([limits.linear_accel_mps2,limits.angular_accel_rps2])
+    issued=previous+np.clip(target-previous,-rates*elapsed_s,rates*elapsed_s)
+    current=np.array([measured.x,measured.y,measured.yaw,measured.v,measured.w,candidate.states[0,5]])
+    mode='spin' if abs(issued[0])<1e-10 else ('forward' if issued[0]>0 else 'reverse')
+    ref=LocalReference(candidate.route_version,result.grid.epoch,[[current[0],current[1]]],[0.],current[5])
+    prefix=None
+    if (mode=='spin' and abs(current[3])>1e-10 or current[3]*issued[0]<0.):
+        prefix=braking_prefix(measured,result.grid,ref,limits,retain_angular=mode=='spin')
+        current=prefix.states[-1].copy()
+    duration=float(np.max(np.abs(issued-current[3:5])/rates))
+    states=[current.copy()];controls=[];times=[0.]
+    if duration>1e-12:
+        control=np.array([(issued[0]-current[3])/duration,(issued[1]-current[4])/duration,0.])
+        remaining=duration
+        while remaining>1e-12:
+            dt=min(.02,remaining);current=step(current,control,dt)
+            states.append(current.copy());controls.append(control.copy());times.append(times[-1]+dt)
+            remaining-=dt
+    response=Trajectory(candidate.map_epoch,candidate.route_version,times,states,
+        np.asarray(controls).reshape(-1,3),mode,candidate.source)
+    if prefix is not None:response=join_trajectories(prefix,response)
+    proof=command_hold_proof(response,result.grid,limits,command_hold_s)
+    certificate=certify(proof,result.grid,limits,candidate.route_version,backend=backend)
+    if not certificate.matches(proof,result.grid,limits,candidate.route_version):return 0.,0.
+    return float(issued[0]),float(issued[1])

@@ -118,3 +118,68 @@ def test_hold_proof_and_command_share_exact_measured_integration(monkeypatch):
     assert command[0]==measured.v
     assert proofs[0].states[0,3]==measured.v
     assert proofs[0].states[1,3]==command[0]
+
+def test_velocity_reference_uses_first_shooting_interval_and_last_published_command():
+    from types import SimpleNamespace as S
+    from scripts.navigation.one_cm.nav1cm.execution import certified_velocity_command
+    from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits
+    from scripts.navigation.one_cm.nav1cm.certification import certify
+    from tests.navigation.one_cm.test_certification import free_grid
+    limits=WheelLimits(motion_model='differential_drive'); grid=free_grid()
+    state=VehicleState(0,0,0,0,0)
+    u=np.array([[0.,.4,0.]])
+    full=Trajectory(grid.epoch,1,[0.,.2],rollout([0,0,0,0,0,0],u,.2),u,'spin','mpcc')
+    cert=certify(full,grid,limits,1)
+    result=S(candidate=full,certificate=cert,grid=grid,status='TRACKING')
+    command=certified_velocity_command(result,state,limits,reference_interval_s=.2,
+        last_command=(0.,.06),elapsed_s=.05,command_hold_s=.1)
+    assert command == pytest.approx((0.,.08))
+    assert state.w == 0.
+
+@pytest.mark.parametrize('mode,control,expected', [('spin',[0.,.4,0.],(0.,.08)),('forward',[.4,0.,0.],(.08,0.))])
+def test_delayed_nearzero_p3_does_not_restart_output_and_proof_binds_issued(monkeypatch,mode,control,expected):
+    from types import SimpleNamespace as S
+    import scripts.navigation.one_cm.nav1cm.execution as execution
+    import scripts.navigation.one_cm.nav1cm.certification as certification
+    from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits
+    from tests.navigation.one_cm.test_certification import free_grid
+    limits=WheelLimits(motion_model='differential_drive');grid=free_grid();state=VehicleState(0,0,0,0,0)
+    u=np.array([control]);full=Trajectory(grid.epoch,1,[0.,.2],rollout([0,0,0,0,0,0],u,.2),u,mode,'mpcc')
+    result=S(candidate=full,certificate=certification.certify(full,grid,limits,1),grid=grid,status='TRACKING')
+    original=certification.certify;proofs=[]
+    def capture(proof,*args,**kwargs):
+        proofs.append(proof);return original(proof,*args,**kwargs)
+    monkeypatch.setattr(certification,'certify',capture)
+    previous=(0.,0.)
+    for _ in range(70):
+        previous=execution.certified_velocity_command(result,state,limits,reference_interval_s=.2,
+            last_command=previous,elapsed_s=.05,command_hold_s=.1)
+        assert np.array_equal(proofs[-1].states[0,:5], [0.,0.,0.,0.,0.])
+        hold=np.flatnonzero(np.all(np.abs(proofs[-1].controls)<1e-12,axis=1))
+        assert len(hold)
+        assert proofs[-1].states[hold[0],3:5] == pytest.approx(previous)
+    assert previous == pytest.approx(expected)
+    assert state.v==state.w==0.
+    result.status='ARRIVED'
+    assert execution.certified_velocity_command(result,state,limits,reference_interval_s=.2,
+        last_command=previous,elapsed_s=.05,command_hold_s=.1)==(0.,0.)
+
+@pytest.mark.parametrize('change',['map','limits','collision','state'])
+def test_velocity_issued_certificate_rejects_changed_inputs(change):
+    from dataclasses import replace
+    from types import SimpleNamespace as S
+    from scripts.navigation.one_cm.nav1cm.execution import certified_velocity_command
+    from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits
+    from scripts.navigation.one_cm.nav1cm.certification import certify
+    from tests.navigation.one_cm.test_certification import free_grid
+    limits=WheelLimits(motion_model='differential_drive');grid=free_grid();state=VehicleState(0,0,0,0,0)
+    u=np.array([[0.,.4,0.]])
+    full=Trajectory(grid.epoch,1,[0.,.2],rollout([0,0,0,0,0,0],u,.2),u,'spin','mpcc')
+    result=S(candidate=full,certificate=certify(full,grid,limits,1),grid=grid,status='TRACKING')
+    if change=='map':result.grid=replace(grid,epoch=grid.epoch+1)
+    if change=='limits':limits=replace(limits,angular_accel_rps2=.3)
+    if change=='collision':
+        cells=grid.cells.copy();cells[:]=1;result.grid=replace(grid,cells=cells)
+    if change=='state':state=replace(state,x=.1)
+    assert certified_velocity_command(result,state,limits,reference_interval_s=.2,
+        last_command=(0.,.06),elapsed_s=.05,command_hold_s=.1)==(0.,0.)

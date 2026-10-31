@@ -252,11 +252,11 @@ def test_direct_control_brakes_from_measured_state_and_missing_input_zero():
     runtime.tasks.submit('direct-a',(0,3,0),0.)
     packet=runtime._tick_once(0.)
     assert packet.result.action is not None
-    assert 0 < commands[-1][0] < .1
+    assert commands[-1] == (0.,0.)  # brake候选只发布零目标，实测速度仍保留
     assert session.state.v == .1  # 模型积分不得推进在线实测状态。
     runtime.request_cancel(runtime.tasks.active.task_id)
     runtime._tick_once(.05)
-    assert 0 < commands[-1][0] < .1
+    assert commands[-1] == (0.,0.)  # brake候选只发布零目标，实测速度仍保留
     session.offer_state(None)
     runtime._tick_once(.1)
     assert commands[-1] == (0.,0.)
@@ -347,7 +347,7 @@ def test_direct_publication_latest_map_window_and_body_state(changed):
         return packet
     session.tick=raced
     runtime._tick_once(0.)
-    assert 0 < commands[-1][0] < .1
+    assert commands[-1] == (0.,0.)  # brake候选只发布零目标，实测速度仍保留
 
 
 @pytest.mark.parametrize('hold',[0.,-1.,float('nan'),float('inf'),True])
@@ -384,4 +384,4 @@ def test_direct_safe_changed_window_recertifies_once_without_braking():
         runtime._world=WorldSnapshot(2,session.world.blocked+(CellRect(190,190,200,200),),session.world.known_free)
         return packet
     session.tick=raced;runtime._tick_once(0.)
-    assert 0 < commands[-1][0] < .1
+    assert commands[-1] == (0.,0.)  # brake候选只发布零目标，实测速度仍保留

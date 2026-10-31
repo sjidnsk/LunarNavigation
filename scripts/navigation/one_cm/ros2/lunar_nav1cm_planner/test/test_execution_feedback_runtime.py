@@ -189,7 +189,7 @@ def test_normal_pose_update_keeps_cycle_command_snapshot(monkeypatch,arrival):
         measured.append(state)
         if arrival=='certify':runtime.offer_odometry(message)
         return (.02,0.)
-    monkeypatch.setattr(execution,'certified_command',certify)
+    monkeypatch.setattr(execution,'certified_velocity_command',certify)
     runtime._tick_once(time.monotonic())
     assert measured==[initial]
     assert commands[-1]==(.02,0.)

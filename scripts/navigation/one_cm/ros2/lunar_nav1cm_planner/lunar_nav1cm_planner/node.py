@@ -158,7 +158,8 @@ class PlannerNode(Node):
         direct=settings['control_backend']=='mpcc_cmd_vel' and settings['enable_controller']
         if direct:
             self._command_publisher=self.create_publisher(Twist,settings['command_topic'],1)
-            self.runtime.configure_direct_control(self._publish_command,command_hold_s=float(settings['command_hold_s']))
+            self.runtime.configure_direct_control(self._publish_command,command_hold_s=float(settings['command_hold_s']),
+                reference_interval_s=float(settings['horizon_dt_s']))
         self.runtime.configure_pose_input(float(settings['odometry_timeout_s']))
         latest = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                             durability=DurabilityPolicy.VOLATILE)

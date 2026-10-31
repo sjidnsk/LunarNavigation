@@ -72,28 +72,41 @@ class PlannerRuntime:
         self._pose_waiting=False
         self._tracking_inputs=deque(maxlen=128)
         self.publish_command = None
+        self._last_issued_command=(0.,0.)
+        self._last_issued_s=None
+        self._command_generation=None
         self._observed_pose_stamp_ns = None
 
-    def configure_direct_control(self, publish_command, *, command_hold_s):
+    def configure_direct_control(self, publish_command, *, command_hold_s, reference_interval_s=.2):
         if isinstance(command_hold_s,bool) or not math.isfinite(command_hold_s) or command_hold_s<=0:
             raise ValueError("command_hold_s must be explicitly finite and positive")
+        if isinstance(reference_interval_s,bool) or not math.isfinite(reference_interval_s) or reference_interval_s<=0:
+            raise ValueError("reference_interval_s must be finite and positive")
+        self.reference_interval_s=float(reference_interval_s)
         self.command_hold_s=float(command_hold_s)
         self.publish_command = publish_command
         self.session.direct_control = True
         self.execution_contract_enabled = False
         self.tasks.configure_execution_feedback(required=False)
 
-    def _command(self, packet, command):
+    def _publish_issued(self, command):
+        self._command_previous=self._last_issued_command
+        self.publish_command(*command)
+        self._last_issued_command=tuple(command)
+        self._last_issued_s=time.monotonic()
+
+    def _command(self, packet, command, source_stamp=None):
         if self.publish_command is None:
             return
-        self.publish_command(*command)
+        self._publish_issued(command)
         self._notice('MPCC_COMMAND', json.dumps(dict(v=command[0], w=command[1],
             status=getattr(packet.result, 'status', None),
             source=getattr(packet.candidate, 'source', None),
             mode=getattr(packet.candidate, 'mode', None), command_hold_s=self.command_hold_s,
-            source_stamp_ns=self._pose_source_high_water,
-            source_age_s=None if self._pose_source_high_water is None else
-                (self.ros_now_ns()-self._pose_source_high_water)/1e9)))
+            reference_dt_s=self.reference_interval_s, previous_issued=self._command_previous,
+            source_stamp_ns=source_stamp,
+            source_age_s=None if source_stamp is None else
+                (self.ros_now_ns()-source_stamp)/1e9)))
 
     def _body_observation_time(self, now_s):
         if self.publish_command is None:return now_s
@@ -389,6 +402,7 @@ class PlannerRuntime:
             if fault:self.tasks.fail_tracking(fault,now_s)
         # 本周期认证使用实际采样快照；终态观测仍可读取随后推进的定位。
         proof_state=self.session.state
+        proof_stamp=self._pose_source_high_water
         packet = self.session.tick(now_s)
         proposal = self.tasks.observe(packet, self._body_observation_time(now_s),
                                       state_updated=self._new_body_observation(odometry_sequence),
@@ -463,9 +477,19 @@ class PlannerRuntime:
         published_brake = False
         command=(0.,0.)
         if self.publish_command is not None:
-            from nav1cm.execution import certified_command
-            command=certified_command(packet.result,proof_state,self.session.coordinator.limits,
-                command_hold_s=self.command_hold_s,backend=self.session.coordinator.backend)
+            from nav1cm.execution import certified_velocity_command
+            if self._command_generation != packet.generation:
+                self._last_issued_command=(0.,0.)
+                self._last_issued_s=None
+                self._command_generation=packet.generation
+            command_now=time.monotonic()
+            elapsed=(self.session.coordinator.execution_period_s if self._last_issued_s is None
+                     else max(0.,command_now-self._last_issued_s))
+            if not packet.waiting and not self.session.canceling:
+                command=certified_velocity_command(packet.result,proof_state,self.session.coordinator.limits,
+                    reference_interval_s=self.reference_interval_s,last_command=self._last_issued_command,
+                    elapsed_s=elapsed,command_hold_s=self.command_hold_s,
+                    backend=self.session.coordinator.backend)
         with self._condition:
             if (self._pose_timeout_s is not None and not self._pose_source_current(
                     self._odometry,self._odometry_received_s,time.monotonic())[0]):
@@ -491,11 +515,11 @@ class PlannerRuntime:
                     self.execution_context=(None if active is None else active.task_id,
                         self.session.accepted_generation if active is None else active.generation,intent)
                 self._command(packet,command if self.session.state is not None and
-                              self._pose_integrity_fault is None else (0.,0.))
+                              self._pose_integrity_fault is None else (0.,0.), proof_stamp)
                 self.publish(data)
                 published_brake = packet.candidate is not None and packet.candidate.source == 'brake'
             elif self.publish_command is not None:
-                self.publish_command(0., 0.)
+                self._publish_issued((0., 0.))
         if published_brake:
             try:
                 record = brake_diagnostic(packet, now_s, self.session.coordinator.buffer)
@@ -517,7 +541,7 @@ class PlannerRuntime:
                 self._notice('TICK_ERROR', f'{type(exc).__name__}: {exc}')
                 with self._condition:
                     if not self._stopping:
-                        if self.publish_command is not None:self.publish_command(0., 0.)
+                        if self.publish_command is not None:self._publish_issued((0., 0.))
                         self.publish(paths(None, None, self.ros_now_ns(), self.map_frame))
             # 输入唤醒可提前检查，协调器的单调周期门禁负责不补发历史动作。
             with self._condition:
@@ -529,7 +553,7 @@ class PlannerRuntime:
         if self._closed:
             return self._close_result
         with self._condition:
-            if self.publish_command is not None:self.publish_command(0., 0.)
+            if self.publish_command is not None:self._publish_issued((0., 0.))
             self._stopping = True
             self._condition.notify_all()
         deadline = time.monotonic() + timeout_s
