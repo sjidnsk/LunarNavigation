@@ -371,3 +371,18 @@ def test_direct_source_time_must_cover_arrival_hold():
     feedback.header.stamp.nanosec=400000000
     runtime.offer_odometry(feedback);runtime._tick_once(.8)
     assert runtime.tasks.active.outcome=='GOAL_REACHED'
+
+
+def test_direct_safe_changed_window_recertifies_once_without_braking():
+    from nav1cm.contracts import VehicleState,WorldSnapshot,CellRect
+    runtime,session,*_=build_runtime();commands=[]
+    runtime.configure_direct_control(lambda v,w:commands.append((v,w)),command_hold_s=1.2)
+    session.offer_state(VehicleState(0,0,0,.1,0));runtime.tasks.submit('safe-map',(0,3,0),0.)
+    tick=session.tick
+    def raced(now):
+        packet=tick(now)
+        # 窗口内变化，但远离整车、短动作、有限持令和停车尾。
+        runtime._world=WorldSnapshot(2,session.world.blocked+(CellRect(190,190,200,200),),session.world.known_free)
+        return packet
+    session.tick=raced;runtime._tick_once(0.)
+    assert 0 < commands[-1][0] < .1

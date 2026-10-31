@@ -120,14 +120,36 @@ class PlannerRuntime:
             if source>0:self._observed_pose_stamp_ns=max(source,self._observed_pose_stamp_ns or source)
         except (AttributeError,ValueError,TypeError):pass
 
-    def _physical_map_current(self, packet, world):
+    def _publication_map_proof(self, packet, world):
+        """最多一次当前物理窗口重认证；不追赶持续变化的地图。"""
         if self.publish_command is None or packet.result is None or packet.result.grid is None:
-            return True
+            return packet, True
+        from dataclasses import replace
         from nav1cm.maps import rasterize_world
+        from nav1cm.contracts import GridSnapshot
+        from nav1cm.certification import certify, prepare_certification
         import numpy as np
-        grid=packet.result.grid
-        return world is not None and np.array_equal(
-            rasterize_world(world,grid.origin_xy,grid.cells.shape),grid.cells)
+        result=packet.result
+        grid=result.grid
+        if world is None:return packet, False
+        cells=rasterize_world(world,grid.origin_xy,grid.cells.shape)
+        if np.array_equal(cells,grid.cells):return packet, True
+        if result.candidate is None or result.action is None:return packet, False
+        grid=GridSnapshot(world.epoch,grid.origin_xy,grid.resolution_m,cells,grid.allow_unknown)
+        candidate=replace(result.candidate,map_epoch=grid.epoch)
+        action=replace(result.action,map_epoch=grid.epoch)
+        coordinator=self.session.coordinator
+        context=prepare_certification(grid,backend=coordinator.backend)
+        certificate=certify(candidate,grid,coordinator.limits,candidate.route_version,
+            backend=coordinator.backend,context=context)
+        action_certificate=certify(action,grid,coordinator.limits,candidate.route_version,
+            backend=coordinator.backend,context=context)
+        if (not certificate.matches(candidate,grid,coordinator.limits,candidate.route_version) or
+                not action_certificate.matches(action,grid,coordinator.limits,candidate.route_version)):
+            return packet, False
+        result=replace(result,grid=grid,candidate=candidate,certificate=certificate,
+            action=action,action_certificate=action_certificate)
+        return replace(packet,result=result,candidate=candidate), True
 
     def configure_pose_input(self,timeout_s):
         if isinstance(timeout_s,bool) or not math.isfinite(timeout_s) or timeout_s<=0:
@@ -372,7 +394,7 @@ class PlannerRuntime:
         odometry_error = None
         with self._condition:
             proof_world=self._world
-        physical_map_current=self._physical_map_current(packet,proof_world)
+        packet,physical_map_current=self._publication_map_proof(packet,proof_world)
         with self._condition:
             # 目标、最新测量和内部事件提交共享线性化点；不执行规划或外部回调。
             if not self._stopping and input_sequence == self._goal_sequence:
