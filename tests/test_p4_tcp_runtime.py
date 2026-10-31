@@ -206,22 +206,27 @@ def test_observer_stale_goal_global_watermark_and_frame_transition():
     o.goal(S(header=odom(13).header,pose=None),5.5);assert starts[-1].header.stamp.sec==13
 
 
+def display_odom(stamp):
+    return S(header=S(frame_id='map',stamp=S(sec=stamp,nanosec=0)),pose=S(pose=S(position=S(x=0.,y=0.,z=0.),orientation=S(x=0.,y=0.,z=0.,w=1.))))
+
+
 def test_display_mailbox_coalesces_without_blocking_publish_or_old_path_after_goal():
     from scripts.simulation.p4_tcp_runtime import DisplayWorker
     import threading
     entered=threading.Event();release=threading.Event();done=threading.Event();events=[]
     class Observer:
         def odometry(self,msg,when):
-            if msg=='blocked': entered.set();release.wait(2)
-            events.append(('path',msg))
-            if msg=='new':done.set()
+            value=msg.header.stamp.sec
+            if value==1: entered.set();release.wait(2)
+            events.append(('path',value))
+            if value==3:done.set()
         def goal(self,msg,when): events.append(('goal',msg))
-    worker=DisplayWorker(Observer());worker.start();worker.offer_odom('blocked',0.)
+    worker=DisplayWorker(Observer());worker.start();worker.offer_odom(display_odom(1),0.)
     assert entered.wait(1)
-    worker.offer_odom('old',1.);worker.offer_goal('old goal',2.);worker.offer_goal('new goal',3.);worker.offer_odom('new',4.)
+    worker.offer_odom(display_odom(2),1.);worker.offer_goal('old goal',2.);worker.offer_goal('new goal',3.);worker.offer_odom(display_odom(3),4.)
     release.set();assert done.wait(1);worker.stop()
-    assert ('goal','old goal') not in events and ('path','old') not in events
-    assert events[-2:]==[('goal','new goal'),('path','new')]
+    assert ('goal','old goal') not in events
+    assert events[-3:]==[('path',2),('goal','new goal'),('path',3)]
 
 
 def test_observer_is_enabled_only_for_active_rviz():
@@ -282,18 +287,18 @@ def test_display_worker_limits_batches_and_stop_wakes_without_period_wait():
     seen=[]; first=threading.Event(); second=threading.Event()
     class Observer:
         def odometry(self,msg,when):
-            seen.append((msg,time.monotonic()))
+            seen.append((msg.header.stamp.sec,time.monotonic()))
             (first if len(seen)==1 else second).set()
         def goal(self,msg,when): pass
-    worker=DisplayWorker(Observer());worker.start();worker.offer_odom(0)
+    worker=DisplayWorker(Observer());worker.start();worker.offer_odom(display_odom(1))
     assert first.wait(1)
-    for n in range(1,50):worker.offer_odom(n)
+    for n in range(2,51):worker.offer_odom(display_odom(n))
     assert second.wait(1)
-    assert [x[0] for x in seen]==[0,49]
+    assert [x[0] for x in seen]==[1,50]
     assert seen[1][1]-seen[0][1]>=.19
-    worker.offer_odom(50)
+    worker.offer_odom(display_odom(51))
     before=time.monotonic();worker.stop();assert time.monotonic()-before<.15
-    assert [x[0] for x in seen]==[0,49]
+    assert [x[0] for x in seen]==[1,50]
 
 
 def test_deferred_path_flush_coalesces_goal_and_odom():
@@ -321,15 +326,15 @@ def test_worker_goal_freezes_nearest_legal_before_or_first_after(prior,first_sta
         return S(header=S(frame_id=frame,stamp=S(sec=t,nanosec=0)),pose=S(pose=S(position=S(x=0.,y=0.,z=0.),orientation=S(x=0.,y=0.,z=0.,w=1.))))
     o=NavigationObserver(pose,lambda:S(header=None,poses=[]),lambda p:starts.append(p),lambda _:None,lambda _:done.set(),4.5,defer_path=True)
     class Block:
-        def odometry(self,msg,when):
+        def odometry(self,msg,when):o.odometry(msg,when)
+        def goal(self,msg,when):
             if msg=='block':barrier.set();release.wait(2)
-            else:o.odometry(msg,when)
-        def goal(self,msg,when):o.goal(msg,when)
+            else:o.goal(msg,when)
         def flush(self):o.flush()
     w=DisplayWorker(Block(),timeout=4.5);w.start()
     if prior:
         w.offer_odom(odom(2),0.);import time;time.sleep(.25)
-    w.offer_odom('block',.1);assert barrier.wait(1)
+    w.offer_goal('block',.1);assert barrier.wait(1)
     w.offer_odom(odom(first_stamp,first_frame),.2)
     w.offer_goal(S(header=odom(1).header,pose=None),.3)
     w.offer_odom(odom(4 if first_stamp==3 else 3),.4);w.offer_odom(odom(5),.5)
@@ -349,3 +354,26 @@ def test_worker_keeps_first_advance_after_already_processed_waiting_goal():
     w.offer_odom(odom(2),.1);w.offer_odom(odom(3),.2)
     assert done.wait(1);w.stop()
     assert [p for p in starts if p is not None][0].header.stamp.sec==2
+
+
+@pytest.mark.parametrize('late_stamp,late_frame',[(10,'map'),(9,'other')])
+def test_duplicate_or_older_odom_cannot_refresh_goal_start(late_stamp,late_frame):
+    from scripts.simulation.p4_tcp_runtime import NavigationObserver,DisplayWorker
+    import threading
+    entered=threading.Event();release=threading.Event();done=threading.Event();starts=[]
+    def odom(t,frame='map'):
+        return S(header=S(frame_id=frame,stamp=S(sec=t,nanosec=0)),pose=S(pose=S(position=S(x=0.,y=0.,z=0.),orientation=S(x=0.,y=0.,z=0.,w=1.))))
+    o=NavigationObserver(lambda:S(header=None,pose=None),lambda:S(header=None,poses=[]),starts.append,lambda _:None,lambda _:done.set(),4.5,defer_path=True)
+    class Block:
+        def goal(self,msg,when):
+            if msg=='block':entered.set();release.wait(2)
+            else:o.goal(msg,when)
+        def odometry(self,msg,when):o.odometry(msg,when)
+        def flush(self):o.flush()
+    w=DisplayWorker(Block(),4.5);w.start();w.offer_goal('block',-1.)
+    assert entered.wait(1)
+    w.offer_odom(odom(10),0.);w.offer_odom(odom(late_stamp,late_frame),.15)
+    w.offer_goal(S(header=odom(10).header,pose=None),4.60)
+    release.set();assert done.wait(1);assert starts[-1] is None
+    done.clear();w.offer_odom(odom(11),4.7);assert done.wait(1);w.stop()
+    assert starts[-1].header.stamp.sec==11

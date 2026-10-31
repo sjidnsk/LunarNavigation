@@ -131,10 +131,10 @@ class DisplayWorker:
                              and (self.offer_high_stamp is None or stamp > self.offer_high_stamp)
                              and (self.latest_offer is None or received >= self.latest_offer[1]))
                 except (AttributeError,TypeError,ValueError): valid = False
-                if valid:
-                    self.offer_high_stamp = stamp; self.latest_offer = (msg,received)
-                    if self.waiting_goal is not None and self.waiting_goal[0] is None:
-                        self.waiting_goal[0] = (msg,received)
+                if not valid: return
+                self.offer_high_stamp = stamp; self.latest_offer = (msg,received)
+                if self.waiting_goal is not None and self.waiting_goal[0] is None:
+                    self.waiting_goal[0] = (msg,received)
                 self.pending[kind] = (self.sequence,msg,received)
             else:
                 pre = self.latest_offer
