@@ -97,7 +97,9 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
                            'goal_revision':self.goal_revision,'accepted_goal_generation':self._accepted_goal_generation})
         accepted_candidate = accepted_certificate = None
         identity=(grid.epoch,reference.route_version,self.goal_revision,self._goal,self._goal_yaw,self.allow_unknown)
-        if self._buffer_identity is not None and self._buffer_identity[1:] != identity[1:]:
+        # 路线版本只调度下一次求解；有限执行来源仍属于原任务和原版本。
+        identity_start = 2 if self.revalidate_current_map else 1
+        if self._buffer_identity is not None and self._buffer_identity[identity_start:] != identity[identity_start:]:
             self.buffer.clear()
         self._buffer_identity=identity
         try:
@@ -190,9 +192,14 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
                 events.append({'kind':'BUFFER_CURRENT_STATE_REALIGNED','elapsed_s':now_s-self.buffer.accepted_s,
                                'alignment':dict(self.buffer.last_alignment),
                                'derived_candidate_digest':candidate.digest()})
-            cert=certify(candidate,grid,self.limits,reference.route_version,backend=self.backend,context=context)
-            if not cert.matches(candidate,grid,self.limits,reference.route_version):
+            source_version = candidate.route_version
+            cert=certify(candidate,grid,self.limits,source_version,backend=self.backend,context=context)
+            if not cert.matches(candidate,grid,self.limits,source_version):
                 raise ValueError('BUFFER_CERTIFICATION_'+cert.reason.value)
+            if source_version != reference.route_version:
+                events.append({'kind':'BUFFER_SOURCE_AWAITING_HANDOVER',
+                               'source_route_version':source_version,
+                               'planning_route_version':reference.route_version})
             # 以本次反馈固定下一次预计接续，避免累积小误差并确保反馈从未被传送。
             if self.revalidate_current_map:
                 self.buffer.update_derived(candidate,now_s)
@@ -271,7 +278,7 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
             self.buffer.clear()
         stage = perf_counter()
         if candidate is not None:
-            if not certificate.matches(candidate, grid, self.limits, version) or not np.allclose(candidate.states[0,:5], motion, atol=1e-6, rtol=0):
+            if not certificate.matches(candidate, grid, self.limits, candidate.route_version) or not np.allclose(candidate.states[0,:5], motion, atol=1e-6, rtol=0):
                 events.append({'kind': 'CANDIDATE_REJECTED', 'reason': certificate.reason.value if not certificate.valid else 'INITIAL_STATE_MISMATCH'})
                 candidate = certificate = None
         timings['certification_identity'] = (perf_counter()-stage)*1000
@@ -280,8 +287,8 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
             stage = perf_counter()
             try:
                 action = action_prefix(candidate, state, self.execution_period_s)
-                action_certificate = certify(action, grid, self.limits, version, backend=self.backend, context=context)
-                if not action_certificate.matches(action, grid, self.limits, version):
+                action_certificate = certify(action, grid, self.limits, candidate.route_version, backend=self.backend, context=context)
+                if not action_certificate.matches(action, grid, self.limits, candidate.route_version):
                     events.append({'kind': 'ACTION_REJECTED', 'reason': action_certificate.reason.value})
                     candidate = action = None
             except ValueError as exc:
