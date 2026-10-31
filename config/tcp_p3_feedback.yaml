@@ -7,8 +7,8 @@ p3_map_timeout_s: 0.0
 mppi_time_steps: 140
 mppi_compute_envelope_s: 0.55
 
-# 既有车辆watchdog 1s + 5Hz检查周期0.2s；MPCC认证覆盖此执行保持期，不改变传输超时。
-command_hold_s: 1.2
+# 用户要求P4实测2.5秒持令预测窗口；保留原有watchdog、规划/控制周期和制动检查。
+command_hold_s: 2.5
 
 # 全局有效路线在后台低频刷新；目标/真实阻塞/参考重入立即重算。
 global_period_s: 15.0

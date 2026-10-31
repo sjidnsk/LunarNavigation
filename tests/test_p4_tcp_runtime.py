@@ -472,8 +472,8 @@ def test_tcp_hold_contract_is_single_profile_source():
     from pathlib import Path
     import yaml
     profile=yaml.safe_load((Path(__file__).resolve().parents[1]/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
-    assert profile['command_hold_s']==1.2
-    assert float(launch_settings('/source','/cache','/tcp.yaml',profile)['command_hold_s'])==1.2
+    assert profile['command_hold_s']==2.5
+    assert float(launch_settings('/source','/cache','/tcp.yaml',profile)['command_hold_s'])==2.5
 
 
 def test_stock_interface_optional_connection_diagnostic():
