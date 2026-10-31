@@ -161,7 +161,8 @@ class NavigationCoordinator:
             from .reference_smoothing import shape_route
             if not raw_verified and not self._route_clear(route):
                 raise ValueError("raw route collision")
-            shaped=shape_route(route,self._blocked_boxes,raw_verified=True)
+            shaped=shape_route(route,self._blocked_boxes,raw_verified=True,
+                               terminal_yaw=self._goal_yaw)
         self._raw_route,self._shaped_route=route,shaped
         self.route=route if shaped is None else shaped.route
         self.progress=None

@@ -88,11 +88,12 @@ class _Exhausted(Exception):
 
 def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
                 step_m=.05, max_points=4096, clock=perf_counter,
-                raw_verified=False) -> ShapedRoute:
+                raw_verified=False, terminal_yaw=None) -> ShapedRoute:
     """新全局路线的有界后处理；耗尽回退整条已验证原路线，不留部分曲线。
 
+    terminal_yaw 可选；三次末段连接的终切线按 yaw 模 pi 选择最小转角。
     二次曲线控制点为原拐角，端点分别位于相邻原线段上。每次 De Casteljau
-    二分的控制三角形包住整段曲线，叶 AABB 与障碍严格分离才接受该段。
+    二分的控制多边形包住整段曲线，叶 AABB 与障碍严格分离才接受该段。
     叶控制多边形长度上限同时限制采样间距；采样折线仍独立连续重验。
 
     raw_verified=True 仅供已用同一 blocked_boxes 连续认证原路线的调用方复用
@@ -103,7 +104,8 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
     if (not np.isfinite(budget_s) or budget_s < 0 or not np.isfinite(max_trim_m)
             or max_trim_m < 0 or not np.isfinite(step_m) or step_m <= 0
             or type(max_points) is not int or max_points < 2
-            or type(raw_verified) is not bool):
+            or type(raw_verified) is not bool
+            or (terminal_yaw is not None and not np.isfinite(terminal_yaw))):
         raise ValueError("invalid smoothing budget, trim, step or point limit")
     began = clock()
     points = route.points
@@ -177,9 +179,9 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
         output.extend(samples[distinct])
         check()
 
-    def certify(a, control, b):
+    def certify(*polygon):
         nonlocal subdivisions
-        controls = np.asarray([[a, control, b]])
+        controls = np.asarray([polygon])
         # 用深度17的整数参数区间定位叶，最后恢复原递归从左到右的顺序。
         keys = np.zeros(1, dtype=np.int64)
         accepted_points, accepted_boxes, accepted_keys = [], [], []
@@ -194,14 +196,13 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
                                     np.max(controls, axis=1) + pad[:, None]), axis=1)
             collision = overlaps(boxes)
             if np.any(collision):
-                endpoints = controls[collision][:, (0, 2), :].reshape(-1, 2)
+                endpoints = controls[collision][:, (0, -1), :].reshape(-1, 2)
                 if not segments_clear(endpoints, endpoints):
                     return None
-            length_bound = (np.linalg.norm(controls[:, 1] - controls[:, 0], axis=1) +
-                            np.linalg.norm(controls[:, 2] - controls[:, 1], axis=1))
+            length_bound = np.linalg.norm(np.diff(controls, axis=1), axis=2).sum(axis=1)
             leaves = ~collision & (length_bound <= step_m)
             if np.any(leaves):
-                accepted_points.append(controls[leaves, 2])
+                accepted_points.append(controls[leaves, -1])
                 accepted_boxes.append(boxes[leaves])
                 accepted_keys.append(keys[leaves])
             pending = ~leaves
@@ -213,11 +214,16 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
                 raise _Exhausted("SUBDIVISION_LIMIT")
             controls = controls[pending]
             keys = keys[pending]
-            left = (controls[:, 0] + controls[:, 1]) / 2
-            right = (controls[:, 1] + controls[:, 2]) / 2
-            middle = (left + right) / 2
-            controls = np.stack((np.stack((controls[:, 0], left, middle), axis=1),
-                                 np.stack((middle, right, controls[:, 2]), axis=1)), axis=1).reshape(-1, 3, 2)
+            # 同一个 De Casteljau 细分器服务二次拐角和三次终点连接。
+            level = controls
+            left, right = [level[:, 0]], [level[:, -1]]
+            while level.shape[1] > 1:
+                level = (level[:, :-1] + level[:, 1:]) / 2
+                left.append(level[:, 0])
+                right.append(level[:, -1])
+            degree_count = controls.shape[1]
+            controls = np.stack((np.stack(left, axis=1),
+                                 np.stack(right[::-1], axis=1)), axis=1).reshape(-1, degree_count, 2)
             keys = (keys[:, None] + np.asarray((0, 1 << (16-depth)))).reshape(-1)
             check()
         raise _Exhausted("SUBDIVISION_LIMIT")
@@ -256,6 +262,34 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
                 append_samples(samples)
                 proof.extend(boxes)
                 changed = True
+        if terminal_yaw is not None:
+            goal = points[-1]
+            tail = goal - output[-1]
+            available = np.linalg.norm(tail)
+            if available > 1e-9:
+                unit = tail / available
+                # 模 pi 选择最小几何转角，不决定车辆前进或倒车。
+                relative = (terminal_yaw - np.arctan2(unit[1], unit[0]) + np.pi/2) % np.pi - np.pi/2
+                tangent = np.array((np.cos(np.arctan2(unit[1], unit[0]) + relative),
+                                    np.sin(np.arctan2(unit[1], unit[0]) + relative)))
+                # 最多3m接近区，避免750m直线整段弯曲；短尾段保留1/4直线。
+                # 这里只限制几何尺度，不证明曲率/车速/角速度可行性。
+                trim = min(3., .75 * available)
+                if abs(relative) > 1e-10 and trim > 1e-9:
+                    for _ in range(8):
+                        check()
+                        start = goal - trim * unit
+                        candidate = certify(start, start + trim/3 * unit,
+                                            goal - trim/3 * tangent, goal)
+                        if candidate is not None:
+                            samples, boxes = candidate
+                            if segments_clear(np.vstack((start, samples[:-1])), samples):
+                                line_to(start)
+                                append_samples(samples)
+                                proof.extend(boxes)
+                                changed = True
+                                break
+                        trim /= 2
         if not changed:
             return fallback("NO_ELIGIBLE_CORNER")
         line_to(points[-1])
