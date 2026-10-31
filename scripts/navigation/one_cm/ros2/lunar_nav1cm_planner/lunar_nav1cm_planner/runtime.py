@@ -21,9 +21,13 @@ def brake_diagnostic(packet, cycle_s, buffer):
     import math
     result, candidate = packet.result, packet.candidate
     tick = next ( (e for e in reversed(result.events) if e.get('kind') == 'EXECUTION_TICK'), {} )
-    kinds = {'LOCAL_REJECTED', 'BRAKE_REQUIRED', 'LOCAL_FAILED', 'STALE_LOCAL_RESULT',
-             'CANDIDATE_REJECTED', 'ACTION_REJECTED', 'GOAL_REJECTED', 'BRAKE_REJECTED', 'BRAKE_ACTION_REJECTED'}
-    events = [dict(e) for e in result.events if e.get('kind') in kinds]
+    # 事件可能携带轨迹、请求或尝试列表；仅导出已有标量字段以保留原因并限制日志体积。
+    def scalar(value):
+        return value is None or isinstance(value, (str, bool, int)) or (
+            isinstance(value, float) and math.isfinite(value))
+    events = [{key: value for key, value in event.items() if scalar(value)}
+              for event in result.events
+              if event.get('kind') not in ('EXECUTION_TICK', 'EXECUTION_SCHEDULE')]
     def finite(value):
         return value if isinstance(value, (int, float)) and math.isfinite(value) else None
     return dict(cycle_s=cycle_s, accepted_generation=packet.generation, status=result.status,

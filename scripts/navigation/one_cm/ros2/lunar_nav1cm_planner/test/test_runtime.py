@@ -195,3 +195,46 @@ def test_brake_diagnostic_marks_missing_events_and_nonfinite_values():
     record = module.brake_diagnostic(packet, 2., NS(source_phase_s=float('inf')))
     assert record['events'] == [] and record['event_state'] == 'none'
     assert record['buffer_remaining_s'] is None and record['source_phase_s'] is None
+
+
+def test_published_brake_logs_reference_rejection_once_and_diagnostics_cannot_break_publish(monkeypatch):
+    import nav1cm.async_coordinator as coordinator
+    from nav1cm.global_worker import run_request
+    class ImmediateGlobal:
+        pending = None
+        @property
+        def busy(self): return self.pending is not None
+        def submit(self, request): self.pending = request
+        def poll(self):
+            if self.pending is None: return None
+            request, self.pending = self.pending, None
+            return run_request(request)
+        def close(self): pass
+    runtime, session, published, logs = build_runtime()
+    session.coordinator.runner = ImmediateGlobal()
+    runtime.offer_goal(pose(0, 3)); runtime._tick_once(0.)
+    def reject(*args, **kwargs): raise ValueError('reference proof')
+    monkeypatch.setattr(coordinator, 'extract_reference', reject)
+    before = len(published)
+    packet = runtime._tick_once(.05)
+    assert packet.candidate.source == 'brake' and len(published) == before + 1
+    records = [json.loads(detail) for kind, detail in logs if kind == 'EXECUTION_BRAKE']
+    assert len(records) == 2
+    assert {'kind':'REFERENCE_REJECTED','reason':'reference proof'} in records[-1]['events']
+    monkeypatch.setattr(session, 'publication_current', lambda packet: False)
+    before = len(published); packet = runtime._tick_once(.1)
+    assert packet.candidate.source == 'brake' and len(published) == before
+    assert len([1 for kind, _ in logs if kind == 'EXECUTION_BRAKE']) == 2
+    monkeypatch.setattr(session, 'publication_current', lambda packet: True)
+    monkeypatch.setattr(runtime_api(), 'brake_diagnostic', lambda *a: (_ for _ in ()).throw(ValueError('diagnostic failure')))
+    before = len(published); packet = runtime._tick_once(.15)
+    assert packet.candidate.source == 'brake' and len(published) == before + 1
+    assert len([1 for kind, _ in logs if kind == 'EXECUTION_BRAKE']) == 2
+
+
+def test_brake_diagnostic_includes_worker_and_submit_errors():
+    module = runtime_api()
+    errors = ({'kind':'LOCAL_SUBMIT_ERROR','reason':'submit'}, {'kind':'LOCAL_WORKER_START_ERROR','reason':'start'})
+    packet = NS(candidate=NS(source='brake', mode='drive', route_version=1), generation=2,
+                result=NS(status='WAITING_GLOBAL', reference=None, events=errors))
+    assert module.brake_diagnostic(packet, 1., NS())['events'] == list(errors)
