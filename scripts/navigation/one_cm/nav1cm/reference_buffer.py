@@ -1,8 +1,8 @@
 """标准 Path 的有限参考缓冲；canonical source、物理进度和派生轨迹分离。
 
-只有经过当前图认证的新 worker 结果才能更换 source。普通执行周期只按
-实测 pose/yaw 消费固定 source，并生成受限桥接；派生时间和 bridge 永不
-成为下一次的来源。这里不代替 certify，调用方仍须认证整段及制动尾段。
+普通执行周期只按实测 pose/yaw 消费固定 source。轨迹消费端生成受限桥接，
+并由调用方认证整段及制动尾段；在线速度消费端只取有限来源及几何相位，
+由消费端独立认证真实 P3 到实际 issued 命令的响应、持令和停车。
 """
 from dataclasses import dataclass
 from types import MappingProxyType, SimpleNamespace
@@ -121,11 +121,11 @@ class ReferenceTrajectoryBuffer:
     def remaining_s(self, now_s):
         return 0. if self.source is None else max(0., float(self.source.times[-1]) - self.source_phase_s)
 
-    def prepare_source(self, source, state, minimum_s, limits, *, identity=None):
-        return self._prepare(source, state, 0., minimum_s, limits, identity or {})
+    def prepare_source(self, source, state, minimum_s, limits, *, identity=None, velocity_reference=False):
+        return self._prepare(source, state, 0., minimum_s, limits, identity or {}, velocity_reference)
 
     def install_source(self, proposal, candidate, now_s):
-        """只在 proposal 的派生结果已经通过当前图认证后更换 canonical。"""
+        """安装已核验身份的来源；轨迹消费端另须认证派生执行轨迹。"""
         self.source = proposal.source
         self.source_identity = MappingProxyType(dict(proposal.identity))
         self.source_phase_s = proposal.phase_s
@@ -136,18 +136,19 @@ class ReferenceTrajectoryBuffer:
     def update_derived(self, candidate, now_s):
         self.candidate, self.accepted_s = candidate, now_s
 
-    def current(self, state, now_s, minimum_s, *, limits):
+    def current(self, state, now_s, minimum_s, *, limits, velocity_reference=False):
         if self.source is None:
             raise ValueError('BUFFER_EMPTY')
-        proposal = self._prepare(self.source, state, self.source_phase_s, minimum_s, limits, self.source_identity)
+        proposal = self._prepare(self.source, state, self.source_phase_s, minimum_s, limits, self.source_identity, velocity_reference)
         self.source_phase_s = proposal.phase_s
         self.last_alignment = dict(proposal.alignment, source_wall_age_s=now_s-self.source_accepted_s)
         self.last_error = proposal.error
         return proposal.candidate
 
-    def _prepare(self, source, state, floor, minimum_s, limits, identity):
+    def _prepare(self, source, state, floor, minimum_s, limits, identity, velocity_reference=False):
         # 复用既有形状/有限值校验；不让 wall-age 改变 source 控制相位。
-        if (not np.isfinite(minimum_s) or minimum_s <= 0 or len(source.times) < 2 or
+        if (source.mode not in ('forward', 'reverse', 'spin') or
+                not np.isfinite(minimum_s) or minimum_s <= 0 or len(source.times) < 2 or
                 len(source.times) != len(source.controls) + 1 or
                 len(source.states) != len(source.times) or abs(source.times[0]) > 1e-9 or
                 not np.all(np.diff(source.times) > 0) or not np.isfinite(source.times).all() or
@@ -161,6 +162,12 @@ class ReferenceTrajectoryBuffer:
         active_distance, active_angle = distance > 1e-10, angle > 1e-10
         if not active_distance and not active_angle:
             raise ValueError('BUFFER_SOURCE_EXHAUSTED')
+        if velocity_reference:
+            # 来源仅是速度参考，不桥接真实反馈，不附加远端停车轨迹。
+            alignment = dict(request_identity=dict(identity), source_phase_s=phase,
+                             source_phase_floor_s=floor, remaining_source_distance_m=distance,
+                             remaining_source_angle_rad=angle)
+            return ReferenceProposal(source, dict(identity), phase, source, alignment, {})
         raw = self._conditioner.reanchor(source, state, 1e-9, limits,
                                         source_phase_s=phase, reference_velocity=True)
         alignment = dict(self._conditioner.last_alignment, request_identity=dict(identity),

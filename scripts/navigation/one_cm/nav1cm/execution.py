@@ -104,14 +104,22 @@ def certified_velocity_command(result, measured, limits, *, reference_interval_s
     if result is None or measured is None or result.candidate is None:
         return 0., 0.
     candidate=result.candidate
+    phase = getattr(result, 'reference_phase_s', None)
     if (candidate.source=='brake' or getattr(result,'status',None)=='ARRIVED' or
-            result.certificate is None or not result.certificate.matches(
-                candidate,result.grid,limits,candidate.route_version)):
+            phase is None and (result.certificate is None or not result.certificate.matches(
+                candidate,result.grid,limits,candidate.route_version))):
         return 0., 0.
     if not np.isfinite([reference_interval_s,elapsed_s]).all() or min(reference_interval_s,elapsed_s)<=0:
         return 0., 0.
     try:
-        reference=action_prefix(candidate,measured,reference_interval_s).states[-1,3:5]
+        if phase is None:
+            reference=action_prefix(candidate,measured,reference_interval_s).states[-1,3:5]
+        else:
+            from .reference_buffer import _at
+            if (not np.isfinite(phase) or phase < 0 or phase >= candidate.times[-1] or
+                    candidate.mode not in ('forward','reverse','spin')):
+                return 0.,0.
+            reference=_at(candidate,min(float(candidate.times[-1]),phase+reference_interval_s))[0][3:5]
     except ValueError:
         return 0.,0.
     previous=np.asarray(last_command,dtype=float)

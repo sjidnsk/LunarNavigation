@@ -136,27 +136,8 @@ class PlannerRuntime:
         """最多一次当前物理窗口重认证；不追赶持续变化的地图。"""
         if self.publish_command is None or packet.result is None or packet.result.grid is None:
             return packet, True
-        from dataclasses import replace
-        from nav1cm.maps import rasterize_world
-        from nav1cm.contracts import GridSnapshot
-        from nav1cm.certification import certify, prepare_certification
-        import numpy as np
-        result=packet.result
-        grid=result.grid
-        if world is None:return packet, False
-        cells=rasterize_world(world,grid.origin_xy,grid.cells.shape)
-        if np.array_equal(cells,grid.cells):return packet, True
-        if result.candidate is None:return packet, False
-        grid=GridSnapshot(world.epoch,grid.origin_xy,grid.resolution_m,cells,grid.allow_unknown)
-        candidate=replace(result.candidate,map_epoch=grid.epoch)
-        coordinator=self.session.coordinator
-        context=prepare_certification(grid,backend=coordinator.backend)
-        certificate=certify(candidate,grid,coordinator.limits,candidate.route_version,
-            backend=coordinator.backend,context=context)
-        if not certificate.matches(candidate,grid,coordinator.limits,candidate.route_version):
-            return packet, False
-        result=replace(result,grid=grid,candidate=candidate,certificate=certificate)
-        return replace(packet,result=result,candidate=candidate), True
+        # direct 使用 tick 入口同一 world/P3 快照；实际 issued proof 由发布消费端认证。
+        return packet, world is not None
 
     def configure_pose_input(self,timeout_s):
         if isinstance(timeout_s,bool) or not math.isfinite(timeout_s) or timeout_s<=0:
@@ -402,8 +383,7 @@ class PlannerRuntime:
                                       state_updated=self._new_body_observation(odometry_sequence),
                                       defer_commit=True)
         odometry_error = None
-        with self._condition:
-            proof_world=self._world
+        proof_world=world
         packet,physical_map_current=self._publication_map_proof(packet,proof_world)
         with self._condition:
             # 目标、最新测量和内部事件提交共享线性化点；不执行规划或外部回调。
@@ -429,7 +409,7 @@ class PlannerRuntime:
                     proposal = self.tasks.observe(packet, self._body_observation_time(now_s),
                         state_updated=self._new_body_observation(odometry_sequence),
                         defer_commit=True)
-                if self._world is proof_world and physical_map_current:
+                if physical_map_current:
                     self.tasks.commit_observation(proposal)
                     self._observe_body_stamp()
         self._observed_odometry_sequence = odometry_sequence
@@ -492,7 +472,7 @@ class PlannerRuntime:
             if (not self._stopping and input_sequence == self._goal_sequence and
                     packet.generation == self.session.accepted_generation and
                     (packet.waiting or self.session.publication_current(packet)) and
-                    (self.publish_command is None or self._world is proof_world and physical_map_current)):
+                    (self.publish_command is None or physical_map_current)):
                 if self.execution_contract_enabled:
                     from nav1cm.execution_contract import FOLLOW,BRAKE,HOLD,FINAL_ALIGN,INVALIDATED
                     active=self.tasks.active

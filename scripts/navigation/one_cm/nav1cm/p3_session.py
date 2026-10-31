@@ -83,10 +83,14 @@ class NavigationSession:
         if waiting:
             self._arrival_evidence=None
             return SessionPacket(self.accepted_generation, waiting=waiting)
+        if hasattr(self.coordinator, 'velocity_reference'):
+            self.coordinator.velocity_reference = self.direct_control
         result = self.coordinator.tick(self.world, self.state, (self.goal.x, self.goal.y),
                                        now_s, goal_yaw=self.goal.yaw, need_action=False)
         candidate = result.candidate
-        if (candidate is None or result.certificate is None or
+        velocity_source = (self.direct_control and result.reference_phase_s is not None and
+                           result.status == 'BUFFER_EXECUTING')
+        if not velocity_source and (candidate is None or result.certificate is None or
                 not result.certificate.matches(candidate, result.grid, self.coordinator.limits, candidate.route_version)):
             candidate = None
         if result.status!='NOT_DUE':

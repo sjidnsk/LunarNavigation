@@ -413,3 +413,29 @@ def test_goal_replacement_retains_actual_last_command_and_zero_publish_resets(mo
     runtime._publish_issued((0.,0.))
     runtime.offer_goal(pose(0,5));runtime._tick_once(.2)
     assert seen[-1]==(0.,0.)
+
+
+
+def test_direct_sampled_map_update_does_not_insert_zero_and_next_cycle_blocks():
+    import numpy as np
+    from nav1cm.contracts import VehicleState,WorldSnapshot,CellRect,Route,Trajectory
+    from nav1cm.seeds import rollout
+    runtime,session,*_=build_runtime();commands=[]
+    runtime.configure_direct_control(lambda *cmd:commands.append(cmd),command_hold_s=.1)
+    runtime.tasks.submit('sampled-map',(0,3,0),0.)
+    session.offer_state(VehicleState(0,0,0,0,0))
+    c=session.coordinator;c.route=Route(1,1,[[0,0],[0,3]],(0,3));c._policy=False
+    u=np.array([[0.,.4,0.]])
+    source=Trajectory(1,1,[0.,.2],rollout([0,0,0,0,0,0],u,.2),u,'spin','mpcc')
+    c.buffer.install(source,0.)
+    tick=session.tick
+    def raced(now):
+        packet=tick(now)
+        runtime._world=WorldSnapshot(2,(CellRect(-20,-20,20,20),),session.world.known_free)
+        return packet
+    session.tick=raced
+    runtime._tick_once(0.)
+    assert commands[-1][1]>0
+    session.tick=tick
+    runtime._tick_once(.05)
+    assert commands[-1]==(0.,0.)

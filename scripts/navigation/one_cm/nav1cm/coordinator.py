@@ -27,6 +27,7 @@ class CycleResult:
     global_result: object = None
     action: object = None
     action_certificate: object = None
+    reference_phase_s: object = None
 
 
 class NavigationCoordinator:

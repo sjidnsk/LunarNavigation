@@ -29,6 +29,8 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         self.execution_period_s=execution_period_s
         self.buffer=(ReferenceTrajectoryBuffer(feedback_tolerance)
                      if self.revalidate_current_map else TrajectoryBuffer(feedback_tolerance))
+        self.velocity_reference = False
+        self._velocity_reference = False
         self.initial_travel_direction=initial_travel_direction
         self._initial_direction_pending=bool(initial_travel_direction)
         self._initial_direction_aligned=False
@@ -71,7 +73,7 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         return direction
 
     def _buffer_minimum_s(self, state):
-        if not self.revalidate_current_map:
+        if self._velocity_reference or not self.revalidate_current_map:
             return self.execution_period_s
         # 续用必须剩下一个反应周期及按真实反馈受限制动的时间。
         return self.execution_period_s + max(abs(state.v) / self.limits.linear_accel_mps2,
@@ -128,26 +130,27 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
                     age=now_s-incoming['feedback_s']
                     minimum_s = self._buffer_minimum_s(state)
                     if self.revalidate_current_map:
-                        proposal=self.buffer.prepare_source(candidate,state,minimum_s,self.limits,identity=incoming)
+                        proposal=self.buffer.prepare_source(candidate,state,minimum_s,self.limits,identity=incoming,velocity_reference=self._velocity_reference)
                         candidate=proposal.candidate
                         # 派生当前图轨迹；原请求、原epoch和原candidate哈希都保持可审计。
                         candidate=replace(candidate,map_epoch=grid.epoch)
-                        events.append({'kind':'LOCAL_CANDIDATE_REALIGNED','request_identity':dict(incoming),
+                        events.append({'kind':('LOCAL_REFERENCE_ACCEPTED' if self._velocity_reference else 'LOCAL_CANDIDATE_REALIGNED'),'request_identity':dict(incoming),
                                        'computation_age_s':age,'alignment':dict(proposal.alignment),
                                        'derived_candidate_digest':candidate.digest()})
                     else:
                         if candidate.times[-1] - age < minimum_s - 1e-9:
                             raise ValueError('BUFFER_EXHAUSTED')
                         candidate=self.buffer.rebase(candidate,state,age,minimum_s)
-                    certificate=certify(candidate,grid,self.limits,reference.route_version,backend=self.backend,context=context)
-                    if not certificate.matches(candidate,grid,self.limits,reference.route_version):
+                    certificate=(None if self._velocity_reference else
+                        certify(candidate,grid,self.limits,reference.route_version,backend=self.backend,context=context))
+                    if not self._velocity_reference and not certificate.matches(candidate,grid,self.limits,reference.route_version):
                         raise ValueError('LOCAL_CERTIFICATION_'+certificate.reason.value)
                     if self.revalidate_current_map:
                         self.buffer.install_source(proposal,candidate,now_s)
                     else:
                         self.buffer.install(candidate,now_s)
                     accepted_candidate,accepted_certificate=candidate,certificate
-                    if self.revalidate_current_map and original_epoch != grid.epoch:
+                    if self.revalidate_current_map and not self._velocity_reference and original_epoch != grid.epoch:
                         events.append({'kind':'LOCAL_CURRENT_MAP_REVALIDATED','request_identity':dict(incoming),
                                        'requested_epoch':original_epoch,'original_candidate_digest':original_digest,
                                        'current_epoch':grid.epoch,'current_grid_digest':grid.digest(),
@@ -184,17 +187,18 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
             return accepted_candidate,accepted_certificate,'BUFFER_EXECUTING'
         try:
             minimum_s = self._buffer_minimum_s(state)
-            candidate=(self.buffer.current(state,now_s,minimum_s,limits=self.limits)
+            candidate=(self.buffer.current(state,now_s,minimum_s,limits=self.limits,velocity_reference=self._velocity_reference)
                        if self.revalidate_current_map else self.buffer.current(state,now_s,minimum_s))
-            # 旧控制可跨地图更新保留，但必须绑定当前地图重新认证整段。
+            # 参考可跨地图更新保留；轨迹消费端仍须绑定当前地图认证整段。
             candidate=replace(candidate,map_epoch=grid.epoch)
             if self.revalidate_current_map:
-                events.append({'kind':'BUFFER_CURRENT_STATE_REALIGNED','elapsed_s':now_s-self.buffer.accepted_s,
+                events.append({'kind':('BUFFER_REFERENCE_PROJECTED' if self._velocity_reference else 'BUFFER_CURRENT_STATE_REALIGNED'),'elapsed_s':now_s-self.buffer.accepted_s,
                                'alignment':dict(self.buffer.last_alignment),
                                'derived_candidate_digest':candidate.digest()})
             source_version = candidate.route_version
-            cert=certify(candidate,grid,self.limits,source_version,backend=self.backend,context=context)
-            if not cert.matches(candidate,grid,self.limits,source_version):
+            cert=(None if self._velocity_reference else
+                certify(candidate,grid,self.limits,source_version,backend=self.backend,context=context))
+            if not self._velocity_reference and not cert.matches(candidate,grid,self.limits,source_version):
                 raise ValueError('BUFFER_CERTIFICATION_'+cert.reason.value)
             if source_version != reference.route_version:
                 events.append({'kind':'BUFFER_SOURCE_AWAITING_HANDOVER',
@@ -213,6 +217,7 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
             return None,None,'BUFFER_UNAVAILABLE'
 
     def tick(self, world, state, goal, now_s, *, goal_yaw=None, need_action=True):
+        self._velocity_reference = self.velocity_reference and self.revalidate_current_map and not need_action
         started = perf_counter()
         cpu_started = process_time()
         if not np.isfinite(now_s) or (self._last_tick is not None and now_s < self._last_tick-1e-9):
@@ -277,7 +282,8 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         else:
             self.buffer.clear()
         stage = perf_counter()
-        if candidate is not None:
+        velocity_source = self._velocity_reference and status == 'BUFFER_EXECUTING' and candidate is not None
+        if candidate is not None and not velocity_source:
             if not certificate.matches(candidate, grid, self.limits, candidate.route_version) or not np.allclose(candidate.states[0,:5], motion, atol=1e-6, rtol=0):
                 events.append({'kind': 'CANDIDATE_REJECTED', 'reason': certificate.reason.value if not certificate.valid else 'INITIAL_STATE_MISMATCH'})
                 candidate = certificate = None
@@ -318,4 +324,5 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         timings['total'] = (perf_counter()-started)*1000
         deadline_miss = timings['total'] > self.local_period_s*1000
         if deadline_miss: events.append({'kind': 'LOCAL_DEADLINE_MISS', 'total_ms': timings['total']})
-        return CycleResult(status, candidate, certificate, grid, reference, tuple(events), timings, deadline_miss, global_result, action, action_certificate)
+        return CycleResult(status, candidate, certificate, grid, reference, tuple(events), timings, deadline_miss, global_result, action, action_certificate,
+                           self.buffer.source_phase_s if velocity_source else None)
