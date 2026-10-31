@@ -59,7 +59,11 @@ def test_cli_freezes_limits_hold_and_exports_json(monkeypatch,tmp_path):
     from scripts.analysis import compare_mpcc_handover as module
     limits=tmp_path/'limits.json';limits.write_text(json.dumps(vars(ProbePlanner.limits)),encoding='utf-8')
     output=tmp_path/'result.json'
-    monkeypatch.setattr(module,'load_planner',lambda path,name:(ProbePlanner,dict(path=path,sha256='test-only')))
+    builds=[]
+    class BuildProbe(ProbePlanner):
+        def __init__(self,limits,build_dir,**kwargs):
+            builds.append(build_dir);super().__init__(limits,build_dir,**kwargs)
+    monkeypatch.setattr(module,'load_planner',lambda path,name:(BuildProbe,dict(path=path,sha256='test-only')))
     hold=[];original=module.certified_velocity_command
     def command(*args,**kwargs):
         hold.append(kwargs['command_hold_s']);return original(*args,**kwargs)
@@ -67,6 +71,7 @@ def test_cli_freezes_limits_hold_and_exports_json(monkeypatch,tmp_path):
     module.main(['--baseline-module','old.py','--warm-module','new.py','--limits-json',str(limits),
         '--build-dir',str(tmp_path/'build'),'--output',str(output),'--duration','.3','--scenarios','straight'])
     result=json.loads(output.read_text(encoding='utf-8'))
+    assert builds==[tmp_path/'build',tmp_path/'build']
     assert result['evidence']=='MODEL_SIMULATION'
     assert result['command_hold_s']==1.2
     assert set(hold)=={1.2}

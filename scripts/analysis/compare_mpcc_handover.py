@@ -131,7 +131,7 @@ def main(argv=None):
         field_backend=NativeDistanceField(a.field_lib);result['field_library']=identity(a.field_lib)
     for arm in ('baseline','warm'):
         cls,info=load_planner(getattr(a,arm+'_module'),arm)
-        runs=[simulate(cls(limits,Path(a.build_dir)/arm/s,n=a.n,dt=.2),s,duration=a.duration,result_delay=a.result_delay,feedback_delay=a.feedback_delay,command_hold_s=a.command_hold,backend=backend,field_backend=field_backend) for s in a.scenarios]
+        runs=[simulate(cls(limits,Path(a.build_dir),n=a.n,dt=.2),s,duration=a.duration,result_delay=a.result_delay,feedback_delay=a.feedback_delay,command_hold_s=a.command_hold,backend=backend,field_backend=field_backend) for s in a.scenarios]
         result['arms'][arm]=dict(module=info,runs=runs)
     path=Path(a.output);path.parent.mkdir(parents=True,exist_ok=True)
     path.write_bytes(json.dumps(result,ensure_ascii=False,indent=2).encode('utf-8'))
