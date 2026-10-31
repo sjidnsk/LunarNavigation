@@ -12,6 +12,7 @@ import numpy as np
 from .execution import ExecutionResult
 from .path_geometry import Polyline, angle
 from .tracking import TrackingCommand, TrackingPolicy, _valid_policy
+from .speed_slew import speed_slew, prepare_targets, target_step
 
 
 @dataclass(frozen=True)
@@ -26,20 +27,27 @@ class MppiPolicy:
     control_cost: float = .002
     seed: int = 17
     compute_budget_s: float = .05
-    state_age_budget_s: float = .05
+    state_age_budget_s: float | None = .05
     nominal_response_time_s: float | None = None
 
     def __post_init__(self):
         if any(not isinstance(v,int) or isinstance(v,bool) or v<1 for v in (self.batch_size,self.time_steps,self.iterations)) or self.batch_size<8:
             raise ValueError('invalid MPPI dimensions')
-        if any(not math.isfinite(v) or v<=0 for v in (self.model_dt,self.temperature,self.linear_std,self.angular_std,self.compute_budget_s,self.state_age_budget_s)) or not math.isfinite(self.control_cost) or self.control_cost<0:
+        if any(not math.isfinite(v) or v<=0 for v in (self.model_dt,self.temperature,self.linear_std,self.angular_std,self.compute_budget_s)) or not math.isfinite(self.control_cost) or self.control_cost<0:
             raise ValueError('invalid MPPI parameters')
+        if self.state_age_budget_s is not None and (not math.isfinite(self.state_age_budget_s) or self.state_age_budget_s<=0):
+            raise ValueError('invalid state age budget')
         if self.nominal_response_time_s is not None and (not math.isfinite(self.nominal_response_time_s) or self.nominal_response_time_s<0):
             raise ValueError('invalid nominal response calibration')
+
+    def accepts_state_age(self,age):
+        # 标准Path以定位推进心跳判断中断；真实age仍用于全部延迟积分。
+        return math.isfinite(age) and age>=0 and (self.state_age_budget_s is None or age<=self.state_age_budget_s)
 
 
 class MppiExecutor:
     requires_map = True
+    tracks_task_progress = True
 
     def __init__(self,policy: TrackingPolicy,mppi_policy=None,**_):
         if not _valid_policy(policy):raise ValueError('invalid execution policy')
@@ -49,8 +57,12 @@ class MppiExecutor:
         self.phase='WAITING';self.failure=None;self.progress_m=0.;self.error=0.;self.heading_error=0.;self.direction=1
         self._last_command=np.zeros(2);self._model_time=0.;self._state_age_s=0.;self._command_history=[];self._nominal=np.zeros((self.config.time_steps,2))
         self._first_target_step=self.config.model_dt
-        self._translation_credit_m=0.;self.no_progress_s=0.;self._last_pose=None
+        self._reset_task_progress()
         self.diagnostics={};self.predicted_trajectory=np.empty((0,3))
+
+    def _reset_task_progress(self):
+        if self.tracks_task_progress:
+            self._translation_credit_m=0.;self.no_progress_s=0.;self._last_pose=None
 
     def note_command(self,v,w,stamp_s=None):
         self._last_command=np.array([v,w],float)
@@ -60,7 +72,7 @@ class MppiExecutor:
         else:self._command_history.append(record)
         # 保留原64条下限，同时覆盖允许的真实反馈年龄和执行响应；
         # 必须保留cutoff之前一条，才能重放窗口起点仍在生效的指令。
-        cutoff=stamp-(self.config.state_age_budget_s+self.policy.control_response_time_s+
+        cutoff=stamp-(max(self.config.state_age_budget_s or 0.,self._state_age_s)+self.policy.control_response_time_s+
                       self.config.compute_budget_s+self.config.model_dt)
         keep=max(0,len(self._command_history)-64)
         while keep>0 and self._command_history[keep][0]>cutoff:
@@ -72,7 +84,7 @@ class MppiExecutor:
 
     def clear(self):
         self.path=None;self.phase='WAITING';self.failure=None
-        self._nominal[:]=0.;self.note_command(0.,0.);self.no_progress_s=0.;self._last_pose=None;self._translation_credit_m=0.;self._command_history=[]
+        self._nominal[:]=0.;self.note_command(0.,0.);self._reset_task_progress();self._command_history=[]
 
     def set_map(self,grid):
         if self.map is None or grid.epoch!=self.map.epoch:self._nominal[:]=0.
@@ -89,8 +101,9 @@ class MppiExecutor:
                 self.identity=identity
                 return True
             # Keep physical net-progress time across rolling revisions.
-        else:self.no_progress_s=0.;self._last_pose=None
-        self.path=path;self.identity=identity;self.final=final;self.progress_m=0.;self._translation_credit_m=0.
+        else:self._reset_task_progress()
+        self.path=path;self.identity=identity;self.final=final;self.progress_m=0.
+        if self.tracks_task_progress:self._translation_credit_m=0.
         self.failure=None;self.phase='BRAKING';self._nominal[:]=0.
         return True
 
@@ -116,6 +129,7 @@ class MppiExecutor:
 
     def _observe_progress(self,state,distance,yaw_error,dt):
         """唯一物理进展/行进停滞计算；滚动参考刷新本身不产生进展。"""
+        if not self.tracks_task_progress:return False
         if self._last_pose is None:self._bind_progress_anchor(state)
         anchor,travel,best_angle=self._last_pose
         advance=self._translation_credit_m+float(np.dot(np.array([state.x_m,state.y_m])-anchor,travel))
@@ -159,8 +173,7 @@ class MppiExecutor:
         tw=np.clip(targets[:,:,1],-p.max_angular_radps,p.max_angular_radps)
         integrated=actual if actual.dtype==np.float64 else np.empty(actual.shape,dtype=float)
         for t in range(h):
-            accel=np.where(abs(tv[:,t])>abs(v),p.max_linear_accel_mps2,p.max_linear_decel_mps2)
-            v=v+np.clip(tv[:,t]-v,-accel*dt,accel*dt)
+            v=speed_slew(v,tv[:,t],dt,p.max_linear_accel_mps2,p.max_linear_decel_mps2)
             w=w+np.clip(tw[:,t]-w,-p.max_angular_accel_radps2*dt,p.max_angular_accel_radps2*dt)
             integrated[:,t,0]=v;integrated[:,t,1]=w
         if integrated is not actual:actual[:]=integrated
@@ -251,32 +264,14 @@ class MppiExecutor:
     def _limit_target_step(self,previous,raw,step):
         # Rate limits belong to successive published targets, not a delayed
         # measurement of the actuator. The rollout models physical slew below.
-        p=self.policy
-        pv,pw=previous[:,0],previous[:,1]
-        if p.motion_model == 'differential_drive':
-            # 指令各轴独立限幅；测量原值仅交由物理预测和停车认证处理。
-            target_v=np.clip(raw[:,0],-p.max_reverse_mps if p.allow_reverse else 0.,p.max_linear_mps)
-            target_w=np.clip(raw[:,1],-p.max_angular_radps,p.max_angular_radps)
-            v=pv+np.clip(target_v-pv,-p.max_linear_decel_mps2*step,p.max_linear_accel_mps2*step)
-            w=pw+np.clip(target_w-pw,-p.max_angular_accel_radps2*step,p.max_angular_accel_radps2*step)
-            return np.stack((np.clip(v,-p.max_reverse_mps if p.allow_reverse else 0.,p.max_linear_mps),
-                             np.clip(w,-p.max_angular_radps,p.max_angular_radps)),axis=1)
-        v=pv+np.clip(raw[:,0]-pv,-p.max_linear_decel_mps2*step,p.max_linear_accel_mps2*step)
-        tw=np.where(abs(raw[:,0])>p.stopped_linear_mps,np.clip(raw[:,1],-abs(raw[:,0])*p.max_curvature_per_m,abs(raw[:,0])*p.max_curvature_per_m),raw[:,1])
-        tw=np.where((abs(raw[:,0])<=p.stopped_linear_mps)&(abs(pv)>p.stopped_linear_mps),0.,tw)
-        w=pw+np.clip(tw-pw,-p.max_angular_accel_radps2*step,p.max_angular_accel_radps2*step)
-        lo=np.maximum(-abs(v)*p.max_curvature_per_m,pw-p.max_angular_accel_radps2*step)
-        hi=np.minimum(abs(v)*p.max_curvature_per_m,pw+p.max_angular_accel_radps2*step)
-        moving=abs(v)>p.stopped_linear_mps
-        w=np.where(moving&(lo<=hi),np.clip(w,lo,hi),w)
-        stop=moving&(lo>hi)
-        return np.stack((np.where(stop,0.,v),np.where(stop,0.,w)),axis=1)
+        return target_step(previous,prepare_targets(raw,self.policy),step,self.policy)
 
     def _project_targets(self,raw,step):
         projected=np.empty(raw.shape,dtype=float)
+        intents=prepare_targets(raw,self.policy)
         previous=np.broadcast_to(self._last_command,(len(raw),2))
         for t in range(raw.shape[1]):
-            previous=self._limit_target_step(previous,raw[:,t],min(self._first_target_step,step) if t==0 else step)
+            previous=target_step(previous,intents[:,t],min(self._first_target_step,step) if t==0 else step,self.policy)
             projected[:,t]=previous
         return projected
 
@@ -377,7 +372,7 @@ class MppiExecutor:
         self.diagnostics={'valid_samples':0,'weighted_updates':0}
         self._model_time=self._model_time+dt if now_s is None else float(now_s)
         self._state_age_s=float(state_age_s)
-        if not all(math.isfinite(v) for v in (state.x_m,state.y_m,state.yaw_rad,state.linear_mps,state.angular_radps,state.lateral_mps,dt,self._model_time,self._state_age_s)) or dt<=0 or not 0<=self._state_age_s<=c.state_age_budget_s:
+        if not all(math.isfinite(v) for v in (state.x_m,state.y_m,state.yaw_rad,state.linear_mps,state.angular_radps,state.lateral_mps,dt,self._model_time,self._state_age_s)) or dt<=0 or not c.accepts_state_age(self._state_age_s):
             self.failure='INVALID_STATE';self.phase='FAILED';return self._result()
         # The first target uses this control interval; subsequent prediction
         # knots retain the fixed model interval. Publication uses the same cap.

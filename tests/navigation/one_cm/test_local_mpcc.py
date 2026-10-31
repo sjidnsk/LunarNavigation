@@ -242,3 +242,57 @@ def test_native_swept_wall_rotation_braking_and_unknown_truth():
     check([0,0,0,.2,0,0],[],.2,cells,'forward','VALID',True)
     cells=np.zeros((500,500),dtype=np.int8)
     check([1.87,0,0,.2,0,0],[],.2,cells,'forward','BRAKING_OUT_OF_BOUNDS')
+
+
+@pytest.mark.parametrize("mode", ["forward", "reverse"])
+@pytest.mark.parametrize("terminal", [None, -3.0])
+def test_curved_node_yaws_follow_each_tangent_and_terminal_blend(mode, terminal):
+    from types import SimpleNamespace
+    mpcc, _ = modules()
+    planner = object.__new__(mpcc.MpccPlanner)
+    planner.limits = WheelLimits()
+    planner.offsets = (0.,)
+    planner.radius = .6
+    points = np.array([[0., 0.], [-1., .05], [-2., -.05], [-2., -1.]])
+    s = np.r_[0., np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
+    ref = SimpleNamespace(points=points, s=s, terminal_yaw=terminal)
+    progress = [0., s[1]+.1, s[2]+.1, s[-1]]
+    states = np.zeros((4, 6)); states[:, 2] = 3.12; states[:, 5] = progress
+    field = SimpleNamespace(sample=lambda x,y: (2., 0., 0.))
+    params = planner._parameters(states, np.zeros((3,3)), ref, field, 3.12, s[-1], mode=mode)
+    for z, param in zip(states, params):
+        tangent_yaw = np.arctan2(param[3], param[2]) + (np.pi if mode=='reverse' else 0.)
+        expected = mpcc._approach_yaw(ref, z[5], tangent_yaw, planner.N*planner.dt*planner.limits.linear_speed_mps)
+        assert abs(mpcc.angle_error(expected, param[5])) < 1e-12
+        assert abs(param[5]-z[2]) <= np.pi
+    spin = planner._parameters(states, np.zeros((3,3)), ref, field, -3.0, s[-1], mode='spin')
+    assert all(abs(mpcc.angle_error(-3., p[5])) < 1e-12 for p in spin)
+
+
+def test_spin_target_stays_fixed_during_deceleration_and_residual_handoff():
+    mpcc, _ = modules()
+    for yaw in (.5, .07, .02):
+        state, _, ref = scene(state=VehicleState(0,0,yaw,0,.03))
+        assert abs(mpcc.travel_target_yaw(state,ref,'spin',.8)) < 1e-12
+        assert abs(mpcc.travel_target_yaw(state,ref,'spin',.8,initial_travel_direction='forward')) < 1e-12
+    state, _, ref = scene(state=VehicleState(0,0,0,0,.005))
+    assert mpcc.select_mode(state,ref) == 'forward'
+    assert mpcc.select_mode(state,ref,initial_travel_direction='forward') == 'forward'
+
+
+@pytest.mark.parametrize('angular_speed, expected', [(.009, 'brake'), (-.009, 'brake'), (.011, 'spin')])
+def test_terminal_mode_uses_same_angular_stopped_threshold(angular_speed, expected):
+    from types import SimpleNamespace
+    mpcc, _ = modules()
+    ref = SimpleNamespace(points=np.zeros((1,2)), terminal_yaw=0.)
+    assert mpcc.select_mode(VehicleState(0,0,0,0,angular_speed), ref) == expected
+
+
+def test_approach_spin_target_is_reference_blend_across_deceleration():
+    from types import SimpleNamespace
+    mpcc, _ = modules()
+    ref = SimpleNamespace(points=np.array([[0.,0.],[.8,0.]]), s=np.array([0.,.8]),
+                          progress_s=.6, terminal_yaw=1.)
+    for yaw, angular_speed in ((.5,.1), (.8,.03), (.85,.015)):
+        state = VehicleState(0,0,yaw,0,angular_speed)
+        assert mpcc.travel_target_yaw(state,ref,'spin',.8) == pytest.approx(.84375)

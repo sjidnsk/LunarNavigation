@@ -26,6 +26,30 @@ def brake_candidate(state, grid, reference, limits):
                       np.array(controls).reshape(-1, 3), mode, 'brake')
 
 
+def braking_prefix(state, grid, reference, limits, *, retain_angular=False):
+    """真实初态的平移制动；差速车可保留合法角速度，不伪造零速测量。"""
+    if retain_angular and limits.motion_model=='differential_drive' and abs(state.v)>1e-10:
+        initial=np.array([state.x,state.y,state.yaw,state.v,state.w,reference.progress_s])
+        duration=abs(state.v)/limits.linear_accel_mps2
+        control=np.array([-state.v/duration,0.,0.])
+        endpoint=step(initial,control,duration)
+        return Trajectory(grid.epoch,reference.route_version,[0.,duration],
+            np.stack((initial,endpoint)),control[None,:],
+            'forward' if state.v>0 else 'reverse','brake')
+    return brake_candidate(state,grid,reference,limits)
+
+
+def join_trajectories(prefix, continuation):
+    """接续同一身份、同一物理边界的两段；调用者仍须认证完整结果。"""
+    if (prefix.map_epoch!=continuation.map_epoch or prefix.route_version!=continuation.route_version or
+            not np.allclose(prefix.states[-1],continuation.states[0],atol=1e-10,rtol=0.)):
+        raise ValueError('trajectory continuation identity/state mismatch')
+    return Trajectory(prefix.map_epoch,prefix.route_version,
+        np.concatenate((prefix.times[:-1],prefix.times[-1]+continuation.times)),
+        np.vstack((prefix.states[:-1],continuation.states)),np.vstack((prefix.controls,continuation.controls)),
+        continuation.mode,continuation.source if continuation.source=='brake' else continuation.source+'+braking-entry')
+
+
 def rollout(initial, controls, dt=.2):
     states = [np.asarray(initial, dtype=float)]
     for control in controls:

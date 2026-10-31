@@ -107,3 +107,15 @@ def test_local_integer_nanoseconds_stay_strict_without_dropping_spin_poses(start
     assert [pose.yaw for pose in result.local.poses] == pytest.approx(states[:, 2])
     assert [pose.stamp_ns for pose in result.global_route.poses] == [start_ns] * 2
     assert candidate.digest() == original_digest
+
+
+def test_paths_publish_actual_smoothed_reference_separately_from_raw_route():
+    module=api('ros_conversion')
+    raw=Route(1,1,[[0,0],[2,0],[2,2]],(2,2))
+    shaped=Route(1,1,[[0,0],[1.8,0],[1.95,.05],[2,.2],[2,2]],(2,2))
+    output=module.paths(raw,None,123,global_reference=shaped)
+    assert [(p.x,p.y) for p in output.global_route.poses]==[tuple(x) for x in raw.points]
+    assert [(p.x,p.y) for p in output.global_reference.poses]==[tuple(x) for x in shaped.points]
+    assert not output.local.poses
+    empty=module.paths(None,None,124)
+    assert not empty.global_route.poses and not empty.global_reference.poses and not empty.local.poses

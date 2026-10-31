@@ -19,6 +19,7 @@ def load_configuration(path, overrides=None):
         linear_speed_mps=min(float(capability['maximum_forward_speed_mps']),
                              float(capability['maximum_reverse_speed_mps'])),
         angular_speed_rps=float(capability['maximum_spin_rate_radps']),
+        # 规划模型只有一项对称导数上限，取增速/制动共同可执行的包络；不混用正负方向。
         linear_accel_mps2=min(float(capability['maximum_acceleration_mps2']),
                               float(capability['maximum_braking_deceleration_mps2'])),
         angular_accel_rps2=float(capability['maximum_yaw_acceleration_radps2']),

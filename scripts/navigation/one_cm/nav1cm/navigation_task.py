@@ -1,10 +1,8 @@
 """无 ROS 的导航任务合同；仅 Runtime 的 tick 线程可调用写入方法。"""
 from dataclasses import dataclass, replace
-import math
 from collections import OrderedDict
 from .execution_contract import ExecutionReference, ExecutionStatus, execution_session_id, FOLLOW, BRAKE, HOLD, FINAL_ALIGN
 
-from .pose_goal import angle_error
 from .ros_conversion import PoseGoal, finite
 
 
@@ -51,8 +49,6 @@ class NavigationTaskCoordinator:
         self._execution_accepted_reference = None
         self._execution_status = None
         self._execution_received = None
-        self._execution_last_accepted = None
-        self._execution_pose_wait_received = None
         self._execution_started = now_s
         self._execution_revision = -1
         self._execution_stamp = -1
@@ -103,8 +99,6 @@ class NavigationTaskCoordinator:
             if status.revision < self._execution_revision or status.stamp_ns <= self._execution_stamp:
                 # 已接受旧参考的延迟故障只锁存故障，不回退正常反馈门禁。
                 return True
-        if status.state == 0 and not status.accepted and status.reason == 'WAITING_FOR_POSE':
-            self._execution_pose_wait_received = now_s
         if status.accepted:
             # 发布窗口不能退休仍在执行的精确身份；真实接管后仅保留一个新pin。
             if pinned is not None and pinned.revision != ref.revision and pinned.revision not in self._references:
@@ -112,7 +106,6 @@ class NavigationTaskCoordinator:
                 self._execution_terminal.discard(pinned.revision)
                 self._execution_failed_revisions.discard(pinned.revision)
             self._execution_accepted_reference = ref
-            self._execution_last_accepted = now_s
             self._execution_accepted.add(status.revision)
         if status.state in (5,6):
             self._execution_terminal.add(status.revision)
@@ -120,24 +113,14 @@ class NavigationTaskCoordinator:
         self._execution_revision, self._execution_stamp = max(self._execution_revision, status.revision), status.stamp_ns
         return True
 
-    def check_execution_fault(self, now_s, *, pose_waiting=False):
+    def check_execution_fault(self, now_s):
         if not self._feedback_required or self.active is None or self.active.outcome is not None or self.active.phase in ('CANCELING','ERROR_STOPPING'):
             return None
-        status = self._execution_status
         if self._execution_failure is not None:
             return self._execution_failure
-        # 只有严格匹配当前参考、仍新鲜的定位等待心跳可挂起接受截止。
-        # 不把等待当accepted；心跳消失仍沿原反馈超时失败。
-        if (status is not None and status.state == 0 and not status.accepted and
-                (status.reason == 'WAITING_FOR_POSE' or
-                 (pose_waiting and status.reason == 'WAITING_FOR_FRESH_REFERENCE')) and
-                self._execution_received is not None and
-                0 <= now_s-self._execution_received <= self._feedback_timeout):
-            self._execution_pose_wait_received=self._execution_received
-            return None
-        last = self._execution_started if self._execution_last_accepted is None else self._execution_last_accepted
-        if self._execution_pose_wait_received is not None:
-            last = max(last, self._execution_pose_wait_received)
+        # 反馈活性只看严格匹配并已接收的状态，不把尚未接管参考当成失联。
+        # accepted仍独立控制接管与到达；无进展由导航负责，真实故障优先。
+        last = self._execution_started if self._execution_received is None else self._execution_received
         if now_s - last > self._feedback_timeout:
             return 'EXECUTION_FEEDBACK_TIMEOUT'
         return None
@@ -180,7 +163,7 @@ class NavigationTaskCoordinator:
                         return self.waiting(task_id, 'WAITING_FOR_POSE')
                     yaw = self.session.state.yaw
                 goal = PoseGoal(x, y, yaw)
-            accepted = self.session.offer_goal(goal, force_new=task_id is not None)
+            accepted = self.session.offer_goal(goal, force_new=task_id is not None or self._feedback_required)
         except (ValueError, TypeError) as exc:
             return self.reject(task_id, 'INVALID_GOAL: ' + str(exc))
         if not accepted:
@@ -189,8 +172,12 @@ class NavigationTaskCoordinator:
             self._emit(replace(self.active, phase='FINISHED', outcome='CANCELED', reason_code='GOAL_REPLACED'))
         self._arrived_since = None
         self._reset_execution_feedback(now_s)
-        self.active = (None if task_id is None else
-                       TaskSnapshot(task_id, self.session.accepted_generation, 'PLANNING', reason_code='GOAL_ACCEPTED'))
+        # 执行合同启用时，人工入口同样复用现有任务状态和原有执行身份。
+        # 否则无active会绕过故障接收/停稳终态，造成跟踪已失败而导航仍规划。
+        owned_id=(execution_session_id(None,self.session.accepted_generation)
+                  if task_id is None and self._feedback_required else task_id)
+        self.active = (None if owned_id is None else
+                       TaskSnapshot(owned_id, self.session.accepted_generation, 'PLANNING', reason_code='GOAL_ACCEPTED'))
         return None if self.active is None else self._emit(self.active)
 
     def cancel(self, task_id, now_s):
@@ -208,7 +195,7 @@ class NavigationTaskCoordinator:
         if current is None or current.outcome is not None:
             return None if defer_commit else current
         before, arrived_since = current, self._arrived_since
-        state, goal, limits = self.session.state, self.session.goal, self.session.coordinator
+        state, limits = self.session.state, self.session.coordinator
         stopped = state is not None and abs(state.v) <= limits.stopped_linear_mps and abs(state.w) <= limits.stopped_angular_rps
         if current.phase == 'ERROR_STOPPING':
             if stopped and state_updated:
@@ -217,9 +204,8 @@ class NavigationTaskCoordinator:
             if stopped and state_updated:
                 current = replace(current, phase='FINISHED', outcome='CANCELED', reason_code='CANCELED_STOPPED')
         else:
-            arrived = (self._execution_arrived(now_s) and packet.generation == current.generation and not packet.waiting and stopped and goal is not None and
-                       math.hypot(state.x-goal.x, state.y-goal.y) <= limits.position_target_tolerance_m and
-                       abs(angle_error(goal.yaw, state.yaw)) <= limits.goal_yaw_tolerance_rad)
+            arrived = (self._execution_arrived(now_s) and packet.generation==current.generation and
+                       self.session.arrival_current(packet))
             if not arrived:
                 arrived_since = None
             elif state_updated:

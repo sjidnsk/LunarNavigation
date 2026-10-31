@@ -145,3 +145,76 @@ def test_owned_nav1cm_map_uses_same_twenty_centimeter_exploration_default():
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     maps=module.owned_nav1cm_specs('/private',platform_config='/wheel.yaml',build_dir='/cache',use_sim_time=False)[0][2]
     assert maps['coarse_resolution_m']==.2
+
+
+@pytest.mark.parametrize('direction',['forward','reverse'])
+def test_initial_direction_is_owned_only_by_navigator(monkeypatch,direction):
+    g=nodes(graph(monkeypatch,enable_controller='true',initial_travel_direction=direction))
+    assert g[1]['parameters'][0]['initial_travel_direction']==direction
+    assert all('initial_travel_direction' not in n['parameters'][0] for i,n in enumerate(g) if i!=1)
+
+
+def test_initial_direction_rejects_unsupported_choice(monkeypatch):
+    with pytest.raises(ValueError):graph(monkeypatch,initial_travel_direction='sideways')
+
+
+def test_explicit_tcp_profile_is_shared_by_planner_and_follower(monkeypatch):
+    g=nodes(graph(monkeypatch,enable_controller='true',platform_config='/outside/tcp-final.yaml'))
+    planner=next(n for n in g if n['package']=='lunar_nav1cm_planner')['parameters'][0]
+    follower=next(n for n in g if n['package']=='lunar_pure_wheeled_controller')['parameters'][0]
+    assert planner['wheel_config']==follower['platform_config']=='/outside/tcp-final.yaml'
+
+
+@pytest.mark.parametrize('enabled', ['true','false'])
+def test_direct_backend_has_single_planner_command_owner(monkeypatch, enabled):
+    g=nodes(graph(monkeypatch, control_backend='mpcc_cmd_vel',enable_controller=enabled,command_topic='/private/cmd'))
+    assert len(g)==2
+    p=g[1]['parameters'][0]
+    assert p['control_backend']=='mpcc_cmd_vel'
+    assert p['enable_controller'] is (enabled=='true')
+    assert p['command_topic']=='/private/cmd'
+    assert p['execution_contract_enabled'] is False
+    assert p['odometry_topic']=='/Car/T3/localization/odometry'
+
+
+def test_disabled_legacy_has_no_velocity_owner(monkeypatch):
+    g=nodes(graph(monkeypatch,control_backend='path_mppi',enable_controller='false'))
+    assert len(g)==2 and g[1]['parameters'][0]['enable_controller'] is False
+
+
+def test_unknown_control_backend_rejected(monkeypatch):
+    with pytest.raises(RuntimeError,match='control_backend'):
+        graph(monkeypatch,control_backend='other')
+
+
+def test_command_hold_is_explicit_and_only_planner_receives_it(monkeypatch):
+    g=nodes(graph(monkeypatch,control_backend='mpcc_cmd_vel',enable_controller='true',command_hold_s='1.2'))
+    assert g[1]['parameters'][0]['command_hold_s']==1.2
+    assert 'command_hold_s' not in g[0]['parameters'][0]
+    assert nodes(graph(monkeypatch))[1]['parameters'][0]['command_hold_s']==0.
+
+
+def test_global_refresh_default_and_startup_override_reach_planner(monkeypatch):
+    for value in (None, '27.0'):
+        options = {} if value is None else dict(global_period_s=value)
+        planner = nodes(graph(monkeypatch, **options))[1]['parameters'][0]
+        assert planner['global_period_s'] == (15. if value is None else 27.)
+
+
+@pytest.mark.parametrize('value', ['0', '-1', 'nan', 'inf'])
+def test_global_refresh_period_must_be_finite_positive(monkeypatch, value):
+    with pytest.raises(ValueError, match='global_period_s'):
+        graph(monkeypatch, global_period_s=value)
+
+
+def test_command_spin_prepare_response_model_parameter(monkeypatch):
+    planner = nodes(graph(monkeypatch, control_backend='mpcc_cmd_vel', enable_controller='true',
+                          command_hold_s='1.2', command_spin_prepare_s='3.0'))[1]['parameters'][0]
+    assert planner['command_spin_prepare_s'] == 3.
+    assert nodes(graph(monkeypatch))[1]['parameters'][0]['command_spin_prepare_s'] == 0.
+
+
+@pytest.mark.parametrize('value', ['-1', 'nan', 'inf'])
+def test_command_spin_prepare_rejects_invalid_values(monkeypatch, value):
+    with pytest.raises(ValueError, match='command_spin_prepare_s'):
+        graph(monkeypatch, command_spin_prepare_s=value)

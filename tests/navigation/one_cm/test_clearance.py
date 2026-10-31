@@ -239,3 +239,13 @@ def test_deployed_wheel_files_use_user_requested_unified_clearance():
     for name in ('wheel.yaml','wheel_orin.yaml'):
         limits,_=load_configuration(ROOT/'config'/name)
         assert limits.minimum_clearance_m==.2
+
+
+@pytest.mark.parametrize('accel,brake',[(.1,.5),(.5,.1),(.5,.5)])
+def test_planner_uses_common_acceleration_braking_envelope(tmp_path,accel,brake):
+    document=yaml.safe_load((ROOT/'config/wheel.yaml').read_text(encoding='utf-8'))
+    document['capability']['maximum_acceleration_mps2']=accel
+    document['capability']['maximum_braking_deceleration_mps2']=brake
+    path=tmp_path/'wheel.yaml';path.write_text(yaml.safe_dump(document),encoding='utf-8')
+    limits,_=load_configuration(path)
+    assert limits.linear_accel_mps2==min(accel,brake)

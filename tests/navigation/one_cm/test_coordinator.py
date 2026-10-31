@@ -41,7 +41,7 @@ class RejectPlanner:
 def setup():
     world = WorldSnapshot(1, (), (CellRect(-2000, -2000, 2000, 2000),))
     runner, planner = Runner(), RejectPlanner()
-    coordinator = NavigationCoordinator(planner, runner=runner, local_period_s=10.)
+    coordinator = NavigationCoordinator(planner, runner=runner, local_period_s=10., global_period_s=1.)
     return world, runner, planner, coordinator
 
 
@@ -109,16 +109,15 @@ def test_goal_later_blocked_brakes_real_motion(setup):
     assert result.candidate.states[-1, 3] == pytest.approx(0.)
 
 
-def test_stall_triggers_once_but_yaw_progress_does_not(setup):
-    world, runner, _, c = setup
-    c.local_period_s = .05
-    c.stall_timeout_s = .2
-    c.tick(world, VehicleState(0, 0, 0, 0, 0), (3, 0), 0)
-    runner.ready = True
-    c.tick(world, VehicleState(0, 0, 0, 0, 0), (3, 0), .05)
-    r = c.tick(world, VehicleState(0, 0, 0, 0, 0), (3, 0), .3)
-    assert 'NO_PROGRESS' in [e.get('reason') for e in r.events]
-    assert c.tick(world, VehicleState(0, 0, .03, 0, .1), (3, 0), .6).status != 'NO_CERTIFIED_ACTION'
+def test_offline_prototype_keeps_periodic_replanning_compatibility(setup):
+    world,runner,_,c=setup;c.local_period_s=.05;c.global_period_s=10.
+    c.tick(world,VehicleState(0,0,0,0,0),(3,0),0.)
+    runner.ready=True;c.tick(world,VehicleState(0,0,0,0,0),(3,0),.05)
+    r=c.tick(world,VehicleState(0,0,0,0,0),(3,0),5.)
+    assert 'NO_PROGRESS' not in [e.get('reason') for e in r.events]
+    assert len(runner.requests)==1
+    c.tick(world,VehicleState(0,0,0,0,0),(3,0),10.1)
+    assert runner.requests[-1]['request_reason']=='PERIODIC'
 
 
 def test_worker_restores_immutable_route(setup):
@@ -159,7 +158,7 @@ def test_execution_brake_substeps_never_reverse_and_initial_state_checked(setup)
         action_prefix(result.candidate, VehicleState(1, 0, 0, .003, 0))
 
 
-def test_exact_twenty_hz_and_one_hz_default_schedule(setup):
+def test_offline_prototype_exact_twenty_hz_and_one_hz_schedule(setup):
     world, runner, _, c = setup
     c.local_period_s = .05
     state = VehicleState(0, 0, 0, 0, 0)
@@ -375,5 +374,6 @@ def test_global_submit_failure_still_returns_certified_brake(setup):
     r=c.tick(world,VehicleState(0,0,0,.1,0),(3,0),0)
     assert r.action.source=='brake'
     assert r.action_certificate.matches(r.action,r.grid,c.limits,-1)
-    assert c._pending_reason is not None
+    assert c._pending_reason is None
+    assert c._next_global == c.global_period_s
     assert any(e['kind']=='GLOBAL_SUBMIT_ERROR' for e in r.events)

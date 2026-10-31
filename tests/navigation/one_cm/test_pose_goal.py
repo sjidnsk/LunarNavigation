@@ -58,12 +58,13 @@ def test_final_yaw_satisfied_stops_and_requires_stillness(asynchronous):
 
 @pytest.mark.parametrize('asynchronous', [False, True])
 @pytest.mark.parametrize('boundary', ['yaw', 'position'])
-def test_arrival_requires_braking_endpoint_inside_pose_tolerances(asynchronous, boundary):
+def test_observed_stop_inside_tolerance_does_not_require_predicted_tail(asynchronous, boundary):
     c = coordinator(asynchronous)
     state = (VehicleState(0, 0, .04999, 0, .009) if boundary == 'yaw' else
              VehicleState(.09999, 0, 0, .009, 0))
     r = c.tick(world(), state, (0, 0), 0., goal_yaw=0.)
-    assert r.status == 'GOAL_BRAKING'
+    # 按实测位姿与既有停稳阈值验收，不用预测停车尾收紧容差。
+    assert r.status == 'ARRIVED'
     assert r.action.source == 'brake'
     assert np.array_equal(r.action.states[0, :5], list(vars(state).values()))
 
@@ -234,3 +235,56 @@ def test_solver_failure_is_not_a_pose_invalidity_proof():
     assert r.status == 'QP_FAILED'
     assert c._goal == (2., 0.) and c._goal_yaw == pytest.approx(.2)
     assert not any(event['kind'] == 'GOAL_REJECTED' for event in r.events)
+
+
+
+@pytest.mark.parametrize('model',['differential_drive','curvature_limited'])
+@pytest.mark.parametrize('v',[1e-6,-1e-6,.005,-.005])
+def test_terminal_residual_velocity_has_certified_braking_then_turn(model,v):
+    from dataclasses import replace
+    from scripts.navigation.one_cm.nav1cm.pose_goal import terminal_candidate
+    from scripts.navigation.one_cm.nav1cm.certification import certify
+    from scripts.navigation.one_cm.nav1cm.dynamics import step
+    limits=replace(WheelLimits(),motion_model=model)
+    state=VehicleState(0,0,0,v,0);grid=extract_window(world(),state,False)
+    reference=LocalReference(1,grid.epoch,[[0,0]],[0.],0.,.3)
+    c=terminal_candidate(state,grid,reference,limits)
+    assert c.mode=='spin' and c.source.startswith('terminal-yaw:bounded')
+    assert np.array_equal(c.states[0,:5],list(vars(state).values()))
+    assert np.max(abs(c.states[:,2]))>.05
+    zero=int(np.flatnonzero(abs(c.states[:,3])<=1e-10)[0])
+    assert zero>0 and np.all(abs(c.states[zero:,3])<=1e-10)
+    for i,dt in enumerate(np.diff(c.times)):
+        assert np.allclose(step(c.states[i],c.controls[i],dt),c.states[i+1],atol=1e-12,rtol=0.)
+    assert certify(c,grid,limits,1).valid
+
+
+@pytest.mark.parametrize('w',[-.03,.03])
+def test_terminal_braking_entry_keeps_real_angular_state_and_finishes_yaw(w):
+    from dataclasses import replace
+    from scripts.navigation.one_cm.nav1cm.pose_goal import terminal_candidate
+    from scripts.navigation.one_cm.nav1cm.certification import certify
+    limits=replace(WheelLimits(),motion_model='differential_drive')
+    state=VehicleState(0,0,0,.005,w);grid=extract_window(world(),state,False)
+    reference=LocalReference(1,grid.epoch,[[0,0]],[0.],0.,.2)
+    c=terminal_candidate(state,grid,reference,limits)
+    assert c.source.startswith('terminal-yaw:bounded')
+    assert np.array_equal(c.states[0,:5],list(vars(state).values()))
+    assert c.states[-1,2]==pytest.approx(.2,abs=1e-8)
+    assert certify(c,grid,limits,1).valid
+
+
+
+def test_terminal_braking_prefix_collision_is_still_rejected():
+    from dataclasses import replace
+    from scripts.navigation.one_cm.nav1cm.pose_goal import terminal_candidate
+    from scripts.navigation.one_cm.nav1cm.certification import certify
+    from scripts.navigation.one_cm.nav1cm.contracts import CertificationReason
+    limits=replace(WheelLimits(),motion_model='differential_drive')
+    state=VehicleState(0,0,0,.1,0)
+    blocked=WorldSnapshot(2,(CellRect(60,-1,61,1),),(CellRect(-1000,-1000,1000,1000),))
+    grid=extract_window(blocked,state,False)
+    reference=LocalReference(1,grid.epoch,[[0,0]],[0.],0.,.3)
+    c=terminal_candidate(state,grid,reference,limits)
+    assert c.source.startswith('terminal-yaw:bounded')
+    assert certify(c,grid,limits,1).reason==CertificationReason.COLLISION

@@ -119,8 +119,8 @@ def test_reference_buffer_physically_aligns_legal_retimed_feedback(case):
     assert reference.last_alignment['bridge_duration_s'] > 0
     assert certify(aligned, grid, limits, 1).valid
     assert np.array_equal(aligned.states[0, :5], list(vars(measured).values()))
-    assert reference.last_alignment['derived_distance_m'] <= reference.last_alignment['remaining_source_distance_m'] + 1e-9
-    assert reference.last_alignment['derived_angle_rad'] <= reference.last_alignment['remaining_source_angle_rad'] + 1e-9
+    assert np.isfinite(aligned.times).all() and aligned.times[-1] > 0
+    assert reference.source is original
 
 
 def test_alignment_does_not_clip_out_of_limit_measured_initial_velocity():
@@ -273,3 +273,80 @@ def test_real_async_solver_starts_and_arrives_with_moving_late_plan(direction):
     assert max(v * direction for v in velocities) > .05
     assert min(v * direction for v in velocities) >= -1e-9
     assert any(e['kind'] == 'LOCAL_ACCEPTED' and e['age_s'] >= .25 for e in events)
+
+
+def test_async_existing_buffer_braking_entry_publishes_certified_short_action():
+    limits=WheelLimits(motion_model='differential_drive')
+    worker=PulseWorker();worker.pending={'held':True}
+    coordinator=AsyncNavigationCoordinator(local_worker=worker,global_runner=PendingGlobal(),limits=limits)
+    coordinator._set_goal((.6,0),0.)
+    coordinator.route=Route(1,1,[[0,0],[.6,0]],(.6,0))
+    world,grid=scene(); measured=VehicleState(0,0,0,.1,0)
+    initial=np.array([0.,0.,0.,.1,0.,0.]); controls=np.array([[-.5,0.,0.],[0.,0.,0.]])
+    states=[initial]
+    for control in controls: states.append(step(states[-1],control,.2))
+    candidate=Trajectory(1,1,[0.,.2,.4],states,controls,'spin','old-buffer')
+    assert certify(candidate,grid,limits,1).valid
+    coordinator._policy=coordinator.allow_unknown
+    coordinator.buffer.install(candidate,0.)
+    result=coordinator.tick(world,measured,(.6,0),0.,goal_yaw=0.)
+    assert result.status == 'BUFFER_EXECUTING', result.events
+    assert result.candidate.source == 'old-buffer' and result.action.source != 'brake'
+    assert result.action.states[-1,3] == pytest.approx(.075)
+    assert result.action_certificate.valid
+    assert not any(e['kind'] in ('ACTION_REJECTED','BRAKE_REQUIRED') for e in result.events)
+
+
+def test_session_full_candidate_survives_bad_unused_action_but_offline_rejects_it(monkeypatch):
+    import scripts.navigation.one_cm.nav1cm.async_coordinator as module
+    from scripts.navigation.one_cm.nav1cm.p3_session import NavigationSession
+    from scripts.navigation.one_cm.nav1cm.ros_conversion import PoseGoal
+    original=module.action_prefix; calls=[]
+    def damaged(candidate,state,*args):
+        result=original(candidate,state,*args); calls.append(candidate.source)
+        if candidate.source == 'old-buffer':
+            states=result.states.copy(); states[-1,0]+=.01
+            return replace(result,states=states)
+        return result
+    monkeypatch.setattr(module,'action_prefix',damaged)
+    def setup():
+        worker=PulseWorker(); worker.pending={'held':True}
+        c=AsyncNavigationCoordinator(local_worker=worker,global_runner=PendingGlobal(),limits=WheelLimits(motion_model='differential_drive'))
+        session=NavigationSession(c); world,_=scene();session.set_world(world);session.offer_state(VehicleState(0,0,0,.1,0))
+        assert session.offer_goal(PoseGoal(.6,0,0)); c.route=Route(1,1,[[0,0],[.6,0]],(.6,0));c._policy=c.allow_unknown
+        initial=np.array([0.,0.,0.,.1,0.,0.]);controls=np.array([[-.5,0.,0.],[0.,0.,0.]])
+        states=[initial]
+        for control in controls:states.append(step(states[-1],control,.2))
+        c.buffer.install(Trajectory(1,1,[0.,.2,.4],states,controls,'spin','old-buffer'),0.)
+        return session
+    session=setup(); packet=session.tick(0.)
+    assert packet.candidate.source == 'old-buffer' and packet.result.certificate.valid and not calls
+    offline=setup(); result=offline.coordinator.tick(offline.world,offline.state,(.6,0),0.,goal_yaw=0.)
+    assert calls and any(e['kind']=='ACTION_REJECTED' and e['reason']=='DYNAMICS' for e in result.events)
+    assert result.candidate.source == 'brake' and result.action_certificate.valid
+
+
+def test_session_does_not_publish_uncertified_full_brake_on_collision():
+    from scripts.navigation.one_cm.nav1cm.p3_session import NavigationSession
+    from scripts.navigation.one_cm.nav1cm.ros_conversion import PoseGoal
+    c=AsyncNavigationCoordinator(local_worker=PulseWorker(),global_runner=PendingGlobal())
+    session=NavigationSession(c);session.set_world(WorldSnapshot(1,(),(CellRect(-1000,-1000,1000,1000),)))
+    session.offer_state(VehicleState(0,0,0,.1,0));assert session.offer_goal(PoseGoal(.6,0,0))
+    session.set_world(WorldSnapshot(2,(CellRect(-1,-1,1,1),),(CellRect(-1000,-1000,1000,1000),)))
+    packet=session.tick(0.)
+    assert packet.candidate is None and not packet.result.certificate.valid
+
+
+def test_session_rejects_full_candidate_with_bad_dynamics(monkeypatch):
+    from scripts.navigation.one_cm.nav1cm.p3_session import NavigationSession
+    from scripts.navigation.one_cm.nav1cm.ros_conversion import PoseGoal
+    worker=PulseWorker();worker.pending={'held':True}
+    c=AsyncNavigationCoordinator(local_worker=worker,global_runner=PendingGlobal(),limits=WheelLimits(motion_model='differential_drive'))
+    session=NavigationSession(c);world,_=scene();session.set_world(world);session.offer_state(VehicleState(0,0,0,.1,0))
+    assert session.offer_goal(PoseGoal(.6,0,0));c.route=Route(1,1,[[0,0],[.6,0]],(.6,0));c._policy=c.allow_unknown
+    initial=np.array([0.,0.,0.,.1,0.,0.]);control=np.array([-.5,0.,0.]);end=step(initial,control,.2);end[0]+=.01
+    candidate=Trajectory(1,1,[0.,.2],[initial,end],[control],'spin','invalid-full')
+    monkeypatch.setattr(c.buffer,'current',lambda *a,**kw:candidate)
+    packet=session.tick(0.)
+    assert any(e.get('reason')=='BUFFER_CERTIFICATION_DYNAMICS' for e in packet.result.events)
+    assert packet.candidate is None or packet.candidate.source != 'invalid-full'

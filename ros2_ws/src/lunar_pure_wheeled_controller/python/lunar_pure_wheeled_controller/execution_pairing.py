@@ -5,7 +5,7 @@ import math
 
 class ExecutionInbox:
     def __init__(self,capacity=32,max_age_s=.35):
-        if type(capacity) is not int or capacity<1 or not math.isfinite(max_age_s) or max_age_s<=0:
+        if type(capacity) is not int or capacity<1 or (max_age_s is not None and (not math.isfinite(max_age_s) or max_age_s<=0)):
             raise ValueError('invalid execution pairing bounds')
         self.capacity=capacity;self.max_age_s=max_age_s
         self.paths=OrderedDict();self.references=OrderedDict()
@@ -27,7 +27,7 @@ class ExecutionInbox:
         if not math.isfinite(now_s):return None
         for mapping in (self.paths,self.references):
             for key,(_,received) in list(mapping.items()):
-                if now_s<received or now_s-received>self.max_age_s:mapping.pop(key)
+                if now_s<received or (self.max_age_s is not None and now_s-received>self.max_age_s):mapping.pop(key)
         ready=[(key,value) for key,value in self.references.items() if key in self.paths]
         ready.sort(key=lambda item:item[0][0],reverse=True)
         for key,(ref,received) in ready:

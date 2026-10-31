@@ -4,6 +4,7 @@
 输入、不可变地图及发布 guard 时短暂加锁；不会持锁执行 native 地图计算。
 """
 from collections import deque
+from .command_prediction import CommandPrediction
 import json
 import math
 import threading
@@ -14,6 +15,29 @@ from nav1cm.ros_conversion import (
     LatestTransforms, MissingTransform, goal_from_message, map_from_message,
     paths, state_from_odometry,
 )
+
+
+def brake_diagnostic(packet, cycle_s, buffer):
+    """只整理本周期既有事件，不推断制动原因。"""
+    import math
+    result, candidate = packet.result, packet.candidate
+    tick = next ( (e for e in reversed(result.events) if e.get('kind') == 'EXECUTION_TICK'), {} )
+    # 事件可能携带轨迹、请求或尝试列表；仅导出已有标量字段以保留原因并限制日志体积。
+    def scalar(value):
+        return value is None or isinstance(value, (str, bool, int)) or (
+            isinstance(value, float) and math.isfinite(value))
+    events = [{key: value for key, value in event.items() if scalar(value)}
+              for event in result.events
+              if event.get('kind') not in ('EXECUTION_TICK', 'EXECUTION_SCHEDULE')]
+    def finite(value):
+        return value if isinstance(value, (int, float)) and math.isfinite(value) else None
+    return dict(cycle_s=cycle_s, accepted_generation=packet.generation, status=result.status,
+                candidate_mode=candidate.mode, candidate_source=candidate.source,
+                planning_route_version=getattr(result.reference, 'route_version', None),
+                candidate_route_version=candidate.route_version,
+                buffer_remaining_s=finite(tick.get('buffer_remaining_s')),
+                source_phase_s=finite(getattr(buffer, 'source_phase_s', None)),
+                local_busy=tick.get('local_busy'), events=events, event_state='present' if events else 'none')
 
 
 class PlannerRuntime:
@@ -42,19 +66,94 @@ class PlannerRuntime:
         self.execution_contract_enabled=False
         self.execution_context=None
         self._odometry_received_s=None
+        self._pose_advanced_received_s=None
         self._pose_timeout_s=None
         self._pose_source_high_water=self._pose_clock_high_water=None
         self._pose_integrity_fault=None
         self._pose_waiting=False
-        self._pose_ready_since=self._pose_ready_stamp=None
         self._tracking_inputs=deque(maxlen=128)
+        self.publish_command = None
+        self._last_issued_command=(0.,0.)
+        self._last_issued_s=None
+        self._observed_pose_stamp_ns = None
+        self._command_prediction = CommandPrediction()
+
+    def configure_direct_control(self, publish_command, *, command_hold_s, reference_interval_s=.2, command_spin_prepare_s=0.):
+        if isinstance(command_hold_s,bool) or not math.isfinite(command_hold_s) or command_hold_s<=0:
+            raise ValueError("command_hold_s must be explicitly finite and positive")
+        if isinstance(reference_interval_s,bool) or not math.isfinite(reference_interval_s) or reference_interval_s<=0:
+            raise ValueError("reference_interval_s must be finite and positive")
+        self._command_prediction=CommandPrediction(spin_prepare_s=command_spin_prepare_s)
+        self.reference_interval_s=float(reference_interval_s)
+        self.command_hold_s=float(command_hold_s)
+        self.publish_command = publish_command
+        self.session.direct_control = True
+        self.execution_contract_enabled = False
+        self.tasks.configure_execution_feedback(required=False)
+
+    def _publish_issued(self, command):
+        self._command_previous=self._last_issued_command
+        self.publish_command(*command)
+        self._last_issued_command=tuple(command)
+        self._last_issued_s=time.monotonic()
+        self._command_prediction.issue(self._last_issued_s, command)
+
+    def _command(self, packet, command, source_stamp=None, diagnostics=None):
+        if self.publish_command is None:
+            return
+        self._publish_issued(command)
+        try:
+            diagnostics=dict(diagnostics or {})
+            diagnostics['actual_published_vw']=list(command)
+            diagnostics.setdefault('final_publish_override_reason',None)
+            self._notice('MPCC_COMMAND', json.dumps(dict(v=command[0], w=command[1],
+                status=getattr(packet.result, 'status', None),
+                source=getattr(packet.candidate, 'source', None),
+                mode=getattr(packet.candidate, 'mode', None), command_hold_s=self.command_hold_s,
+                reference_dt_s=self.reference_interval_s, previous_issued=self._command_previous,
+                source_stamp_ns=source_stamp,
+                source_age_s=None if source_stamp is None else
+                    (self.ros_now_ns()-source_stamp)/1e9, **(diagnostics or {}))))
+        except Exception:
+            pass  # 发布后的诊断失败不能触发再次发布或改变控制流程。
+
+    def _body_observation_time(self, now_s):
+        if self.publish_command is None:return now_s
+        try:
+            stamp=self._odometry.header.stamp
+            return int(stamp.sec)+int(stamp.nanosec)/1e9
+        except (AttributeError,ValueError,TypeError):return now_s
+
+    def _new_body_observation(self, sequence):
+        if self.publish_command is None:
+            return sequence != self._observed_odometry_sequence
+        try:
+            stamp=self._odometry.header.stamp
+            source=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
+        except (AttributeError,ValueError,TypeError):
+            return False
+        return source>0 and (self._observed_pose_stamp_ns is None or source>self._observed_pose_stamp_ns)
+
+    def _observe_body_stamp(self):
+        if self.publish_command is None:return
+        try:
+            stamp=self._odometry.header.stamp
+            source=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
+            if source>0:self._observed_pose_stamp_ns=max(source,self._observed_pose_stamp_ns or source)
+        except (AttributeError,ValueError,TypeError):pass
+
+    def _publication_map_proof(self, packet, world):
+        """最多一次当前物理窗口重认证；不追赶持续变化的地图。"""
+        if self.publish_command is None or packet.result is None or packet.result.grid is None:
+            return packet, True
+        # direct 使用 tick 入口同一 world/P3 快照；实际 issued proof 由发布消费端认证。
+        return packet, world is not None
 
     def configure_pose_input(self,timeout_s):
         if isinstance(timeout_s,bool) or not math.isfinite(timeout_s) or timeout_s<=0:
             raise ValueError('odometry_timeout_s must be finite and positive')
         self._pose_timeout_s=float(timeout_s)
         self._pose_waiting=True
-        self._pose_ready_since=self._pose_ready_stamp=None
 
     def _pose_source_current(self,message,received_s,now_s):
         if self._pose_timeout_s is None:return True,None
@@ -62,18 +161,18 @@ class PlannerRuntime:
             stamp=message.header.stamp
             source_ns=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
             clock=self.ros_now_ns()
-            age=(clock-source_ns)/1e9
+            advanced_s=(received_s if self._pose_source_high_water is None or
+                        source_ns>self._pose_source_high_water else self._pose_advanced_received_s)
             valid=(source_ns>0 and received_s is not None and
                    (self._pose_clock_high_water is None or clock>=self._pose_clock_high_water) and
                    (self._pose_source_high_water is None or source_ns>=self._pose_source_high_water) and
                    0<=now_s-received_s<=self._pose_timeout_s and
-                   0<=age<=self._pose_timeout_s)
+                   source_ns<=clock and advanced_s is not None and
+                   0<=now_s-advanced_s<=self._pose_timeout_s)
             return valid,source_ns
         except (ValueError,TypeError,AttributeError,OverflowError):return False,None
 
-    def _enter_pose_wait(self,*,reset=True):
-        if reset or not self._pose_waiting:
-            self._pose_ready_since=self._pose_ready_stamp=None
+    def _enter_pose_wait(self):
         self._pose_waiting=True
         self.session.offer_state(None)
 
@@ -88,10 +187,12 @@ class PlannerRuntime:
             if fault:
                 self._pose_integrity_fault=self._pose_integrity_fault or fault
                 valid=False
-            if valid:self._pose_source_high_water=max(stamp,self._pose_source_high_water or stamp)
+            if valid and (self._pose_source_high_water is None or stamp>self._pose_source_high_water):
+                self._pose_source_high_water=stamp
+                self._pose_advanced_received_s=received_s
         if not valid:
             self._enter_pose_wait()
-            self._notice('ODOMETRY_WAITING','missing_or_stale_pose')
+            self._notice('ODOMETRY_WAITING','missing_or_nonadvancing_pose')
             return
         if message is None:return
         try:value=state_from_odometry(message,transforms,self.map_frame)
@@ -106,17 +207,20 @@ class PlannerRuntime:
             else:self.session.offer_state(None)
             raise
         if self._pose_timeout_s is not None and self._pose_waiting:
-            if self._pose_ready_since is None:
-                self._pose_ready_since,self._pose_ready_stamp=now_s,stamp
-            # 沿用TCP稳定预检2秒，并要求真实源时间推进；不重标或插值定位。
-            if now_s-self._pose_ready_since<2. or stamp<=self._pose_ready_stamp:
-                self.session.offer_state(None)
-                return
             self._pose_waiting=False
-            self._notice('ODOMETRY_RECOVERED','stable_pose_replanning')
+            self._notice('ODOMETRY_RECOVERED','valid_pose_replanning')
         self.session.offer_state(value)
+        if self.publish_command is not None:
+            try:
+                source=message.header.stamp
+                source_ns=int(source.sec)*1_000_000_000+int(source.nanosec)
+            except (AttributeError,ValueError,TypeError):
+                return
+            self._command_prediction.correct(value,source_ns,now_s,self.ros_now_ns())
 
     def enable_execution_contract(self,timeout_s=2.):
+        if self.publish_command is not None:
+            return
         self.execution_contract_enabled=True
         self.tasks.configure_execution_feedback(required=True,timeout_s=timeout_s)
 
@@ -145,6 +249,15 @@ class PlannerRuntime:
 
     def offer_odometry(self, message):
         with self._condition:
+            if self.publish_command is not None and self._odometry is not None:
+                try:
+                    old=self._odometry.header.stamp
+                    new=message.header.stamp
+                    if (int(new.sec)*1_000_000_000+int(new.nanosec) <=
+                            int(old.sec)*1_000_000_000+int(old.nanosec)):
+                        return
+                except (AttributeError,ValueError,TypeError):
+                    pass
             self._odometry = message
             self._odometry_received_s=time.monotonic()
             self._odometry_sequence += 1
@@ -214,7 +327,11 @@ class PlannerRuntime:
     def _deliver_task_events(self):
         # 事件已提交；外部回调引入的新输入严格排在该提交之后。
         while self._task_events:
-            self.event_sink(self._task_events.popleft())
+            snapshot=self._task_events.popleft()
+            if snapshot.phase=='ERROR_STOPPING' or snapshot.outcome is not None:
+                self._notice('TASK_STATE',json.dumps({key:getattr(snapshot,key) for key in
+                    ('task_id','generation','phase','outcome','reason_code')},sort_keys=True))
+            self.event_sink(snapshot)
 
     def _tick_once(self, now_s):
         with self._condition:
@@ -280,18 +397,36 @@ class PlannerRuntime:
             with self._condition:
                 tracking_inputs,self._tracking_inputs=self._tracking_inputs,deque(maxlen=128)
             for status,received_s in tracking_inputs:
-                offered=self.tasks.offer_execution_status(status,received_s)
-                if (offered and self._pose_timeout_s is not None and status.state==0 and
-                        not status.accepted and status.reason=='WAITING_FOR_POSE' and
-                        0<=now_s-received_s<=self.tasks._feedback_timeout):
-                    self._enter_pose_wait(reset=False)
-            fault=self.tasks.check_execution_fault(now_s,pose_waiting=self._pose_waiting)
+                self.tasks.offer_execution_status(status,received_s)
+            # 定位有效性由自身输入流判定；迟到的控制器等待不得覆盖恢复后的新定位。
+            fault=self.tasks.check_execution_fault(now_s)
             if fault:self.tasks.fail_tracking(fault,now_s)
-        packet = self.session.tick(now_s)
-        proposal = self.tasks.observe(packet, now_s,
-                                      state_updated=odometry_sequence != self._observed_odometry_sequence,
+        # 本周期认证使用实际采样快照；终态观测仍可读取随后推进的定位。
+        p3_new_sample=odometry_sequence != self._observed_odometry_sequence
+        proof_state=self.session.state
+        if self.publish_command is not None and proof_state is not None and not self.session.canceling:
+            proof_state=self._command_prediction.predict(now_s,self.session.coordinator.limits) or proof_state
+        proof_stamp=self._pose_source_high_water
+        if self.publish_command is not None:
+            def state_values(value):
+                return None if value is None else [value.x,value.y,value.yaw,value.v,value.w]
+            self._notice('COMMAND_STATE_ESTIMATE',json.dumps(dict(
+                prediction_applied=proof_state != self.session.state,
+                history_covered=self._command_prediction.covered(now_s),
+                measured_state=state_values(self.session.state),
+                estimated_state=state_values(proof_state),source_stamp_ns=proof_stamp,
+                proof_basis='command_response_model_estimate')))
+        # session.state 始终是实测；仅规划和候选投影接收估计。
+        if self.publish_command is not None and proof_state != self.session.state:
+            packet = self.session.tick(now_s, planning_state=proof_state)
+        else:
+            packet = self.session.tick(now_s)
+        proposal = self.tasks.observe(packet, self._body_observation_time(now_s),
+                                      state_updated=self._new_body_observation(odometry_sequence),
                                       defer_commit=True)
         odometry_error = None
+        proof_world=world
+        packet,physical_map_current=self._publication_map_proof(packet,proof_world)
         with self._condition:
             # 目标、最新测量和内部事件提交共享线性化点；不执行规划或外部回调。
             if not self._stopping and input_sequence == self._goal_sequence:
@@ -300,7 +435,7 @@ class PlannerRuntime:
                     except (ValueError,AttributeError,TypeError) as exc:odometry_error=exc
                     if self.session.state is None:
                         packet=self.session.tick(now_s)
-                        proposal=self.tasks.observe(packet,now_s,state_updated=False,defer_commit=True)
+                        proposal=self.tasks.observe(packet,self._body_observation_time(now_s),state_updated=False,defer_commit=True)
                 if proposal is not None and (odometry_sequence != self._odometry_sequence or
                                              tf_sequence != self._tf_sequence):
                     # 仅重做轻量位姿转换/纯观测，不因持续等价odom/TF而饿死反馈或终态。
@@ -313,10 +448,12 @@ class PlannerRuntime:
                             self.session.offer_state(None)
                             odometry_error = exc
                     odometry_sequence = self._odometry_sequence
-                    proposal = self.tasks.observe(packet, now_s,
-                        state_updated=odometry_sequence != self._observed_odometry_sequence,
+                    proposal = self.tasks.observe(packet, self._body_observation_time(now_s),
+                        state_updated=self._new_body_observation(odometry_sequence),
                         defer_commit=True)
-                self.tasks.commit_observation(proposal)
+                if physical_map_current:
+                    self.tasks.commit_observation(proposal)
+                    self._observe_body_stamp()
         self._observed_odometry_sequence = odometry_sequence
         self._deliver_task_events()
         if odometry_error is not None:
@@ -340,24 +477,54 @@ class PlannerRuntime:
                               current_accepted_generation=packet.generation)
                 self._notice('GLOBAL_RESULT', json.dumps(record, sort_keys=True))
             for event in result.events:
+                if event['kind']=='LOCAL_RESULT':
+                    self._notice('LOCAL_PLAN_STATUS',json.dumps(dict(reason=event.get('reason'),
+                        mode=event.get('candidate_mode'),attempt_reasons=[r.get('reason') for r in event.get('attempts',())],
+                        attempt_seeds=[r.get('seed') for r in event.get('attempts',())],
+                        attempt_count=len(event.get('attempts',())),
+                        timings_ms=result.timings_ms,
+                        **{key:event.get(key) for key in ('request_identity','received_s','received_wall_s',
+                           'worker_start_wall_s','worker_finish_wall_s','worker_cpu_ms','field_reused')}),sort_keys=True))
                 if event['kind'] in ('GLOBAL_CURRENT_MAP_REVALIDATED', 'GLOBAL_CURRENT_MAP_REJECTED',
-                                      'LOCAL_CURRENT_MAP_REVALIDATED'):
+                                      'LOCAL_CURRENT_MAP_REVALIDATED', 'INITIAL_START_COMPLETED', 'GLOBAL_REFERENCE_SHAPED'):
                     self._notice(event['kind'], json.dumps(event, sort_keys=True))
         if packet.waiting:
             self._notice('WAITING_INPUT', ','.join(packet.waiting))
         elif packet.result.status == 'NOT_DUE':
             return packet
-        data = paths(packet.route, packet.candidate, self.ros_now_ns(), self.map_frame)
+        data = paths(packet.raw_route if packet.raw_route is not None else packet.route,
+                     packet.candidate,self.ros_now_ns(),self.map_frame,global_reference=packet.route)
         # ROS 时间仅给本次 Path 定 t0；调度/轨迹年龄始终使用单调时钟。
+        published_brake = False
+        command=(0.,0.)
+        command_diagnostics={}
+        if self.publish_command is not None:
+            from nav1cm.execution import certified_velocity_command
+            command_now=time.monotonic()
+            elapsed=(self.session.coordinator.execution_period_s if self._last_issued_s is None
+                     else max(0.,command_now-self._last_issued_s))
+            if not packet.waiting and not self.session.canceling:
+                command=certified_velocity_command(packet.result,proof_state,self.session.coordinator.limits,
+                    reference_interval_s=self.reference_interval_s,last_command=self._last_issued_command,
+                    elapsed_s=elapsed,command_hold_s=self.command_hold_s,
+                    backend=self.session.coordinator.backend,diagnostics=command_diagnostics)
+            else:
+                command_diagnostics['command_reject_reason']='NO_INPUT' if packet.waiting else 'CANCELING'
+            command_diagnostics.update(p3_new_sample=p3_new_sample,
+                source_identity=dict(getattr(self.session.coordinator.buffer, 'source_identity', {})))
         with self._condition:
             if (self._pose_timeout_s is not None and not self._pose_source_current(
                     self._odometry,self._odometry_received_s,time.monotonic())[0]):
                 self._enter_pose_wait()
                 packet=self.session.tick(now_s)
                 data=paths(None,None,self.ros_now_ns(),self.map_frame)
+            if self.publish_command is not None and self._odometry is not None:
+                try:self._apply_pose_input(self._odometry,self._odometry_received_s,time.monotonic(),self._transforms)
+                except (ValueError,AttributeError,TypeError):self.session.offer_state(None)
             if (not self._stopping and input_sequence == self._goal_sequence and
                     packet.generation == self.session.accepted_generation and
-                    (packet.waiting or self.session.publication_current(packet))):
+                    (packet.waiting or self.session.publication_current(packet)) and
+                    (self.publish_command is None or physical_map_current)):
                 if self.execution_contract_enabled:
                     from nav1cm.execution_contract import FOLLOW,BRAKE,HOLD,FINAL_ALIGN,INVALIDATED
                     active=self.tasks.active
@@ -369,7 +536,27 @@ class PlannerRuntime:
                     # cancel_goal提升generation，执行身份仍固定在原接受任务上。
                     self.execution_context=(None if active is None else active.task_id,
                         self.session.accepted_generation if active is None else active.generation,intent)
+                if self.session.state is None:
+                    command_diagnostics['final_publish_override_reason']='POSE_UNAVAILABLE'
+                elif self._pose_integrity_fault is not None:
+                    command_diagnostics['final_publish_override_reason']='POSE_INTEGRITY_FAULT'
+                self._command(packet,command if self.session.state is not None and
+                              self._pose_integrity_fault is None else (0.,0.), proof_stamp, command_diagnostics)
                 self.publish(data)
+                published_brake = packet.candidate is not None and packet.candidate.source == 'brake'
+            elif self.publish_command is not None:
+                command_diagnostics['final_publish_override_reason']=(
+                    'STOPPING' if self._stopping else
+                    'GOAL_GENERATION_CHANGED' if input_sequence != self._goal_sequence or
+                        packet.generation != self.session.accepted_generation else
+                    'MAP_NOT_CURRENT' if not physical_map_current else 'PUBLICATION_NOT_CURRENT')
+                self._command(packet,(0.,0.),proof_stamp,command_diagnostics)
+        if published_brake:
+            try:
+                record = brake_diagnostic(packet, now_s, self.session.coordinator.buffer)
+                self._notice('EXECUTION_BRAKE', json.dumps(record, sort_keys=True, default=str))
+            except Exception:
+                pass  # 诊断故障不能影响已发布的控制参考。
         return packet
 
     def _tick_loop(self):
@@ -385,6 +572,7 @@ class PlannerRuntime:
                 self._notice('TICK_ERROR', f'{type(exc).__name__}: {exc}')
                 with self._condition:
                     if not self._stopping:
+                        if self.publish_command is not None:self._publish_issued((0., 0.))
                         self.publish(paths(None, None, self.ros_now_ns(), self.map_frame))
             # 输入唤醒可提前检查，协调器的单调周期门禁负责不补发历史动作。
             with self._condition:
@@ -396,6 +584,7 @@ class PlannerRuntime:
         if self._closed:
             return self._close_result
         with self._condition:
+            if self.publish_command is not None:self._publish_issued((0., 0.))
             self._stopping = True
             self._condition.notify_all()
         deadline = time.monotonic() + timeout_s

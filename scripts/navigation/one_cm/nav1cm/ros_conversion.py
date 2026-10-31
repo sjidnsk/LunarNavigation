@@ -157,9 +157,10 @@ class PathData:
 class PathPair:
     global_route: PathData
     local: PathData
+    global_reference: PathData | None = None
 
 
-def paths(route, trajectory, ros_start_ns, map_frame='map'):
+def paths(route, trajectory, ros_start_ns, map_frame='map', *, global_reference=None):
     """调用方只传完整认证候选；保留全部位姿，不能由切线替换车体 yaw。"""
     start = int(ros_start_ns)
     global_poses = []
@@ -177,4 +178,12 @@ def paths(route, trajectory, ros_start_ns, map_frame='map'):
             stamp_ns = start if index == 0 else max(start + round(float(t) * 1_000_000_000), previous_ns + 1)
             local_poses.append(PathPose(float(state[0]), float(state[1]), float(state[2]), stamp_ns))
             previous_ns = stamp_ns
-    return PathPair(PathData(map_frame, start, tuple(global_poses)), PathData(map_frame, start, tuple(local_poses)))
+    # 相同的几何参考交给MPCC截取与RViz；原始全局路线独立保留。
+    reference_poses=[]
+    if global_reference is not None:
+        points=global_reference.points
+        for index,(x,y) in enumerate(points):
+            a,b=(points[index],points[index+1]) if index+1<len(points) else (points[-2],points[-1])
+            reference_poses.append(PathPose(float(x),float(y),math.atan2(b[1]-a[1],b[0]-a[0]),start))
+    return PathPair(PathData(map_frame, start, tuple(global_poses)), PathData(map_frame, start, tuple(local_poses)),
+                    PathData(map_frame,start,tuple(reference_poses)))

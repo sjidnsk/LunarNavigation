@@ -67,7 +67,7 @@ def test_new_feedback_cannot_renew_the_state_used_by_this_calculation():
 
 @pytest.mark.parametrize('reason,retryable,expected_state',[
     ('publication_certificate_expired',True,1),('map_changed_during_certification',True,1),
-    ('missing_or_stale_feedback',False,0),('latest_map_or_aged_motion_unsafe',False,6)])
+    ('missing_or_stale_feedback',False,0),('missing_or_stale_map',False,0),('latest_map_or_aged_motion_unsafe',False,6)])
 def test_candidate_invalidation_is_not_a_permanent_tracking_failure(reason,retryable,expected_state):
     import json
     emitted=[];statuses=[];diagnostics=[];discarded=[]
@@ -78,19 +78,21 @@ def test_candidate_invalidation_is_not_a_permanent_tracking_failure(reason,retry
         _publish_execution_status=lambda **kw:statuses.append(kw))
     node._standard_pose_wait=lambda reason='WAITING_FOR_POSE':PureWheeledControllerNode._standard_pose_wait(node,reason)
     PureWheeledControllerNode._standard_unavailable(node,reason,retryable=retryable)
-    assert emitted==[0] and discarded==[True]
+    assert emitted==[0]
+    assert discarded==([] if retryable else [True])
     assert statuses[0]['state_code']==expected_state
     assert diagnostics[0]['certified_stop'] is False and diagnostics[0]['measured_stopped'] is None
 
 
 def test_real_executor_failure_wins_over_retryable_map_race():
-    statuses=[]
+    statuses=[];discarded=[]
     node=S(_executor=S(failure='TRACKING_STALLED',last_execution_state=6,
-        discard_prediction=lambda:None),_mppi_diagnostics=S(publish=lambda m:None),
+        discard_prediction=lambda:discarded.append(True)),_mppi_diagnostics=S(publish=lambda m:None),
         _publish_twist=lambda:None,_publish_execution_status=lambda **kw:statuses.append(kw))
     PureWheeledControllerNode._standard_unavailable(node,'map_changed_during_certification',retryable=True)
     assert statuses[0]['state_code']==6
     assert statuses[0]['reason']=='EXECUTION_INPUT_UNAVAILABLE:TRACKING_STALLED'
+    assert discarded==[True]
 
 
 def test_missing_pose_requests_zero_and_reports_unaccepted_current_pair():
@@ -125,13 +127,13 @@ def test_waiting_for_reference_still_checks_source_time_and_map(case):
         get_clock=lambda:S(now=lambda:S(nanoseconds=clock)),_standard_state_ns=source,
         _standard_unavailable=reasons.append,_standard_pose_wait=wait.append)
     PureWheeledControllerNode._tick_standard_path(n)
-    expected={'future':'future_feedback','old_source':'stale_source_feedback','missing_map':'missing_or_stale_map'}
-    assert reasons==([] if case=='valid' else [expected[case]])
-    assert wait==(['WAITING_FOR_FRESH_REFERENCE'] if case=='valid' else [])
+    expected={'future':'future_feedback','missing_map':'missing_or_stale_map'}
+    assert reasons==([] if case in ('valid','old_source') else [expected[case]])
+    assert wait==(['WAITING_FOR_FRESH_REFERENCE'] if case in ('valid','old_source') else [])
 
 
 @pytest.mark.parametrize('crossing',['solve','certificate'])
-def test_source_age_crossing_budget_blocks_publication_with_fresh_receipt(crossing):
+def test_source_age_crossing_old_limit_keeps_certified_publication(crossing):
     clock=[10_000_000_000];reasons=[];published=[];queries=[]
     old=S(revision=1,epoch='1',origin=(0.,0.));new=S(revision=2,epoch='1',origin=(0.,0.))
     def update(*a,**kw):
@@ -143,13 +145,13 @@ def test_source_age_crossing_budget_blocks_publication_with_fresh_receipt(crossi
         _odometry_timeout_s=.5,_active=object(),_path_received_at=1.,_path_timeout_s=.35,
         _standard_state=object(),_standard_state_ns=9_510_000_000,_last_control_ns=None,
         _executor=S(config=S(compute_budget_s=.2),request_stop=lambda *a:None,set_map=lambda *a:None,
-            update=update,certify_publication=certify,diagnostics={}),_input_is_stale=lambda *a:False,
+            update=update,certify_publication=certify,diagnostics={},_stopped=lambda *a:False),_input_is_stale=lambda *a:False,
         _standard_grid=grid,get_clock=lambda:S(now=lambda:S(nanoseconds=clock[0])),
         _standard_unavailable=lambda reason,**kw:reasons.append(reason),
         _publish_twist=lambda *a:published.append(a),_publish_execution_status=lambda:None,
         _mppi_diagnostics=S(publish=lambda *a:None))
     PureWheeledControllerNode._tick_standard_path(n)
-    assert reasons==['stale_source_feedback'] and not published
+    assert not reasons and published==[(.1,0.)]
 
 
 def test_failed_feedback_stays_failed_when_pose_returns_during_wait():
@@ -166,3 +168,126 @@ def test_failed_feedback_stays_failed_when_pose_returns_during_wait():
     PureWheeledControllerNode._tick_standard_path(n)
     assert not wrong and statuses[-1]['state_code']==6
     assert statuses[-1]['reason'].endswith('INVALID_FEEDBACK')
+
+
+def test_delayed_source_is_forwarded_to_model_without_source_age_veto():
+    age=[];emitted=[];errors=[];clock=10_000_000_000
+    grid=S(revision=1,epoch='1',origin=(0.,0.))
+    node=S(_feedback_lock=Lock(),_execution_ingress_overflow=False,_odometry=object(),
+        _odometry_received_at=0.,_odometry_advanced_at=0.,_odometry_timeout_s=.5,
+        _active=object(),_path_received_at=0.,_path_timeout_s=.35,
+        _standard_state=object(),_standard_state_ns=1_000_000_000,_last_control_ns=None,
+        _executor=S(config=S(compute_budget_s=.05),set_map=lambda *a:None,
+            update=lambda *a,**kw:(age.append(kw['state_age_s']) or S(command=S(linear_x_mps=.1,angular_z_radps=0.),phase='TRACKING')),
+            diagnostics={},_stopped=lambda *a:False,certify_publication=lambda *a:True),
+        _input_is_stale=lambda *a:False,_standard_grid=lambda state:grid,
+        get_clock=lambda:S(now=lambda:S(nanoseconds=clock)),
+        _standard_unavailable=errors.append,_mppi_diagnostics=S(publish=lambda *a:None),
+        _publish_twist=lambda *a:emitted.append(a),_publish_execution_status=lambda:None)
+    PureWheeledControllerNode._tick_standard_path(node)
+    assert age==[9.] and emitted==[(.1,0.)] and not errors
+
+
+def test_only_new_source_stamp_renews_controller_continuity(monkeypatch):
+    import nav1cm.ros_conversion as conversion
+    monkeypatch.setattr(conversion,'state_from_odometry',lambda *a:S(x=0.,y=0.,yaw=0.,v=0.,w=0.))
+    n=S(_executor=S(failure=None),_latest_transforms=object(),_map_frame='map',_p3_source=None)
+    def feed(source,received,ros):
+        message=S(header=S(stamp=S(sec=source,nanosec=0)),twist=S(twist=S(linear=S(y=0.))))
+        n._standard_pending_odometry=(message,received,ros*10**9)
+        PureWheeledControllerNode._accept_standard_odometry(n)
+    feed(90,10.,100)
+    assert n._standard_state_ns==90*10**9 and n._odometry_advanced_at==10.
+    feed(90,14.,104)
+    assert n._odometry_received_at==14. and n._odometry_advanced_at==10.
+    feed(92,15.,105)
+    assert n._odometry_advanced_at==15. and n._executor.failure is None
+    feed(91,16.,106)
+    assert n._executor.failure=='INVALID_FEEDBACK_TIMESTAMP' and n._odometry is None
+
+
+@pytest.mark.parametrize('hard_failure',[False,True])
+def test_input_fault_uses_current_offered_identity_but_execution_failure_keeps_active(hard_failure):
+    statuses=[];active=object();offered=object()
+    n=S(_execution_offered=offered,
+        _executor=S(failure='UNSAFE' if hard_failure else None,last_execution_state=0,
+                    execution_reference=active,discard_prediction=lambda:None,
+                    _stop_reason='WAITING_FOR_POSE',wait_for_pose=lambda:None),
+        _mppi_diagnostics=S(publish=lambda msg:None),_publish_twist=lambda:None,
+        _publish_execution_status=lambda **kw:statuses.append(kw))
+    n._standard_pose_wait=lambda reason='WAITING_FOR_POSE':PureWheeledControllerNode._standard_pose_wait(n,reason)
+    PureWheeledControllerNode._standard_unavailable(n,'missing_or_stale_map')
+    status=statuses[-1]
+    if hard_failure:
+        assert status['state_code']==6 and status.get('reference',active) is active and status['reason'].endswith('UNSAFE')
+    else:
+        assert status['state_code']==0 and status['reason']=='WAITING_FOR_MAP'
+        assert status['reference'] is offered and status['accepted'] is False
+
+
+@pytest.mark.parametrize('reason',['WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'])
+@pytest.mark.parametrize('previously_accepted',[False,True])
+def test_braking_recovery_heartbeat_belongs_to_current_offered_reference(reason,previously_accepted):
+    from test_terminal_execution_contract import ref
+    from builtin_interfaces.msg import Time
+    emitted=[];active=ref(session='a'*32);offered=ref(2,4,session='a'*32)
+    executor=S(execution_reference=active,_stop_reason=reason,failure=None,
+               reference_accepted=previously_accepted,last_execution_state=1)
+    n=S(_execution_enabled=True,_executor=executor,_execution_offered=offered,
+        _map_frame='map',get_clock=lambda:S(now=lambda:S(to_msg=lambda:Time(sec=1))),
+        _tracking_status=S(publish=emitted.append))
+    PureWheeledControllerNode._publish_execution_status(n)
+    assert emitted[0].segment_revision==offered.revision
+    assert emitted[0].state==1 and not emitted[0].reference_accepted
+
+
+@pytest.mark.parametrize('case', ['window', 'aged_window', 'world', 'world_twice',
+    'policy_revision', 'policy_twice', 'source_latest', 'source_final',
+    'missing', 'expired', 'unsafe', 'aged_unsafe'])
+def test_map_proof_uses_source_specific_world_and_fixed_snapshot(case):
+    import json
+    clock=[10_000_000_000];calls=[];maps=[];published=[];reasons=[];diagnostics=[]
+    a=S(revision=1,epoch='1',origin=(0.,0.))
+    b=S(revision=2,epoch='2' if case in ('world','world_twice','unsafe') else '1',origin=(1.,0.))
+    c=S(revision=3,epoch='3' if case=='world_twice' else b.epoch,origin=(2.,0.))
+    source=object();queries=[]
+    def grid(state):
+        queries.append(1)
+        if case=='source_latest' and len(queries)==2:n._p3_source=object()
+        if case=='source_final' and len(queries)==3:n._p3_source=object()
+        if case=='missing' and len(queries)==3:return None
+        return [a,b,c][len(queries)-1]
+    def update(*args,**kwargs):
+        clock[0]+=60_000_000 if case in ('aged_window','aged_unsafe','expired') else 1_000_000
+        return S(command=S(linear_x_mps=.1,angular_z_radps=0.),phase='TRACKING')
+    def certify(*args):
+        calls.append(maps[-1])
+        clock[0]+=60_000_000 if case=='expired' else 1_000_000
+        return case not in ('unsafe','aged_unsafe')
+    # Policy revision tests retain fixed origin: revision alone changes content.
+    if case.startswith('policy'):
+        b.origin=c.origin=a.origin
+        if case=='policy_revision':c=b
+    n=S(_p3_source=None if case.startswith('policy') else source,
+        _feedback_lock=Lock(),_execution_ingress_overflow=False,_odometry=object(),
+        _odometry_received_at=0.,_odometry_timeout_s=.5,_active=object(),
+        _standard_state=object(),_standard_state_ns=clock[0],_last_control_ns=None,
+        _executor=S(config=S(compute_budget_s=.05),set_map=maps.append,update=update,
+            certify_publication=certify,diagnostics={},_stopped=lambda *a:False),
+        _input_is_stale=lambda *a:False,_standard_grid=grid,
+        get_clock=lambda:S(now=lambda:S(nanoseconds=clock[0])),
+        _standard_unavailable=lambda reason,**kw:reasons.append(reason),
+        _publish_twist=lambda *a:published.append(a),_publish_execution_status=lambda:None,
+        _mppi_diagnostics=S(publish=lambda msg:diagnostics.append(json.loads(msg.data))))
+    PureWheeledControllerNode._tick_standard_path(n)
+    success=case in ('window','aged_window','world','policy_revision')
+    assert bool(published)==success
+    if case=='window':assert calls==[] and diagnostics[-1]['map_revision']==a.revision
+    if case=='aged_window':assert calls==[a] and diagnostics[-1]['map_revision']==a.revision
+    if case in ('world','policy_revision'):assert calls==[b] and diagnostics[-1]['map_revision']==b.revision
+    if case in ('world_twice','policy_twice','source_final'):assert reasons==['map_changed_during_certification']
+    if case=='source_latest':assert reasons==['map_changed_during_certification'] and not calls
+    if case=='missing':assert reasons==['stale_map_after_certification']
+    if case=='expired':assert reasons==['publication_certificate_expired'] and calls==[a]
+    if case in ('unsafe','aged_unsafe'):assert reasons==['latest_map_or_aged_motion_unsafe']
+    if case=='aged_unsafe':assert calls==[a]

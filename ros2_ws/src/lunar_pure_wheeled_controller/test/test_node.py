@@ -904,3 +904,33 @@ def test_direct_p3_map_qos_can_share_reliable_without_changing_state_qos(configu
     finally:
         if node is not None: node.destroy_node()
         rclpy.shutdown()
+
+
+@pytest.mark.parametrize('cap,override,expected,angular_cap,angular_override,angular',[(.5,None,.5,1.2,None,1.2),(.5,.1,.1,1.2,.4,.4),(.5,1.,.5,1.2,2.,1.2),(.2,None,.2,1.,None,1.)])
+def test_standard_path_policy_and_executor_use_platform_speed_cap(tmp_path, cap, override, expected, angular_cap, angular_override, angular):
+    from pathlib import Path
+    import yaml
+    root=Path(__file__).resolve().parents[4]
+    data=yaml.safe_load((root/'config/wheel.yaml').read_text(encoding='utf-8'))
+    data['capability'].update(maximum_forward_speed_mps=cap, maximum_reverse_speed_mps=cap, maximum_spin_rate_radps=angular_cap)
+    path=tmp_path/'wheel.yaml';path.write_text(yaml.safe_dump(data),encoding='utf-8')
+    args=['--ros-args','-p','input_mode:=incremental_path','-p','controller_backend:=mppi_path_follower',
+          '-p',f'platform_config:={path.as_posix()}']
+    if override is not None:
+        args += ['-p',f'max_linear_mps:={override}', '-p',f'max_reverse_mps:={override}']
+    if angular_override is not None:args += ['-p',f'max_angular_radps:={angular_override}']
+    rclpy.init(args=args);node=None
+    try:
+        node=PureWheeledControllerNode()
+        for policy in (node._policy,node._executor.policy):
+            assert policy.max_linear_mps == pytest.approx(expected)
+            assert policy.max_reverse_mps == pytest.approx(expected)
+            assert policy.max_angular_radps == pytest.approx(angular)
+            assert policy.max_linear_accel_mps2 == pytest.approx(.5)
+            assert policy.max_linear_decel_mps2 == pytest.approx(.5)
+        assert node.get_parameter('max_linear_mps').value == pytest.approx(expected)
+        assert node.get_parameter('max_reverse_mps').value == pytest.approx(expected)
+        assert node.get_parameter('max_angular_radps').value == pytest.approx(angular)
+    finally:
+        if node is not None:node.destroy_node()
+        rclpy.shutdown()

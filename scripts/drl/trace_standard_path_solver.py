@@ -21,15 +21,14 @@ def install(path):
         return dict(state=asdict(state),stage_index=e._stage_index,stages=[stage(s) for s in e._stages],
             active=None if active is None else vars(active),path=e.path.original if e.path else None,
             policy=asdict(e.policy),config=asdict(e.config),progress_m=e.progress_m,
-            local_progress_m=e._local_progress,no_progress_s=e.no_progress_s,anchor=e._last_pose,
-            translation_credit_m=getattr(e,'_translation_credit_m',0.),
+            local_progress_m=e._local_progress,
             phase=e.phase,failure=e.failure,direction=e.direction,last_command=e._last_command,
             history=[(t,u.tolist()) for t,u in e._command_history],model_time=e._model_time,state_age=e._state_age_s)
     def score(e,state,controls,target,target_yaw,dt):
         costs,poses=original_score(e,state,controls,target,target_yaw,dt)
         now=time.monotonic()
         distance=math.dist((state.x_m,state.y_m),e.path.points[-1])
-        if (distance<.2 or e.no_progress_s>2.) and now-last.get(id(e),-1e9)>=1.:
+        if now-last.get(id(e),-1e9)>=1.:
             last[id(e)]=now;captured.add(id(e));maps[id(e)]=e.map
             correction=e.config.control_cost*np.sum(e._nominal[None]*(controls-e._nominal[None])/np.array([e.config.linear_std,e.config.angular_std])**2,axis=(1,2))
             total=costs+correction;valid=np.isfinite(total)
@@ -61,7 +60,7 @@ def install(path):
         old=e._stages[e._stage_index] if e._stages else None
         old_description=None if old is None else stage(old)
         result=original_accept(e,state)
-        if pending is not None and e.no_progress_s>2.:
+        if pending is not None:
             emit('accept',old=old_description,incoming=[stage(s) for s in pending.stages],
                 retained_old=bool(old is not None and e._stages and e._stages[0] is old),context=context(e,state))
         return result

@@ -169,3 +169,20 @@ def test_completed_spawn_worker_closes_without_signals():
         result=worker.poll(); time.sleep(.01)
     assert result=={'sequence':1}
     assert worker.close(timeout_s=.5)=={'terminated_pids':[],'surviving_pids':[]}
+
+
+def test_worker_forwards_stop_tolerance_without_initial_preference(monkeypatch):
+    from types import SimpleNamespace
+    from scripts.navigation.one_cm.nav1cm import local_worker as module
+    from tests.navigation.one_cm.test_local_mpcc import scene
+    state, grid, reference = scene()
+    seen = {}
+    def plan(*args, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(candidate=None,reason='TEST',timings_ms={},attempts=())
+    monkeypatch.setattr(module, '_planner', SimpleNamespace(plan=plan))
+    monkeypatch.setattr(module, '_cache', SimpleNamespace(get=lambda _:None,last_reused=False))
+    monkeypatch.setattr(module, '_ready', {})
+    module.run_request(dict(state=state,grid=grid,reference=reference,identity={},
+                            initial_stopped_angular_rps=.025))
+    assert seen['initial_stopped_angular_rps'] == .025

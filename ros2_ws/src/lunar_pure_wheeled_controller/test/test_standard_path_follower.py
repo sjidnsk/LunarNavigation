@@ -50,18 +50,17 @@ def test_identical_geometry_new_identity_does_not_reset_or_brake():
     tick(e,TrackingState(.2,0.,0.,.1));e.note_command(.1,0.)
     progress=e.progress_m;history=list(e._command_history);e.no_progress_s=.4
     e.set_standard_path(path,2)
-    assert e.progress_m==progress and e.no_progress_s==.4
+    assert e.progress_m==progress and getattr(e,'no_progress_s',0.)==.4
     assert len(e._command_history)==len(history)
     assert e.phase!='BRAKING'
 
 
-def test_stall_survives_reference_revisions():
+def test_rolling_reference_does_not_add_a_tracker_task_timeout():
     e=follower(no_progress_timeout_s=.3)
     for i in range(12):
         e.set_standard_path(((0.,0.,0.),(1.+i*.001,0.,0.)),i)
         r=tick(e,TrackingState(0.,0.,0.))
-    assert e.failure=='TRACKING_STALLED'
-    assert r.command.linear_x_mps==0.
+    assert e.failure is None and getattr(e,'no_progress_s',0.)==0.
 
 
 @pytest.mark.parametrize('target',[math.pi/2,-math.pi+.03])
@@ -188,13 +187,13 @@ def test_latest_active_geometry_cancels_older_pending_reference():
     progress=e.progress_m
     history=[(t,u.copy()) for t,u in e._command_history]
     e.set_standard_path(b,2);e.set_standard_path(a,3)
-    assert e.progress_m==progress and e.no_progress_s==.4
+    assert e.progress_m==progress and getattr(e,'no_progress_s',0.)==.4
     assert len(e._command_history)==len(history)
     assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
     r=tick(e,TrackingState(.2,0.,0.,.1))
     assert e.reference.points==a
     assert r.phase=='TRACKING' and r.command.linear_x_mps>0.
-    assert e.progress_m>=progress and e.no_progress_s>=.4
+    assert e.progress_m>=progress and getattr(e,'no_progress_s',0.)>=.4
 
 
 def test_dense_spin_rolling_makes_physical_progress():
@@ -317,13 +316,13 @@ def test_transient_stopping_failure_recovers_only_after_real_conditions_change(c
         assert e.diagnostics['measured_stopped'] is True
         assert r.command.linear_x_mps==r.command.angular_z_radps==0.
     assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
-    before=e.no_progress_s
+    before=getattr(e,'no_progress_s',0.)
     e.set_map(GridMap(np.ones((100,100),np.uint8),.1,(-5.,-5.)))
     # A published zero and elapsed delay drain the queue; retain every historical record.
     e.note_command(0.,0.,.1)
     r=e.update(state,.05,now_s=.5)
     assert e.failure is None and r.command.angular_z_radps>0.
-    assert e.no_progress_s>=before
+    assert getattr(e,'no_progress_s',0.)>=before
     assert len(e._command_history)>=len(history)+1
     for i in range(100):
         e.note_command(r.command.linear_x_mps,r.command.angular_z_radps,.5+i*.05)
@@ -334,18 +333,17 @@ def test_transient_stopping_failure_recovers_only_after_real_conditions_change(c
     assert abs(state.yaw_rad-.6)<.05 and abs(state.angular_radps)<=.01
 
 
-@pytest.mark.parametrize('fault',['INVALID_STATE','TRACKING_STALLED'])
+@pytest.mark.parametrize('fault',['INVALID_STATE','UNSAFE'])
 def test_fresh_standard_path_does_not_clear_hard_fault(fault):
     e=follower(no_progress_timeout_s=.1);path=((0.,0.,0.),(1.,0.,0.));e.set_standard_path(path)
     if fault=='INVALID_STATE':e.update(TrackingState(float('nan'),0.,0.),.05)
-    else:
-        for _ in range(5):tick(e,TrackingState(0.,0.,0.))
+    else:e.failure=fault
     assert e.failure==fault
-    elapsed=e.no_progress_s
+    elapsed=getattr(e,'no_progress_s',0.)
     e.set_standard_path(path,identity=99)
     r=e.update(TrackingState(0.,0.,0.),.05)
     assert e.failure==fault and r.command.linear_x_mps==r.command.angular_z_radps==0.
-    assert e.no_progress_s>=elapsed
+    assert getattr(e,'no_progress_s',0.)>=elapsed
 
 
 def test_recovery_certifies_measured_motion_without_fabricating_a_stop():
@@ -384,31 +382,173 @@ def test_stopped_spin_replaced_by_rolling_translation_counts_physical_progress(c
         points=tuple((x+j*.02*math.cos(theta),y+j*.02*math.sin(theta),theta) for j in range(51))
         e.set_standard_path(points,i)
         r=tick(e,TrackingState(x,y,theta,0. if i==0 else .2,.2 if curved and i else 0.))
-        assert e.failure is None, (i,x,y,e.no_progress_s)
+        assert e.failure is None, (i,x,y,getattr(e,'no_progress_s',0.))
     assert math.hypot(x,y)>.28 and r.phase=='TRACKING'
 
 
 @pytest.mark.parametrize('motion',['stationary','lateral','wrongway','oscillation'])
-def test_revised_reference_cannot_manufacture_physical_progress(motion):
+def test_motion_observation_is_not_a_second_task_timeout(motion):
     e=follower(no_progress_timeout_s=.4)
     for i in range(40):
         x=(-i*.01 if motion=='wrongway' else .02*(i%2) if motion=='oscillation' else 0.)
         y=i*.01 if motion=='lateral' else 0.
         e.set_standard_path(((0.,0.,0.),(2.+i*.001,0.,0.)),i)
         tick(e,TrackingState(x,y,0.))
-    assert e.failure=='TRACKING_STALLED'
+    assert e.failure is None and getattr(e,'no_progress_s',0.)==0.
 
 
-def test_stopped_incompatible_rebindings_preserve_stall_clock_and_history():
+def test_stopped_incompatible_rebindings_preserve_command_history_without_task_clock():
     e=follower(no_progress_timeout_s=.3)
     for i in range(12):
         end=1. if i%2 else -1.
         e.set_standard_path(((0.,0.,0.),(end,0.,0.)),i)
-        before=e.no_progress_s
+        before=getattr(e,'no_progress_s',0.)
         history=[(t,u.copy()) for t,u in e._command_history]
         r=e.update(TrackingState(0.,0.,0.),.05)
-        assert e.no_progress_s>=before
+        assert getattr(e,'no_progress_s',0.)>=before
         assert len(history)==len(e._command_history)
         assert all(t==old_t and np.array_equal(u,old_u) for (t,u),(old_t,old_u) in zip(e._command_history,history))
         e.note_command(r.command.linear_x_mps,r.command.angular_z_radps)
-    assert e.failure=='TRACKING_STALLED'
+    assert e.failure is None and getattr(e,'no_progress_s',0.)==0.
+
+
+@pytest.mark.parametrize('sign,start',[(1.,0.),(-1.,0.),(1.,2.8),(-1.,-2.8)])
+def test_same_direction_spin_crosses_internal_boundary_without_stopping(sign,start):
+    e=follower(motion_model='differential_drive')
+    points=tuple((0.,0.,start+sign*y) for y in (0.,math.pi/2,5*math.pi/6))
+    e.set_standard_path(points)
+    tick(e,TrackingState(0.,0.,start))
+    # 验证实际旋转跨段连续性，定位角度不需要累计圈数。
+    for offset in (-.02,0.,.02):
+        r=tick(e,TrackingState(0.,0.,start+sign*(math.pi/2+offset),0.,sign*.1))
+        assert r.phase not in ('BRAKING','WAITING','FAILED')
+        assert r.command.linear_x_mps==0.
+        assert sign*r.command.angular_z_radps>0.
+    assert e._stage_index==1
+    assert e.path is e._stages[1].path
+
+
+@pytest.mark.parametrize('sign',[1.,-1.])
+def test_multiturn_spin_passes_all_internal_boundaries_and_stops_at_end(sign):
+    e=follower(motion_model='differential_drive')
+    yaws=[sign*i*math.pi/2 for i in range(10)]
+    e.set_standard_path(tuple((0.,0.,y) for y in yaws))
+    tick(e,TrackingState(0.,0.,0.))
+    for i,yaw in enumerate(yaws[1:-1],1):
+        # 验证实际旋转跨段连续性，定位角度不需要累计圈数。
+        wrapped=math.atan2(math.sin(yaw),math.cos(yaw))
+        r=tick(e,TrackingState(0.,0.,wrapped,0.,sign*.1))
+        assert r.phase not in ('BRAKING','WAITING','FAILED')
+        assert sign*r.command.angular_z_radps>0.
+        assert e._stage_index==i
+    r=tick(e,TrackingState(0.,0.,yaws[-1],0.,sign*.1))
+    assert r.phase=='BRAKING'
+    assert tick(e,TrackingState(0.,0.,yaws[-1])).phase=='WAITING'
+
+
+def test_spin_reversal_keeps_actual_stop_boundary():
+    e=follower(motion_model='differential_drive')
+    e.set_standard_path(((0.,0.,0.),(0.,0.,math.pi/2),(0.,0.,0.)))
+    tick(e,TrackingState(0.,0.,0.))
+    r=tick(e,TrackingState(0.,0.,math.pi/2,0.,.1))
+    assert r.phase=='BRAKING' and e._stage_index==0
+    tick(e,TrackingState(0.,0.,math.pi/2))
+    assert e._stage_index==1
+    assert tick(e,TrackingState(0.,0.,math.pi/2)).command.angular_z_radps<0.
+
+
+@pytest.mark.parametrize('end',[5*math.pi/6,-5*math.pi/6,4*math.pi])
+def test_simulated_spin_has_no_internal_stop(end):
+    e=follower(motion_model='differential_drive')
+    points=tuple((0.,0.,float(y)) for y in np.linspace(0.,end,100))
+    e.set_standard_path(points)
+    s=TrackingState(0.,0.,0.);crossed=False
+    for _ in range(1600):
+        r=tick(e,s)
+        if math.pi/2-.1<abs(s.yaw_rad)<abs(end)-.1:
+            crossed=True
+            assert r.phase not in ('BRAKING','WAITING','FAILED')
+            assert abs(s.angular_radps)>.01
+            assert r.command.angular_z_radps*end>0.
+        w=s.angular_radps+float(np.clip(r.command.angular_z_radps-s.angular_radps,-.025,.025))
+        s=TrackingState(0.,0.,s.yaw_rad+w*.05,0.,w)
+        if r.phase=='WAITING':break
+    assert crossed and r.phase=='WAITING'
+    assert abs(s.yaw_rad-end)<.05 and abs(s.angular_radps)<=.01
+
+
+def test_spin_to_translation_keeps_alignment_and_stop_boundary():
+    e=follower(motion_model='differential_drive')
+    e.set_standard_path(((0.,0.,0.),(0.,0.,math.pi/2),(0.,1.,math.pi/2)))
+    tick(e,TrackingState(0.,0.,0.))
+    r=tick(e,TrackingState(0.,0.,math.pi/2,0.,.1))
+    assert r.phase=='BRAKING' and r.command.linear_x_mps==0.
+    assert e._stage_index==0
+
+
+@pytest.mark.parametrize('sign',[1.,-1.])
+@pytest.mark.parametrize('start',[0.,2.8,-2.8])
+def test_sparse_half_turn_with_small_initial_error_preserves_order(sign,start):
+    e=follower(motion_model='differential_drive')
+    points=tuple((0.,0.,start+sign*y) for y in (0.,math.pi,1.5*math.pi))
+    e.set_standard_path(points)
+    r=tick(e,TrackingState(0.,0.,start-sign*.01))
+    assert e._stage_index==0
+    assert all(abs(stage.spin_delta)<=math.pi/2+1e-12 for stage in e._stages)
+    assert r.command.linear_x_mps==0. and sign*r.command.angular_z_radps>0.
+
+
+@pytest.mark.parametrize('reverse',[False,True])
+def test_position_and_body_yaw_use_same_local_leg_on_nearby_return_path(reverse):
+    from lunar_pure_wheeled_controller.path_geometry import angle
+    e=follower(motion_model='differential_drive')
+    offset=math.pi if reverse else 0.
+    points=[(0.,0.,offset),(2.,0.,offset)]
+    points.extend((2.+.04*math.cos(t),.04+.04*math.sin(t),t+math.pi/2+offset)
+                  for t in np.linspace(-math.pi/2,math.pi/2,19)[1:])
+    points.append((0.,.08,math.pi+offset))
+    e.set_standard_path(points);e._accept_pending(TrackingState(0.,0.,offset))
+    assert len(e._stages)==1
+    e.progress_m=.3;e.direction=-1 if reverse else 1
+    distance,heading=e._reference_errors(np.array([[[.3,.06,offset]]]))
+    assert distance.item()==pytest.approx(.06**2)
+    # 不能为yaw跳到更近的未来返程腿。
+    assert abs(angle(heading.item()-offset-(math.pi if reverse else 0.)))<1e-12
+
+
+def test_body_yaw_interpolation_uses_clipped_fraction_across_pi():
+    from lunar_pure_wheeled_controller.path_geometry import Polyline,angle
+    e=follower(motion_model='differential_drive')
+    e.path=Polyline(((0.,0.,math.pi-.1),(2.,0.,-math.pi+.1)))
+    e.progress_m=.5;e.direction=1
+    distance,heading=e._reference_errors(np.array([[[.1,.02,0.]]]))
+    assert distance.item()==pytest.approx(.3**2+.02**2)
+    assert abs(angle(heading.item()-(math.pi-.06)))<1e-12
+
+
+
+def test_body_yaw_cache_replaces_rolling_geometry_and_survives_temporary_path():
+    from lunar_pure_wheeled_controller.path_geometry import Polyline
+    e=follower(motion_model='differential_drive')
+    e.path=Polyline(((0.,0.,0.),(2.,0.,0.)));original=e.path
+    poses=np.array([[[.3,.1,0.]]])
+    assert e._reference_errors(poses)[1].item()==0.
+    first=e._reference_body_geometry
+    e._reference_errors(poses)
+    assert e._reference_body_geometry is first
+    assert all(not a.flags.writeable for a in first[1:])
+    e.path=Polyline(((0.,0.,.2),(2.,0.,.2)))
+    assert e._reference_errors(poses)[1].item()==pytest.approx(.2)
+    assert e._reference_body_geometry is not first
+    e.path=original
+    assert e._reference_errors(poses)[1].item()==0.
+
+
+@pytest.mark.parametrize('sign',[1.,-1.])
+@pytest.mark.parametrize('offset',[math.pi/2+.01,math.pi-.01])
+def test_initial_yaw_behind_ordered_spin_start_is_not_executed_progress(sign,offset):
+    e=follower(motion_model='differential_drive')
+    e.set_standard_path(tuple((0.,0.,sign*y) for y in (0.,math.pi,1.5*math.pi)))
+    r=tick(e,TrackingState(0.,0.,-sign*offset))
+    assert e._stage_index==0 and r.phase=='FINAL_ALIGN'
+    assert sign*r.command.angular_z_radps>0.

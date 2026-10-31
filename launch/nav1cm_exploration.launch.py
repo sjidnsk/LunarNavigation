@@ -10,7 +10,7 @@ from launch_ros.actions import Node
 
 # 这些值只属于新入口；既有 exploration_navigation 和训练默认保持原样。
 DEFAULTS = {
-    "exploration_strategy": "none", "enable_controller": "false", "drl_actor": "",
+    "global_period_s": "15.0", "command_hold_s": "0.0", "command_spin_prepare_s": "0.0", "control_backend": "path_mppi", "exploration_strategy": "none", "enable_controller": "false", "drl_actor": "",
     "allow_unknown": "false",
     "build_dir": "", "platform_config": "", "use_sim_time": "false",
     "map_frame": "map", "odom_frame": "odom", "base_frame": "base_link",
@@ -29,18 +29,26 @@ DEFAULTS = {
     "command_topic": "/Car/T5/Car_Cmd_Vel", "diagnostics_topic": "/Car/T4/control/mppi_diagnostics",
     "map_qos_reliability": "reliable", "map_qos_durability": "volatile",
     "p3_map_timeout_s": "3.0", "odometry_timeout_s": "0.5", "mppi_time_steps": "40",
-    "mppi_compute_envelope_s": "0.05",
+    "mppi_compute_envelope_s": "0.05", "initial_travel_direction": "",
     "coarse_resolution_m": "0.2", "navigation_map_wait_timeout_s": "30.0",
 }
 
 def _compose(context):
     values = {k: LaunchConfiguration(k).perform(context).strip() or v for k,v in DEFAULTS.items()}
+    values["command_spin_prepare_s"] = float(values["command_spin_prepare_s"])
+    if not isfinite(values["command_spin_prepare_s"]) or values["command_spin_prepare_s"] < 0:
+        raise ValueError("command_spin_prepare_s must be finite and nonnegative")
+    values["global_period_s"] = float(values["global_period_s"])
+    if not isfinite(values["global_period_s"]) or values["global_period_s"] <= 0:
+        raise ValueError("global_period_s must be finite and positive")
     values["p3_map_timeout_s"] = float(values["p3_map_timeout_s"])
     if not isfinite(values["p3_map_timeout_s"]) or values["p3_map_timeout_s"] < 0:
         raise ValueError("p3_map_timeout_s must be finite and nonnegative")
     values["odometry_timeout_s"] = float(values["odometry_timeout_s"])
     if not isfinite(values["odometry_timeout_s"]) or values["odometry_timeout_s"] <= 0:
         raise ValueError("odometry_timeout_s must be finite and positive")
+    if values["initial_travel_direction"] not in ("", "forward", "reverse"):
+        raise ValueError("initial_travel_direction must be forward or reverse")
     values["mppi_time_steps"] = int(values["mppi_time_steps"])
     if values["mppi_time_steps"] <= 0:
         raise ValueError("mppi_time_steps must be positive")
@@ -49,6 +57,8 @@ def _compose(context):
     values['mppi_compute_envelope_s'] = float(values['mppi_compute_envelope_s'])
     if not isfinite(values['mppi_compute_envelope_s']) or values['mppi_compute_envelope_s'] <= 0:
         raise ValueError('mppi_compute_envelope_s must be finite and positive')
+    if values["control_backend"] not in {"path_mppi", "mpcc_cmd_vel"}:
+        raise RuntimeError("control_backend 必须为 path_mppi/mpcc_cmd_vel")
     strategy = values["exploration_strategy"]
     if strategy not in {"none", "frontier", "drl"}:
         raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
@@ -74,8 +84,15 @@ def _compose(context):
             "coarse_resolution_m": float(values["coarse_resolution_m"])}),
         node("lunar_nav1cm_planner", "navigation_task_node", {
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
-            "execution_contract_enabled":values["enable_controller"]=="true",
+            "global_period_s":values["global_period_s"],
+            "command_hold_s":float(values["command_hold_s"]),
+            "command_spin_prepare_s":values["command_spin_prepare_s"],
+            "control_backend":values["control_backend"],
+            "enable_controller":values["enable_controller"]=="true",
+            "command_topic":values["command_topic"],
+            "execution_contract_enabled":values["enable_controller"]=="true" and values["control_backend"]=="path_mppi",
             "odometry_timeout_s":values["odometry_timeout_s"],
+            "initial_travel_direction":values["initial_travel_direction"],
             "execution_reference_topic":values["execution_reference_topic"],"tracking_status_topic":values["tracking_status_topic"],
             **{k: values[k] for k in ("action_name","goal_topic","global_route_topic","local_path_topic","build_dir")},
             "allow_unknown": values["allow_unknown"] == "true"}),
@@ -92,7 +109,7 @@ def _compose(context):
         actions.append(node("lunar_drl_exploration", "lunar_drl_inference_node", {
             **shared_policy, "navigation_backend": "nav1cm", "actor_path": values["drl_actor"],
             **{k: values[k] for k in ("action_name","policy_map_service","tf_static_topic","global_route_topic")}}))
-    if values["enable_controller"] == "true":
+    if values["enable_controller"] == "true" and values["control_backend"] == "path_mppi":
         actions.append(node("lunar_pure_wheeled_controller", "lunar_pure_wheeled_controller_node.py", {
             **frames, **qos, **{k: values[k] for k in ("odometry_topic","tf_topic","tf_static_topic","command_topic")},
             "platform_config": config, "input_mode": "incremental_path", "controller_backend": "mppi_path_follower",

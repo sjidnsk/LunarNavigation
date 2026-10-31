@@ -27,7 +27,7 @@ from .incremental_path import ParsedIncrementalPath, parse_incremental_path
 from .reference import ParsedReference, parse_reference
 from .tracking import TrackingPolicy, TrackingState, track_trajectory
 from .execution import PathExecutor
-from .motion_configuration import p3_map_receipt_expired
+from .motion_configuration import p3_map_receipt_expired,input_disposition
 
 
 def map_input_qos(reliability, durability):
@@ -136,7 +136,6 @@ class PureWheeledControllerNode(Node):
             "control_rate_hz": 20.0,
             "odometry_timeout_s": 0.5,
             "tf_timeout_s": 0.5,
-            "path_timeout_s": 0.35,
             "lookahead_m": 0.5,
             "max_linear_mps": 0.2,
             "max_angular_radps": 0.5,
@@ -230,7 +229,10 @@ class PureWheeledControllerNode(Node):
                     float(policy_values[key]), float(capability[source])
                 )
         if self._standard_mode:
-            for name,value in dict(max_angular_radps=1.,goal_position_tolerance_m=.1,goal_yaw_tolerance_rad=.05,stopped_angular_radps=.01).items():
+            for name in ("max_linear_mps", "max_reverse_mps", "max_angular_radps"):
+                if name not in self._parameter_overrides:
+                    policy_values[name] = float(capability[names[name]])
+            for name,value in dict(goal_position_tolerance_m=.1,goal_yaw_tolerance_rad=.05,stopped_angular_radps=.01).items():
                 if name not in self._parameter_overrides:
                     policy_values[name]=min(value,float(capability[names[name]])) if platform_path and name in names else value
         from lunar_pure_wheeled_controller.motion_configuration import resolve_motion_model
@@ -242,7 +244,9 @@ class PureWheeledControllerNode(Node):
             from rclpy.parameter import Parameter
             self._minimum_clearance_m=resolve_minimum_clearance(capability.get('minimum_clearance_m',0.0),
                 self.get_parameter('minimum_clearance_m').value)
-            self.set_parameters([Parameter('minimum_clearance_m',value=self._minimum_clearance_m)])
+            self.set_parameters([Parameter('minimum_clearance_m',value=self._minimum_clearance_m),
+                *[Parameter(name,value=getattr(self._policy,name)) for name in
+                  ('max_linear_mps','max_reverse_mps','max_angular_radps')]])
             dimensions=capability['body_extent_m'][:2]
             self._body_dimensions=tuple(float(self.get_parameter(name).value) or float(default)
                 for name,default in zip(('body_length_m','body_width_m'),dimensions))
@@ -269,7 +273,7 @@ class PureWheeledControllerNode(Node):
                 seed=self.get_parameter("mppi_seed").value,
                 nominal_response_time_s=self.get_parameter("mppi_nominal_response_time_s").value,
                 compute_budget_s=float(self.get_parameter('mppi_compute_envelope_s').value),
-                state_age_budget_s=float(self.get_parameter('odometry_timeout_s').value) if self._standard_mode else .05))
+                state_age_budget_s=None if self._standard_mode else .05))
             self._mppi_diagnostics = self.create_publisher(String,self._absolute_topic_name("mppi_diagnostics_topic",self.get_parameter("mppi_diagnostics_topic").value),10)
             self._map_client = None
             if self._standard_mode and self._standard_map_source=='direct_p3':
@@ -313,7 +317,7 @@ class PureWheeledControllerNode(Node):
         if self._execution_enabled:
             from lunar_planning_msgs.msg import PathExecutionReference
             from .execution_pairing import ExecutionInbox
-            self._execution_inbox=ExecutionInbox()
+            self._execution_inbox=ExecutionInbox(max_age_s=None)
             self._execution_offered=None
 
         control_rate_hz = float(self.get_parameter("control_rate_hz").value)
@@ -325,14 +329,13 @@ class PureWheeledControllerNode(Node):
             raise ValueError("odometry_timeout_s must be finite and greater than zero")
         if not isfinite(self._tf_timeout_s) or self._tf_timeout_s <= 0.0:
             raise ValueError("tf_timeout_s must be finite and greater than zero")
-        self._path_timeout_s=float(self.get_parameter("path_timeout_s").value)
-        if not isfinite(self._path_timeout_s) or self._path_timeout_s<=0:
-            raise ValueError("path_timeout_s must be finite and positive")
         self._path_received_at=None
         self._active: ParsedReference | ParsedIncrementalPath | None = None
         self._trajectory_cursor = 0
         self._odometry: Odometry | None = None
         self._odometry_received_at: float | None = None
+        self._odometry_advanced_at=None
+        self._standard_source_high_water=None
         self._mppi_tf_history = deque(maxlen=16)
         self._mppi_odom_history = deque(maxlen=16)
         self._map_from_odom: MapFromOdom | None = None
@@ -515,7 +518,7 @@ class PureWheeledControllerNode(Node):
         try:
             reference=reference_from_message(message)
             now=self.get_clock().now().nanoseconds
-            if message.header.frame_id!=self._map_frame or reference.stamp_ns>now or now-reference.stamp_ns>self._path_timeout_s*1e9:
+            if message.header.frame_id!=self._map_frame or reference.stamp_ns>now:
                 return
             if not self._execution_inbox.add_reference(reference,monotonic() if received_at is None else received_at):return
             actual=self._executor.execution_reference
@@ -540,7 +543,11 @@ class PureWheeledControllerNode(Node):
 
     def _publish_execution_status(self,*,reference=None,state_code=None,accepted=None,reason=None):
         if not getattr(self,'_execution_enabled',False):return
-        reference=reference or self._executor.execution_reference or self._execution_offered
+        if reference is None:
+            waiting=(self._executor.failure is None and
+                     self._executor._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'))
+            reference=(self._execution_offered if waiting else None) or self._executor.execution_reference or self._execution_offered
+            if waiting and accepted is None:accepted=False
         if reference is None:return
         status=TrackingStatus();status.header.frame_id=self._map_frame
         status.header.stamp=self.get_clock().now().to_msg()
@@ -734,11 +741,20 @@ class PureWheeledControllerNode(Node):
             # 非有限/损坏测量是完整性故障，不能降格成普通断流等待。
             self._executor.failure=self._executor.failure or 'INVALID_FEEDBACK'
             return
-        self._standard_state=TrackingState(value.x,value.y,value.yaw,value.v,value.w,lateral_mps)
-        self._odometry=odometry;self._odometry_received_at=received
         stamp=odometry.header.stamp
         source_ns=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
-        self._standard_state_ns=source_ns if source_ns>0 else receipt_ns
+        high=getattr(self,'_standard_source_high_water',None)
+        if source_ns<=0 or source_ns>receipt_ns or (high is not None and source_ns<high):
+            self._executor.failure=self._executor.failure or 'INVALID_FEEDBACK_TIMESTAMP'
+            self._odometry=None;self._odometry_received_at=None
+            self._standard_pending_odometry=None
+            return
+        if high is None or source_ns>high:
+            self._standard_source_high_water=source_ns
+            self._odometry_advanced_at=received
+        self._standard_state=TrackingState(value.x,value.y,value.yaw,value.v,value.w,lateral_mps)
+        self._odometry=odometry;self._odometry_received_at=received
+        self._standard_state_ns=source_ns
         if self._p3_source is not None:self._p3_source.set_center(value.x,value.y)
 
     def _standard_pose_wait(self,reason='WAITING_FOR_POSE'):
@@ -746,7 +762,7 @@ class PureWheeledControllerNode(Node):
             return self._standard_unavailable(self._executor.failure)
         reference=getattr(self,'_execution_offered',None) or self._executor.execution_reference
         self._executor.wait_for_pose()
-        if self._executor._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+        if self._executor._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'):
             self._executor._stop_reason=reason
         self._active=None;self._path_received_at=None;self._last_control_ns=None
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(event='input_wait',
@@ -756,22 +772,26 @@ class PureWheeledControllerNode(Node):
 
     def _standard_unavailable(self,reason,*,retryable=False):
         failure=getattr(self._executor,'failure',None)
-        if failure is None and reason in (
-                'missing_or_stale_feedback','stale_source_feedback',
-                'stale_feedback_after_optimization','stale_feedback_during_recertification',
-                'stale_feedback_after_certification'):
-            return self._standard_pose_wait()
-        retryable=(retryable and failure is None and
-                   getattr(self._executor,'last_execution_state',0)!=6)
+        disposition=input_disposition(reason,
+            hard_failure=failure is not None or getattr(self._executor,'last_execution_state',0)==6)
+        if disposition in ('WAITING_FOR_POSE','WAITING_FOR_MAP'):
+            return self._standard_pose_wait(disposition)
+        retryable=disposition=='RECOMPUTE'
         if failure is not None:reason=failure
         # 零目标是未知运动时的保底请求，不能当作有界制动认证或实测停车。
-        self._executor.discard_prediction()
+        # 可重算失效仅作废本次发布证明；nominal 只供下轮完整重算热启动。
+        if not retryable:self._executor.discard_prediction()
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(event='certificate_unavailable',
             reason=reason,retryable=retryable,measured_stopped=None,certified_stop=False))))
         self._publish_twist()
         # 仅证明在发布前作废可重算；输入失效/不安全仍是终端故障。
+        # 输入拒绝归属当前收到的参考；真正执行故障仍归属实际执行身份。
+        # 否则等待新参考时持续重发旧未接管参考故障，只会被导航正确拒收。
+        rejected=(getattr(self,'_execution_offered',None)
+                  if failure is None and not retryable else None)
+        identity={} if rejected is None else dict(reference=rejected,accepted=False)
         self._publish_execution_status(state_code=1 if retryable else 6,
-            reason=('PUBLICATION_DEFERRED:' if retryable else 'EXECUTION_INPUT_UNAVAILABLE:')+str(reason))
+            reason=('PUBLICATION_DEFERRED:' if retryable else 'EXECUTION_INPUT_UNAVAILABLE:')+str(reason),**identity)
 
     def _standard_grid(self,state):
         if self._p3_source is not None:
@@ -782,25 +802,26 @@ class PureWheeledControllerNode(Node):
         return self._map_cache.local_grid(state.x_m,state.y_m,2.5)
 
     def _tick_standard_path(self):
-        received_at=self._odometry_received_at
+        # 消费同一快照的推进接收时间；新消息不能给本轮旧计算续期。
+        received_at=getattr(self,'_odometry_advanced_at',self._odometry_received_at)
         if self._odometry is None or self._input_is_stale(received_at,self._odometry_timeout_s):
             return self._standard_unavailable('missing_or_stale_feedback')
         state=self._standard_state
+        proof_source=getattr(self,'_p3_source',None)
+        proof_cache=getattr(self,'_map_cache',None)
         grid=self._standard_grid(state)
         if grid is None:return self._standard_unavailable('missing_or_stale_map')
         now_ns=self.get_clock().now().nanoseconds
         source_ns=self._standard_state_ns
         if now_ns<source_ns:return self._standard_unavailable('future_feedback')
-        if (now_ns-source_ns)/1e9>self._odometry_timeout_s:
-            return self._standard_unavailable('stale_source_feedback')
         if self._active is None and getattr(self._executor,'_stop_reason',None) in (
-                'WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+                'WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'):
             return self._standard_pose_wait('WAITING_FOR_FRESH_REFERENCE')
         dt=.05 if self._last_control_ns is None else (now_ns-self._last_control_ns)/1e9
         self._last_control_ns=now_ns
         if dt<=0:return self._standard_unavailable('nonpositive_dt')
-        if self._active is None or self._input_is_stale(self._path_received_at,self._path_timeout_s):
-            self._executor.request_stop('STALE_PATH' if self._active is not None else 'NO_PATH')
+        if self._active is None:
+            self._executor.request_stop('NO_PATH')
         self._executor.set_map(grid)
         started=monotonic()
         result=self._executor.update(state,dt,now_s=source_ns/1e9,state_age_s=(now_ns-source_ns)/1e9)
@@ -808,18 +829,28 @@ class PureWheeledControllerNode(Node):
             return self._standard_unavailable('stale_feedback_after_optimization')
         after_solve_ns=self.get_clock().now().nanoseconds
         if after_solve_ns<now_ns:return self._standard_unavailable('clock_regressed_during_optimization')
-        if (after_solve_ns-source_ns)/1e9>self._odometry_timeout_s:
-            return self._standard_unavailable('stale_source_feedback')
         # 每周期最多追加一次证明，截止时刻从证明开始计算，绝不追赶自身耗时。
         covered_ns=now_ns+int(self._executor.config.compute_budget_s*1e9)
         latest=self._standard_grid(state)
         if latest is None:return self._standard_unavailable('stale_map_after_optimization')
         if self._input_is_stale(received_at,self._odometry_timeout_s):
             return self._standard_unavailable('stale_feedback_during_recertification')
-        identity=lambda value:(value.revision,value.epoch,value.origin)
+        # direct P3 的 epoch 仅在同一 source 生命周期内表示不可变物理世界；
+        # revision/origin 是窗口投影。policy cache 的 revision 仍承载内容更新。
+        proof_grid=grid
+        identity=lambda value:(value.epoch if proof_source is not None else
+                               (value.revision,value.epoch,value.origin))
+        def same_source():
+            return (getattr(self,'_p3_source',None) is proof_source and
+                    getattr(self,'_map_cache',None) is proof_cache)
+        if not same_source():
+            return self._standard_unavailable('map_changed_during_certification',retryable=True)
         certificate_ns=self.get_clock().now().nanoseconds
-        if identity(latest)!=identity(grid) or certificate_ns>covered_ns:
-            self._executor.set_map(latest)
+        world_changed=identity(latest)!=identity(proof_grid)
+        if world_changed or certificate_ns>covered_ns:
+            if world_changed:proof_grid=latest
+            # 仅时间续期仍完整认证原快照；出窗/UNKNOWN 由既有认证拒绝。
+            self._executor.set_map(proof_grid)
             if not self._executor.certify_publication(state,result.command.linear_x_mps,
                     result.command.angular_z_radps,(certificate_ns-source_ns)/1e9):
                 return self._standard_unavailable('latest_map_or_aged_motion_unsafe')
@@ -832,9 +863,7 @@ class PureWheeledControllerNode(Node):
             return self._standard_unavailable('stale_feedback_after_certification')
         if publication_ns<certificate_ns:
             return self._standard_unavailable('clock_regressed_during_certification')
-        if (publication_ns-source_ns)/1e9>self._odometry_timeout_s:
-            return self._standard_unavailable('stale_source_feedback')
-        if identity(final_grid)!=identity(latest):
+        if not same_source() or identity(final_grid)!=identity(proof_grid):
             return self._standard_unavailable('map_changed_during_certification',retryable=True)
         if publication_ns>covered_ns:
             return self._standard_unavailable('publication_certificate_expired',retryable=True)
@@ -845,7 +874,7 @@ class PureWheeledControllerNode(Node):
         self._publish_execution_status()
         self._mppi_diagnostics.publish(String(data=json.dumps(dict(self._executor.diagnostics,
             event='solve_result',phase=result.phase,compute_ms=(monotonic()-started)*1000,
-            map_revision=latest.revision,measured_stopped=self._executor._stopped(state)))))
+            map_revision=proof_grid.revision,measured_stopped=self._executor._stopped(state)))))
 
     def _publish_mppi_step(self, stamp_ns):
         self._mppi_step_ack.publish(String(data=json.dumps(dict(event="control_step",
@@ -883,8 +912,6 @@ class PureWheeledControllerNode(Node):
                 self._mppi_observe("stop", reason="missing_or_stale_input")
             self._publish_twist()
             return
-        if self._standard_mode and self._input_is_stale(self._path_received_at,self._path_timeout_s):
-            self._executor.request_stop("STALE_PATH")
         if self._input_mode in {"incremental_path", "incremental_reference"}:
             self._tick_incremental_path()
             return

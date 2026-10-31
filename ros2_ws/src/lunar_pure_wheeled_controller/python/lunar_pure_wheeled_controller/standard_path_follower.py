@@ -4,13 +4,15 @@ import math
 import numpy as np
 from .mppi import MppiExecutor
 from .mppi_path_follower import MppiPathFollower
-from .path_geometry import angle
+from .path_geometry import Polyline, angle
 from .standard_path_reference import StandardPathReference
 
 
 class StandardPathFollower(MppiPathFollower):
+    tracks_task_progress = False
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.config=replace(self.config,state_age_budget_s=None)
         self.reference=None;self._pending=None;self._stages=[];self._stage_index=0
         self._local_progress=0.;self._total_progress=0.;self._stop_reason=None
         self._switch_brake=False
@@ -104,14 +106,6 @@ class StandardPathFollower(MppiPathFollower):
             self._local_progress=self.path.project(state.x_m,state.y_m,reach=.75).s if compatible else 0.
         if not compatible:
             self.discard_prediction()
-            if self._stopped(state):
-                # 已实测停稳的参考切换不经过 _stop(switching=True)。
-                # 在此同样绑定新有序阶段；仅更新锚点，不刷新停滞时钟。
-                self._orient_progress_anchor(state)
-
-    def _orient_progress_anchor(self, state):
-        # 换向或越过有序屏障后更新方向，保留已经累积的物理停滞时间。
-        self._bind_progress_anchor(state,progress_m=self._local_progress,retain_translation=True)
 
     def _stop(self, state, dt, now_s, state_age_s, *, switching=False):
         self._model_time=self._model_time+dt if now_s is None else float(now_s)
@@ -120,12 +114,11 @@ class StandardPathFollower(MppiPathFollower):
         self.phase='BRAKING'
         safe_state=all(math.isfinite(v) for v in (state.x_m,state.y_m,state.yaw_rad,
             state.linear_mps,state.angular_radps,state.lateral_mps,dt,self._state_age_s))
-        if not safe_state or dt<=0 or not 0<=state_age_s<=self.config.state_age_budget_s:
+        if not safe_state or dt<=0 or not self.config.accepts_state_age(state_age_s):
             self.failure='INVALID_STATE';self.phase='FAILED';return self._result()
         if self._stopped(state):
             if switching:
                 self._switch_brake=False
-                self._orient_progress_anchor(state)
             else:self.phase='WAITING'
             return self._result()
         first=self._first_commands(state,np.zeros((1,2)),min(dt,self.config.model_dt))
@@ -164,20 +157,47 @@ class StandardPathFollower(MppiPathFollower):
         return sequence
 
     def _reference_errors(self, poses):
-        distance,heading=super()._reference_errors(poses)
-        # MPPI 基类按行进方向评分；在此保留标准 Path 的中间车体 yaw。
-        if self.path.lengths:
-            points=self.path.original;xy=poses[:,:,:2]
-            a=np.array([p[:2] for p in points[:-1]]);b=np.array([p[:2] for p in points[1:]])
-            vec=b-a;length=np.sum(vec*vec,axis=1)
-            fraction=np.clip(np.sum((xy[:,:,None,:]-a)*vec,axis=-1)/length,0.,1.)
-            d=np.sum((xy[:,:,None,:]-a-fraction[:,:,:,None]*vec)**2,axis=-1)
-            index=np.argmin(d,axis=-1)
-            yaw=np.array([p[2] for p in points]);delta=np.arctan2(np.sin(np.diff(yaw)),np.cos(np.diff(yaw)))
-            body=yaw[:-1]+fraction*delta
-            heading=np.take_along_axis(body,index[:,:,None],axis=-1)[:,:,0]
-            heading=heading+(math.pi if self.direction<0 else 0.)
+        distance,index,fraction=self._reference_projection(poses)
+        if index is None:return distance,np.full(distance.shape,self.path.final_yaw)
+        # 标准Path的车体yaw与位置共用同一有序局部投影，不再搜索远期邻近路段。
+        cache=getattr(self,'_reference_body_geometry',None)
+        if cache is None or cache[0] is not self.path:
+            yaw=np.asarray([p[2] for p in self.path.original])
+            delta=np.arctan2(np.sin(np.diff(yaw)),np.cos(np.diff(yaw)))
+            yaw.setflags(write=False);delta.setflags(write=False)
+            cache=(self.path,yaw,delta)
+            self._reference_body_geometry=cache
+        _,yaw,delta=cache
+        heading=yaw[index]+fraction*delta[index]+(math.pi if self.direction<0 else 0.)
         return distance,heading
+
+    def _continuous_spin_target(self,state):
+        # 分段保留圈数与反向顺序，但同中心同向分段不是停车屏障。
+        current=self._stages[self._stage_index]
+        if current.direction!=0 or abs(current.spin_delta)<=1e-9:return self.path
+        end=self._stage_index
+        while end+1<len(self._stages):
+            following=self._stages[end+1]
+            if (following.direction!=0 or following.spin_delta*current.spin_delta<=0 or
+                    math.dist(current.path.points[-1],following.path.points[-1])>1e-8):break
+            end+=1
+        sign=1. if current.spin_delta>0 else -1.
+        at_center=math.dist((state.x_m,state.y_m),current.path.points[-1])<=self.policy.goal_position_tolerance_m
+        while self._stage_index<end and at_center:
+            start=current.path.final_yaw-current.spin_delta
+            offset=sign*angle(state.yaw_rad-start)
+            # 起点后方的反向偏差不是已经执行的旋转，不能由末端wrap符号跳段。
+            if offset<abs(current.spin_delta)-1e-9:break
+            self._stage_index+=1
+            current=self._stages[self._stage_index]
+            self.path=current.path
+        if self._stage_index==end:return self.path
+        start=current.path.final_yaw-current.spin_delta
+        remaining=(abs(current.spin_delta)-sign*angle(state.yaw_rad-start)+
+            sum(abs(stage.spin_delta) for stage in self._stages[self._stage_index+1:end+1]))
+        # 沿既有有序参考前视，最多四分之一圈，避免最短角目标反转或丢圈。
+        x,y=current.path.points[-1]
+        return Polyline(((x,y,state.yaw_rad+sign*min(math.pi/2,remaining)),))
 
     def _update_standard(self,state,dt,*,now_s=None,state_age_s=0.):
         if self._stop_reason is not None:
@@ -188,6 +208,8 @@ class StandardPathFollower(MppiPathFollower):
         if self._switch_brake:
             return self._stop(state,dt,now_s,state_age_s,switching=True)
         if self.path is None:return MppiExecutor.update(self,state,dt,now_s,state_age_s)
+        target=self._continuous_spin_target(state)
+        stage_path=self.path
         total=self._total_progress;previous=self._local_progress
         self.progress_m=previous
         policy=self.policy
@@ -195,8 +217,11 @@ class StandardPathFollower(MppiPathFollower):
         if self._stage_index+1<len(self._stages) and not (
                 self.execution_reference is not None and self.execution_reference.intent==3):
             self.policy=replace(policy,goal_position_tolerance_m=min(.005,policy.corner_position_tolerance_m))
+        self.path=target
         try:result=MppiExecutor.update(self,state,dt,now_s,state_age_s)
-        finally:self.policy=policy
+        finally:
+            self.policy=policy
+            self.path=stage_path
         self._local_progress=self.progress_m
         self._total_progress=total+max(0.,self._local_progress-previous)
         self.progress_m=self._total_progress
@@ -204,7 +229,6 @@ class StandardPathFollower(MppiPathFollower):
             if self._stage_index+1<len(self._stages):
                 self._stage_index+=1;self.path=self._stages[self._stage_index].path
                 self._local_progress=0.;self.phase='TRACKING';self.discard_prediction()
-                self._orient_progress_anchor(state)
             else:self.phase='WAITING'
             return self._result()
         if result.phase=='BRAKING' and self.failure is None:
@@ -248,7 +272,7 @@ class StandardPathFollower(MppiPathFollower):
         previous=self._stop_reason
         self.request_stop('WAITING_FOR_POSE')
         if previous is not None and previous not in (
-                'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH','WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+                'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH','WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'):
             self._stop_reason=previous
         self._retire_execution_geometry()
         self.phase='WAITING';self.last_execution_state=0
@@ -263,7 +287,7 @@ class StandardPathFollower(MppiPathFollower):
         # 独立检查完整停车尾部（含真实发布历史），实测零速本身不构成认证。
         if (not all(math.isfinite(v) for v in (state.x_m,state.y_m,state.yaw_rad,
                 state.linear_mps,state.angular_radps,state.lateral_mps,dt,state_age_s))
-                or dt<=0 or not 0<=state_age_s<=self.config.state_age_budget_s):return False
+                or dt<=0 or not self.config.accepts_state_age(state_age_s)):return False
         self._model_time=self._model_time if now_s is None else float(now_s)
         self._state_age_s=state_age_s
         return self.map is not None and bool(self._brake_safe(
@@ -337,7 +361,7 @@ class StandardPathFollower(MppiPathFollower):
                 new_session=active is None or active.session_id!=requested.session_id
                 extension=self._alignment_extension(state,geometry,active,requested)
                 continuous_align=extension is not None
-                recovering=self._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE')
+                recovering=self._stop_reason in ('WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE')
                 needs_stop=new_session or requested.intent!=0 or recovering
                 certified=(self._execution_certified(state,dt,now_s,state_age_s)
                     if needs_stop else True)
@@ -355,23 +379,18 @@ class StandardPathFollower(MppiPathFollower):
                             self._execution_retired.pop(next(iter(self._execution_retired)))
                     self._retire_execution_geometry()
                     self.failure=None;self._stop_reason=None
-                    self.no_progress_s=0.;self._last_pose=None;self._translation_credit_m=0.
                 if requested.intent!=0 and not continuous_align:
                     self._retire_execution_geometry()
                     if self._stop_reason in (None,'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH',
-                                             'WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+                                             'WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'):
                         self._stop_reason=None
                 if requested.intent==3 and not continuous_align:
                     # 退休旧平移屏障，保留新终端参考中的有序旋转和跨界方向。
                     x,y=geometry.points[-1][:2]
                     geometry=StandardPathReference(tuple((x,y,p[2]) for p in geometry.points),self.policy)
                 if requested.intent in (0,3) and not continuous_align:
-                    retired_geometry=self.path is None
                     self._pending=geometry
                     self._accept_pending(state)
-                    # 显式退休后的新阶段使用自己的物理比较锚；保留累计停滞
-                    # 时间，后续只有真实位移/角误差下降才能清钟。
-                    if retired_geometry:self._orient_progress_anchor(state)
                     if requested.intent==3:self.phase='FINAL_ALIGN'
                 if continuous_align:
                     # 固定当前stage与已执行前缀，仅重建未来同向表示片段。
@@ -380,7 +399,7 @@ class StandardPathFollower(MppiPathFollower):
                 self._execution_pending=None
                 # 只有配对参考实际接管才结束传输等待；手动停止与任务故障另行保留。
                 if requested.intent==0 and self._stop_reason in (
-                        'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH','WAITING_FOR_POSE','WAITING_FOR_FRESH_REFERENCE'):
+                        'EXECUTION_PAIR_WAIT','STALE_PATH','NO_PATH','WAITING_FOR_POSE','WAITING_FOR_MAP','WAITING_FOR_FRESH_REFERENCE'):
                     self._stop_reason=None
             if self.failure is not None:
                 result=self._stop(state,dt,now_s,state_age_s)

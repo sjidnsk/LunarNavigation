@@ -3,9 +3,9 @@ from dataclasses import dataclass
 from time import perf_counter
 import numpy as np
 
-from .contracts import LocalReference, WheelLimits
+from .contracts import LocalReference, WheelLimits, VehicleState
 from .maps import extract_window, DistanceFieldCache
-from .reference import extract_reference
+from .reference import extract_reference, project_progress, _arc_lengths, _point_at
 from .certification import certify, prepare_certification
 from .seeds import brake_candidate
 from .global_planner import AdaptiveGlobalPlanner, GoalCheck, _segment_clear
@@ -27,27 +27,33 @@ class CycleResult:
     global_result: object = None
     action: object = None
     action_certificate: object = None
+    reference_phase_s: object = None
 
 
 class NavigationCoordinator:
     def __init__(self, planner, *, runner=None, limits=None, backend=None,
-                 allow_unknown=False, local_period_s=.05, global_period_s=1.,
-                 global_budget_s=1., clearance_radius_m=.9, stall_timeout_s=4., field_backend=None,
-                 revalidate_current_map=False):
+                 allow_unknown=False, local_period_s=.05, global_period_s=15.,
+                 global_budget_s=1., clearance_radius_m=.9, field_backend=None,
+                 revalidate_current_map=False, reference_smoothing=False):
         self.planner = planner
         self.runner = GlobalWorker() if runner is None else runner
         self.limits = WheelLimits() if limits is None else limits
         self.backend = backend
         self.allow_unknown = allow_unknown
+        # 全局低频后台刷新；目标和参考失效事件无需等待周期。
         self.local_period_s, self.global_period_s = local_period_s, global_period_s
         self.global_budget_s = global_budget_s
         self.clearance_radius_m = self.limits.global_clearance_radius(clearance_radius_m)
-        self.stall_timeout_s = stall_timeout_s
         self.goal_tolerance_m = .1
         self.goal_position_target_m = None
         self.goal_yaw_tolerance_rad = .05
         self.stopped_linear_mps = self.stopped_angular_rps = .01
         self.route = self.progress = None
+        if type(reference_smoothing) is not bool:raise ValueError("reference_smoothing must be bool")
+        if reference_smoothing and not revalidate_current_map:
+            raise ValueError("reference smoothing requires current map revalidation")
+        self.reference_smoothing=reference_smoothing
+        self._raw_route=self._shaped_route=None
         self._goal = self._epoch = self._policy = None
         self._goal_yaw = None
         self.goal_revision = 0
@@ -55,9 +61,6 @@ class NavigationCoordinator:
         self._next_local = self._next_global = -float('inf')
         self._version = 0
         self._pending_reason = 'INITIAL'
-        self._motion = None
-        self._motion_s = 0.
-        self._stalled = False
         self._field_cache = DistanceFieldCache(backend=field_backend)
         self._goal_checker = AdaptiveGlobalPlanner(self.limits, self.clearance_radius_m)
         # 原型默认严格 epoch 身份；P3 持续更新地图时显式开启当前图重验。
@@ -86,7 +89,7 @@ class NavigationCoordinator:
         self._global_inflight = None
         self._pending_reason = 'GOAL_CHANGED'
 
-    def cancel_tick(self, world, state, now_s):
+    def cancel_tick(self, world, state, now_s, *, need_action=False):
         """只认证从当前实测状态开始的受限制动，绝不续发旧目标路径。"""
         grid = extract_window(world, state, self.allow_unknown)
         reference = LocalReference(-1, grid.epoch, [[state.x, state.y]], [0.], 0.)
@@ -94,8 +97,15 @@ class NavigationCoordinator:
         certificate = certify(candidate, grid, self.limits, -1, backend=self.backend)
         if not certificate.matches(candidate, grid, self.limits, -1):
             candidate = None
+        action = action_certificate = None
+        if candidate is not None and need_action:
+            action = action_prefix(candidate, state, getattr(self, 'execution_period_s', self.local_period_s))
+            action_certificate = certify(action, grid, self.limits, -1, backend=self.backend)
+            if not action_certificate.matches(action, grid, self.limits, -1):
+                action = None
         return CycleResult('CANCEL_BRAKING' if candidate is not None else 'NO_CERTIFIED_ACTION',
-                           candidate=candidate, certificate=certificate, grid=grid, reference=reference)
+                           candidate=candidate, certificate=certificate, grid=grid, reference=reference,
+                           action=action, action_certificate=action_certificate)
 
     def replace_goal(self, goal, *, goal_yaw=None, generation):
         """会话接收事件入口；相同最终位姿也不能复活较早代际的结果。"""
@@ -120,7 +130,6 @@ class NavigationCoordinator:
             self._goal, self._goal_yaw = goal, yaw
             self.route = self.progress = None
             self._pending_reason = 'GOAL_CHANGED'
-            self._motion = None
         if generation is not None:
             self._accepted_goal_generation = generation
 
@@ -138,7 +147,41 @@ class NavigationCoordinator:
             self._blocked_boxes = self._blocked_boxes + [-radius, -radius, radius, radius]
         return changed
 
-    def _route_clear(self, route):
+    @property
+    def raw_route(self):
+        # 缓存只能属于当前有效参考；等待/取消不能暴露已退休几何。
+        if self.route is None:return None
+        if self._shaped_route is not None and self._shaped_route.route is self.route:
+            return self._raw_route
+        return self.route
+
+    def _adopt_route(self, route, events, *, raw_verified=False):
+        shaped=None
+        if self.reference_smoothing:
+            from .reference_smoothing import shape_route
+            if not raw_verified and not self._route_clear(route):
+                raise ValueError("raw route collision")
+            shaped=shape_route(route,self._blocked_boxes,raw_verified=True)
+        self._raw_route,self._shaped_route=route,shaped
+        self.route=route if shaped is None else shaped.route
+        self.progress=None
+        if shaped is not None:
+            events.append(dict(kind='GLOBAL_REFERENCE_SHAPED',version=route.version,
+                map_epoch=route.map_epoch,changed=shaped.changed,reason=shaped.reason,
+                raw_points=len(route.points),reference_points=len(self.route.points)))
+
+    def _route_clear(self, route, *, start_s=None):
+        if start_s is not None:
+            # 当前参考执行的是采样折线；只检查从本次有界投影开始的剩余段。
+            # 新来源默认仍全验，整形构造的连续曲线凸包证明也不改变。
+            arc = _arc_lengths(route.points)
+            points = np.vstack((_point_at(route.points, arc, start_s),
+                                route.points[np.searchsorted(arc, start_s, side='right'):]))
+            return all(_segment_clear(a, b, self._blocked_boxes)
+                       for a, b in zip(points[:-1], points[1:]))
+        if self._shaped_route is not None and self._shaped_route.route is route:
+            from .reference_smoothing import reference_clear
+            return reference_clear(self._shaped_route,self._blocked_boxes)
         return all(_segment_clear(a, b, self._blocked_boxes) for a, b in zip(route.points[:-1], route.points[1:]))
 
     @staticmethod
@@ -161,48 +204,56 @@ class NavigationCoordinator:
                     abs(sum(np.linalg.norm(np.diff(incoming.points, axis=0), axis=1)) -
                         (projected[-1] - projected[0])) <= 1e-6)
 
+    def goal_reached(self, state):
+        """统一位姿/停稳判据；任务完成仍由P3新实测观测确认。"""
+        return (self._goal is not None and state is not None and
+                abs(state.v)<=self.stopped_linear_mps and abs(state.w)<=self.stopped_angular_rps and
+                np.hypot(state.x-self._goal[0],state.y-self._goal[1])<=self.goal_tolerance_m and
+                (self._goal_yaw is None or abs(angle_error(self._goal_yaw,state.yaw))<=self.goal_yaw_tolerance_rad))
+
     def _terminal_plan(self, state, grid, reference):
         yaw_satisfied = (self._goal_yaw is None or
                          abs(angle_error(self._goal_yaw, state.yaw)) <= self.goal_yaw_tolerance_rad)
-        stopped = abs(state.v) <= self.stopped_linear_mps and abs(state.w) <= self.stopped_angular_rps
         if yaw_satisfied:
-            # 低于停稳阈值仍有真实运动；到达状态不能紧接着被自身制动带出容差。
+            # 已有停稳阈值定义可接受的残余速度；不再用预测停车点
+            # 二次收紧完成范围，后续新实测越界仍会清除到达保持证据。
             candidate = brake_candidate(state, grid, reference, self.limits)
-            last = candidate.states[-1]
-            final_pose_satisfied = (
-                np.linalg.norm(last[:2] - self._goal) <= self.position_target_tolerance_m and
-                (self._goal_yaw is None or
-                 abs(angle_error(self._goal_yaw, last[2])) <= self.goal_yaw_tolerance_rad))
-            return candidate, 'ARRIVED' if stopped and final_pose_satisfied else 'GOAL_BRAKING'
+            arrived=self.goal_reached(state)
+            return candidate, 'ARRIVED' if arrived else 'GOAL_BRAKING'
         candidate = terminal_candidate(state, grid, reference, self.limits)
-        return candidate, 'GOAL_TURNING' if candidate.source == 'terminal-yaw:bounded' else 'GOAL_BRAKING'
+        return candidate, 'GOAL_TURNING' if candidate.source.startswith('terminal-yaw:bounded') else 'GOAL_BRAKING'
 
     def _update_route(self, world, state, goal, now_s, events, *, goal_yaw=None):
         """共享全局身份、目标检查与非阻塞路线调度；不执行局部求解。"""
         self._set_goal(goal, goal_yaw)
         goal = self._goal
-        blocked_changed = self._observe_world(world) if self.revalidate_current_map else False
+        blocked_changed = self._observe_world(world) if (self.revalidate_current_map or self.reference_smoothing) else False
         if world.epoch != self._epoch:
-            if not self.revalidate_current_map or blocked_changed:
+            if not self.revalidate_current_map:
                 self._pending_reason = 'MAP_CHANGED'
             events.append({'kind': 'MAP_CHANGED', 'epoch': world.epoch})
         if self.revalidate_current_map and blocked_changed and self.route is not None:
-            if not self._route_clear(self.route):
+            start_s = 0.
+            if self.progress is not None and self.progress.route_version == self.route.version:
+                try:
+                    start_s = project_progress(self.route, state, self.progress).s
+                except ValueError:
+                    # 非法进度不提供历史段豁免；后续extract_reference仍走原重入处理。
+                    pass
+            if not self._route_clear(self.route, start_s=start_s):
                 events.append({'kind': 'GLOBAL_CURRENT_MAP_REJECTED', 'version': self.route.version,
                                'requested_epoch': self.route.map_epoch, 'current_epoch': world.epoch})
                 self.route = self.progress = None
             else:
                 events.append({'kind': 'GLOBAL_CURRENT_MAP_REVALIDATED', 'version': self.route.version,
                                'requested_epoch': self.route.map_epoch, 'current_epoch': world.epoch})
+        if (self.revalidate_current_map and blocked_changed and self.route is None and
+                self._pending_reason not in ('INITIAL', 'GOAL_CHANGED')):
+            self._pending_reason = 'MAP_CHANGED'
         if self._policy is not None and self._policy != self.allow_unknown:
             events.append({'kind': 'UNKNOWN_POLICY_CHANGED', 'allow_unknown': self.allow_unknown})
         self._epoch, self._policy = world.epoch, self.allow_unknown
         motion = np.array([state.x, state.y, state.yaw, state.v, state.w])
-        if self._motion is None or np.linalg.norm(motion[:2]-self._motion[:2]) > .015 or abs(motion[2]-self._motion[2]) > .015 or np.linalg.norm(motion[3:]-self._motion[3:]) > .015:
-            self._motion, self._motion_s, self._stalled = motion, now_s, False
-        elif self.route is not None and now_s-self._motion_s >= self.stall_timeout_s and not self._stalled:
-            self._pending_reason, self._stalled = 'NO_PROGRESS', True
-            events.append({'kind': 'REPLAN_REQUIRED', 'reason': 'NO_PROGRESS'})
         global_result = None
         try:
             raw = self.runner.poll()
@@ -217,8 +268,7 @@ class NavigationCoordinator:
                         submitted['version'] != global_result['requested_version'] or
                         submitted['epoch'] != global_result['requested_epoch'] or
                         tuple(global_result['requested_goal']) != goal or
-                        (not self.revalidate_current_map and global_result['requested_epoch'] != world.epoch) or
-                        (self.revalidate_current_map and submitted.get('allow_unknown') != self.allow_unknown)):
+                        (not self.revalidate_current_map and global_result['requested_epoch'] != world.epoch)):
                     events.append({'kind': 'STALE_GLOBAL_RESULT', 'version': global_result['requested_version']})
                 elif route is not None:
                     current_clear = not self.revalidate_current_map or self._route_clear(route)
@@ -229,18 +279,22 @@ class NavigationCoordinator:
                     elif self.revalidate_current_map and route.map_epoch != world.epoch:
                         events.append({'kind': 'GLOBAL_CURRENT_MAP_REVALIDATED', 'version': route.version,
                                        'requested_epoch': route.map_epoch, 'current_epoch': world.epoch})
-                    # 同图周期重算保留现有路线，避免从移动起点裁短导致进度每秒清零。
+                    # 同几何前向后缀保留版本和进度；不同合法路线可接替。
                     keep = (self.route is not None and route is not None and
-                            ((self.revalidate_current_map and self._same_route_geometry(self.route, route)) or
+                            (self.revalidate_current_map and self._same_route_geometry(self.raw_route, route) or
                              (not self.revalidate_current_map and self.route.map_epoch == route.map_epoch and global_result.get('request_reason') == 'PERIODIC')))
                     if route is not None and not keep:
-                        self.route, self.progress = route, None
+                        self._adopt_route(route,events,raw_verified=True)
                         events.append({'kind': 'ROUTE_ACCEPTED', 'version': route.version, 'map_epoch': route.map_epoch, 'points': route.points.tolist()})
                     elif route is not None:
                         events.append({'kind': 'ROUTE_CONTINUITY_RETAINED', 'version': self.route.version, 'computed_version': route.version})
+                    if self.revalidate_current_map and route is not None and self._pending_reason == 'MAP_CHANGED':
+                        # 此结果已按最新障碍复验；在途地图事件无需再重复求解。
+                        self._pending_reason = None
                 else:
                     events.append({'kind': 'GLOBAL_FAILED', 'reason': global_result['reason_code']})
         except Exception as exc:
+            self._global_inflight = None
             events.append({'kind': 'GLOBAL_ERROR', 'reason': type(exc).__name__, 'detail': str(exc)})
         if (self.revalidate_current_map and self._cached_goal_check is not None and
                 not blocked_changed and self._goal_check_key == self.goal_revision):
@@ -249,21 +303,24 @@ class NavigationCoordinator:
             goal_check = (self._goal_checker.check_goal(world, goal) if self._goal_yaw is None else
                           check_pose_goal(world, goal, self._goal_yaw, self.limits))
             self._goal_check_key, self._cached_goal_check = self.goal_revision, goal_check
-        arrived_xy = np.linalg.norm(np.array(goal)-motion[:2]) <= self.position_target_tolerance_m
+        distance = np.linalg.norm(np.array(goal)-motion[:2])
+        # 移动时继续收敛到位置目标；验收范围内已停下则完成位置阶段，
+        # 避免P3厘米级波动反复把最终朝向切回起步对准。
+        arrived_xy = (distance <= self.position_target_tolerance_m or
+                      distance <= self.goal_tolerance_m and abs(motion[3]) <= self.stopped_linear_mps)
         global_due = now_s + 1e-9 >= self._next_global
-        coalesced_map_update = (self.revalidate_current_map and self.route is not None and
-                                self._pending_reason == 'MAP_CHANGED' and not global_due)
         if (goal_check.accepted and not arrived_xy and not self.runner.busy and
-                not coalesced_map_update and (self._pending_reason or global_due)):
+                (self._pending_reason or global_due)):
             reason = self._pending_reason or 'PERIODIC'
             self._version += 1
             request = make_request(world, motion[:2], goal, self._version, self.limits, self.clearance_radius_m, self.global_budget_s)
             request['request_reason'] = reason
+            # 每次尝试都消费事件并推进既有周期，submit异常也不能每tick重试。
+            self._pending_reason = None
+            self._next_global = now_s + self.global_period_s
             try:
                 self.runner.submit(request)
             except Exception as exc:
-                # 全局进程故障不打断本次执行；下次根据最新地图、目标与反馈重建请求。
-                self._pending_reason = reason
                 events.append({'kind': 'GLOBAL_SUBMIT_ERROR', 'reason': type(exc).__name__,
                                'detail': str(exc), 'request_reason': reason, 'version': self._version,
                                'epoch': world.epoch, 'goal': goal})
@@ -273,11 +330,10 @@ class NavigationCoordinator:
                                          'epoch': world.epoch, 'allow_unknown': self.allow_unknown,
                                          'accepted_generation': self._accepted_goal_generation}
                 self._pending_reason = None
-                self._next_global = now_s+self.global_period_s
                 events.append({'kind': 'GLOBAL_SUBMITTED', 'reason': reason, 'version': self._version})
         return goal_check, arrived_xy, motion, global_result
 
-    def tick(self, world, state, goal, now_s, *, goal_yaw=None):
+    def tick(self, world, state, goal, now_s, *, goal_yaw=None, need_action=True):
         started = perf_counter()
         self._set_goal(goal, goal_yaw)
         if now_s + 1e-9 < self._next_local:
@@ -302,6 +358,8 @@ class NavigationCoordinator:
             except ValueError as exc:
                 events.append({'kind': 'REFERENCE_REJECTED', 'reason': str(exc)})
                 self._pending_reason = 'REFERENCE_REENTRY'
+                if self.revalidate_current_map:
+                    self.route = self.progress = None
         timings['reference'] = (perf_counter()-stage)*1000
         candidate = certificate = None
         if not goal_check.accepted:
@@ -339,7 +397,7 @@ class NavigationCoordinator:
                 candidate = certificate = None
         timings['certification_identity'] = (perf_counter()-stage)*1000
         action = action_certificate = None
-        if candidate is not None:
+        if candidate is not None and need_action:
             stage = perf_counter()
             try:
                 action = action_prefix(candidate, state)
@@ -351,7 +409,7 @@ class NavigationCoordinator:
                 events.append({'kind': 'ACTION_REJECTED', 'reason': 'ACTION_PREFIX_INVALID', 'detail': str(exc)})
                 candidate = action = None
             timings['action_gate'] = (perf_counter()-stage)*1000
-        # 软周期只观测耗时；候选和前缀已独立认证，时间不能改变动作选择。
+        # 软周期只观测耗时；完整候选均须认证，离线消费动作时前缀另行认证。
         if candidate is None:
             stage = perf_counter()
             candidate = brake_candidate(state, grid, reference, self.limits)
@@ -361,7 +419,7 @@ class NavigationCoordinator:
                 candidate = None
                 status = 'NO_CERTIFIED_ACTION'
             action = action_certificate = None
-            if candidate is not None:
+            if candidate is not None and need_action:
                 action = action_prefix(candidate, state)
                 action_certificate = certify(action, grid, self.limits, version, backend=self.backend, context=context)
                 if not action_certificate.matches(action, grid, self.limits, version):

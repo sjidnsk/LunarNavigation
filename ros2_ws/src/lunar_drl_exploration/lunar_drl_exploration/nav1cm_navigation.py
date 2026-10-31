@@ -2,7 +2,7 @@
 from threading import Lock
 import math
 import time
-from .ros_messages import PolicyMapClient, NavigationResult, InfrastructureError, velocity_is_stopped
+from .ros_messages import PolicyMapClient, NavigationResult, InfrastructureError
 
 
 class Nav1cmNavigationAdapter(PolicyMapClient):
@@ -118,10 +118,13 @@ class Nav1cmNavigationAdapter(PolicyMapClient):
         if result.outcome==6:
             self._finish(result)
             raise InfrastructureError('navigation internal failure: '+result.reason_code)
-        if result.outcome in (0,5) and (time.monotonic()-self.pose_received_monotonic>1. or
-                                      not velocity_is_stopped(self.velocity)):
-            return None
         return self._finish(result)
+
+    @property
+    def terminal_stop_confirmed(self):
+        # nav1cm终态已包含导航owner的实际停稳确认，不从客户端旧速度重新推断。
+        return (not self.inflight and self.last_goal_result is not None and
+                self.last_goal_result.outcome in (0,5))
 
     def close(self):
         self.action.destroy();self.node.destroy_client(self.client)

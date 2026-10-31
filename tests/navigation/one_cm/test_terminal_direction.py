@@ -62,3 +62,24 @@ def test_direction_alignment_wraps_across_pi_by_shortest_turn():
     reference = ref(heading=-np.pi+.02, yaw=-np.pi+.1)
     assert select_mode(state, reference) == 'forward'
     assert travel_target_yaw(state, reference, 'forward', .8)-state.yaw == pytest.approx(.04)
+
+
+@pytest.mark.parametrize('direction,target', [('forward',0.),('reverse',np.pi)])
+def test_initial_direction_aligns_before_start_and_is_not_a_permanent_limit(direction,target):
+    reference=ref(length=2.,heading=0.,yaw=0.)
+    state=VehicleState(0.,0.,np.pi/2,0.,0.)
+    assert select_mode(state,reference,initial_travel_direction=direction)=='spin'
+    desired=travel_target_yaw(state,reference,'spin',.8,initial_travel_direction=direction)
+    assert abs(np.arctan2(np.sin(desired-target),np.cos(desired-target)))<1e-8
+    assert select_mode(VehicleState(0.,0.,target,0.,0.),reference,initial_travel_direction=direction)==direction
+    assert select_mode(VehicleState(0.,0.,target,.02,0.),reference,initial_travel_direction=direction)=='brake'
+    # 起步提示撤销后，既有双向模式选择恢复，不把选择当运动权限。
+    assert select_mode(VehicleState(0.,0.,np.pi,0.,0.),reference)=='reverse'
+    assert select_mode(VehicleState(0.,0.,0.,0.,0.),reference)=='forward'
+
+
+def test_initial_alignment_uses_existing_stopped_angular_condition():
+    state=VehicleState(0.,0.,0.,0.,.0001564915249)
+    reference=ref(length=2.,heading=0.,yaw=0.)
+    assert select_mode(state,reference,initial_travel_direction='forward',initial_stopped_angular_rps=.01)=='forward'
+    assert select_mode(state,reference,initial_travel_direction='forward',initial_stopped_angular_rps=.0001)=='spin'

@@ -38,16 +38,16 @@ def test_execution_ingress_overflow_latches_without_silent_drop(monkeypatch):
     assert C._drain_standard_execution(n) is False
 
 
-def test_source_expiry_rejected_before_executor_can_latch_invalid_state():
+def test_nonadvancing_feedback_rejected_before_executor_runs():
     reasons=[]
-    n=S(_odometry=object(),_odometry_received_at=0.,_odometry_timeout_s=4.5,
+    n=S(_odometry=object(),_odometry_received_at=6.,_odometry_advanced_at=0.,_odometry_timeout_s=4.5,
         _active=object(),_path_received_at=0.,_path_timeout_s=.35,_standard_state=object(),
-        _standard_state_ns=1_000_000_000,_last_control_ns=None,_input_is_stale=lambda *a:False,
+        _standard_state_ns=1_000_000_000,_last_control_ns=None,_input_is_stale=lambda received,limit:6.-received>limit,
         _standard_grid=lambda *a:object(),get_clock=lambda:S(now=lambda:S(nanoseconds=6_000_000_000)),
         _standard_unavailable=lambda reason,**kw:reasons.append(reason),
         _executor=S(request_stop=lambda *a:None,set_map=lambda *a:None,update=lambda *a,**k:pytest.fail('expired source reached executor')))
     C._tick_standard_path(n)
-    assert reasons==['stale_source_feedback']
+    assert reasons==['missing_or_stale_feedback']
 
 
 def test_path_and_reference_callbacks_receive_while_control_is_blocked(monkeypatch):
@@ -98,5 +98,5 @@ def test_configured_compute_envelope_is_used_by_full_brake_model():
     node=C()
     try:
         assert node._executor.config.compute_budget_s==.2
-        assert node._executor.config.state_age_budget_s==node._odometry_timeout_s
+        assert node._executor.config.state_age_budget_s is None
     finally:node.destroy_node();rclpy.shutdown()

@@ -1,5 +1,5 @@
 """P3 导航会话：无 ROS，目标校验与协调器始终由同一个 tick 线程写入。"""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .contracts import WorldSnapshot
 from .pose_goal import angle_error, check_pose_goal
@@ -13,6 +13,7 @@ class SessionPacket:
     result: object = None
     waiting: tuple = ()
     candidate: object = None
+    raw_route: object = None
 
 
 class NavigationSession:
@@ -22,6 +23,8 @@ class NavigationSession:
         self.accepted_generation = 0
         self.last_goal_rejection = None
         self.canceling = False
+        self.direct_control = False
+        self._arrival_evidence = None
 
     def set_world(self, world):
         self.world = world
@@ -47,6 +50,7 @@ class NavigationSession:
         self.accepted_generation += 1
         self.goal, self.last_goal_rejection = goal, None
         self.canceling = False
+        self._arrival_evidence = None
         # 显式代际使两次 tick 之间 A→B→A 也能使最初的 A 全部失效。
         self.coordinator.replace_goal((goal.x, goal.y), goal_yaw=goal.yaw,
                                       generation=self.accepted_generation)
@@ -57,21 +61,48 @@ class NavigationSession:
         self.goal, self.canceling = None, True
         self.coordinator.invalidate_goal(generation=self.accepted_generation)
 
-    def tick(self, now_s):
+    def arrival_current(self, packet):
+        # NOT_DUE不产生新证明；仅复用相同输入下上一份真实认证的终态。
+        evidence=self._arrival_evidence
+        if evidence is None or packet.waiting or packet.generation!=self.accepted_generation:return False
+        world,state,goal,generation,result=evidence
+        if (world is not self.world or state!=self.state or goal!=self.goal or
+                generation!=self.accepted_generation or
+                (packet.result is not result and getattr(packet.result,'status',None)!='NOT_DUE')):return False
+        return (self.coordinator.goal_reached(self.state) and result.status=='ARRIVED' and
+                result.candidate is not None and result.certificate is not None and
+                result.certificate.matches(result.candidate,result.grid,self.coordinator.limits,
+                                           result.candidate.route_version))
+
+    def tick(self, now_s, *, planning_state=None):
         if self.canceling and self.world is not None and self.state is not None:
-            result = self.coordinator.cancel_tick(self.world, self.state, now_s)
+            result = self.coordinator.cancel_tick(self.world, self.state, now_s, need_action=False)
             return SessionPacket(self.accepted_generation, result=result, candidate=result.candidate)
 
         waiting = tuple(name for name in ('world', 'state', 'goal') if getattr(self, name) is None)
         if waiting:
+            self._arrival_evidence=None
             return SessionPacket(self.accepted_generation, waiting=waiting)
-        result = self.coordinator.tick(self.world, self.state, (self.goal.x, self.goal.y),
-                                       now_s, goal_yaw=self.goal.yaw)
+        if hasattr(self.coordinator, 'velocity_reference'):
+            self.coordinator.velocity_reference = self.direct_control
+        # 规划可消费延迟补偿后的当前估计；self.state 始终保留 P3 实测。
+        state = planning_state if self.direct_control and planning_state is not None else self.state
+        result = self.coordinator.tick(self.world, state, (self.goal.x, self.goal.y),
+                                       now_s, goal_yaw=self.goal.yaw, need_action=False)
+        # 预测终态只能请求保持/制动；真实 P3 未到达不能提交任务完成证据。
+        if result.status == 'ARRIVED' and not self.coordinator.goal_reached(self.state):
+            result = replace(result, status='GOAL_BRAKING')
         candidate = result.candidate
-        if (candidate is None or result.certificate is None or
+        velocity_source = (self.direct_control and result.reference_phase_s is not None and
+                           result.status == 'BUFFER_EXECUTING')
+        if not velocity_source and (candidate is None or result.certificate is None or
                 not result.certificate.matches(candidate, result.grid, self.coordinator.limits, candidate.route_version)):
             candidate = None
-        return SessionPacket(self.accepted_generation, self.coordinator.route, result, candidate=candidate)
+        if result.status!='NOT_DUE':
+            self._arrival_evidence=((self.world,self.state,self.goal,self.accepted_generation,result)
+                                    if result.status=='ARRIVED' and candidate is not None else None)
+        return SessionPacket(self.accepted_generation, self.coordinator.route, result, candidate=candidate,
+                             raw_route=self.coordinator.raw_route)
 
     def publication_current(self, packet):
         return bool(packet.generation == self.accepted_generation and not packet.waiting and

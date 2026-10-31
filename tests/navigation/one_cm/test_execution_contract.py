@@ -126,14 +126,16 @@ def test_delayed_failure_of_previously_accepted_revision_is_not_lost():
     assert task.check_execution_fault(.4)=='DELAYED_FAILURE'
 
 
-def test_unaccepted_feedback_does_not_renew_acceptance_deadline():
+def test_unaccepted_feedback_keeps_communication_alive_without_acceptance():
     session,Goal=make_session(); task=NavigationTaskCoordinator(session)
     task.configure_execution_feedback(required=True)
     task.submit('a',Goal(0,3,0),0.)
     r=ref(task);task.register_execution_reference(r,0.)
     status=ExecutionStatus(r.session_id,1,r.path_digest,FOLLOW,0,False,1)
     assert task.offer_execution_status(status,1.9)
-    assert task.check_execution_fault(2.1)=='EXECUTION_FEEDBACK_TIMEOUT'
+    assert task.check_execution_fault(2.1) is None
+    assert task._execution_accepted_reference is None
+    assert task.check_execution_fault(3.91)=='EXECUTION_FEEDBACK_TIMEOUT'
 
 
 def test_action_uuid_identity_preserved_and_zero_bounds_rejected():
@@ -228,7 +230,9 @@ def test_pinned_reference_is_replaced_only_by_real_acceptance_and_reset_on_new_t
     task, reference, status = accepted_reference_after_catalog_rollover()
     newer = replace(status, revision=130, accepted=False, stamp_ns=141)
     assert task.offer_execution_status(newer, 6.6)
-    assert task.check_execution_fault(8.51) == 'EXECUTION_FEEDBACK_TIMEOUT'
+    assert task.check_execution_fault(8.51) is None
+    assert task._execution_accepted_reference is reference
+    assert task.check_execution_fault(8.61) == 'EXECUTION_FEEDBACK_TIMEOUT'
     assert task.offer_execution_status(replace(newer, accepted=True, stamp_ns=142), 6.7)
     assert not task.offer_execution_status(replace(status, stamp_ns=143), 6.8)
     assert not task.offer_execution_status(replace(status, state=5, stamp_ns=144), 6.9)
@@ -277,13 +281,13 @@ def test_matched_pose_wait_heartbeat_preserves_goal_without_faking_acceptance():
     waiting=ExecutionStatus(r.session_id,r.revision,r.path_digest,FOLLOW,0,False,1,'WAITING_FOR_POSE')
     assert task.offer_execution_status(waiting,3.)
     assert task.check_execution_fault(3.1) is None
-    assert task._execution_last_accepted is None
+    assert task._execution_accepted_reference is None
     assert task.active.outcome is None and session.goal.y==3
     assert task.check_execution_fault(5.1)=='EXECUTION_FEEDBACK_TIMEOUT'
     assert task.offer_execution_status(replace(waiting,stamp_ns=2),6.)
     assert task.offer_execution_status(replace(waiting,stamp_ns=3,reason='WAITING_FOR_FRESH_REFERENCE'),6.1)
     assert task.check_execution_fault(7.9) is None
-    assert task.check_execution_fault(8.1)=='EXECUTION_FEEDBACK_TIMEOUT'
+    assert task.check_execution_fault(8.10001)=='EXECUTION_FEEDBACK_TIMEOUT'
 
 
 def test_pose_wait_does_not_mask_real_failed_reference():
