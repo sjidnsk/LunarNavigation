@@ -4,7 +4,7 @@ from pathlib import Path
 from time import perf_counter, process_time
 import hashlib
 import numpy as np
-from .contracts import CellState, Trajectory, VehicleState
+from .contracts import CellState, Trajectory, VehicleState, circumscribed_radius
 from .maps import build_distance_field
 from .seeds import braking_prefix, join_trajectories, initial_seed, rollout
 from .pose_goal import angle_error, terminal_candidate
@@ -128,7 +128,7 @@ class MpccPlanner:
         if type(n) is not int or n < 1 or not np.isfinite(dt) or dt <= 0:
             raise ValueError('horizon requires positive integer n and finite positive dt')
         self.N, self.dt = n, float(dt)
-        self.model_fingerprint = hashlib.sha256(f'pose-terminal-clearance-v3:{self.N}:{self.dt.hex()}:{limits.digest()}'.encode()).hexdigest()[:12]
+        self.model_fingerprint = hashlib.sha256(f'pose-terminal-single-circle-v4:{self.N}:{self.dt.hex()}:{limits.digest()}'.encode()).hexdigest()[:12]
         try:
             import casadi as ca
             from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -142,10 +142,10 @@ class MpccPlanner:
         self._solvers={}
         # 零margin保留原三圆条带；非零margin用实际body外接圆的Minkowski膨胀，
         # 与global/follower同义，避免各条带矩形扩张在前缘重复保守。
-        # 保留固定22维参数/三个约束槽；中心圆重复不改变可行集合。
+        # 非零margin只生成一个中心圆；零margin保留历史三圆，布局参与模型版本。
         if limits.minimum_clearance_m > 0:
-            self.offsets=np.zeros(3)
-            self.radius=float(np.hypot(limits.body_length_m,limits.body_width_m)/2+limits.minimum_clearance_m)
+            self.offsets=np.zeros(1)
+            self.radius=circumscribed_radius(limits.body_length_m,limits.body_width_m,limits.minimum_clearance_m)
         else:
             self.offsets=np.array([-limits.body_length_m/3,0.,limits.body_length_m/3])
             self.radius=float(np.hypot(limits.body_length_m/6,limits.body_width_m/2))
@@ -155,8 +155,8 @@ class MpccPlanner:
             model=AcadosModel()
             model.name='nav1cm_'+mode+'_'+self.model_fingerprint
             x=ca.SX.sym('x',6); u=ca.SX.sym('u',3)
-            # route xy/tangent/s/yaw, previous controls, three affine circle clearances
-            p=ca.SX.sym('p',22)
+            # route xy/tangent/s/yaw、前次控制、每个实际圆的仿射净空、参考终点
+            p=ca.SX.sym('p',self.parameter_count)
             vm=x[3]+.5*u[0]*self.dt; wm=x[4]+.5*u[1]*self.dt
             ym=x[2]+.5*wm*self.dt
             model.x=x; model.u=u; model.p=p
@@ -170,7 +170,7 @@ class MpccPlanner:
             model.cost_expr_ext_cost+=.2*ca.sumsqr(u-p[6:9])
             model.cost_expr_ext_cost_e=tracking-2*x[5]
             hs=[]
-            for j in range(3):
+            for j in range(len(self.offsets)):
                 q=p[9+4*j:13+4*j]
                 hs.append(q[0]*x[0]+q[1]*x[1]+q[2]*x[2]+q[3])
             sign=-1 if mode=='reverse' else 1
@@ -178,7 +178,7 @@ class MpccPlanner:
                 hs += [sign*limits.curvature_inv_m*x[3]-x[4],sign*limits.curvature_inv_m*x[3]+x[4]]
             # 刹停距离不超过有效参考余量，终点自然减速。
             # 在 |v|<=vmax 内，vmax*|v|/(2a) 保守上界 v²/(2a)，且 RTI 不再低估凸制动项。
-            hs.append(p[21]-x[5]-sign*x[3]*limits.linear_speed_mps/(2*limits.linear_accel_mps2))
+            hs.append(p[-1]-x[5]-sign*x[3]*limits.linear_speed_mps/(2*limits.linear_accel_mps2))
             model.con_h_expr=ca.vertcat(*hs); model.con_h_expr_e=ca.vertcat(*hs)
             ocp.model=model; ocp.solver_options.N_horizon=self.N
             ocp.solver_options.tf=self.N*self.dt
@@ -205,10 +205,14 @@ class MpccPlanner:
             ocp.constraints.ubu=np.array([0. if mode=='spin' else amin,almax,0. if mode=='spin' else vmax])
             ocp.constraints.lh=np.zeros(len(hs)); ocp.constraints.uh=np.ones(len(hs))*1e6
             ocp.constraints.lh_e=ocp.constraints.lh.copy(); ocp.constraints.uh_e=ocp.constraints.uh.copy()
-            ocp.constraints.x0=np.zeros(6); ocp.parameter_values=np.zeros(22)
+            ocp.constraints.x0=np.zeros(6); ocp.parameter_values=np.zeros(self.parameter_count)
             ocp.code_export_directory=str(self.build_dir/mode)
             self._solvers[mode]=AcadosOcpSolver(ocp,json_file=str(self.build_dir/(mode+'.json')),verbose=False)
         self.build_ms=(perf_counter()-started)*1000
+
+    @property
+    def parameter_count(self):
+        return 9+4*len(self.offsets)+1
 
     def _parameters(self, states, controls, reference, field, target_yaw, end, *, mode="forward", initial_travel_direction=""):
         params=[]
@@ -224,14 +228,14 @@ class MpccPlanner:
             # spin仅对准行进车体方向/制动；moving在末段逐点平滑趋向最终车体yaw。
             # 方向选择已经体现在target_yaw中，最终yaw不再叠加倒车pi。
             yaw=z[2]+angle_error(desired_yaw,z[2])
-            p=np.zeros(22); p[:6]=[*xy,*tangent,s,yaw]
+            p=np.zeros(self.parameter_count); p[:6]=[*xy,*tangent,s,yaw]
             p[6:9]=controls[min(k,len(controls)-1)]
             for j,offset in enumerate(self.offsets):
                 cx=z[0]+offset*np.cos(z[2]); cy=z[1]+offset*np.sin(z[2])
                 d,gx,gy=field.sample(cx,cy)
                 gyaw=offset*(-gx*np.sin(z[2])+gy*np.cos(z[2]))
                 p[9+4*j:13+4*j]=[gx,gy,gyaw,d-self.radius-.003-gx*z[0]-gy*z[1]-gyaw*z[2]]
-            p[21]=end
+            p[-1]=end
             params.append(p)
         return params
 

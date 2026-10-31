@@ -44,6 +44,14 @@ class CertificationReason(str, Enum):
     BRAKING_LIMIT = "BRAKING_LIMIT"
 
 
+def circumscribed_radius(body_length_m, body_width_m, minimum_clearance_m=0.0):
+    """任意朝向车体外接圆加一次几何净空；不包含离散/执行数值余量。"""
+    length,width,clearance=map(float,(body_length_m,body_width_m,minimum_clearance_m))
+    if not all(np.isfinite((length,width,clearance))) or min(length,width)<=0 or clearance<0:
+        raise ValueError('body dimensions must be positive and clearance nonnegative')
+    return float(np.hypot(length,width)/2+clearance)
+
+
 @dataclass(frozen=True)
 class WheelLimits:
     body_length_m: float = 1.182
@@ -68,7 +76,7 @@ class WheelLimits:
     def global_clearance_radius(self, requested=None):
         # 零净空纯原型保留显式半车宽参考；生产非零净空采用任意yaw外接圆下限。
         base = self.body_width_m / 2
-        required = (np.hypot(self.body_length_m,self.body_width_m)/2 + self.minimum_clearance_m
+        required = (circumscribed_radius(self.body_length_m,self.body_width_m,self.minimum_clearance_m)
                     if self.minimum_clearance_m > 0 else base)
         radius = required if requested is None else float(requested)
         if not np.isfinite(radius) or radius < base:
