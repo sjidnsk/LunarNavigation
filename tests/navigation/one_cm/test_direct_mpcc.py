@@ -310,3 +310,65 @@ def test_online_worker_handover_keeps_finite_source_until_legal_replacement(inco
     if incoming=='fresh':
         assert any(e['kind']=='LOCAL_REFERENCE_ACCEPTED' for e in observed.events)
         assert not any(e['kind']=='LOCAL_CURRENT_MAP_REVALIDATED' for e in observed.events)
+
+
+def test_velocity_diagnostics_preserve_command_and_single_certification(monkeypatch):
+    from types import SimpleNamespace as S
+    import scripts.navigation.one_cm.nav1cm.execution as execution
+    import scripts.navigation.one_cm.nav1cm.certification as certification
+    from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits
+    from tests.navigation.one_cm.test_certification import free_grid
+    limits=WheelLimits(motion_model='differential_drive'); grid=free_grid()
+    state=VehicleState(0,0,0,0,0); u=np.array([[0.,.4,0.]])
+    full=Trajectory(grid.epoch,1,[0.,.2],rollout([0,0,0,0,0,0],u,.2),u,'spin','mpcc')
+    result=S(candidate=full,certificate=certification.certify(full,grid,limits,1),grid=grid,status='TRACKING')
+    calls=[]; original=certification.certify
+    def certify(*args,**kwargs):
+        calls.append(1); return original(*args,**kwargs)
+    monkeypatch.setattr(certification,'certify',certify)
+    kwargs=dict(reference_interval_s=.2,last_command=(0.,.06),elapsed_s=.05,command_hold_s=.1)
+    plain=execution.certified_velocity_command(result,state,limits,**kwargs)
+    diagnostics={}
+    observed=execution.certified_velocity_command(result,state,limits,diagnostics=diagnostics,**kwargs)
+    assert observed == plain
+    assert len(calls)==2
+    assert diagnostics['command_reject_reason'] is None
+    assert diagnostics['target_raw_vw'] == pytest.approx([0.,.08])
+    assert diagnostics['target_vw'] == pytest.approx([0.,.08])
+    assert diagnostics['issued_vw'] == pytest.approx(observed)
+    assert diagnostics['source_initial_vw'] == [0.,0.]
+    assert diagnostics['command_total_ms'] >= diagnostics['command_certification_ms'] >= 0
+    result.status='ARRIVED'
+    assert execution.certified_velocity_command(result,state,limits,diagnostics=diagnostics,**kwargs)==(0.,0.)
+    assert diagnostics['command_reject_reason']=='ARRIVED'
+    assert len(calls)==2
+    assert 'target_raw_vw' not in diagnostics
+
+
+@pytest.mark.parametrize('change,reason', [
+    ('missing','MISSING_RESULT_STATE_OR_CANDIDATE'),
+    ('brake','BRAKE_SOURCE'),('interval','INVALID_COMMAND_INTERVAL'),
+    ('phase','INVALID_REFERENCE_PHASE_OR_MODE'),('previous','INVALID_PREVIOUS_COMMAND'),
+    ('collision','ISSUED_CERTIFICATE_MISMATCH')])
+def test_velocity_diagnostic_rejection_reasons(change,reason):
+    from dataclasses import replace
+    from types import SimpleNamespace as S
+    from scripts.navigation.one_cm.nav1cm.execution import certified_velocity_command
+    from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits
+    from tests.navigation.one_cm.test_certification import free_grid
+    limits=WheelLimits(motion_model='differential_drive'); grid=free_grid()
+    state=VehicleState(0,0,0,0,0); u=np.array([[0.,.4,0.]])
+    full=Trajectory(grid.epoch,1,[0.,.2],rollout([0,0,0,0,0,0],u,.2),u,'spin','mpcc')
+    result=S(candidate=full,certificate=None,grid=grid,status='TRACKING',reference_phase_s=0.)
+    kwargs=dict(reference_interval_s=.2,last_command=(0.,.06),elapsed_s=.05,command_hold_s=.1)
+    if change=='missing': result=None
+    if change=='brake': result.candidate=replace(full,source='brake')
+    if change=='interval': kwargs['elapsed_s']=0.
+    if change=='phase': result.reference_phase_s=-1.
+    if change=='previous': kwargs['last_command']=1.
+    if change=='collision':
+        cells=grid.cells.copy(); cells[:]=1; result.grid=replace(grid,cells=cells)
+    diagnostic={}
+    assert certified_velocity_command(result,state,limits,diagnostics=diagnostic,**kwargs)==(0.,0.)
+    assert diagnostic['command_reject_reason']==reason
+    assert diagnostic['command_total_ms']>=0

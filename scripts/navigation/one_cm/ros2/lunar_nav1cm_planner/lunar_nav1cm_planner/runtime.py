@@ -98,7 +98,7 @@ class PlannerRuntime:
         self._last_issued_s=time.monotonic()
         self._command_prediction.issue(self._last_issued_s, command)
 
-    def _command(self, packet, command, source_stamp=None):
+    def _command(self, packet, command, source_stamp=None, diagnostics=None):
         if self.publish_command is None:
             return
         self._publish_issued(command)
@@ -109,7 +109,7 @@ class PlannerRuntime:
             reference_dt_s=self.reference_interval_s, previous_issued=self._command_previous,
             source_stamp_ns=source_stamp,
             source_age_s=None if source_stamp is None else
-                (self.ros_now_ns()-source_stamp)/1e9)))
+                (self.ros_now_ns()-source_stamp)/1e9, **(diagnostics or {}))))
 
     def _body_observation_time(self, now_s):
         if self.publish_command is None:return now_s
@@ -396,6 +396,7 @@ class PlannerRuntime:
             fault=self.tasks.check_execution_fault(now_s)
             if fault:self.tasks.fail_tracking(fault,now_s)
         # 本周期认证使用实际采样快照；终态观测仍可读取随后推进的定位。
+        p3_new_sample=odometry_sequence != self._observed_odometry_sequence
         proof_state=self.session.state
         if self.publish_command is not None and proof_state is not None and not self.session.canceling:
             proof_state=self._command_prediction.predict(now_s,self.session.coordinator.limits) or proof_state
@@ -472,7 +473,12 @@ class PlannerRuntime:
             for event in result.events:
                 if event['kind']=='LOCAL_RESULT':
                     self._notice('LOCAL_PLAN_STATUS',json.dumps(dict(reason=event.get('reason'),
-                        mode=event.get('candidate_mode'),attempt_reasons=[r.get('reason') for r in event.get('attempts',())]),sort_keys=True))
+                        mode=event.get('candidate_mode'),attempt_reasons=[r.get('reason') for r in event.get('attempts',())],
+                        attempt_seeds=[r.get('seed') for r in event.get('attempts',())],
+                        attempt_count=len(event.get('attempts',())),
+                        timings_ms=result.timings_ms,
+                        **{key:event.get(key) for key in ('request_identity','received_s','received_wall_s',
+                           'worker_start_wall_s','worker_finish_wall_s','worker_cpu_ms','field_reused')}),sort_keys=True))
                 if event['kind'] in ('GLOBAL_CURRENT_MAP_REVALIDATED', 'GLOBAL_CURRENT_MAP_REJECTED',
                                       'LOCAL_CURRENT_MAP_REVALIDATED', 'INITIAL_START_COMPLETED', 'GLOBAL_REFERENCE_SHAPED'):
                     self._notice(event['kind'], json.dumps(event, sort_keys=True))
@@ -485,6 +491,7 @@ class PlannerRuntime:
         # ROS 时间仅给本次 Path 定 t0；调度/轨迹年龄始终使用单调时钟。
         published_brake = False
         command=(0.,0.)
+        command_diagnostics={}
         if self.publish_command is not None:
             from nav1cm.execution import certified_velocity_command
             command_now=time.monotonic()
@@ -494,7 +501,9 @@ class PlannerRuntime:
                 command=certified_velocity_command(packet.result,proof_state,self.session.coordinator.limits,
                     reference_interval_s=self.reference_interval_s,last_command=self._last_issued_command,
                     elapsed_s=elapsed,command_hold_s=self.command_hold_s,
-                    backend=self.session.coordinator.backend)
+                    backend=self.session.coordinator.backend,diagnostics=command_diagnostics)
+            command_diagnostics.update(p3_new_sample=p3_new_sample,
+                source_identity=dict(getattr(self.session.coordinator.buffer, 'source_identity', {})))
         with self._condition:
             if (self._pose_timeout_s is not None and not self._pose_source_current(
                     self._odometry,self._odometry_received_s,time.monotonic())[0]):
@@ -520,7 +529,7 @@ class PlannerRuntime:
                     self.execution_context=(None if active is None else active.task_id,
                         self.session.accepted_generation if active is None else active.generation,intent)
                 self._command(packet,command if self.session.state is not None and
-                              self._pose_integrity_fault is None else (0.,0.), proof_stamp)
+                              self._pose_integrity_fault is None else (0.,0.), proof_stamp, command_diagnostics)
                 self.publish(data)
                 published_brake = packet.candidate is not None and packet.candidate.source == 'brake'
             elif self.publish_command is not None:

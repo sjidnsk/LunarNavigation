@@ -439,3 +439,23 @@ def test_direct_sampled_map_update_does_not_insert_zero_and_next_cycle_blocks():
     session.tick=tick
     runtime._tick_once(.05)
     assert commands[-1]==(0.,0.)
+
+
+def test_command_diagnostics_merge_into_existing_notice(monkeypatch):
+    import nav1cm.execution as execution
+    from nav1cm.contracts import VehicleState
+    runtime,session,*_=build_runtime(); notices=[]
+    runtime._notice=lambda kind,detail:notices.append((kind,detail))
+    runtime.configure_direct_control(lambda *command:None,command_hold_s=.1)
+    session.offer_state(VehicleState(0,0,0,0,0))
+    def command(result,state,*args,**kwargs):
+        kwargs['diagnostics'].update(target_vw=[.07,.03],command_reject_reason=None)
+        return (.07,.03)
+    monkeypatch.setattr(execution,'certified_velocity_command',command)
+    runtime.offer_goal(pose(0,3));runtime._tick_once(0.)
+    records=[json.loads(detail) for kind,detail in notices if kind=='MPCC_COMMAND']
+    assert len(records)==1
+    assert records[0]['target_vw']==[.07,.03]
+    assert records[0]['p3_new_sample'] is False
+    assert records[0]['source_identity']=={}
+    assert (records[0]['v'],records[0]['w'])==(.07,.03)
