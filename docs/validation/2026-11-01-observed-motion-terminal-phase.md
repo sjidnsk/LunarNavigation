@@ -25,3 +25,14 @@ P3 src/t3_voxelmap/src/voxelmap_node.cpp:402–412 发布前已有body=base_from
 先RED：预测5失败1通过、重复源1失败、缓存回查1失败，修复后相关47通过。阶段22项回归涵盖sync/async、实测与预测分离、目标/取消/generation复位、XY-only及完成验收。最终本机完整导航+受影响纯Python runtime1224通过95跳过；216隔离Humble相关70通过，规划器11/11 CTest通过。安装五产品源码SHA与冻结输入一致。独立复审批准。
 
 复测部署目录/home/yanfa/P4/build/observed-motion-20261101，不上传设计文档/数据/模型。用户明确由其在RViz重新选目标，不能重放旧目标。当前准备部署，真实P3末端驾驶尚未验收；Orin/真实车辆NOT_RUN。源码待本地提交、未合入/推送。
+
+
+## 部署与本轮实际到达
+
+产品提交8d55371已部署216，operator241655、navigation_task_node241727实际argv指向build/observed-motion-20261101/install；P3/车辆六进程PID不变。运行run/p4-20261101-131434-241655。用户明确在RViz重新选目标，未自动重放或发送目标。
+
+本轮用户目标(-11.849766731262207,-7.365363597869873)，yaw0.7803066067028689。P3实测位置误差1.570cm时只发生一次位置→最终朝向转换，此后没有回到位置阶段。约229.87秒后首次ARRIVED：位置8.061cm、yaw误差-3.784deg、v=-0.001926m/s、w=-0.004892rad/s，满足已有10cm/5deg/停稳。后续持续ARRIVED，复核位置8.250cm、yaw-1.558deg、v/w约1e-4，发布0/0。最终转向时位置变化仍存在，但未越10cm，阶段保持符合用户规则。
+
+首轮90秒采样1034控制周期均BUFFER_EXECUTING无制动状态，属于起步/行进片段；不能等同整次运行零制动。新目标首轮全路径自然到达已在P3/UE TCP环境确认；这仅一个目标，不能推广多目标、Orin或真实车辆。原始回执已归档本机observed-motion-replay-20261101/{deployment,installed-sha,arrival-receipt,latest-terminal-check,live-check-samples}.json，包测试控制台同期保留。
+
+处置：已提交并部署，待长期线合入，未推送。用户可继续用RViz选点；本轮不额外增加自动目标或修改其他目录。
