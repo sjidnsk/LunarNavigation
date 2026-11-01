@@ -46,3 +46,5 @@ bash /home/yanfa/P4/start_p4.sh
 每个组件前台运行，Ctrl+C正常退出。关闭view只退出窗口，不会关闭mapping。重启整套P3时使用新的共用run目录。运行日志/状态/生成配置均在P4/run，临时文件在P4/tmp，缓存在P4/.cache。TCP参数仍使用已生效的park初始模式；不会自动发送新任务或改变控制策略。capture只转发不保存数据。P3的模型和算法代码保持原位置读取，不复制或上传模型。
 
 本模板仅做Bash语法、Python语法、配置解析和静态路径核对；未启动进程，未验证ROS/Humble联调、GUI或实机，均为NOT_RUN。有效profile及车辆参数取自停机前配置，未调算法阈值。
+
+P3 monitor/view额外只读叠加原bundle的 `workspace/install_native/local_setup.bash` 和 `integration_demo/rviz_plugins/opt/ros/humble`；mapping、relay、capture、wheel不加载这些显示依赖。

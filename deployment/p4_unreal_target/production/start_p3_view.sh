@@ -7,6 +7,12 @@ run="$(realpath -m -- "$run")"
 if [[ "$(dirname -- "$run")" != /home/yanfa/P4/run || "$(basename -- "$run")" != p3-* ]]; then exit 2; fi
 source /home/yanfa/P4/config/p4_environment.sh
 source /home/yanfa/P3/lidar_visual_fusion/scripts/env.sh
+# 显示专用旧版消息/Python模块与RViz插件；只读叠加，不影响mapping组件。
+visual_bundle=/home/yanfa/P3/roma_t3_algorithm_bundle_20260825
+source "$visual_bundle/workspace/install_native/local_setup.bash"
+source /home/yanfa/P3/lidar_visual_fusion/scripts/env.sh
+export AMENT_PREFIX_PATH="$visual_bundle/integration_demo/rviz_plugins/opt/ros/humble:${AMENT_PREFIX_PATH:-}"
+export LD_LIBRARY_PATH="$visual_bundle/integration_demo/rviz_plugins/opt/ros/humble/lib:${LD_LIBRARY_PATH:-}"
 export ROS_DOMAIN_ID=57 ROS_LOCALHOST_ONLY=0
 export T3_VISUAL_RUNTIME="$run/visual"
 export ROS_HOME="$run/ros-home/view" ROS_LOG_DIR="$run/ros-log/view"
