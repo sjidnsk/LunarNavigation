@@ -226,7 +226,7 @@ def test_task_uses_observed_stop_tolerance_at_acceptance_edge():
     assert task.active.outcome == 'GOAL_REACHED'
 
 
-def test_new_observation_outside_acceptance_resets_arrival_hold():
+def test_position_drift_after_completion_does_not_reset_arrival_hold():
     session,Goal=make_session();task=task_api(session)
     task.submit('a',Goal(0,0,0),0.)
     session.offer_state(VehicleState(.09999,0,0,.009,0))
@@ -234,7 +234,7 @@ def test_new_observation_outside_acceptance_resets_arrival_hold():
     assert task.active.outcome is None
     session.offer_state(VehicleState(.1001,0,0,0,0))
     task.observe(session.tick(.4),.4)
-    assert task.active.outcome is None
+    assert task.active.outcome=='GOAL_REACHED'
 
 
 def test_certified_arrival_survives_not_due_but_not_new_world():

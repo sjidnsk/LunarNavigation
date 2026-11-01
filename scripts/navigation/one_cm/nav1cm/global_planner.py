@@ -87,7 +87,7 @@ def _segment_clear(a, b, boxes, corner_radius=0):
     return not bool(np.any(possible & (lo <= hi)))
 
 
-def _path_cost_python(points, hard_boxes, soft_clearance_m=.4, clearance_weight=.5, check=None, *, corner_radius=0):
+def _path_cost_python(points, hard_boxes, soft_clearance_m=.4, clearance_weight=1.0, check=None, *, corner_radius=0):
     """长度加硬碰撞边界外有限净空积分；仅用于偏好，绝不认证碰撞。
 
     corner_radius>0时距原矩形的距离减去圆半径，0保留AABB边界语义。
@@ -176,7 +176,7 @@ def _path_cost_python(points, hard_boxes, soft_clearance_m=.4, clearance_weight=
     return total
 
 
-def path_cost(points, hard_boxes, soft_clearance_m=.4, clearance_weight=.5, check=None, *, corner_radius=0):
+def path_cost(points, hard_boxes, soft_clearance_m=.4, clearance_weight=1.0, check=None, *, corner_radius=0):
     """可选原生偏好积分；无库/旧库/有界工作量超限时回退同公式Python参考。"""
     from .global_cost_native import load_cost_function
     soft,weight=float(soft_clearance_m),float(clearance_weight)
@@ -260,7 +260,7 @@ class AdaptiveGlobalPlanner:
     """
     def __init__(self, limits: WheelLimits, clearance_radius_m=None,
                  domain_margin_m=2.0, domain_bounds_m=None, max_nodes=200_000,
-                 soft_clearance_m=.4, clearance_weight=.5):
+                 soft_clearance_m=.4, clearance_weight=1.0):
         radius = limits.global_clearance_radius(clearance_radius_m)
         if not math.isfinite(radius) or radius < limits.body_width_m / 2:
             raise ValueError("clearance radius must be at least half vehicle width")
