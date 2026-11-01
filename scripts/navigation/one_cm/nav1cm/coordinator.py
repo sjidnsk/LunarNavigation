@@ -35,7 +35,7 @@ class NavigationCoordinator:
                  allow_unknown=False, local_period_s=.05, global_period_s=15.,
                  global_budget_s=1., clearance_radius_m=.75, field_backend=None,
                  revalidate_current_map=False, reference_smoothing=False,
-                 global_soft_clearance_m=.4, global_clearance_weight=.5):
+                 global_soft_clearance_m=.4, global_clearance_weight=1.0):
         for name,value in (("global_soft_clearance_m",global_soft_clearance_m),
                            ("global_clearance_weight",global_clearance_weight)):
             if isinstance(value,bool) or not np.isfinite(value) or value < 0:
@@ -221,7 +221,8 @@ class NavigationCoordinator:
         """统一位姿/停稳判据；任务完成仍由P3新实测观测确认。"""
         return (self._goal is not None and state is not None and
                 abs(state.v)<=self.stopped_linear_mps and abs(state.w)<=self.stopped_angular_rps and
-                np.hypot(state.x-self._goal[0],state.y-self._goal[1])<=self.goal_tolerance_m and
+                (self._goal_yaw is not None and self._position_completed or
+                 np.hypot(state.x-self._goal[0],state.y-self._goal[1])<=self.goal_tolerance_m) and
                 (self._goal_yaw is None or abs(angle_error(self._goal_yaw,state.yaw))<=self.goal_yaw_tolerance_rad))
 
     def _local_reference(self, world, state, grid):
@@ -354,17 +355,14 @@ class NavigationCoordinator:
         # 规划与认证继续使用state；终点阶段只由真实观测确认。
         observed = state if observed_state is None else observed_state
         distance = np.hypot(goal[0]-observed.x, goal[1]-observed.y)
-        # 位置目标与任务验收上限职责不同：不能在10cm边缘因暂时低速
-        # 就提前开始最终转向。已完成的位置阶段仅在越出验收范围时重开。
-        # 这一位历史属于现有目标；路线刷新和速度波动都不能将其清除。
+        # 同一目标的位置阶段只完成一次；进入最终转向后，位置漂移不重开行进。
+        # 该历史仍由新目标、目标替换或取消清除，地图/路线刷新不清除。
         if self._goal_yaw is None:
             # 无最终朝向的目标没有朝向阶段，保留既有位置/制动交接。
             arrived_xy = (distance <= self.position_target_tolerance_m or
                           distance <= self.goal_tolerance_m and abs(observed.v) <= self.stopped_linear_mps)
         else:
-            if distance > self.goal_tolerance_m:
-                self._position_completed = False
-            elif distance <= self.position_target_tolerance_m or self.goal_reached(observed):
+            if distance <= self.position_target_tolerance_m or self.goal_reached(observed):
                 self._position_completed = True
             arrived_xy = self._position_completed
         global_due = now_s + 1e-9 >= self._next_global

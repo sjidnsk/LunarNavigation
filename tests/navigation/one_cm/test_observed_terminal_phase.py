@@ -20,7 +20,7 @@ def test_position_entry_uses_observation(asynchronous, estimated_distance, obser
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-def test_completed_position_ignores_estimate_but_reopens_on_observed_exit(asynchronous):
+def test_completed_position_stays_completed_after_observed_drift(asynchronous):
     c = coordinator(asynchronous)
     c.goal_position_target_m = .02
     near = VehicleState(.0198, 0., 0., .02, 0.)
@@ -29,7 +29,7 @@ def test_completed_position_ignores_estimate_but_reopens_on_observed_exit(asynch
     retained = c.tick(world(), far, (0., 0.), .05, goal_yaw=1., observed_state=near)
     assert retained.reference.terminal_yaw == 1.
     reopened = c.tick(world(), near, (0., 0.), .1, goal_yaw=1., observed_state=far)
-    assert reopened.reference.terminal_yaw is None
+    assert reopened.reference.terminal_yaw == 1.
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -83,7 +83,7 @@ def test_xy_only_uses_observed_braking_decision_with_estimated_candidate(asynchr
     assert not c._position_completed
 
 
-def test_p3_session_keeps_final_yaw_until_real_position_exits():
+def test_p3_session_keeps_final_yaw_after_real_position_drift():
     session, Goal = make_session()
     session.direct_control = True
     session.coordinator.goal_position_target_m = .02
@@ -95,5 +95,5 @@ def test_p3_session_keeps_final_yaw_until_real_position_exits():
     assert session.tick(.05, planning_state=far).result.reference.terminal_yaw == 1.
     session.offer_state(far)
     packet = session.tick(.1, planning_state=near)
-    assert packet.result.reference.terminal_yaw is None
+    assert packet.result.reference.terminal_yaw == 1.
     assert not session.arrival_current(packet)

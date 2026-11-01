@@ -55,7 +55,7 @@ def create_resources(limits, capability, settings):
             global_period_s=settings['global_period_s'], global_budget_s=settings['global_budget_s'],
             clearance_radius_m=settings['clearance_radius_m'], revalidate_current_map=True,
             global_soft_clearance_m=settings.get('global_soft_clearance_m',.4),
-            global_clearance_weight=settings.get('global_clearance_weight',.5),
+            global_clearance_weight=settings.get('global_clearance_weight',1.0),
             reference_smoothing=settings['smooth_global_reference'],
             planner_options={'n': settings['horizon_steps'], 'dt': settings['horizon_dt_s']})
     except Exception:
@@ -103,7 +103,7 @@ class PlannerNode(Node):
             'map_frame': 'map', 'build_dir': os.environ.get('NAV1CM_BUILD_DIR', ''),
             'allow_unknown': False, 'smooth_global_reference': True, 'initial_travel_direction': '', 'planning_period_s': .1, 'execution_period_s': .05,
             'global_period_s': 15., 'global_budget_s': 1., 'clearance_radius_m': limits.global_clearance_radius(.75),
-            'global_soft_clearance_m': .4, 'global_clearance_weight': .5,
+            'global_soft_clearance_m': .4, 'global_clearance_weight': 1.0,
             'horizon_steps': 20, 'horizon_dt_s': .2,
             'goal_tolerance_m': .1, 'goal_position_target_m': .02, 'goal_yaw_tolerance_rad': .08726646259971647,
             'stopped_linear_mps': .01, 'stopped_angular_rps': .01,
