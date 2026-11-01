@@ -885,7 +885,8 @@ void Decide(const std::shared_ptr<Runtime>& runtime) {
     if (!runtime->latest_map || !runtime->task_boundary ||
         !runtime->pose_resolver.LatestPoseInMap()) {
       runtime->state = Status::WAITING_FOR_INPUT;
-      runtime->reason_code = "WAITING_FOR_INPUT";
+      runtime->reason_code = !runtime->latest_map ? "WAITING_FOR_MAP" :
+          !runtime->task_boundary ? "WAITING_FOR_REGION" : "WAITING_FOR_POSE_IN_MAP";
       PublishLocked(*runtime);
       return;
     }
@@ -1246,7 +1247,9 @@ void HandleTask(const std::weak_ptr<Runtime>& weak_runtime,
         runtime->completed_goal_count = 0U;
         runtime->minimum_decision_map_sequence.reset();
         runtime->state = Status::WAITING_FOR_INPUT;
-        runtime->reason_code = "WAITING_FOR_INPUT";
+        runtime->reason_code = !runtime->latest_map ? "WAITING_FOR_MAP" :
+            !runtime->pose_resolver.LatestPoseInMap() ? "WAITING_FOR_POSE_IN_MAP" :
+            "WAITING_FOR_INPUT";
         if (!runtime->active_goal && runtime->latest_map) {
           RefreshDecisionLocked(*runtime);
           decide = true;

@@ -740,6 +740,19 @@ TEST_F(IncrementalExplorationNodeTest, StartWithoutMapWaitsForInput) {
   EXPECT_EQ(server_->goal_count(), 0U);
 }
 
+TEST_F(IncrementalExplorationNodeTest, MissingTransformReportsMapPoseWaitAndRecovers) {
+  map_publisher_->publish(ExplorationMap(false));
+  odometry_publisher_->publish(Odometry());
+  task_publisher_->publish(StartTask());
+  ASSERT_TRUE(WaitFor([this] {
+    const auto status = LastStatus();
+    return status && status->reason_code == "WAITING_FOR_POSE_IN_MAP";
+  }));
+  EXPECT_EQ(server_->goal_count(), 0U);
+  tf_publisher_->publish(MapFromOdom());
+  ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 1U; }));
+}
+
 TEST_F(IncrementalExplorationNodeTest,
        RejectsEveryValueOutsideThePublishedThreeStateExplorationMap) {
   task_publisher_->publish(StartTask());
