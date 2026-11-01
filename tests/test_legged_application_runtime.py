@@ -34,7 +34,7 @@ def test_legged_uses_same_launch_graph_with_own_platform(monkeypatch):
     args = actions[0].launch_arguments
     assert Path(args['platform_config']).name == 'legged_orin.yaml'
     assert args['platform_selector'] == 'legged'
-    assert args['allow_unknown'] == 'false'
+    assert args['allow_unknown'] == 'true'
     assert args['control_backend'] == 'mpcc_cmd_vel'
     assert args['enable_controller'] == 'false'
     assert args['command_topic'] == '/Car/T5/Car_Cmd_Vel'
@@ -85,7 +85,31 @@ def test_native_terrain_uses_legged_evaluator_not_wheel():
     assert center(LeggedTerrainCapability(.4,.5,.3)) == 1
 
 
-def test_legged_configuration_is_unchanged_from_source():
+def test_legged_configuration_preserves_capability_except_unknown_policy():
     import subprocess
     original = subprocess.check_output(['git','show','ff75f52:config/legged_orin.yaml'])
-    assert (ROOT/'config/legged_orin.yaml').read_bytes() == original
+    expected = yaml.safe_load(original)
+    expected['capability']['unknown_is_traversable'] = True
+    assert yaml.safe_load((ROOT/'config/legged_orin.yaml').read_text(encoding='utf-8')) == expected
+
+
+def test_legged_unknown_policy_is_consistent_in_both_profiles():
+    for name in ('legged.yaml', 'legged_orin.yaml'):
+        doc = yaml.safe_load((ROOT/'config'/name).read_text(encoding='utf-8'))
+        assert doc['capability']['unknown_is_traversable'] is True
+
+
+def test_unknown_permission_does_not_relabel_map_or_allow_known_obstacles():
+    import numpy as np
+    from nav1cm.contracts import GridSnapshot
+    from nav1cm.certification import _CollisionContext
+    raw = np.array([[-1, 0, 1]], dtype=np.int8)
+    allowed = GridSnapshot(1, (0.,0.), .2, raw, True)
+    forbidden = GridSnapshot(1, (0.,0.), .2, raw, False)
+    yes = _CollisionContext.build(allowed)
+    no = _CollisionContext.build(forbidden)
+    assert not yes.has_hazard(0,0,1,1)
+    assert no.has_hazard(0,0,1,1)
+    assert yes.has_hazard(2,0,3,1)
+    np.testing.assert_array_equal(allowed.cells, raw)
+    assert allowed.cells[0,0] == -1

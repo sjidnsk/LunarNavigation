@@ -26,7 +26,7 @@ capability:
   maximum_gap_width_m: 0.3
   minimum_body_clearance_m: 0.3
   step_vertical_rate_mps: 0.1
-  unknown_is_traversable: false
+  unknown_is_traversable: true
   motion_primitives:
     - {primitive_id: forward, kind: FORWARD, body_frame_displacement_m: [0.2, 0.0, 0.0], yaw_change_rad: 0.0}
     - {primitive_id: backward, kind: BACKWARD, body_frame_displacement_m: [-0.2, 0.0, 0.0], yaw_change_rad: 0.0}

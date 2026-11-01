@@ -29,3 +29,10 @@ Humble/Orin/足式实机、DDS和车辆闭环未验证，不由静态测试推�
 处置：算法/足式适配合并c567237a，通用源帧修复5aac81e2；已快进合回app/orin-legged-vehicle（产品合并c567237a、共享修复5aac81e2，登记提交3c8d1116）。无push/PR，无分支或工作树删除；专题待授权回收。足式真实驱动、Orin部署/闭环、横移及足端动作NOT_RUN。
 
 最终核对：与轮式相比，共用全局/MPCC/认证/参考/任务及runtime源码相同，标准控制器源码也相同；有效源码差异仅5项足式适配（配置读取、节点圆半径缺省、native地形构造/包装）。公共源帧修复已落主线aed65c90、轮式95a08047、TCP fde8a16f；main重跑122项定向回归全部通过。所有相关工作树无未提交改动，不推送。
+
+## 后续：统一允许未知地形
+
+用户进一步要求TCP、轮式、足式都允许未知区域规划与通行。轮式正式wheel_navigation.allow_unknown=true与TCP launch_settings.allow_unknown=true已核实；足式legged/legged_orin的capability.unknown_is_traversable和legged_navigation.allow_unknown改为true，其他能力值不变。
+地图生成仍由源分辨率高程和足式intrinsic evaluator产生FREE/BLOCKED/UNKNOWN；缺少观测或邻域证据仍UNKNOWN，不填充高程、不伪造FREE。规划/局部距离场/认证仅按同一个allow_unknown决定是否将UNKNOWN视为禁止区域，已知BLOCKED不豁免。探索仍按实际三态识别前沿，不把未知算作已探索。
+当前intrinsic足式实现用局部坡度和起伏（30°/0.5m）共同判定，邻域不全时UNKNOWN。maximum_gap_width_m虽传入能力，但该格分类器未测量沟宽；minimum_body_clearance_m亦不作为intrinsic坡度/起伏判据。平面圆碰撞仍按原平台几何处理。不能把未知可行策略声称为已认证30cm跨沟/落脚能力；台阶坡面分离、支撑区与落脚建模需要单独讨论，不在本配置切片新增算法。
+验证：Windows176通过1跳过（新原生桥未在Windows构建）；Humble隔离包增量构建成功，新入口/原生能力/未知策略9通过，1项Git源身份检查仅在本机运行。实际正式P4/P3/Env_X未变，足式实机NOT_RUN。延续原专题及owner，本地提交并快进足式，不push、不部署。
