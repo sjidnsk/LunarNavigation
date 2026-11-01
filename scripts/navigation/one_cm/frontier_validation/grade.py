@@ -17,14 +17,18 @@ def grade(e):
     required=("graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received","sensor_timing","authoritative_identity")
     checks={k:bool(e["common"].get(k)) for k in required}
     yaw_tolerance=e.get("goal_yaw_tolerance_rad",.05)
-    if not math.isfinite(yaw_tolerance) or not 0<yaw_tolerance<=math.pi:raise ValueError("invalid goal yaw tolerance")
+    if yaw_tolerance not in (.05, math.radians(5.)):raise ValueError("invalid goal yaw tolerance")
     reached=e.get("reached",[])
     checks["actual_goal_reached"]=bool(reached) and all(
         r.get("uuid") and all(math.isfinite(r[k]) for k in ("xy_error","yaw_error","v","w","hold_s")) and
         r.get('sample_age_s',math.inf)<=.15 and r["xy_error"]<=.1+1e-9 and abs(r["yaw_error"])<=yaw_tolerance+1e-9 and abs(r["v"])<=.01+1e-9 and
         abs(r["w"])<=.01+1e-9 and r["hold_s"]>=.3-1e-9 and r["status"]==4 and r["outcome"]==0 for r in reached)
     if e["case"]=="frontier_progress":
-        checks.update(new_observations=e.get("observed_growth",0)>0,next_frontend_goal=e.get("distinct_goals",0)>=2)
+        next_goal=e.get('distinct_goals',0)>=2
+        if 'validation_settings' in e:
+            measured={r['uuid'] for r in reached}
+            next_goal=any(t['reached_uuid'] in measured for t in e.get('progress_transitions',[]))
+        checks.update(new_observations=e.get("observed_growth",0)>0,next_frontend_goal=next_goal)
     elif e["case"]=="blocked_wait_reselect":
         checks.pop("actual_goal_reached")
         checks.update(path_or_map_wait=e.get("waits",0)>0,actual_cancel_stop=e.get("canceled_stopped",0)>0,

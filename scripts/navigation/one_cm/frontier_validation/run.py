@@ -17,7 +17,7 @@ HERE=Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE))
 from fixtures import CASES,DECLARATION,measurement_mask,declaration,OBSTACLE_UPDATE_DECLARATION
 from grade import grade
-from acceptance import AcceptanceLedger
+from acceptance import AcceptanceLedger, progress_transitions
 
 def helper(name):
     spec=importlib.util.spec_from_file_location("independent_"+name,HERE.parent/"p3_path_validation"/(name+".py"))
@@ -91,16 +91,24 @@ def validation_settings(args):
     limits=dict(forward=.2,reverse=.2,angular=1.,acceleration=.5,braking=.5,yaw_acceleration=.5)
     if profile:
         import yaml
-        profile=str(Path(profile).resolve());cap=yaml.safe_load(Path(profile).read_text(encoding='utf-8'))['capability']
+        profile=str(Path(profile).resolve())
+        document=yaml.safe_load(Path(profile).read_text(encoding='utf-8'))
+        cap=document['capability']
+        if (document.get('platform')!='wheel' or cap.get('motion_model')!='differential_drive'
+                or cap.get('body_extent_m')!=[1.182,.818,1.29996]
+                or cap.get('footprint_xy_m')!=[[.591,.409],[.591,-.409],[-.591,-.409],[-.591,.409]]
+                or cap.get('minimum_clearance_m')!=.2):
+            raise ValueError('platform geometry incompatible with independent wheel plant')
         for name,key in [('forward','maximum_forward_speed_mps'),('reverse','maximum_reverse_speed_mps'),('angular','maximum_spin_rate_radps'),('acceleration','maximum_acceleration_mps2'),('braking','maximum_braking_deceleration_mps2'),('yaw_acceleration','maximum_yaw_acceleration_radps2')]:
             value=float(cap[key])
             if not math.isfinite(value) or value<=0:raise ValueError('invalid platform capability '+key)
             limits[name]=value
-    return dict(control_backend=backend,platform_config=profile,limits=limits,goal_yaw_tolerance_rad=math.radians(5.))
+    strategy='none' if args.case=='large_source_preflight' else 'frontier'
+    return dict(strategy=strategy,allow_unknown=False,initial_travel_direction='auto',control_backend=backend,platform_config=profile,limits=limits,goal_yaw_tolerance_rad=math.radians(5.))
 
 
 def launch_command(args,settings):
-    strategy='none' if args.case=='large_source_preflight' else 'frontier'
+    strategy=settings['strategy']
     launch=['ros2','launch','lunar_pure_exploration_ros','nav1cm_exploration.launch.py',
         'exploration_strategy:='+strategy,'enable_controller:=true','build_dir:='+str(Path(args.build_dir).resolve()),'coarse_resolution_m:=0.2', 'control_backend:='+settings['control_backend']]
     if settings['control_backend']=='mpcc_cmd_vel':launch += ['command_hold_s:=1.2','global_period_s:=15.0']
@@ -113,18 +121,33 @@ def launch_command(args,settings):
     return launch
 
 
-def backend_evidence(backend,identities,applied,policy,diagnostics,records):
+def backend_evidence(backend,identities,applied,policy,diagnostics,records,graph):
     """根据实际参与节点核对安装与输入证据；direct不需要MPPI诊断。"""
     planner=any('/install/lunar_nav1cm_planner/' in row['cmdline'] for row in identities)
     follower=any('/install/lunar_pure_wheeled_controller/' in row['cmdline'] for row in identities)
     source=bool(applied) and any(row['ready'] for row in policy)
+    expected='lunar_nav1cm_planner' if backend=='mpcc_cmd_vel' else 'lunar_pure_wheeled_controller'
+    nodes=graph.get('nodes',[])
+    publishers=graph.get('publishers',{}).get(TOPICS['cmd'],[])
+    owner=expected in nodes and [p['node_name'] for p in publishers]==[expected]
     if backend=='mpcc_cmd_vel':
-        return planner,source and any(row['kind']=='EXPLORATION_MAP' and row['counts'].get('0',0)>0 for row in records)
-    return planner and follower,source and any(row['data'].get('map_revision',0)>0 for row in diagnostics)
+        return planner and owner and not follower and 'lunar_pure_wheeled_controller' not in nodes,source and any(row['kind']=='EXPLORATION_MAP' and row['counts'].get('0',0)>0 for row in records)
+    return planner and follower and owner and 'lunar_nav1cm_planner' in nodes,source and any(row['data'].get('map_revision',0)>0 for row in diagnostics)
+
+
+def commands_in_bounds(records,limits):
+    for row in records:
+        if row['kind']=='COMMAND':
+            v,w=row['v'],row['w']
+            if not (math.isfinite(v) and math.isfinite(w) and
+                    -limits['reverse']-1e-6<=v<=limits['forward']+1e-6 and abs(w)<=limits['angular']+1e-6):
+                return False
+    return True
 
 
 def run(args):
     settings=validation_settings(args)
+    strategy=settings["strategy"]
     limits=settings["limits"]
     import numpy as np
     import rclpy
@@ -347,7 +370,7 @@ def run(args):
     last_graph=graphs[-1] if graphs else {};pubs=last_graph.get('publishers',{})
     graph_ok &= len(pubs.get(TOPICS['local'],[]))==1 and len(pubs.get(TOPICS['cmd'],[]))==1 and not pubs.get(TOPICS['goal_disabled']) and len(pubs.get(TOPICS['navigate']+'/_action/feedback',[]))==1
     # 安装身份由本次进程原始cmdline/native映射及外部逐文件receipt补证。
-    installed,source_received=backend_evidence(settings['control_backend'],process_identity,applied,policy,diagnostics,records)
+    installed,source_received=backend_evidence(settings['control_backend'],process_identity,applied,policy,diagnostics,records,last_graph)
     no_exceptions=exception is None and not any(s in text for s in ('Traceback (most recent call last)','TICK_ERROR','process has died'))
     odom_times=[r["t"] for r in records if r["kind"]=="ODOMETRY"]
     span=odom_times[-1]-odom_times[0] if len(odom_times)>1 else 0.
@@ -360,11 +383,11 @@ def run(args):
         if binding is None or r.get('requested_goal') is None or any(abs(a-b)>1e-9 for a,b in zip(binding.goal[:2],r['requested_goal'])):identity_ok=False
     common=dict(authoritative_identity=identity_ok,sensor_timing=timing_ok,graph=graph_ok,formal=any(r.get('planning_outcome')==0 and r.get('reason_code')=='PLAN_FOUND' and r.get('has_reference') is True for r in formal),
       motion=bool(states) and max(math.hypot(r['x'],r['y']) for r in states)>.3,
-      bounds=bool(states) and all(all(math.isfinite(r[k]) for k in ('x','y','yaw','v','w','a','alpha')) and -limits['reverse']-1e-6<=r['v']<=limits['forward']+1e-6 and abs(r['w'])<=limits['angular']+1e-6 and -limits['braking']-1e-6<=r['a']<=limits['acceleration']+1e-6 and abs(r['alpha'])<=limits['yaw_acceleration']+1e-6 for r in states),
+      bounds=bool(states) and commands_in_bounds(records,limits) and all(all(math.isfinite(r[k]) for k in ('x','y','yaw','v','w','a','alpha')) and -limits['reverse']-1e-6<=r['v']<=limits['forward']+1e-6 and abs(r['w'])<=limits['angular']+1e-6 and -limits['braking']-1e-6<=r['a']<=limits['acceleration']+1e-6 and abs(r['alpha'])<=limits['yaw_acceleration']+1e-6 for r in states),
       clearance=clear['pass'],cleanup=proc.returncode==0 and not termination and not remaining,
       installed=installed,no_exceptions=no_exceptions,
       source_received=source_received)
-    evidence=dict(validation_settings=settings,goal_yaw_tolerance_rad=settings["goal_yaw_tolerance_rad"],case=args.case,tf_mode=args.tf_mode,fixture_version=args.fixture_version,common=common,sensor_timing=timing,reached=reached,distinct_goals=len({tuple(r['pose']) for r in accepted_goals}),observed_growth=(observations[-1]['observed_cells']-observations[0]['observed_cells']) if observations else 0,
+    evidence=dict(progress_transitions=progress_transitions(text.splitlines()),validation_settings=settings,goal_yaw_tolerance_rad=settings["goal_yaw_tolerance_rad"],case=args.case,tf_mode=args.tf_mode,fixture_version=args.fixture_version,common=common,sensor_timing=timing,reached=reached,distinct_goals=len({tuple(r['pose']) for r in accepted_goals}),observed_growth=(observations[-1]['observed_cells']-observations[0]['observed_cells']) if observations else 0,
        waits=sum(r['message']['reason_code'] in ('WAITING_FOR_MAP','WAITING_FOR_PATH') for r in feedback),canceled_stopped=sum(r['reason']=='CANCELED_STOPPED' and r['status']==5 and measured_stopped_before(states,r['monotonic_s']) for r in results),
        cancel_while_moving=cancel_moving,no_goals_after_cancel=cancel_at is not None and not any(r['monotonic_s']>cancel_at+.1 for r in accepted_goals),
        formal=formal,applied=applied,clearance=clear,goals=accepted_goals,current_goal_observations=goals,results=results,acceptance_errors=ledger.errors,required_task_ids=sorted(required_ids),exception=exception,returncode=proc.returncode,termination=termination,
