@@ -65,14 +65,12 @@ def test_runtime_direct_ignores_duplicate_and_late_feedback(monkeypatch):
     assert runtime._odometry_received_s==6.
 
 
-def test_runtime_planning_estimate_keeps_measured_state(monkeypatch):
+def test_runtime_planning_uses_measured_state_without_extrapolation(monkeypatch):
     from test_runtime import build_runtime,pose
     runtime,session,_,_=build_runtime()
     runtime.configure_direct_control(lambda *a:None,command_hold_s=.1)
     s=VehicleState(0,0,0,.05,0)
     session.offer_state(s)
-    runtime._command_prediction.issue(0.,(.2,0.))
-    runtime._command_prediction.correct(s,1000000000,0.,1000000000)
     runtime.offer_goal(pose(0,3))
     calls=[]; original=session.tick
     def tick(now,**kwargs):
@@ -81,8 +79,7 @@ def test_runtime_planning_estimate_keeps_measured_state(monkeypatch):
         return original(now,**kwargs)
     monkeypatch.setattr(session,'tick',tick)
     runtime._tick_once(1.)
-    assert calls[0].x==pytest.approx(.05)
-    assert calls[0].v==pytest.approx(.05)
+    assert calls[0] is None
     assert session.state==s
 
 
@@ -155,7 +152,7 @@ def test_runtime_configures_platform_prepare_without_changing_issued_command():
                                      command_spin_prepare_s=3.)
     runtime._publish_issued((0.,.5))
     assert sent==[(0.,.5)]
-    assert runtime._command_prediction.spin_prepare_s==3.
+    assert not hasattr(runtime,"_command_prediction")
 
 
 def test_reapplied_same_source_cannot_change_position_completion_evidence(monkeypatch):

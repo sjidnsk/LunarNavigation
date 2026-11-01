@@ -19,7 +19,7 @@ def _topic_defaults():
 
 DEFAULTS = {'global_period_s': '15.0',
  'global_soft_clearance_m': '0.4',
- 'global_clearance_weight': '0.5',
+ 'global_clearance_weight': '1.0',
  'command_hold_s': '0.0',
  'command_spin_prepare_s': '0.0',
  'control_backend': 'path_mppi',

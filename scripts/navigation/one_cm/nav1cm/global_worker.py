@@ -10,7 +10,7 @@ from .global_planner import AdaptiveGlobalPlanner
 
 
 def make_request(world, start, goal, version, limits, clearance_radius_m=.75, budget_s=1., *,
-                 global_soft_clearance_m=.4, global_clearance_weight=.5):
+                 global_soft_clearance_m=.4, global_clearance_weight=1.0):
     return {'world': asdict(world), 'start': list(start), 'goal': list(goal),
             'version': version, 'limits': asdict(limits), 'clearance_radius_m': clearance_radius_m,
             'global_soft_clearance_m': global_soft_clearance_m,
@@ -25,7 +25,7 @@ def run_request(request):
                           tuple(CellRect(**r) for r in raw['known_free']))
     planner = AdaptiveGlobalPlanner(WheelLimits(**request['limits']), request['clearance_radius_m'],
         soft_clearance_m=request.get('global_soft_clearance_m', .4),
-        clearance_weight=request.get('global_clearance_weight', .5))
+        clearance_weight=request.get('global_clearance_weight', 1.0))
     result = planner.plan(world, request['start'], request['goal'], request['version'], request['budget_s'])
     payload = asdict(result)
     if result.route is not None:

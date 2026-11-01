@@ -63,7 +63,7 @@ def test_worker_request_preserves_soft_options_and_legacy_defaults(monkeypatch):
     assert captured[-1]==(.75,{'soft_clearance_m':.12,'clearance_weight':3.})
     request.pop('global_soft_clearance_m');request.pop('global_clearance_weight')
     with pytest.raises(Stop):global_worker.run_request(request)
-    assert captured[-1]==(.75,{'soft_clearance_m':.4,'clearance_weight':.5})
+    assert captured[-1]==(.75,{'soft_clearance_m':.4,'clearance_weight':1.0})
 
 
 @pytest.mark.parametrize('key',['global_soft_clearance_m','global_clearance_weight'])
@@ -98,7 +98,7 @@ def _launch_graph(monkeypatch,**values):
 
 
 @pytest.mark.parametrize('options,expected',[
-    ({},(.4,.5)),
+    ({},(.4,1.0)),
     ({'global_soft_clearance_m':'.12','global_clearance_weight':'3.'},(.12,3.)),
     ({'global_soft_clearance_m':'0','global_clearance_weight':'0'},(0.,0.))])
 def test_launch_passes_soft_options_only_to_navigation(monkeypatch,options,expected):
