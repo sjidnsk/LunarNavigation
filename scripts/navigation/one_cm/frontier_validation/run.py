@@ -68,12 +68,12 @@ def measured_stopped_before(rows, terminal_time):
     latest=latest_before(rows,terminal_time)
     return bool(latest is not None and terminal_time-latest['monotonic_s']<=.15 and abs(latest['v'])<=.01 and abs(latest['w'])<=.01)
 
-def held(rows,pose,terminal_time):
+def held(rows,pose,terminal_time,yaw_tolerance_rad=.05):
     start=None;endpoint=None
     for row in rows:
         if row['monotonic_s']>terminal_time:break
         xy=math.hypot(row['x']-pose[0],row['y']-pose[1]);yaw=motion.wrap(row['yaw']-pose[2])
-        valid=xy<=.1+1e-9 and abs(yaw)<=.05+1e-9 and abs(row['v'])<=.01+1e-9 and abs(row['w'])<=.01+1e-9
+        valid=xy<=.1+1e-9 and abs(yaw)<=yaw_tolerance_rad+1e-9 and abs(row['v'])<=.01+1e-9 and abs(row['w'])<=.01+1e-9
         start=(row['monotonic_s'] if start is None else start) if valid else None
         endpoint=dict(xy_error=xy,yaw_error=yaw,v=row['v'],w=row['w'],hold_s=0. if start is None else row['monotonic_s']-start,measured_at=row['monotonic_s'])
     if endpoint is None:return dict(xy_error=math.inf,yaw_error=math.inf,v=math.inf,w=math.inf,hold_s=0.,sample_age_s=math.inf)
@@ -81,7 +81,51 @@ def held(rows,pose,terminal_time):
     if endpoint['sample_age_s']>.15:endpoint['hold_s']=0.
     return endpoint
 
+def validation_settings(args):
+    """独立验证器声明实际后端与平台边界，不改变产品配置。"""
+    if args.case in ('blocked_wait_reselect','blocked_obstacle_update'):
+        raise ValueError('旧取消重选合同已废弃；当前等待保留目标，由状态机回归验证')
+    backend=getattr(args,'control_backend','path_mppi')
+    if backend not in ('path_mppi','mpcc_cmd_vel'):raise ValueError('invalid control backend')
+    profile=getattr(args,'platform_config',None)
+    limits=dict(forward=.2,reverse=.2,angular=1.,acceleration=.5,braking=.5,yaw_acceleration=.5)
+    if profile:
+        import yaml
+        profile=str(Path(profile).resolve());cap=yaml.safe_load(Path(profile).read_text(encoding='utf-8'))['capability']
+        for name,key in [('forward','maximum_forward_speed_mps'),('reverse','maximum_reverse_speed_mps'),('angular','maximum_spin_rate_radps'),('acceleration','maximum_acceleration_mps2'),('braking','maximum_braking_deceleration_mps2'),('yaw_acceleration','maximum_yaw_acceleration_radps2')]:
+            value=float(cap[key])
+            if not math.isfinite(value) or value<=0:raise ValueError('invalid platform capability '+key)
+            limits[name]=value
+    return dict(control_backend=backend,platform_config=profile,limits=limits,goal_yaw_tolerance_rad=math.radians(5.))
+
+
+def launch_command(args,settings):
+    strategy='none' if args.case=='large_source_preflight' else 'frontier'
+    launch=['ros2','launch','lunar_pure_exploration_ros','nav1cm_exploration.launch.py',
+        'exploration_strategy:='+strategy,'enable_controller:=true','build_dir:='+str(Path(args.build_dir).resolve()),'coarse_resolution_m:=0.2', 'control_backend:='+settings['control_backend']]
+    if settings['control_backend']=='mpcc_cmd_vel':launch += ['command_hold_s:=1.2','global_period_s:=15.0']
+    if settings['platform_config']:launch += ['platform_config:='+settings['platform_config']]
+    names={'map_topic':'grid','odometry_topic':'odom','tf_topic':'tf','tf_static_topic':'tf_static','action_name':'navigate','goal_topic':'goal_disabled',
+           'global_route_topic':'global','local_path_topic':'local','exploration_map_topic':'exploration_map','policy_map_service':'policy',
+           'task_topic':'task','status_topic':'status','command_topic':'cmd','diagnostics_topic':'diag'}
+    launch += [name+':='+TOPICS[key] for name,key in names.items()]
+    launch += [name+':='+PREFIX+'/'+name for name in ('current_goal_topic','frontiers_topic','task_boundary_topic','task_map_markers_topic','exploration_diagnostics_topic')]
+    return launch
+
+
+def backend_evidence(backend,identities,applied,policy,diagnostics,records):
+    """根据实际参与节点核对安装与输入证据；direct不需要MPPI诊断。"""
+    planner=any('/install/lunar_nav1cm_planner/' in row['cmdline'] for row in identities)
+    follower=any('/install/lunar_pure_wheeled_controller/' in row['cmdline'] for row in identities)
+    source=bool(applied) and any(row['ready'] for row in policy)
+    if backend=='mpcc_cmd_vel':
+        return planner,source and any(row['kind']=='EXPLORATION_MAP' and row['counts'].get('0',0)>0 for row in records)
+    return planner and follower,source and any(row['data'].get('map_revision',0)>0 for row in diagnostics)
+
+
 def run(args):
+    settings=validation_settings(args)
+    limits=settings["limits"]
     import numpy as np
     import rclpy
     from rclpy.node import Node
@@ -102,7 +146,7 @@ def run(args):
     assert os.environ.get('ROS_DISTRO')=='humble'
     output=Path(args.output).resolve();output.mkdir(parents=True,exist_ok=False)
     declared=declaration(args.fixture_version)
-    declared.update(tf_mode=args.tf_mode,identity_contract='exact TASK_ACCEPTED task_id/generation/map goal only; missing/conflicting binding fails qualification and forbids obstacle',terminal_contract='latest measurement before result receipt; continuous valid suffix to latest endpoint; freshness<=.15s; cancel uses latest sample')
+    declared.update(limits=settings["limits"],wait_policy="retain current navigation goal; no timed cancellation",validation_settings=settings,tf_mode=args.tf_mode,identity_contract='exact TASK_ACCEPTED task_id/generation/map goal only; missing/conflicting binding fails qualification and forbids obstacle',terminal_contract='latest measurement before result receipt; continuous valid suffix to latest endpoint; freshness<=.15s; cancel uses latest sample')
     if args.case=='blocked_obstacle_update':
         if args.fixture_version!='v1':raise ValueError('blocked_obstacle_update uses qualified progress v1 initial source')
         declared.pop('blocked',None)
@@ -116,15 +160,7 @@ def run(args):
     def emit(kind,**values):
         row=dict(kind=kind,monotonic_s=time.monotonic(),**values);records.append(row)
         stream.write(json.dumps(row,ensure_ascii=False,allow_nan=True)+'\n');stream.flush();return row
-    strategy='none' if args.case=='large_source_preflight' else 'frontier'
-    launch=['ros2','launch','lunar_pure_exploration_ros','nav1cm_exploration.launch.py',
-        'exploration_strategy:='+strategy,'enable_controller:=true','build_dir:='+str(Path(args.build_dir).resolve()),'coarse_resolution_m:=0.2',
-        'navigation_map_wait_timeout_s:='+('2.0' if args.case in ('blocked_wait_reselect','blocked_obstacle_update') else '30.0')]
-    names={'map_topic':'grid','odometry_topic':'odom','tf_topic':'tf','tf_static_topic':'tf_static','action_name':'navigate','goal_topic':'goal_disabled',
-           'global_route_topic':'global','local_path_topic':'local','exploration_map_topic':'exploration_map','policy_map_service':'policy',
-           'task_topic':'task','status_topic':'status','command_topic':'cmd','diagnostics_topic':'diag'}
-    launch += [name+':='+TOPICS[key] for name,key in names.items()]
-    launch += [name+':='+PREFIX+'/'+name for name in ('current_goal_topic','frontiers_topic','task_boundary_topic','task_map_markers_topic','exploration_diagnostics_topic')]
+    launch=launch_command(args,settings)
     emit('COMMAND_CONTRACT',argv=launch,domain=os.environ['ROS_DOMAIN_ID'],localhost=os.environ['ROS_LOCALHOST_ONLY'])
     console=(output/'launch.console.log').open('x')
     rclpy.init(args=[],signal_handler_options=SignalHandlerOptions.NO);node=Node('nav1cm_task3_independent_plant')
@@ -219,7 +255,7 @@ def run(args):
         while time.monotonic()-start<CASES[args.case]:
             now=time.monotonic();remaining=now-last;t=now-start
             while remaining>1e-9:
-                dt=min(.01,remaining);a=max(-.5,min(.5,(command[0]-state.v)/dt));alpha=max(-.5,min(.5,(command[1]-state.w)/dt))
+                dt=min(.01,remaining);a=max(-limits['braking'],min(limits['acceleration'],(command[0]-state.v)/dt));alpha=max(-limits['yaw_acceleration'],min(limits['yaw_acceleration'],(command[1]-state.w)/dt))
                 before=state;state=motion.integrate(state,a,alpha,dt);remaining-=dt
                 boxes=physical_boundary+([] if obstacle is None else [obstacle])
                 row=emit('STATE',t=t-remaining,x=state.x,y=state.y,yaw=state.yaw,v=state.v,w=state.w,a=a,alpha=alpha,
@@ -303,7 +339,7 @@ def run(args):
     reached=[]
     for row in results:
         if row['outcome']==0 and row['status']==4 and row['pose']:
-            reached.append(dict(uuid=row['uuid'],status=row['status'],outcome=row['outcome'],**held(states,row['pose'],row['monotonic_s'])))
+            reached.append(dict(uuid=row['uuid'],status=row['status'],outcome=row['outcome'],**held(states,row['pose'],row['monotonic_s'],settings['goal_yaw_tolerance_rad'])))
     obstacle_event=next((r for r in records if r['kind']=='OBSTACLE_ADDED'),None)
     boxes=lambda t:physical_boundary+([] if obstacle_event is None or t<obstacle_event['t'] else [obstacle_event['box']])
     clear=clearance.measure(states,boxes,.2)
@@ -311,7 +347,7 @@ def run(args):
     last_graph=graphs[-1] if graphs else {};pubs=last_graph.get('publishers',{})
     graph_ok &= len(pubs.get(TOPICS['local'],[]))==1 and len(pubs.get(TOPICS['cmd'],[]))==1 and not pubs.get(TOPICS['goal_disabled']) and len(pubs.get(TOPICS['navigate']+'/_action/feedback',[]))==1
     # 安装身份由本次进程原始cmdline/native映射及外部逐文件receipt补证。
-    installed=bool(process_identity) and any('/install/lunar_nav1cm_planner/' in r['cmdline'] for r in process_identity) and any('/install/lunar_pure_wheeled_controller/' in r['cmdline'] for r in process_identity)
+    installed,source_received=backend_evidence(settings['control_backend'],process_identity,applied,policy,diagnostics,records)
     no_exceptions=exception is None and not any(s in text for s in ('Traceback (most recent call last)','TICK_ERROR','process has died'))
     odom_times=[r["t"] for r in records if r["kind"]=="ODOMETRY"]
     span=odom_times[-1]-odom_times[0] if len(odom_times)>1 else 0.
@@ -324,11 +360,11 @@ def run(args):
         if binding is None or r.get('requested_goal') is None or any(abs(a-b)>1e-9 for a,b in zip(binding.goal[:2],r['requested_goal'])):identity_ok=False
     common=dict(authoritative_identity=identity_ok,sensor_timing=timing_ok,graph=graph_ok,formal=any(r.get('planning_outcome')==0 and r.get('reason_code')=='PLAN_FOUND' and r.get('has_reference') is True for r in formal),
       motion=bool(states) and max(math.hypot(r['x'],r['y']) for r in states)>.3,
-      bounds=bool(states) and all(all(math.isfinite(r[k]) for k in ('x','y','yaw','v','w','a','alpha')) and abs(r['v'])<=.200001 and abs(r['w'])<=1.000001 and abs(r['a'])<=.500001 and abs(r['alpha'])<=.500001 and (abs(r['v'])<1e-8 or abs(r['w'])<=abs(r['v'])+1e-7) for r in states),
+      bounds=bool(states) and all(all(math.isfinite(r[k]) for k in ('x','y','yaw','v','w','a','alpha')) and -limits['reverse']-1e-6<=r['v']<=limits['forward']+1e-6 and abs(r['w'])<=limits['angular']+1e-6 and -limits['braking']-1e-6<=r['a']<=limits['acceleration']+1e-6 and abs(r['alpha'])<=limits['yaw_acceleration']+1e-6 for r in states),
       clearance=clear['pass'],cleanup=proc.returncode==0 and not termination and not remaining,
       installed=installed,no_exceptions=no_exceptions,
-      source_received=bool(applied) and any(r['ready'] for r in policy) and any(r['data'].get('map_revision',0)>0 for r in diagnostics))
-    evidence=dict(case=args.case,tf_mode=args.tf_mode,fixture_version=args.fixture_version,common=common,sensor_timing=timing,reached=reached,distinct_goals=len({tuple(r['pose']) for r in accepted_goals}),observed_growth=(observations[-1]['observed_cells']-observations[0]['observed_cells']) if observations else 0,
+      source_received=source_received)
+    evidence=dict(validation_settings=settings,goal_yaw_tolerance_rad=settings["goal_yaw_tolerance_rad"],case=args.case,tf_mode=args.tf_mode,fixture_version=args.fixture_version,common=common,sensor_timing=timing,reached=reached,distinct_goals=len({tuple(r['pose']) for r in accepted_goals}),observed_growth=(observations[-1]['observed_cells']-observations[0]['observed_cells']) if observations else 0,
        waits=sum(r['message']['reason_code'] in ('WAITING_FOR_MAP','WAITING_FOR_PATH') for r in feedback),canceled_stopped=sum(r['reason']=='CANCELED_STOPPED' and r['status']==5 and measured_stopped_before(states,r['monotonic_s']) for r in results),
        cancel_while_moving=cancel_moving,no_goals_after_cancel=cancel_at is not None and not any(r['monotonic_s']>cancel_at+.1 for r in accepted_goals),
        formal=formal,applied=applied,clearance=clear,goals=accepted_goals,current_goal_observations=goals,results=results,acceptance_errors=ledger.errors,required_task_ids=sorted(required_ids),exception=exception,returncode=proc.returncode,termination=termination,
@@ -361,5 +397,6 @@ def run(args):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--case',required=True,choices=CASES);p.add_argument('--fixture-version',default="v1",choices=("v1","v2"));p.add_argument('--output',required=True);p.add_argument('--build-dir',required=True);p.add_argument('--tf-mode',default='paired',choices=('paired','static_only_latched'))
+    p.add_argument('--control-backend',default='path_mppi',choices=('path_mppi','mpcc_cmd_vel'));p.add_argument('--platform-config')
     return run(p.parse_args())
 if __name__=='__main__':sys.exit(main())

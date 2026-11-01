@@ -193,3 +193,47 @@ def test_all_cross_topic_orders_wait_for_authoritative_exact_binding(order):
     ledger.observe_frontend_goal([-100.,100.,1.])
     assert ledger.observe_uuid(old).goal==(-1.,0.,0.)
     assert ledger.observe_uuid(new).goal==(3.,4.,.5) and ledger.current.task_id==new
+
+
+def runner_module():
+    import sys
+    spec=spec_from_file_location("frontier_control_test",FILE.with_name("run.py"))
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module);return module
+
+
+def test_current_terminal_five_degrees_is_explicit_without_changing_history():
+    import math
+    e=evidence();e['reached'][0]['yaw_error']=math.radians(4.)
+    assert not load().grade(e)['pass_']
+    e['goal_yaw_tolerance_rad']=math.radians(5.)
+    assert load().grade(e)['pass_']
+    e['reached'][0]['yaw_error']=math.radians(5.01)
+    assert not load().grade(e)['pass_']
+
+
+def test_direct_validation_commands_preserve_private_topics_and_platform(tmp_path):
+    from types import SimpleNamespace as S
+    import yaml
+    profile=tmp_path/'wheel.yaml'
+    profile.write_text(yaml.safe_dump({'capability':dict(maximum_forward_speed_mps=.2,maximum_reverse_speed_mps=.2,maximum_spin_rate_radps=.1,maximum_acceleration_mps2=.5,maximum_braking_deceleration_mps2=.5,maximum_yaw_acceleration_radps2=.5)}),encoding='utf-8')
+    m=runner_module();args=S(case='frontier_progress',build_dir=str(tmp_path/'cache'),control_backend='mpcc_cmd_vel',platform_config=str(profile))
+    settings=m.validation_settings(args);command=m.launch_command(args,settings)
+    assert 'control_backend:=mpcc_cmd_vel' in command and 'command_hold_s:=1.2' in command
+    assert 'platform_config:='+str(profile.resolve()) in command
+    assert 'command_topic:=/nav1cm_task3/cmd' in command
+    assert not any('navigation_map_wait_timeout_s' in a for a in command)
+    assert settings['limits']['angular']==.1
+
+
+def test_direct_evidence_requires_actual_map_input_not_absent_mppi_diagnostics():
+    m=runner_module();identities=[{'cmdline':'/task/install/lunar_nav1cm_planner/navigation_task_node'}]
+    received=[{'kind':'EXPLORATION_MAP','counts':{'0':12}}]
+    assert m.backend_evidence('mpcc_cmd_vel',identities,[{'epoch':1}],[{'ready':True}],[],received)==(True,True)
+    assert m.backend_evidence('mpcc_cmd_vel',identities,[],[{'ready':True}],[],received)==(True,False)
+    assert m.backend_evidence('path_mppi',identities,[{'epoch':1}],[{'ready':True}],[],received)==(False,False)
+
+
+def test_obsolete_wait_cancel_qualification_is_rejected_before_ros():
+    from types import SimpleNamespace as S
+    with pytest.raises(ValueError,match='等待保留'):
+        runner_module().validation_settings(S(case='blocked_wait_reselect',control_backend='path_mppi',platform_config=None))
