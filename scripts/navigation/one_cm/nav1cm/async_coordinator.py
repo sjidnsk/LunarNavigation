@@ -4,7 +4,6 @@ from time import perf_counter, process_time
 import numpy as np
 from .contracts import LocalReference
 from .maps import extract_window
-from .reference import extract_reference
 from .certification import certify, prepare_certification
 from .seeds import brake_candidate
 from .execution import action_prefix
@@ -257,7 +256,7 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         # 末端单点参考绑定当前目标朝向，不再受旧路线进度或出窗位置影响。
         if self.route is not None and not arrived_xy:
             try:
-                reference, self.progress = extract_reference(self.route, state, grid, self.progress, terminal_yaw=self._goal_yaw)
+                reference = self._local_reference(world, state, grid)
             except ValueError as exc:
                 events.append({'kind': 'REFERENCE_REJECTED', 'reason': str(exc)})
                 self._pending_reason = 'REFERENCE_REENTRY'

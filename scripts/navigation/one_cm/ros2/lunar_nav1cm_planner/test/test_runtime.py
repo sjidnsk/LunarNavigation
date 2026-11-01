@@ -198,7 +198,7 @@ def test_brake_diagnostic_marks_missing_events_and_nonfinite_values():
 
 
 def test_published_brake_logs_reference_rejection_once_and_diagnostics_cannot_break_publish(monkeypatch):
-    import nav1cm.async_coordinator as coordinator
+    import nav1cm.coordinator as coordinator
     from nav1cm.global_worker import run_request
     class ImmediateGlobal:
         pending = None

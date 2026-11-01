@@ -1,11 +1,11 @@
 """只组合地图、全局参考、MPCC 和认证；tick 只输出离线动作数据。"""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 import numpy as np
 
-from .contracts import LocalReference, WheelLimits, VehicleState
+from .contracts import CellState, LocalReference, WheelLimits, VehicleState
 from .maps import extract_window, DistanceFieldCache
-from .reference import extract_reference, project_progress, _arc_lengths, _point_at
+from .reference import extract_reference, project_progress, _arc_lengths, _point_at, TERMINAL_APPROACH_DISTANCE_M
 from .certification import certify, prepare_certification
 from .seeds import brake_candidate
 from .global_planner import AdaptiveGlobalPlanner, GoalCheck, _segment_clear
@@ -212,6 +212,41 @@ class NavigationCoordinator:
                 np.hypot(state.x-self._goal[0],state.y-self._goal[1])<=self.goal_tolerance_m and
                 (self._goal_yaw is None or abs(angle_error(self._goal_yaw,state.yaw))<=self.goal_yaw_tolerance_rad))
 
+    def _local_reference(self, world, state, grid):
+        """末段从当前状态收敛位置；不把沿线投影到头当作实际到达。"""
+        reference, self.progress = extract_reference(
+            self.route, state, grid, self.progress, terminal_yaw=self._goal_yaw)
+        distance = float(np.hypot(state.x-self._goal[0], state.y-self._goal[1]))
+        remaining = float(reference.s[-1]-reference.progress_s)
+        if (distance > TERMINAL_APPROACH_DISTANCE_M or
+                remaining > TERMINAL_APPROACH_DISTANCE_M or
+                not np.array_equal(reference.points[-1], self._goal)):
+            return reference
+        # 任务最终yaw仍保存在导航owner；未到位置时，局部参考只负责位置收敛。
+        reference = replace(reference, terminal_yaw=None)
+        if distance <= 1e-12:
+            return reference
+        self._observe_world(world)
+        xy = np.asarray((state.x, state.y))
+        # 复用现有闭边界线段几何，不越过已知膨胀障碍；实际轨迹仍须完整认证。
+        if not _segment_clear(xy, self._goal, self._blocked_boxes):
+            return reference
+        if not grid.allow_unknown:
+            # 仅检查候选直连附近未知格；不把原可用绕行参考换成穿未知的弦。
+            radius = self.clearance_radius_m
+            origin = np.asarray(grid.origin_xy)
+            shape = np.asarray(grid.cells.shape[::-1])
+            low = np.maximum(0, np.floor((np.minimum(xy, self._goal)-radius-origin)/grid.resolution_m).astype(int)-1)
+            high = np.minimum(shape, np.floor((np.maximum(xy, self._goal)+radius-origin)/grid.resolution_m).astype(int)+2)
+            rows, cols = np.nonzero(grid.cells[low[1]:high[1],low[0]:high[0]] == CellState.UNKNOWN)
+            lower = origin + np.column_stack((cols+low[0],rows+low[1]))*grid.resolution_m
+            boxes = np.column_stack((lower-radius,lower+grid.resolution_m+radius))
+            if not _segment_clear(xy, self._goal, boxes):
+                return reference
+        start_s = reference.progress_s
+        return LocalReference(reference.route_version, grid.epoch,
+                              [xy, self._goal], [start_s, start_s+distance], start_s)
+
     def _terminal_plan(self, state, grid, reference):
         yaw_satisfied = (self._goal_yaw is None or
                          abs(angle_error(self._goal_yaw, state.yaw)) <= self.goal_yaw_tolerance_rad)
@@ -355,7 +390,7 @@ class NavigationCoordinator:
         # 到达位置后直接按当前目标车体朝向转向，旧路线进度和截窗不能覆盖末端参考。
         if self.route is not None and not arrived_xy:
             try:
-                reference, self.progress = extract_reference(self.route, state, grid, self.progress, terminal_yaw=self._goal_yaw)
+                reference = self._local_reference(world, state, grid)
             except ValueError as exc:
                 events.append({'kind': 'REFERENCE_REJECTED', 'reason': str(exc)})
                 self._pending_reason = 'REFERENCE_REENTRY'
