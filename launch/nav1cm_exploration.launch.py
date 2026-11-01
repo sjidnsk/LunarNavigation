@@ -30,7 +30,7 @@ DEFAULTS = {
     "map_qos_reliability": "reliable", "map_qos_durability": "volatile",
     "p3_map_timeout_s": "3.0", "odometry_timeout_s": "0.5", "mppi_time_steps": "40",
     "mppi_compute_envelope_s": "0.05", "initial_travel_direction": "",
-    "coarse_resolution_m": "0.2", "navigation_map_wait_timeout_s": "30.0",
+    "coarse_resolution_m": "0.2",
 }
 
 def _compose(context):
@@ -103,8 +103,7 @@ def _compose(context):
         actions.append(node("lunar_pure_exploration_ros", "incremental_exploration_node", {
             **shared_policy, **{k: values[k] for k in ("current_goal_topic","frontiers_topic","task_boundary_topic","task_map_markers_topic")},
             "diagnostics_topic": values["exploration_diagnostics_topic"], "platform_selector": "wheel", "navigation_action": values["action_name"],
-            "exploration_map_topic": values["exploration_map_topic"],
-            "navigation_map_wait_timeout_s": float(values["navigation_map_wait_timeout_s"])}))
+            "exploration_map_topic": values["exploration_map_topic"]}))
     elif strategy == "drl":
         actions.append(node("lunar_drl_exploration", "lunar_drl_inference_node", {
             **shared_policy, "navigation_backend": "nav1cm", "actor_path": values["drl_actor"],

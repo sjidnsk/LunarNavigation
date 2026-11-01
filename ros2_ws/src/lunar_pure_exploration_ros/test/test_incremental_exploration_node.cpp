@@ -245,7 +245,7 @@ class FakeNavigationServer final {
     result->reason_code = reason_code;
     if (outcome == Action::Result::GOAL_REACHED) {
       active->succeed(result);
-    } else if (outcome == Action::Result::CANCELED) {
+    } else if (outcome == Action::Result::CANCELED && active->is_canceling()) {
       active->canceled(result);
     } else {
       active->abort(result);
@@ -262,7 +262,6 @@ class FakeNavigationServer final {
 
 class IncrementalExplorationNodeTest : public ::testing::Test {
  protected:
-  virtual double MapWaitTimeoutSeconds() const { return -1.0; }
   virtual bool UseSimTime() const { return false; }
   virtual bool StaticOnlyBeforeFrontendStart() const { return false; }
   virtual void ConfigureParameters(IncrementalExplorationNodeParameters&) {}
@@ -279,10 +278,6 @@ class IncrementalExplorationNodeTest : public ::testing::Test {
     server_ = std::make_unique<FakeNavigationServer>(
         *server_node_, parameters_.navigation_action);
     std::vector<rclcpp::Parameter> node_parameters{{"use_sim_time", UseSimTime()}};
-    if (MapWaitTimeoutSeconds() >= 0.0) {
-      node_parameters.emplace_back("navigation_map_wait_timeout_s",
-                                   MapWaitTimeoutSeconds());
-    }
     node_parameters.emplace_back("tf_static_topic", parameters_.tf_topic + "_static");
     if (StaticOnlyBeforeFrontendStart()) {
       static_publisher_ = observer_->create_publisher<tf2_msgs::msg::TFMessage>(
@@ -541,7 +536,6 @@ class IncrementalExplorationNodeTest : public ::testing::Test {
 
 class IncrementalExplorationMapWaitTest : public IncrementalExplorationNodeTest {
  protected:
-  double MapWaitTimeoutSeconds() const override { return 45.0; }
   bool UseSimTime() const override { return true; }
 
   void SetUp() override {
@@ -568,66 +562,75 @@ class IncrementalExplorationMapWaitTest : public IncrementalExplorationNodeTest 
     server_->PublishFeedback(Action::Feedback::PLANNING, "WAITING_FOR_MAP");
     ASSERT_TRUE(WaitFor([this, before_feedback] {
       const auto status = LastStatus();
-      return StatusCount() > before_feedback && status &&
-             status->reason_code == "NAVIGATION_WAITING_FOR_MAP";
+      if (StatusCount() > before_feedback && status &&
+          status->reason_code == "NAVIGATION_WAITING_FOR_MAP") {
+        return true;
+      }
+      server_->PublishFeedback(Action::Feedback::PLANNING, "WAITING_FOR_MAP");
+      return false;
     }));
   }
 
-  void TriggerMapWaitTimeout() {
-    WaitForMapFeedback();
-    SetClock(145);
-    ASSERT_TRUE(WaitFor([this] { return server_->cancel_count() == 1U; }));
-  }
 
   rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock_publisher_;
 };
 
-class IncrementalExplorationDisabledMapWaitTest
-    : public IncrementalExplorationMapWaitTest {
- protected:
-  double MapWaitTimeoutSeconds() const override { return 0.0; }
-};
-
-class IncrementalExplorationDefaultMapWaitTest
-    : public IncrementalExplorationMapWaitTest {
- protected:
-  double MapWaitTimeoutSeconds() const override { return -1.0; }
-};
-
-TEST_F(IncrementalExplorationDefaultMapWaitTest,
-       DefaultThirtySecondsCancelsOnlyAtDeadline) {
-  EXPECT_DOUBLE_EQ(node_->get_parameter("navigation_map_wait_timeout_s").as_double(), 30.0);
-  Start(false);
-  WaitForMapFeedback();
-  SetClock(129);
-  EXPECT_FALSE(WaitFor([this] { return server_->cancel_count() != 0U; }, 100ms));
-  SetClock(130);
-  ASSERT_TRUE(WaitFor([this] { return server_->cancel_count() == 1U; }));
-  EXPECT_EQ(server_->goal_count(), 1U);
-  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
-}
-
-TEST_F(IncrementalExplorationNodeTest, RejectsInvalidMapWaitTimeout) {
-  for (const double timeout : {-1.0, std::numeric_limits<double>::infinity(),
-                               std::numeric_limits<double>::quiet_NaN()}) {
-    EXPECT_THROW(std::make_shared<IncrementalExplorationNode>(
-                     parameters_, rclcpp::NodeOptions{}.enable_rosout(false).parameter_overrides({
-                                      {"navigation_map_wait_timeout_s", timeout}})),
-                 std::invalid_argument);
-  }
-}
-
-TEST_F(IncrementalExplorationDisabledMapWaitTest,
-       ExplicitZeroDisablesTimeoutCancellation) {
+TEST_F(IncrementalExplorationMapWaitTest, LongInputWaitRetainsOwnedGoal) {
   Start(false);
   WaitForMapFeedback();
   SetClock(10000);
-  EXPECT_FALSE(WaitFor([this] { return server_->cancel_count() != 0U; }, 150ms));
+  EXPECT_FALSE(WaitFor([this] { return server_->cancel_count() != 0U; }, 200ms));
+  EXPECT_EQ(server_->goal_count(), 1U);
+  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
   EXPECT_EQ(LastStatus()->reason_code, "NAVIGATION_WAITING_FOR_MAP");
+}
+
+TEST_F(IncrementalExplorationNodeTest, PoseWaitRetainsOwnedGoalAndReportsReason) {
+  Start();
+  server_->PublishFeedback(Action::Feedback::PLANNING, "WAITING_FOR_POSE");
+  ASSERT_TRUE(WaitFor([this] {
+    if (LastStatus()->reason_code == "NAVIGATION_WAITING_FOR_POSE") {
+      return true;
+    }
+    server_->PublishFeedback(Action::Feedback::PLANNING, "WAITING_FOR_POSE");
+    return false;
+  }));
+  EXPECT_EQ(server_->goal_count(), 1U);
+  EXPECT_EQ(server_->cancel_count(), 0U);
+  server_->PublishFeedback(Action::Feedback::EXECUTING, "EXECUTING");
   EXPECT_EQ(server_->goal_count(), 1U);
 }
 
-TEST_F(IncrementalExplorationDisabledMapWaitTest,
+TEST_F(IncrementalExplorationNodeTest, ManualReplacementPausesUntilResume) {
+  Start();
+  server_->Finish(Action::Result::CANCELED, "GOAL_REPLACED");
+  ASSERT_TRUE(WaitFor([this] { return LastStatus()->state == Status::PAUSED; }));
+  map_publisher_->publish(ExplorationMap());
+  EXPECT_FALSE(WaitFor([this] { return server_->goal_count() > 1U; }, 200ms));
+  EXPECT_EQ(LastStatus()->reason_code, "GOAL_REPLACED");
+  task_publisher_->publish(Command(Task::RESUME));
+  ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 2U; }));
+}
+
+TEST_F(IncrementalExplorationNodeTest, GenericTimeoutPausesWithoutRejectingCandidate) {
+  Start();
+  const auto first = server_->goal(0U);
+  server_->Finish(Action::Result::TIMEOUT, "EXECUTION_TIMEOUT");
+  ASSERT_TRUE(WaitFor([this] { return LastStatus()->state == Status::PAUSED; }));
+  EXPECT_EQ(LastStatus()->reason_code, "EXECUTION_TIMEOUT");
+  map_publisher_->publish(ExplorationMap());
+  EXPECT_FALSE(WaitFor([this] { return server_->goal_count() > 1U; }, 200ms));
+  task_publisher_->publish(Command(Task::RESUME));
+  ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 2U; }));
+  EXPECT_DOUBLE_EQ(server_->goal(1U).target_x_m, first.target_x_m);
+  EXPECT_DOUBLE_EQ(server_->goal(1U).target_y_m, first.target_y_m);
+  EXPECT_DOUBLE_EQ(server_->goal(1U).target_yaw_rad, first.target_yaw_rad);
+}
+
+
+
+
+TEST_F(IncrementalExplorationMapWaitTest,
        FrontierAddsAndDeletesUseMapFrameAndCurrentSimulationStamp) {
   using Marker = visualization_msgs::msg::Marker;
   Start(false);
@@ -655,70 +658,8 @@ TEST_F(IncrementalExplorationDisabledMapWaitTest,
   }
 }
 
-TEST_F(IncrementalExplorationMapWaitTest,
-       TimeoutWaitsForCanceledTerminalBeforeSuppressingAndReselecting) {
-  Start(false);
-  const auto first = server_->goal(0U);
-  WaitForMapFeedback();
-  SetClock(144);
-  EXPECT_FALSE(WaitFor([this] { return server_->cancel_count() != 0U; }, 100ms));
-  SetClock(145);
-  ASSERT_TRUE(WaitFor([this] { return server_->cancel_count() == 1U; }));
-  ASSERT_TRUE(WaitFor([this] {
-    return LastStatus()->reason_code == "NAVIGATION_MAP_WAIT_TIMEOUT_CANCELING";
-  }));
-  server_->PublishFeedback(Action::Feedback::EXECUTING, "EXECUTING");
-  SetClock(1000);
-  EXPECT_FALSE(WaitFor([this] { return server_->goal_count() != 1U; }, 100ms));
-  EXPECT_EQ(LastStatus()->reason_code, "NAVIGATION_MAP_WAIT_TIMEOUT_CANCELING");
-  EXPECT_EQ(LastStatus()->failed_candidate_count, 0U);
-  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
-  const auto before_terminal = StatusCount();
-  server_->Finish(Action::Result::CANCELED, "CANCELED");
-  ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 2U; }));
-  EXPECT_FALSE(SameNavigationPose(first, server_->goal(1U)));
-  EXPECT_EQ(LastStatus()->failed_candidate_count, 1U);
-  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
-  EXPECT_TRUE(HasStatusReasonPrefixSince(before_terminal,
-                                        "NAVIGATION_MAP_WAIT_TIMEOUT"));
-}
 
-TEST_F(IncrementalExplorationMapWaitTest,
-       IdenticalMapReceiptsAndRepeatedWaitingFeedbackDoNotResetTimeout) {
-  Start(false);
-  WaitForMapFeedback();
-  SetClock(140);
-  auto map = ExplorationMap(false);
-  map.header.stamp.sec = 140;
-  map_publisher_->publish(map);
-  ASSERT_TRUE(WaitFor([this] { return map_sequence_.load() == 2U; }));
-  WaitForMapFeedback();
-  SetClock(145);
-  EXPECT_TRUE(WaitFor([this] { return server_->cancel_count() == 1U; }));
-}
 
-TEST_F(IncrementalExplorationMapWaitTest,
-       ChangedMapEvidenceAndExecutingFeedbackResetContinuousWait) {
-  Start(false);
-  WaitForMapFeedback();
-  SetClock(140);
-  auto map = ExplorationMap(false);
-  map.data.front() = 0;
-  map_publisher_->publish(map);
-  ASSERT_TRUE(WaitFor([this] { return map_sequence_.load() == 2U; }));
-  SetClock(145);
-  EXPECT_FALSE(WaitFor([this] { return server_->cancel_count() != 0U; }, 100ms));
-  SetClock(170);
-  server_->PublishFeedback(Action::Feedback::EXECUTING, "EXECUTING");
-  ASSERT_TRUE(WaitFor([this] {
-    return LastStatus()->reason_code == "NAVIGATION_EXECUTING";
-  }));
-  SetClock(300);
-  EXPECT_FALSE(WaitFor([this] { return server_->cancel_count() != 0U; }, 100ms));
-  WaitForMapFeedback();
-  SetClock(345);
-  EXPECT_TRUE(WaitFor([this] { return server_->cancel_count() == 1U; }));
-}
 
 TEST_F(IncrementalExplorationMapWaitTest,
        PauseAndResumeDoNotConvertTheirPendingCancellationIntoMapTimeout) {
@@ -740,40 +681,12 @@ TEST_F(IncrementalExplorationMapWaitTest,
   EXPECT_EQ(LastStatus()->failed_candidate_count, 0U);
 }
 
-TEST_F(IncrementalExplorationMapWaitTest,
-       ReplacementTaskDoesNotInheritPendingTimeoutFailure) {
-  Start(false);
-  const auto first = server_->goal(0U);
-  TriggerMapWaitTimeout();
-  task_publisher_->publish(StartTask("replacement"));
-  ASSERT_TRUE(WaitFor([this] { return LastStatus()->task_id == "replacement"; }));
-  EXPECT_EQ(server_->goal_count(), 1U);
-  server_->Finish(Action::Result::CANCELED, "CANCELED");
-  ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 2U; }));
-  EXPECT_TRUE(SameNavigationPose(first, server_->goal(1U)));
-  EXPECT_EQ(LastStatus()->failed_candidate_count, 0U);
-  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
-}
 
-TEST_F(IncrementalExplorationMapWaitTest,
-       MapChangeDuringCancellationDoesNotRecordObsoleteTimeoutEvidence) {
-  Start(false);
-  const auto first = server_->goal(0U);
-  TriggerMapWaitTimeout();
-  auto map = ExplorationMap(false);
-  map.data.front() = 0;
-  map_publisher_->publish(map);
-  ASSERT_TRUE(WaitFor([this] { return map_sequence_.load() == 2U; }));
-  server_->Finish(Action::Result::CANCELED, "CANCELED");
-  ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 2U; }));
-  EXPECT_TRUE(SameNavigationPose(first, server_->goal(1U)));
-  EXPECT_EQ(LastStatus()->failed_candidate_count, 0U);
-}
 
 TEST_F(IncrementalExplorationMapWaitTest,
        InternalErrorDuringTimeoutCancellationIsNotConvertedToRetry) {
   Start(false);
-  TriggerMapWaitTimeout();
+  WaitForMapFeedback();
   server_->Finish(Action::Result::INTERNAL_ERROR, "TEST_NAVIGATION_INTERNAL_ERROR");
   ASSERT_TRUE(WaitFor([this] { return LastStatus()->state == Status::ERROR; }));
   EXPECT_EQ(LastStatus()->reason_code, "TEST_NAVIGATION_INTERNAL_ERROR");
@@ -784,7 +697,7 @@ TEST_F(IncrementalExplorationMapWaitTest,
 TEST_F(IncrementalExplorationMapWaitTest,
        GoalReachedDuringTimeoutCancellationRemainsActualSuccess) {
   Start(false);
-  TriggerMapWaitTimeout();
+  WaitForMapFeedback();
   server_->Finish(Action::Result::GOAL_REACHED, "GOAL_REACHED");
   ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 2U; }));
   EXPECT_EQ(LastStatus()->completed_goal_count, 1U);
@@ -795,7 +708,7 @@ TEST_F(IncrementalExplorationMapWaitTest,
        ActualNoPathDuringPausedTimeoutCancellationKeepsPauseAndFailure) {
   Start(false);
   const auto first = server_->goal(0U);
-  TriggerMapWaitTimeout();
+  WaitForMapFeedback();
   task_publisher_->publish(Command(Task::PAUSE));
   ASSERT_TRUE(WaitFor([this] { return LastStatus()->state == Status::PAUSED; }));
   server_->Finish(Action::Result::NO_PATH, "NO_PATH");
@@ -1423,25 +1336,6 @@ TEST_F(IncrementalExplorationNodeTest, OnlyInternalNavigationErrorEntersError) {
 
 namespace lunar::pure_exploration_ros {
 namespace {
-TEST_F(IncrementalExplorationMapWaitTest,
-       PathWaitingUsesSameBoundedCancellationAndCurrentTerminalPolicy) {
-  Start(false);
-  const auto first = server_->goal(0U);
-  server_->PublishFeedback(Action::Feedback::PLANNING, "WAITING_FOR_PATH");
-  ASSERT_TRUE(WaitFor([this] {
-    return LastStatus()->reason_code == "NAVIGATION_WAITING_FOR_PATH";
-  }));
-  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
-  SetClock(145);
-  ASSERT_TRUE(WaitFor([this] { return server_->cancel_count() == 1U; }));
-  EXPECT_EQ(server_->goal_count(), 1U);
-  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
-  server_->Finish(Action::Result::CANCELED, "CANCELED_STOPPED");
-  ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 2U; }));
-  EXPECT_FALSE(SameNavigationPose(first, server_->goal(1U)));
-  EXPECT_EQ(LastStatus()->failed_candidate_count, 1U);
-  EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
-}
 }  // namespace
 }  // namespace lunar::pure_exploration_ros
 

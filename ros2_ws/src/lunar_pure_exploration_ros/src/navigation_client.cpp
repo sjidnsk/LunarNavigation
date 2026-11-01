@@ -19,6 +19,9 @@ using GoalHandle = rclcpp_action::ClientGoalHandle<Action>;
 
 std::optional<NavigationFeedbackState> MapFeedback(
     const std::uint8_t state, const std::string& reason_code) {
+  if (reason_code == "WAITING_FOR_POSE") {
+    return NavigationFeedbackState::kWaitingForPose;
+  }
   if (reason_code == "WAITING_FOR_MAP") {
     return NavigationFeedbackState::kWaitingForMap;
   }

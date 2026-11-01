@@ -589,8 +589,6 @@ struct IncrementalExplorationNode::Runtime final {
   struct ActiveGoal final {
     CandidateView candidate;
     std::uint64_t task_generation;
-    std::optional<rclcpp::Time> map_wait_started_at;
-    std::optional<std::uint64_t> map_wait_timeout_evidence_sequence;
   };
 
   Runtime(rclcpp::Node& node, IncrementalExplorationNodeParameters input)
@@ -657,10 +655,8 @@ struct IncrementalExplorationNode::Runtime final {
   std::string reason_code{"IDLE"};
   std::uint8_t state{Status::IDLE};
   std::uint64_t exploration_map_sequence{0U};
-  std::uint64_t map_evidence_sequence{0U};
   std::uint64_t task_generation{0U};
   std::uint32_t completed_goal_count{0U};
-  std::uint32_t navigation_map_wait_timeout_count{0U};
   std::uint32_t map_backed_free_cell_count{0U};
   std::uint32_t reachable_candidate_count{0U};
   bool cancel_expected{false};
@@ -683,14 +679,7 @@ namespace {
 
 using Runtime = IncrementalExplorationNode::Runtime;
 
-double MapWaitElapsedSecondsLocked(const Runtime& runtime) {
-  if (!runtime.active_goal || !runtime.active_goal->map_wait_started_at) {
-    return 0.0;
-  }
-  const auto now = runtime.clock->now();
-  const auto started = *runtime.active_goal->map_wait_started_at;
-  return now >= started ? (now - started).seconds() : 0.0;
-}
+
 
 void PublishLocked(Runtime& runtime) {
   Status status;
@@ -798,27 +787,7 @@ void PublishLocked(Runtime& runtime) {
   active_navigation.key = "active_navigation";
   active_navigation.value = runtime.active_goal ? "true" : "false";
   diagnostic.values.push_back(std::move(active_navigation));
-  KeyValue map_wait_elapsed;
-  map_wait_elapsed.key = "navigation_map_wait_elapsed_s";
-  map_wait_elapsed.value = std::to_string(MapWaitElapsedSecondsLocked(runtime));
-  diagnostic.values.push_back(std::move(map_wait_elapsed));
-  KeyValue map_wait_timeout;
-  map_wait_timeout.key = "navigation_map_wait_timeout_s";
-  map_wait_timeout.value =
-      std::to_string(runtime.parameters.navigation_map_wait_timeout_s);
-  diagnostic.values.push_back(std::move(map_wait_timeout));
-  KeyValue map_wait_cancel_pending;
-  map_wait_cancel_pending.key = "navigation_map_wait_cancel_pending";
-  map_wait_cancel_pending.value =
-      runtime.active_goal &&
-              runtime.active_goal->map_wait_timeout_evidence_sequence
-          ? "true" : "false";
-  diagnostic.values.push_back(std::move(map_wait_cancel_pending));
-  KeyValue map_wait_timeout_count;
-  map_wait_timeout_count.key = "navigation_map_wait_timeout_count";
-  map_wait_timeout_count.value =
-      std::to_string(runtime.navigation_map_wait_timeout_count);
-  diagnostic.values.push_back(std::move(map_wait_timeout_count));
+
   diagnostics.status.push_back(std::move(diagnostic));
   runtime.diagnostics_publisher->publish(std::move(diagnostics));
 }
@@ -1021,10 +990,7 @@ void HandleFeedback(const std::weak_ptr<Runtime>& weak_runtime,
       runtime->cancel_expected) {
     return;
   }
-  if (feedback != NavigationFeedbackState::kWaitingForMap &&
-      feedback != NavigationFeedbackState::kWaitingForPath) {
-    runtime->active_goal->map_wait_started_at.reset();
-  }
+
   switch (feedback) {
     case NavigationFeedbackState::kPlanning:
       runtime->state = Status::PLANNING;
@@ -1040,51 +1006,19 @@ void HandleFeedback(const std::weak_ptr<Runtime>& weak_runtime,
       break;
     case NavigationFeedbackState::kWaitingForMap:
     case NavigationFeedbackState::kWaitingForPath:
-      if (!runtime->active_goal->map_wait_started_at ||
-          runtime->clock->now() < *runtime->active_goal->map_wait_started_at) {
-        runtime->active_goal->map_wait_started_at = runtime->clock->now();
-      }
+    case NavigationFeedbackState::kWaitingForPose:
+
       runtime->state = Status::WAITING_FOR_INPUT;
       runtime->reason_code = feedback == NavigationFeedbackState::kWaitingForPath
-          ? "NAVIGATION_WAITING_FOR_PATH" : "NAVIGATION_WAITING_FOR_MAP";
+          ? "NAVIGATION_WAITING_FOR_PATH"
+          : feedback == NavigationFeedbackState::kWaitingForPose
+              ? "NAVIGATION_WAITING_FOR_POSE" : "NAVIGATION_WAITING_FOR_MAP";
       break;
   }
   PublishLocked(*runtime);
 }
 
-void CheckNavigationMapWaitTimeout(const std::weak_ptr<Runtime>& weak_runtime) {
-  const auto runtime = weak_runtime.lock();
-  if (!runtime) {
-    return;
-  }
-  std::scoped_lock lock{runtime->mutex};
-  if (runtime->teardown || !runtime->active_goal || runtime->cancel_expected ||
-      runtime->active_goal->task_generation != runtime->task_generation ||
-      !runtime->active_goal->map_wait_started_at ||
-      runtime->state == Status::PAUSED || runtime->state == Status::IDLE ||
-      runtime->state == Status::ERROR ||
-      runtime->parameters.navigation_map_wait_timeout_s <= 0.0) {
-    return;
-  }
-  const auto now = runtime->clock->now();
-  if (now < *runtime->active_goal->map_wait_started_at) {
-    runtime->active_goal->map_wait_started_at = now;
-    return;
-  }
-  if (MapWaitElapsedSecondsLocked(*runtime) <
-      runtime->parameters.navigation_map_wait_timeout_s) {
-    return;
-  }
-  runtime->active_goal->map_wait_timeout_evidence_sequence =
-      runtime->map_evidence_sequence;
-  runtime->cancel_expected = true;
-  runtime->state = Status::WAITING_FOR_INPUT;
-  runtime->reason_code = "NAVIGATION_MAP_WAIT_TIMEOUT_CANCELING";
-  // Keep ownership until the navigator confirms a terminal result. Cancel
-  // acceptance alone is neither a completed goal nor evidence of no path.
-  runtime->navigation_client->CancelActive();
-  PublishLocked(*runtime);
-}
+
 
 void HandleTerminal(const std::weak_ptr<Runtime>& weak_runtime,
                     NavigationTerminal terminal) {
@@ -1158,61 +1092,17 @@ void HandleTerminal(const std::weak_ptr<Runtime>& weak_runtime,
               runtime->exploration_map_sequence + 1U;
           break;
         case Action::Result::TIMEOUT:
-          if (runtime->raster) {
-            runtime->failure_memory.RecordPersistentFailure(
-                finished.candidate,
-                PersistentFailureReason::kNavigationTimeout,
-                *runtime->raster);
-          }
-          if (runtime->state != Status::PAUSED) {
-            runtime->state = Status::SELECTING_FRONTIER;
-            runtime->reason_code = "NAVIGATION_TIMEOUT";
-            decide = true;
-          }
+          runtime->state = Status::PAUSED;
+          runtime->reason_code = terminal.reason_code.empty()
+                                     ? "NAVIGATION_TIMEOUT" : terminal.reason_code;
           break;
         case Action::Result::CANCELED:
-          if (finished.map_wait_timeout_evidence_sequence) {
-            const bool same_evidence =
-                *finished.map_wait_timeout_evidence_sequence ==
-                runtime->map_evidence_sequence;
-            if (same_evidence) {
-              try {
-                if (!runtime->raster) {
-                  throw std::logic_error{"map-wait timeout has no task raster"};
-                }
-                runtime->failure_memory.RecordPersistentFailure(
-                    finished.candidate,
-                    PersistentFailureReason::kNavigationTimeout,
-                    *runtime->raster);
-              } catch (const std::exception& error) {
-                runtime->state = Status::ERROR;
-                runtime->reason_code =
-                    std::string{"NAVIGATION_MAP_WAIT_SUPPRESSION_FAILED: "} +
-                    error.what();
-                break;
-              }
-            }
-            if (runtime->navigation_map_wait_timeout_count !=
-                std::numeric_limits<std::uint32_t>::max()) {
-              ++runtime->navigation_map_wait_timeout_count;
-            }
-            runtime->minimum_decision_map_sequence.reset();
-            if (runtime->state != Status::PAUSED &&
-                runtime->state != Status::IDLE && runtime->state != Status::ERROR) {
-              runtime->state = Status::SELECTING_FRONTIER;
-              runtime->reason_code = same_evidence
-                  ? "NAVIGATION_MAP_WAIT_TIMEOUT"
-                  : "NAVIGATION_MAP_WAIT_CANCELED_AFTER_MAP_CHANGE";
-              decide = true;
-            }
-          } else if (!expected_cancel) {
-            runtime->state = Status::WAITING_FOR_INPUT;
-            runtime->reason_code = "UNEXPECTED_NAVIGATION_CANCELED";
-            runtime->minimum_decision_map_sequence =
-                runtime->exploration_map_sequence + 1U;
+          if (!expected_cancel) {
+            runtime->state = Status::PAUSED;
+            runtime->reason_code = terminal.reason_code.empty()
+                                       ? "UNEXPECTED_NAVIGATION_CANCELED" : terminal.reason_code;
           } else {
-            decide = runtime->state != Status::IDLE &&
-                     runtime->state != Status::PAUSED;
+            decide = runtime->state != Status::IDLE && runtime->state != Status::PAUSED;
           }
           break;
         case Action::Result::INTERNAL_ERROR:
@@ -1262,11 +1152,7 @@ void HandleMap(const std::weak_ptr<Runtime>& weak_runtime,
       ++runtime->exploration_map_sequence;
       if (evidence_changed) {
         runtime->recent_observations.InvalidateChanged(map);
-        runtime->map_evidence_sequence = runtime->exploration_map_sequence;
-        if (runtime->active_goal && runtime->active_goal->map_wait_started_at &&
-            !runtime->cancel_expected) {
-          runtime->active_goal->map_wait_started_at = runtime->clock->now();
-        }
+
       }
       if (runtime->task_boundary) {
         RefreshDecisionLocked(*runtime);
@@ -1358,7 +1244,6 @@ void HandleTask(const std::weak_ptr<Runtime>& weak_runtime,
         runtime->recent_observations.Clear();
         runtime->candidate_suppressed.assign(runtime->candidates.size(), false);
         runtime->completed_goal_count = 0U;
-        runtime->navigation_map_wait_timeout_count = 0U;
         runtime->minimum_decision_map_sequence.reset();
         runtime->state = Status::WAITING_FOR_INPUT;
         runtime->reason_code = "WAITING_FOR_INPUT";
@@ -1371,9 +1256,7 @@ void HandleTask(const std::weak_ptr<Runtime>& weak_runtime,
         if (!runtime->task_id.empty()) {
           cancel = true;
           runtime->cancel_expected = runtime->active_goal.has_value();
-          if (runtime->active_goal) {
-            runtime->active_goal->map_wait_started_at.reset();
-          }
+
           runtime->state = Status::PAUSED;
           runtime->reason_code = "PAUSED";
         }
@@ -1459,13 +1342,7 @@ void IncrementalExplorationNode::Initialize(
   if (parameters.map_frame.empty() || parameters.odom_frame.empty() || parameters.base_frame.empty() || parameters.map_frame == parameters.odom_frame || parameters.odom_frame == parameters.base_frame || parameters.map_frame == parameters.base_frame) {
     throw std::invalid_argument("map_frame, odom_frame, base_frame must be nonempty distinct names");
   }
-  parameters.navigation_map_wait_timeout_s = declare_parameter<double>(
-      "navigation_map_wait_timeout_s", parameters.navigation_map_wait_timeout_s);
-  if (!std::isfinite(parameters.navigation_map_wait_timeout_s) ||
-      parameters.navigation_map_wait_timeout_s < 0.0) {
-    throw std::invalid_argument{
-        "navigation_map_wait_timeout_s must be finite and nonnegative"};
-  }
+
   const auto tf_static_topic = AbsoluteTopic(*this, "tf_static_topic", "/tf_static");
   const auto exploration_qos = ConfiguredExplorationMapQos(*this);
   auto runtime = std::make_shared<Runtime>(*this, std::move(parameters));
@@ -1522,18 +1399,12 @@ void IncrementalExplorationNode::Initialize(
     return result;
   });
 
-  if (runtime_->parameters.navigation_map_wait_timeout_s > 0.0) {
-    navigation_map_wait_timer_ = create_wall_timer(
-        std::chrono::milliseconds{50}, [weak_runtime] {
-          CheckNavigationMapWaitTimeout(weak_runtime);
-        });
-  }
+
   std::scoped_lock lock{runtime_->mutex};
   PublishLocked(*runtime_);
 }
 
 IncrementalExplorationNode::~IncrementalExplorationNode() noexcept {
-  navigation_map_wait_timer_.reset();
   if (!runtime_) {
     return;
   }
