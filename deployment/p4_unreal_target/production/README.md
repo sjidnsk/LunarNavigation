@@ -8,12 +8,13 @@
 |---|---|
 | `config/**` | `config/**` |
 | `start_tcp.sh` | `start_tcp.sh` |
+| `start_p4.sh` | `start_p4.sh` |
 | `start_p3.sh` | `start_p3.sh` |
 | `start_p3_view.sh` | `start_p3_view.sh` |
 | `p3_runtime.py` | `p3_runtime.py` |
 | `README.md` | `README.md`（根唯一说明） |
 
-另将既有 `source/scripts/simulation/start_p4.sh` 逐文件安装为根 `start_p4.sh`，保持原实现；它调用source中的既有 `p4_tcp_runtime.py`。保留正式源码、`.venv`、`deps/acados-v040`、`ros2-humble/install` 和 `build/current/install`；这些运行依赖与本模板分开部署。正式环境只叠加系统Humble、P4基座、Env_X接口、build/current四层。P3组件额外读取其 `scripts/env.sh`，不调用会在P3写锁的controller入口。
+根 `start_p4.sh` 仅清除继承的根目录覆盖并调用既有 `source/scripts/simulation/start_p4.sh`；复用source中的 `p4_tcp_runtime.py`，不复制导航实现。保留正式源码、`.venv`、`deps/acados-v040`、`ros2-humble/install` 和 `build/current/install`；这些运行依赖与本模板分开部署。正式环境只叠加系统Humble、P4基座、Env_X接口、build/current四层。P3组件额外读取其 `scripts/env.sh`，不调用会在P3写锁的controller入口。
 
 终端1运行TCP：
 
