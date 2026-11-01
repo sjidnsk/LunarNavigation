@@ -28,6 +28,26 @@ def segment_hits_box(a, b, box):
     return min(cross) <= 0 <= max(cross)
 
 
+
+def segment_hits_round_box(a, b, box, radius):
+    """独立标量验证：线段到矩形四条边的距离，不复用规划器几何代码。"""
+    if segment_hits_box(a,b,box):
+        return True
+    def point_segment2(point,start,end):
+        dx,dy=end[0]-start[0],end[1]-start[1]
+        length2=dx*dx+dy*dy
+        t=0. if length2==0 else max(0.,min(1.,((point[0]-start[0])*dx+(point[1]-start[1])*dy)/length2))
+        return (point[0]-start[0]-t*dx)**2+(point[1]-start[1]-t*dy)**2
+    x0,y0,x1,y1=box
+    corners=((x0,y0),(x0,y1),(x1,y1),(x1,y0))
+    for c,d in zip(corners,corners[1:]+corners[:1]):
+        distance2=min(point_segment2(a,c,d),point_segment2(b,c,d),
+                      point_segment2(c,a,b),point_segment2(d,a,b))
+        if distance2 <= radius*radius:
+            return True
+    return False
+
+
 def make_scale(scale, count, epoch):
     rng = random.Random(20261026 + scale)
     size = scale * 100
@@ -63,7 +83,7 @@ def validate(world, start, goal, result, *, expected_version):
         for rect in world.blocked:
             box = (rect.x0 / 100, rect.y0 / 100, rect.x1 / 100, rect.y1 / 100)
             raw_collision |= segment_hits_box(a, b, box)
-            clearance_collision |= segment_hits_box(a, b, (box[0] - r, box[1] - r, box[2] + r, box[3] + r))
+            clearance_collision |= segment_hits_round_box(a, b, box, r)
     length = sum(math.dist(a, b) for a, b in zip(points[:-1], points[1:]))
     identity_ok = (reference.map_epoch == world.epoch and reference.version == expected_version and
                    tuple(reference.goal) == tuple(goal) and tuple(points[0]) == tuple(start) and tuple(points[-1]) == tuple(goal))
@@ -84,7 +104,7 @@ def validate_scenario(scenario, result, *, expected_version):
     radius = result.clearance_radius_m
     known_valid = None
     if scenario.known_route:
-        known_valid = all(not segment_hits_box(a, b, (r.x0/100-radius, r.y0/100-radius, r.x1/100+radius, r.y1/100+radius))
+        known_valid = all(not segment_hits_round_box(a, b, (r.x0/100, r.y0/100, r.x1/100, r.y1/100), radius)
                           for a, b in zip(scenario.known_route[:-1], scenario.known_route[1:]) for r in scenario.world.blocked)
     if result.route is not None:
         points = result.route.points
@@ -169,7 +189,7 @@ def run(output, repeats=20, suite="scale"):
                 "python": platform.python_version(), "numpy": np.__version__, "resolution_m": .01,
                 "clearance_radius_m": .409, "cache": "NONE; every sample rebuilds; epoch changes",
                 "budget_s": 1., "timed_scope": "plan: goal checks + decomposition + graph + search + shortcut + final validation",
-                "independent_validation": "outside timed planner; separating axis theorem against every original and inflated rectangle",
+                "independent_validation": "outside timed planner; separating axis against raw rectangles and independent segment-to-edge distances for the collision circle",
                 "geometry_only": True, "rss_at_start": rss()}
     metadata["suite"] = suite
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")

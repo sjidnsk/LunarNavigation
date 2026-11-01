@@ -1,5 +1,6 @@
 """轮式入口显式共享标准Path参数，导航默认不发控制。"""
 import ast
+import math
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 LAUNCH=ROOT/'ros2_ws/src/lunar_pure_wheeled_controller/launch/nav1cm_wheel.launch.py'
@@ -15,7 +16,7 @@ def test_navigation_only_and_production_response():
     assert c['DEFAULTS']['start_controller']=='false'
     assert c['DEFAULTS']['mppi_nominal_response_time_s']=='0.15'
     assert c['DEFAULTS']['angular_speed_rps']=='1.0'
-    assert c['DEFAULTS']['goal_yaw_tolerance_rad']=='0.05'
+    assert float(c['DEFAULTS']['goal_yaw_tolerance_rad'])==math.radians(5.)
 
 def test_shared_interfaces_and_limits():
     c=constants()

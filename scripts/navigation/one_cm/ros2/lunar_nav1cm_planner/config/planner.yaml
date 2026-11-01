@@ -13,7 +13,9 @@ lunar_nav1cm_planner:
     execution_period_s: 0.05
     global_period_s: 15.0
     global_budget_s: 1.0
-    clearance_radius_m: 0.9
+    clearance_radius_m: 0.75
+    global_soft_clearance_m: 0.4
+    global_clearance_weight: 0.5
     goal_tolerance_m: 0.1
     goal_position_target_m: 0.02
     goal_yaw_tolerance_rad: 0.08726646259971647

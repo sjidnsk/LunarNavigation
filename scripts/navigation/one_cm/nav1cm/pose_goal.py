@@ -3,7 +3,7 @@ import math
 
 import numpy as np
 
-from .contracts import Trajectory, VehicleState
+from .contracts import Trajectory, VehicleState, circumscribed_radius
 from .dynamics import step
 from .global_planner import GoalCheck
 from .rectangle_distance import rectangle_distance_squared
@@ -31,12 +31,17 @@ def check_pose_goal(world, goal_xy, goal_yaw, limits):
     yaw = normalize_yaw(goal_yaw)
     c, s = math.cos(yaw), math.sin(yaw)
     hl, hw = limits.body_length_m / 2, limits.body_width_m / 2
+    radius = circumscribed_radius(limits.body_length_m, limits.body_width_m, limits.minimum_clearance_m)
     for rect in world.blocked:
         x0, y0, x1, y1 = np.asarray((rect.x0, rect.y0, rect.x1, rect.y1)) / 100.
         dx, dy = (x0 + x1) / 2 - xy[0], (y0 + y1) / 2 - xy[1]
         rx, ry = (x1 - x0) / 2, (y1 - y0) / 2
-        distance2=rectangle_distance_squared(dx,dy,rx,ry,c,s,hl,hw)
-        intersects=distance2 <= (limits.minimum_clearance_m+1e-12)**2
+        if limits.minimum_clearance_m > 0:
+            qx, qy = max(abs(dx)-rx,0.), max(abs(dy)-ry,0.)
+            intersects = qx*qx+qy*qy <= (radius+1e-12)**2
+        else:
+            distance2=rectangle_distance_squared(dx,dy,rx,ry,c,s,hl,hw)
+            intersects=distance2 <= 1e-24
         if intersects:
             return GoalCheck(False, 'GOAL_IN_OBSTACLE', world.epoch)
     return GoalCheck(True, 'GOAL_ACCEPTED', world.epoch)

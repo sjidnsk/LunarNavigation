@@ -230,10 +230,10 @@ def test_unverified_raw_stops_collision_work_at_deadline(monkeypatch):
     calls = 0
     original = api()._segments_clear
 
-    def timed_segment(a, b, boxes):
+    def timed_segment(a, b, boxes, **kwargs):
         nonlocal now, calls
         assert len(boxes) <= 1024
-        clear = original(a, b, boxes)
+        clear = original(a, b, boxes, **kwargs)
         calls += 1
         now += .01
         return clear
@@ -250,17 +250,17 @@ def test_curve_and_final_revalidation_bound_obstacle_batches(monkeypatch):
     overlaps = api()._overlap_mask
     segment_sizes, overlap_sizes = [], []
 
-    def bounded_segment(a, b, boxes):
+    def bounded_segment(a, b, boxes, **kwargs):
         segment_sizes.append(len(boxes))
         assert 0 < len(a) <= 64
         assert 0 < len(boxes) <= 1024
-        return segment(a, b, boxes)
+        return segment(a, b, boxes, **kwargs)
 
-    def bounded_overlap(box, boxes):
+    def bounded_overlap(box, boxes, **kwargs):
         overlap_sizes.append(len(boxes))
         assert 0 < len(box) <= 64
         assert 0 < len(boxes) <= 1024
-        return overlaps(box, boxes)
+        return overlaps(box, boxes, **kwargs)
 
     monkeypatch.setattr(api(), '_segments_clear', bounded_segment)
     monkeypatch.setattr(api(), '_overlap_mask', bounded_overlap)
@@ -276,10 +276,10 @@ def test_final_connector_revalidation_expiry_discards_candidate_immediately(monk
     original = api()._segments_clear
     expired = False
 
-    def expire_on_final_connector(a, b, boxes):
+    def expire_on_final_connector(a, b, boxes, **kwargs):
         nonlocal expired
         assert not expired, 'geometry work continued after the final-check deadline'
-        clear = original(a, b, boxes)
+        clear = original(a, b, boxes, **kwargs)
         if np.any(np.all(a == (0, 0), axis=1) & np.all(b == (1.5, 0), axis=1)):
             expired = True
         return clear
@@ -305,10 +305,10 @@ def test_final_curve_proof_revalidation_checks_deadline_after_each_batch(monkeyp
     first_leaf = None
     expired = False
 
-    def expire_on_repeated_leaf(box, boxes):
+    def expire_on_repeated_leaf(box, boxes, **kwargs):
         nonlocal first_leaf, expired
         assert not expired, 'curve-proof work continued after the final-check deadline'
-        collision = original(box, boxes)
+        collision = original(box, boxes, **kwargs)
         for leaf in box:
             if first_leaf is None and np.max(leaf[2:] - leaf[:2]) < .04:
                 first_leaf = leaf.copy()

@@ -48,7 +48,7 @@ def test_body_free_but_clearance_insufficient_is_rejected(tmp_path,margin):
     grid=wall_grid(front)
     assert certify(stationary(),grid,WheelLimits(),1).valid  # 真正车体无碰撞。
     assert certify(stationary(),grid,limits,1).reason==CertificationReason.COLLISION
-    assert certify(stationary(),wall_grid(round(limits.body_length_m/2+margin+.05,2)),limits,1).valid
+    assert certify(stationary(),wall_grid(round(limits.global_clearance_radius()+.05,2)),limits,1).valid
 
 
 @pytest.mark.parametrize('margin',[.2,.4])
@@ -76,8 +76,8 @@ def test_explicit_clearance_floor_validation_and_certificate_identity(tmp_path):
 def test_clearance_reaches_braking_tail_and_unknown(tmp_path,margin):
     # 本例固定0.2m/s能力以检查制动净空，避免应用基础低速档先触发LIMIT。
     limits=replace(selected(tmp_path,margin),linear_speed_mps=.2)
-    # 停车距离 .04m；当前车体+净空无碰撞，制动尾段违反净空。
-    front=round(limits.body_length_m/2+margin+.02,2)
+    # 停车距离 .04m；当前统一圆包络无碰撞，制动尾段违反净空。
+    front=round(limits.global_clearance_radius()+.02,2)
     result=certify(stationary(.2),wall_grid(front),limits,1)
     assert result.reason==CertificationReason.BRAKING_COLLISION
     assert certify(stationary(.2),wall_grid(front),WheelLimits(),1).valid
@@ -200,7 +200,7 @@ def test_euclidean_margin_accepts_full_rotation_and_braking(tmp_path,native):
 
 @pytest.mark.parametrize('native',[False,True])
 @pytest.mark.parametrize('margin',[.2,.4])
-def test_corner_distance_checks_both_sides_of_euclidean_margin(tmp_path,margin,native):
+def test_corner_distance_checks_both_sides_of_uniform_circle(tmp_path,margin,native):
     import os
     from nav1cm.geometry_native import NativeGeometry
     from nav1cm.maps import rasterize_world
@@ -209,8 +209,8 @@ def test_corner_distance_checks_both_sides_of_euclidean_margin(tmp_path,margin,n
     limits=selected(tmp_path,margin)
     for gap,accepted in ((margin*.75,True),(margin*.7,False)):
         x,y=int(round((.591+gap)*100)),int(round((.409+gap)*100))
-        independent_distance=math.hypot(x/100-.591,y/100-.409)
-        assert (independent_distance>margin)==accepted
+        independent_distance=math.hypot(x/100,y/100)
+        assert (independent_distance>limits.global_clearance_radius())==accepted
         world=WorldSnapshot(1,(CellRect(x,y,x+1,y+1),),(CellRect(-500,-500,500,500),))
         grid=GridSnapshot(1,(-2.5,-2.5),.01,rasterize_world(world,(-2.5,-2.5),(500,500)))
         assert certify(stationary(),grid,limits,1,backend=backend).valid==accepted
@@ -239,7 +239,7 @@ def test_positive_margin_real_solver_motion_is_nondegenerate(tmp_path,mode,point
 def test_deployed_wheel_files_use_user_requested_unified_clearance():
     for name in ('wheel.yaml','wheel_orin.yaml'):
         limits,_=load_configuration(ROOT/'config'/name)
-        assert limits.minimum_clearance_m==.2
+        assert limits.global_clearance_radius()==pytest.approx(.75)
 
 
 @pytest.mark.parametrize('accel,brake',[(.1,.5),(.5,.1),(.5,.5)])
