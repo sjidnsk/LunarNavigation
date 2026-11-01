@@ -264,6 +264,7 @@ class IncrementalExplorationNodeTest : public ::testing::Test {
  protected:
   virtual bool UseSimTime() const { return false; }
   virtual bool StaticOnlyBeforeFrontendStart() const { return false; }
+  virtual bool MultipleStaticMessages() const { return false; }
   virtual void ConfigureParameters(IncrementalExplorationNodeParameters&) {}
 
   void SetUp() override {
@@ -281,10 +282,19 @@ class IncrementalExplorationNodeTest : public ::testing::Test {
     node_parameters.emplace_back("tf_static_topic", parameters_.tf_topic + "_static");
     if (StaticOnlyBeforeFrontendStart()) {
       static_publisher_ = observer_->create_publisher<tf2_msgs::msg::TFMessage>(
-          parameters_.tf_topic + "_static", rclcpp::QoS{1}.reliable().transient_local());
+          parameters_.tf_topic + "_static", rclcpp::QoS{100}.reliable().transient_local());
       auto transforms = MapFromOdom();
       for (auto& tf : transforms.transforms) tf.header.stamp = builtin_interfaces::msg::Time{};
       static_publisher_->publish(transforms);  // 只在前沿节点创建前发布一次。
+      if (MultipleStaticMessages()) {
+        // 多条历史消息来自同一转发发布者，所需 map->odom 不是最后一条。
+        for (int index = 0; index < 5; ++index) {
+          auto unrelated = transforms;
+          unrelated.transforms.front().header.frame_id = parameters_.base_frame;
+          unrelated.transforms.front().child_frame_id = "sensor_" + std::to_string(index);
+          static_publisher_->publish(unrelated);
+        }
+      }
     }
     node_ = std::make_shared<IncrementalExplorationNode>(
         parameters_, rclcpp::NodeOptions{}.parameter_overrides(node_parameters));
@@ -1352,6 +1362,16 @@ TEST_F(IncrementalExplorationStaticOnlyTest, LatchedZeroStampStaticPublishedBefo
   EXPECT_EQ(server_->goal_count(), 1U);
   EXPECT_EQ(static_publisher_->get_subscription_count(), 1U);
   EXPECT_EQ(LastStatus()->completed_goal_count, 0U);
+}
+
+class IncrementalExplorationMultiStaticTest : public IncrementalExplorationStaticOnlyTest {
+ protected:
+  bool MultipleStaticMessages() const override { return true; }
+};
+TEST_F(IncrementalExplorationMultiStaticTest, ReceivesRequiredTransformBeforeLastLatchedMessage) {
+  Start(false);
+  EXPECT_EQ(server_->goal_count(), 1U);
+  EXPECT_EQ(static_publisher_->get_subscription_count(), 1U);
 }
 }  // namespace
 }  // namespace lunar::pure_exploration_ros

@@ -1378,7 +1378,7 @@ void IncrementalExplorationNode::Initialize(
   tf_subscription_ = create_subscription<tf2_msgs::msg::TFMessage>(
       runtime->parameters.tf_topic, rclcpp::QoS{10}.reliable(), transforms_callback);
   tf_static_subscription_ = create_subscription<tf2_msgs::msg::TFMessage>(
-      tf_static_topic, rclcpp::QoS{1}.reliable().transient_local(), transforms_callback);
+      tf_static_topic, rclcpp::QoS{100}.reliable().transient_local(), transforms_callback);
   task_subscription_ = create_subscription<Task>(
       runtime->parameters.task_topic, rclcpp::QoS{10}.reliable(),
       [weak_runtime](Task::SharedPtr task) {
