@@ -113,7 +113,7 @@ def test_map_epoch_update_rebuilds_and_rejects_new_wall():
 def test_storage_and_explicit_domain_limits_do_not_claim_no_path():
     api = load_api()
     planner = api.AdaptiveGlobalPlanner(WheelLimits(), max_nodes=2)
-    assert planner.plan(world(), (0, 0), (3, 0), 1).reason_code == "STORAGE_LIMIT"
+    assert planner.plan(world([CellRect(140, -100, 160, 100)]), (0, 0), (3, 0), 1).reason_code == "STORAGE_LIMIT"
     bounded = api.AdaptiveGlobalPlanner(WheelLimits(), domain_bounds_m=(-1, -1, 1, 1))
     assert bounded.plan(world(), (0, 0), (3, 0), 1).reason_code == "DOMAIN_EXHAUSTED"
 

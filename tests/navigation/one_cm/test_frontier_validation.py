@@ -193,3 +193,119 @@ def test_all_cross_topic_orders_wait_for_authoritative_exact_binding(order):
     ledger.observe_frontend_goal([-100.,100.,1.])
     assert ledger.observe_uuid(old).goal==(-1.,0.,0.)
     assert ledger.observe_uuid(new).goal==(3.,4.,.5) and ledger.current.task_id==new
+
+
+def runner_module():
+    import sys
+    spec=spec_from_file_location("frontier_control_test",FILE.with_name("run.py"))
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module);return module
+
+
+def test_current_terminal_five_degrees_is_explicit_without_changing_history():
+    import math
+    e=evidence();e['reached'][0]['yaw_error']=math.radians(4.)
+    assert not load().grade(e)['pass_']
+    e['goal_yaw_tolerance_rad']=math.radians(5.)
+    assert load().grade(e)['pass_']
+    e['reached'][0]['yaw_error']=math.radians(5.01)
+    assert not load().grade(e)['pass_']
+
+
+def test_direct_validation_commands_preserve_private_topics_and_platform(tmp_path):
+    from types import SimpleNamespace as S
+    import yaml
+    profile=tmp_path/'wheel.yaml'
+    wheel=yaml.safe_load((FILE.parents[4]/'config/wheel.yaml').read_text(encoding='utf8'))
+    wheel['capability'].update(dict(maximum_forward_speed_mps=.2,maximum_reverse_speed_mps=.2,maximum_spin_rate_radps=.1,maximum_acceleration_mps2=.5,maximum_braking_deceleration_mps2=.5,maximum_yaw_acceleration_radps2=.5))
+    profile.write_text(yaml.safe_dump(wheel),encoding='utf-8')
+    m=runner_module();args=S(case='frontier_progress',build_dir=str(tmp_path/'cache'),control_backend='mpcc_cmd_vel',platform_config=str(profile))
+    settings=m.validation_settings(args);command=m.launch_command(args,settings)
+    assert 'control_backend:=mpcc_cmd_vel' in command and 'command_hold_s:=1.2' in command
+    assert 'platform_config:='+str(profile.resolve()) in command
+    assert 'command_topic:=/nav1cm_task3/cmd' in command
+    assert not any('navigation_map_wait_timeout_s' in a for a in command)
+    assert settings['limits']['angular']==.1
+
+
+def test_direct_evidence_requires_actual_map_input_not_absent_mppi_diagnostics():
+    m=runner_module();identities=[{'cmdline':'/task/install/lunar_nav1cm_planner/navigation_task_node'}]
+    graph={'nodes':['lunar_nav1cm_planner'],'publishers':{m.TOPICS['cmd']:[{'node_name':'lunar_nav1cm_planner'}]}}
+    received=[{'kind':'EXPLORATION_MAP','counts':{'0':12}}]
+    assert m.backend_evidence('mpcc_cmd_vel',identities,[{'epoch':1}],[{'ready':True}],[],received,graph)==(True,True)
+    assert m.backend_evidence('mpcc_cmd_vel',identities,[],[{'ready':True}],[],received,graph)==(True,False)
+    assert m.backend_evidence('path_mppi',identities,[{'epoch':1}],[{'ready':True}],[],received,graph)==(False,False)
+
+
+def test_obsolete_wait_cancel_qualification_is_rejected_before_ros():
+    from types import SimpleNamespace as S
+    with pytest.raises(ValueError,match='等待保留'):
+        runner_module().validation_settings(S(case='blocked_wait_reselect',control_backend='path_mppi',platform_config=None))
+
+def test_run_has_no_unbound_global_reads_including_cleanup():
+    import dis
+    import builtins
+    runner=runner_module()
+    missing={op.argval for op in dis.get_instructions(runner.run)
+             if op.opname=='LOAD_GLOBAL' and op.argval not in vars(runner) and not hasattr(builtins,op.argval)}
+    assert not missing
+
+
+def test_direct_rejects_mppi_node_or_foreign_command_authority():
+    m=runner_module()
+    planner='lunar_nav1cm_planner'
+    follower='lunar_pure_wheeled_controller'
+    pid=[{'cmdline':'/task/install/'+planner+'/navigation_task_node'}]
+    graph={'nodes':[planner],'publishers':{m.TOPICS['cmd']:[{'node_name':follower}]}}
+    def installed(backend):return m.backend_evidence(backend,pid,[],[],[],[],graph)[0]
+    assert not installed('mpcc_cmd_vel')
+    graph['nodes'].append(follower)
+    pid.append({'cmdline':'/task/install/'+follower+'/controller'})
+    assert installed('path_mppi')
+    graph['publishers'][m.TOPICS['cmd']][0]['node_name']=planner
+    assert not installed('mpcc_cmd_vel') and not installed('path_mppi')
+
+
+def test_progress_needs_same_writer_success_before_new_accepted_pose():
+    import json
+    import math
+    m=runner_module()
+    a,b='a'*32,'b'*32
+    def notice(kind,**payload):
+        return '[navigation_task_node-2] [INFO] [lunar_nav1cm_planner]: '+kind+': '+json.dumps(payload)
+    first=notice('TASK_ACCEPTED',task_id=a,accepted_generation=1,goal=[0,0,0])
+    reached=notice('TASK_STATE',task_id=a,generation=1,phase='FINISHED',outcome='GOAL_REACHED',reason_code='GOAL_REACHED')
+    second=notice('TASK_ACCEPTED',task_id=b,accepted_generation=2,goal=[1,0,0])
+    e=evidence();e.update(validation_settings={});e['reached'][0]['uuid']=a
+    def passed(lines):
+        e['progress_transitions']=m.progress_transitions(lines)
+        return load().grade(e)['pass_']
+    assert not passed([first,second,reached])
+    assert not passed([first,reached,second.replace('-2]', '-3]')])
+    assert passed([first,reached,second])
+    for pose,expected in [([0,0,.2],True),([.01,0,0],True),([0,0,0],False),([0,0,2*math.pi],False)]:
+        successor=notice('TASK_ACCEPTED',task_id=b,accepted_generation=2,goal=pose)
+        assert passed([first,reached,successor]) is expected,pose
+    e['reached'][0]['uuid']=b
+    assert not passed([first,reached,second])
+
+
+def test_unapproved_yaw_tolerance_rejected():
+    import math
+    with pytest.raises(ValueError):load().grade(dict(evidence(),goal_yaw_tolerance_rad=math.pi))
+
+
+@pytest.mark.parametrize('v,w',[(.3,0.),(-.201,0.),(0.,.101),(float('nan'),0.)])
+def test_short_raw_command_violation_fails_even_when_plant_slews(v,w):
+    m=runner_module()
+    limits=dict(forward=.2,reverse=.2,angular=.1)
+    assert not m.commands_in_bounds([dict(kind='COMMAND',v=v,w=w)],limits)
+
+
+@pytest.mark.parametrize('field,value',[('motion_model','ackermann'),('body_extent_m',[3,1,1]),('minimum_clearance_m',.4),('footprint_xy_m',[[0,0]]*4)])
+def test_incompatible_plant_geometry_is_rejected(tmp_path,field,value):
+    import yaml
+    from types import SimpleNamespace as S
+    wheel=yaml.safe_load((FILE.parents[4]/'config/wheel.yaml').read_text(encoding='utf8'))
+    wheel['capability'][field]=value
+    p=tmp_path/'wheel.yaml';p.write_text(yaml.safe_dump(wheel),encoding='utf8')
+    with pytest.raises(ValueError):runner_module().validation_settings(S(case='frontier_progress',platform_config=str(p)))

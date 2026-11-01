@@ -45,3 +45,33 @@ class AcceptanceLedger:
         if marker not in line:return None
         try:return self.record(json.loads(line.split(marker,1)[1]),observed_at)
         except (ValueError,TypeError) as exc:self.errors.append(str(exc));return None
+
+def progress_transitions(lines):
+    """按同一 launch 进程的日志行序记录当前目标到达后接受新观察位姿。"""
+    transitions=[]
+    writers={}
+    for line_number,line in enumerate(lines,1):
+        match=re.match(r'^\[(navigation_task_node-\d+)\].*? (TASK_ACCEPTED|TASK_STATE): (.*)$',line)
+        if not match:
+            continue
+        writer,kind,raw=match.groups()
+        payload=json.loads(raw)
+        ledger,terminal=writers.setdefault(writer,(AcceptanceLedger(),None))
+        current=ledger.current
+        if kind=='TASK_STATE':
+            if (current and payload.get('task_id')==current.task_id and payload.get('generation')==current.generation
+                    and (payload.get('phase'),payload.get('outcome'),payload.get('reason_code'))==('FINISHED','GOAL_REACHED','GOAL_REACHED')):
+                writers[writer]=(ledger,line_number)
+            continue
+        if ledger.get(payload.get('task_id')) is not None:
+            continue
+        accepted=ledger.record(payload,line_number)
+        if terminal and current and accepted and accepted.generation>current.generation:
+            yaw_delta=accepted.goal[2]-current.goal[2]
+            yaw_distance=abs(math.atan2(math.sin(yaw_delta),math.cos(yaw_delta)))
+            if math.dist(current.goal[:2],accepted.goal[:2])>1e-9 or yaw_distance>1e-9:
+                transitions.append(dict(writer=writer,reached_uuid=current.task_id,reached_generation=current.generation,
+                                        reached_line=terminal,next_uuid=accepted.task_id,next_generation=accepted.generation,
+                                        next_line=line_number))
+        writers[writer]=(ledger,None)
+    return transitions

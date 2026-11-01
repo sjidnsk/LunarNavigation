@@ -100,6 +100,7 @@ get_filename_component(
 install(
   FILES
     "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/pure_exploration.yaml"
+    "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/p4_topics.yaml"
     "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/exploration_navigation.yaml"
   DESTINATION share/${PROJECT_NAME}/config)
 install(

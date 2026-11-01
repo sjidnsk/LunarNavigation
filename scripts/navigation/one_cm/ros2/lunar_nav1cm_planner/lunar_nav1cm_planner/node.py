@@ -102,7 +102,7 @@ class PlannerNode(Node):
             'allow_unknown': False, 'smooth_global_reference': True, 'initial_travel_direction': '', 'planning_period_s': .1, 'execution_period_s': .05,
             'global_period_s': 15., 'global_budget_s': 1., 'clearance_radius_m': limits.global_clearance_radius(.9),
             'horizon_steps': 20, 'horizon_dt_s': .2,
-            'goal_tolerance_m': .1, 'goal_position_target_m': .02, 'goal_yaw_tolerance_rad': .05,
+            'goal_tolerance_m': .1, 'goal_position_target_m': .02, 'goal_yaw_tolerance_rad': .08726646259971647,
             'stopped_linear_mps': .01, 'stopped_angular_rps': .01,
             'map_topic': '/Car/T3/mapping/grid_map',
             'map_qos_reliability': 'best_effort', 'map_qos_durability': 'volatile',

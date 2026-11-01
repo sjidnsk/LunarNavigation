@@ -118,9 +118,10 @@ def test_closed_loop_rotation_certifies_every_segment_and_arrives_stopped(asynch
             break
     else:
         pytest.fail('terminal rotation did not converge')
-    assert seen_spin
+    # 已在配置容差内无需额外转向；跨越±pi也遵守同一判据。
+    assert seen_spin == (abs(api().angle_error(yaw,start)) > c.goal_yaw_tolerance_rad)
     assert np.hypot(state.x, state.y) <= .1
-    assert abs(api().angle_error(yaw, state.yaw)) <= .05
+    assert abs(api().angle_error(yaw, state.yaw)) <= c.goal_yaw_tolerance_rad
     assert abs(state.v) <= .01 and abs(state.w) <= .01
 
 
@@ -168,6 +169,6 @@ def test_real_solver_approach_and_certified_terminal_pose(goal):
     else:
         pytest.fail(f'real solver terminal pose did not converge: {state}, {reasons[-20:]}')
     assert 'mpcc:acados-sqp-rti' in sources
-    assert abs(api().angle_error(.1, state.yaw)) <= .05
+    assert abs(api().angle_error(.1, state.yaw)) <= c.goal_yaw_tolerance_rad
     assert np.linalg.norm(np.array(goal) - [state.x, state.y]) <= .1
     assert abs(state.v) <= .01 and abs(state.w) <= .01

@@ -204,10 +204,17 @@ class NavigationTaskCoordinator:
             if stopped and state_updated:
                 current = replace(current, phase='FINISHED', outcome='CANCELED', reason_code='CANCELED_STOPPED')
         else:
-            arrived = (self._execution_arrived(now_s) and packet.generation==current.generation and
+            execution_arrived = self._execution_arrived(now_s)
+            arrived = (execution_arrived and packet.generation==current.generation and
                        self.session.arrival_current(packet))
             if not arrived:
-                arrived_since = None
+                # NOT_DUE只表示证明尚未刷新，不是新的负观测；不凭旧证明完成。
+                pending_proof = (execution_arrived and not packet.waiting and
+                                 packet.generation==current.generation==self.session.accepted_generation and
+                                 getattr(packet.result,'status',None)=='NOT_DUE' and
+                                 limits.goal_reached(state))
+                if not pending_proof:
+                    arrived_since = None
             elif state_updated:
                 if arrived_since is None:
                     arrived_since = now_s

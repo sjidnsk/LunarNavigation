@@ -1,0 +1,8 @@
+<library path="lunar_navigation_rviz">
+  <class name="lunar_navigation_rviz/ExplorationPanel" type="lunar_navigation_rviz::ExplorationPanel" base_class_type="rviz_common::Panel">
+    <description>Exploration task commands and actual status.</description>
+  </class>
+  <class name="lunar_navigation_rviz/BoundaryTool" type="lunar_navigation_rviz::BoundaryTool" base_class_type="rviz_common::Tool">
+    <description>Click vertices on the map z=0 plane; close the polygon in the panel.</description>
+  </class>
+</library>

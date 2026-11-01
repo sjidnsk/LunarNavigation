@@ -542,3 +542,29 @@ def test_command_publisher_failure_is_not_swallowed():
     packet=NS(result=None,candidate=None)
     with pytest.raises(RuntimeError,match='publisher failed'):
         runtime._command(packet,(0.,0.))
+
+
+@pytest.mark.parametrize('position,success',[(.08,True),(.11,False)])
+def test_direct_new_pose_on_not_due_is_evaluated_after_current_proof(position,success):
+    from dataclasses import replace
+    runtime,session,*_=build_runtime()
+    runtime.configure_direct_control(lambda *args:None,command_hold_s=1.2)
+    session.coordinator.local_period_s=.1
+    runtime.tasks.submit('phase-arrival',(0,0,0),0.)
+    def feedback(sec,nanosec,x):
+        return NS(header=NS(frame_id='map',stamp=NS(sec=sec,nanosec=nanosec)),
+                  pose=NS(pose=pose(x).pose),
+                  twist=NS(twist=NS(linear=NS(x=0.),angular=NS(z=0.))))
+    runtime.offer_odometry(feedback(1,0,.08));runtime._tick_once(0.)
+    assert runtime.tasks._arrived_since==1.
+    for k in range(1,33):
+        if k in (1,31):
+            runtime._world=replace(session.world,epoch=session.world.epoch+1)
+        if k==31:runtime.offer_odometry(feedback(2,500000000,position))
+        packet=runtime._tick_once(k*.05)
+        if k==31:
+            assert packet.result.status=='NOT_DUE'
+            assert runtime.tasks.active.outcome is None  # 尚无当前图证明，不能完成。
+            assert runtime._observed_pose_stamp_ns==1000000000
+            assert runtime.tasks._arrived_since==(1. if success else None)
+    assert (runtime.tasks.active.outcome=='GOAL_REACHED')==success

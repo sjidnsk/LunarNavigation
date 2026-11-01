@@ -141,10 +141,14 @@ def certified_velocity_command(result, measured, limits, *, reference_interval_s
     record(target_vw=target.tolist())
     rates=np.array([limits.linear_accel_mps2,limits.angular_accel_rps2])
     issued=previous+np.clip(target-previous,-rates*elapsed_s,rates*elapsed_s)
-    record(issued_vw=issued.tolist())
     construction_started=perf_counter()
     current=np.array([measured.x,measured.y,measured.yaw,measured.v,measured.w,candidate.states[0,5]])
     mode='spin' if abs(issued[0])<1e-10 else ('forward' if issued[0]>0 else 'reverse')
+    if mode=='spin':
+        # 已按零平移选择spin，发布值和证明也须使用同一精确零值。
+        # 保留真实初态；必要制动前缀仍由下方按实测速度构造。
+        issued[0]=0.
+    record(issued_vw=issued.tolist())
     ref=LocalReference(candidate.route_version,result.grid.epoch,[[current[0],current[1]]],[0.],current[5])
     prefix=None
     if (mode=='spin' and abs(current[3])>1e-10 or current[3]*issued[0]<0.):

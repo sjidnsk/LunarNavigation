@@ -218,3 +218,9 @@ def test_command_spin_prepare_response_model_parameter(monkeypatch):
 def test_command_spin_prepare_rejects_invalid_values(monkeypatch, value):
     with pytest.raises(ValueError, match='command_spin_prepare_s'):
         graph(monkeypatch, command_spin_prepare_s=value)
+
+
+def test_default_topics_are_loaded_from_single_contract(monkeypatch):
+    from scripts.simulation.p4_topics import launch_topic_arguments
+    module = load(monkeypatch)
+    assert {key:module.DEFAULTS[key] for key in launch_topic_arguments(ROOT)} == launch_topic_arguments(ROOT)

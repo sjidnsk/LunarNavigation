@@ -36,6 +36,9 @@ def test_startup_overrides_reach_resources_and_endpoints(configured_node):
     assert observed['limits'].linear_speed_mps==.07
     assert observed['settings']['planning_period_s']==.27
     assert observed['settings']['global_period_s']==27.
+    # 实际ROS默认参数与交给资源工厂的完成合同采用同一5度容差。
+    assert node.get_parameter('goal_yaw_tolerance_rad').value==pytest.approx(0.08726646259971647)
+    assert observed['settings']['goal_yaw_tolerance_rad']==node.get_parameter('goal_yaw_tolerance_rad').value
     assert node.describe_parameter('global_period_s').read_only
     assert '/startup_parameters_test/map' in [s.topic_name for s in node.subscriptions]
     assert node.get_parameter('action_name').value=='/startup_parameters_test/navigate'
