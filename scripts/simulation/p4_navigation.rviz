@@ -3,8 +3,9 @@ Panels:
   Name: Displays
 - Class: lunar_navigation_rviz/ExplorationPanel
   Name: 导航与探索
-  Task Topic: /p4_p3_debug/exploration/task
-  Status Topic: /p4_p3_debug/exploration/status
+  Task Topic Key: task_topic
+  Status Topic Key: status_topic
+  Boundary Topic Key: boundary_draft
 Visualization Manager:
   Class: ''
   Global Options:
@@ -17,27 +18,11 @@ Visualization Manager:
     Enabled: true
     Cell Size: 1.0
     Plane Cell Count: 100
-  - Class: rviz_default_plugins/PointCloud2
-    Name: P3 elevation map
-    Enabled: true
-    Topic:
-      Value: /T3/mapping/elevation_cloud
-      Reliability Policy: Best Effort
-      Durability Policy: Volatile
-      Depth: 1
-    Style: Points
-    Size (Pixels): 3
-    Size (m): 0.05
-    Position Transformer: XYZ
-    Color Transformer: AxisColor
-    Axis: Z
-    Decay Time: 0.0
-    Use Fixed Frame: true
   - Class: rviz_default_plugins/Odometry
     Name: P3 odometry
     Enabled: true
+    Topic Key: odometry_topic
     Topic:
-      Value: /Car/T3/localization/odometry
       Reliability Policy: Best Effort
       Durability Policy: Volatile
       Depth: 1
@@ -52,8 +37,8 @@ Visualization Manager:
   - Class: rviz_default_plugins/Map
     Name: P4 exploration grid
     Enabled: true
+    Topic Key: exploration_map_topic
     Topic:
-      Value: /p4_p3_debug/exploration_map
       Reliability Policy: Reliable
       Durability Policy: Transient Local
       Depth: 1
@@ -61,8 +46,8 @@ Visualization Manager:
   - Class: rviz_default_plugins/Path
     Name: P4 raw global route (diagnostic)
     Enabled: false
+    Topic Key: global_route_topic
     Topic:
-      Value: /p4_p3_debug/global_route
       Reliability Policy: Reliable
       Durability Policy: Volatile
       Depth: 1
@@ -72,8 +57,8 @@ Visualization Manager:
   - Class: rviz_default_plugins/Path
     Name: P4 certified local path
     Enabled: true
+    Topic Key: local_path_topic
     Topic:
-      Value: /p4_p3_debug/local_path
       Reliability Policy: Reliable
       Durability Policy: Volatile
       Depth: 1
@@ -83,8 +68,8 @@ Visualization Manager:
   - Class: rviz_default_plugins/Path
     Name: P4 smoothed global reference
     Enabled: true
+    Topic Key: global_reference_topic
     Topic:
-      Value: /p4_p3_debug/global_route_reference
       Reliability Policy: Reliable
       Durability Policy: Volatile
       Depth: 1
@@ -94,24 +79,24 @@ Visualization Manager:
   - Class: rviz_default_plugins/Marker
     Name: Start from P3 (waiting if absent)
     Enabled: true
+    Topic Key: start_marker
     Topic:
-      Value: /p4_p3_debug/start_marker
       Reliability Policy: Reliable
       Durability Policy: Transient Local
       Depth: 1
   - Class: rviz_default_plugins/Marker
     Name: Selected goal (not arrival)
     Enabled: true
+    Topic Key: goal_marker
     Topic:
-      Value: /p4_p3_debug/goal_marker
       Reliability Policy: Reliable
       Durability Policy: Transient Local
       Depth: 1
   - Class: rviz_default_plugins/Path
     Name: Actual P3 observations
     Enabled: true
+    Topic Key: actual_path
     Topic:
-      Value: /p4_p3_debug/actual_path
       Reliability Policy: Reliable
       Durability Policy: Transient Local
       Depth: 1
@@ -121,40 +106,40 @@ Visualization Manager:
   - Class: rviz_default_plugins/Marker
     Name: Editing exploration region
     Enabled: true
+    Topic Key: boundary_draft
     Topic:
-      Value: /lunar_rviz/boundary
       Reliability Policy: Reliable
       Durability Policy: Transient Local
       Depth: 1
   - Class: rviz_default_plugins/MarkerArray
     Name: Active exploration boundary
     Enabled: true
+    Topic Key: task_boundary_topic
     Topic:
-      Value: /p4_p3_debug/exploration/task_boundary
       Reliability Policy: Reliable
       Durability Policy: Transient Local
       Depth: 1
   - Class: rviz_default_plugins/MarkerArray
     Name: Exploration task map
     Enabled: true
+    Topic Key: task_map_markers_topic
     Topic:
-      Value: /p4_p3_debug/exploration/task_map_markers
       Reliability Policy: Reliable
       Durability Policy: Transient Local
       Depth: 1
   - Class: rviz_default_plugins/MarkerArray
     Name: Exploration frontiers
     Enabled: true
+    Topic Key: frontiers_topic
     Topic:
-      Value: /p4_p3_debug/exploration/frontiers
       Reliability Policy: Reliable
       Durability Policy: Transient Local
       Depth: 1
   - Class: rviz_default_plugins/Pose
     Name: Current exploration goal
     Enabled: true
+    Topic Key: current_goal_topic
     Topic:
-      Value: /p4_p3_debug/exploration/current_goal
       Reliability Policy: Reliable
       Durability Policy: Volatile
       Depth: 1
@@ -165,7 +150,8 @@ Visualization Manager:
   - Class: rviz_default_plugins/Select
   - Class: rviz_default_plugins/Measure
   - Class: rviz_default_plugins/SetGoal
-    Topic: /goal_pose
+    Topic Key: goal_topic
+    Topic: ''
   Views:
     Current:
       Class: rviz_default_plugins/Orbit

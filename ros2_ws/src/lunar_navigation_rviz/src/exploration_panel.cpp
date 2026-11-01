@@ -13,7 +13,7 @@
 namespace lunar_navigation_rviz {
 ExplorationPanel::ExplorationPanel(QWidget * parent) : rviz_common::Panel(parent) {
   auto * layout = new QVBoxLayout(this);
-  auto * help = new QLabel("导航：使用工具栏 2D Goal Pose 点选位置并拖拽朝向。\n探索：选取区域 → 逐点单击地面 → 完成区域 → 开始探索。", this);
+  auto * help = new QLabel("导航：使用工具栏 2D Goal Pose，经统一导航目标入口点选位置并拖拽朝向。\n探索：选取区域 → 逐点单击地面 → 完成区域 → 开始探索。", this);
   help->setWordWrap(true); layout->addWidget(help);
   auto * buttons = new QGridLayout;
   auto make_button = [this, buttons](const char * name, const QString & text, int row, int col) {
@@ -72,19 +72,21 @@ void ExplorationPanel::onInitialize() {
 }
 void ExplorationPanel::load(const rviz_common::Config & config) {
   rviz_common::Panel::load(config);
-  QString task, status;
-  const auto old_task = task_topic_, old_status = status_topic_;
+  QString task, status, boundary;
+  const auto old_task = task_topic_, old_status = status_topic_, old_boundary = boundary_topic_;
   if (config.mapGetString("Task Topic", &task) && !task.isEmpty()) task_topic_ = task.toStdString();
   if (config.mapGetString("Status Topic", &status) && !status.isEmpty()) status_topic_ = status.toStdString();
-  if (node_ && (old_task != task_topic_ || old_status != status_topic_)) bindInterfaces();
+  if (config.mapGetString("Boundary Topic", &boundary) && !boundary.isEmpty()) boundary_topic_ = boundary.toStdString();
+  if (node_ && (old_task != task_topic_ || old_status != status_topic_ || old_boundary != boundary_topic_)) bindInterfaces();
 }
 void ExplorationPanel::save(rviz_common::Config config) const {
   rviz_common::Panel::save(config);
   config.mapSetValue("Task Topic", QString::fromStdString(task_topic_));
   config.mapSetValue("Status Topic", QString::fromStdString(status_topic_));
+  config.mapSetValue("Boundary Topic", QString::fromStdString(boundary_topic_));
 }
 void ExplorationPanel::bindInterfaces() {
-  status_sub_.reset(); task_pub_.reset();
+  status_sub_.reset(); task_pub_.reset(); marker_pub_.reset();
   // 旧订阅的在途回调仅持有旧Inbox，不得污染新接口状态。
   inbox_ = std::make_shared<Inbox>();
   status_received_ = false; state_ = Status::IDLE; pending_ = 0; task_id_.clear();
@@ -92,7 +94,7 @@ void ExplorationPanel::bindInterfaces() {
   details_->setText("状态话题：" + QString::fromStdString(status_topic_));
   task_pub_ = node_->create_publisher<Task>(task_topic_, rclcpp::QoS(10).reliable());
   marker_pub_ = node_->create_publisher<visualization_msgs::msg::Marker>(
-    "/lunar_rviz/boundary", rclcpp::QoS(1).reliable().transient_local());
+    boundary_topic_, rclcpp::QoS(1).reliable().transient_local());
   const auto inbox = inbox_;
   status_sub_ = node_->create_subscription<Status>(status_topic_,
     rclcpp::QoS(10).reliable().transient_local(), [inbox](Status::ConstSharedPtr status) {

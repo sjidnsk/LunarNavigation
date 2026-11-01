@@ -49,6 +49,7 @@ private:
   std::string task_id_;
   std::string task_topic_{"/Car/T4/exploration/task"};
   std::string status_topic_{"/Car/T4/exploration/status"};
+  std::string boundary_topic_{"/Car/T4/exploration/boundary_draft"};
   QLabel * state_label_;
   QLabel * details_;
   QLabel * region_label_;

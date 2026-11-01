@@ -72,16 +72,22 @@ TEST(ExplorationPanelDds, PublishesValidatedCommandsWithConfirmationAndBackendAc
     [&](Task::ConstSharedPtr task) { tasks.push_back(*task); });
   auto status_pub = peer->create_publisher<Status>("/panel_test/exploration/status", rclcpp::QoS(10).reliable().transient_local());
 
+  std::vector<visualization_msgs::msg::Marker> draft_markers;
+  auto draft_sub = peer->create_subscription<visualization_msgs::msg::Marker>(
+    "/panel_test/boundary_draft", rclcpp::QoS(1).reliable().transient_local(),
+    [&](visualization_msgs::msg::Marker::ConstSharedPtr marker) { draft_markers.push_back(*marker); });
   auto panel = std::make_unique<lunar_navigation_rviz::ExplorationPanel>();
   rviz_common::Config config;
   config.mapSetValue("Task Topic","/panel_test/exploration/task");
   config.mapSetValue("Status Topic","/panel_test/exploration/status");
+  config.mapSetValue("Boundary Topic","/panel_test/boundary_draft");
   panel->load(config);  // 配置先于initialize。
   panel->initialize(&context);
   rviz_common::Config saved; panel->save(saved);
-  QString saved_task, saved_status;
+  QString saved_task, saved_status, saved_boundary;
   ASSERT_TRUE(saved.mapGetString("Task Topic",&saved_task)); EXPECT_EQ(saved_task,"/panel_test/exploration/task");
   ASSERT_TRUE(saved.mapGetString("Status Topic",&saved_status)); EXPECT_EQ(saved_status,"/panel_test/exploration/status");
+  ASSERT_TRUE(saved.mapGetString("Boundary Topic",&saved_boundary)); EXPECT_EQ(saved_boundary,"/panel_test/boundary_draft");
   auto wait = [&](auto predicate) {
     const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (std::chrono::steady_clock::now() < end) {
@@ -117,6 +123,8 @@ TEST(ExplorationPanelDds, PublishesValidatedCommandsWithConfirmationAndBackendAc
   // 最后一点与完成操作之间不泵Qt/ROS队列，必须同步形成完整四边形。
   EXPECT_TRUE(panel->findChild<QLabel *>("region")->text().contains("4 点"));
   button("finish")->click(); ASSERT_TRUE(button("start")->isEnabled());
+  ASSERT_TRUE(wait([&] { return !draft_markers.empty() && draft_markers.back().points.size()==5u; }));
+  EXPECT_EQ(draft_markers.back().header.frame_id,"map");
   confirm(QMessageBox::No, "start"); pump(); EXPECT_TRUE(tasks.empty());
   confirm(QMessageBox::Yes, "start"); ASSERT_TRUE(wait([&] { return tasks.size()==1; }));
   EXPECT_EQ(tasks[0].command, Task::START); EXPECT_EQ(tasks[0].header.frame_id,"map");
@@ -156,7 +164,17 @@ TEST(ExplorationPanelDds, PublishesValidatedCommandsWithConfirmationAndBackendAc
   Status old_status; old_status.state=Status::ERROR; old_status.reason_code="OLD_ENDPOINT";
   old_status_pub->publish(old_status);
   executor.spin_some();
+  reloaded_panel->load(config);  // 先统一任务/状态接口，再单独修改草图区接口。
+  std::vector<visualization_msgs::msg::Marker> reloaded_markers;
+  auto reloaded_draft_sub = peer->create_subscription<visualization_msgs::msg::Marker>(
+    "/panel_test/reloaded_boundary", rclcpp::QoS(1).reliable().transient_local(),
+    [&](visualization_msgs::msg::Marker::ConstSharedPtr marker) { reloaded_markers.push_back(*marker); });
+  config.mapSetValue("Boundary Topic","/panel_test/reloaded_boundary");
   reloaded_panel->load(config);
+  ASSERT_TRUE(wait([&] { return !reloaded_markers.empty(); }));
+  EXPECT_EQ(reloaded_markers.back().action,visualization_msgs::msg::Marker::DELETE);
+  reloaded_panel->save(saved);
+  ASSERT_TRUE(saved.mapGetString("Boundary Topic",&saved_boundary)); EXPECT_EQ(saved_boundary,"/panel_test/reloaded_boundary");
   ASSERT_TRUE(wait([&] { return reloaded_panel->findChild<QLabel *>("state")->text().contains("EXECUTING"); }));
   EXPECT_FALSE(reloaded_panel->findChild<QLabel *>("details")->text().contains("OLD_ENDPOINT"));
   reloaded_panel.reset();
