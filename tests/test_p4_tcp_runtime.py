@@ -1,14 +1,16 @@
 """P4域10接线与车辆租约回归；不依赖ROS。"""
 from types import SimpleNamespace as S
 import pytest
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]
 from scripts.simulation.p4_tcp_runtime import CONTROL_DOMAIN, P3_SOURCE_DOMAIN, input_bridge, launch_settings
 
 
 def test_control_launch_uses_existing_wheel_limits_and_private_adapter_input():
     assert (CONTROL_DOMAIN,P3_SOURCE_DOMAIN)==(10,57)
-    args=launch_settings('/p4/source','/p4/cache','/p4/test-wheel.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=6.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
-    assert args['command_topic']=='/p4_p3_debug/cmd_vel'
-    assert args['goal_topic']=='/goal_pose'
+    args=launch_settings(ROOT,'/p4/cache','/p4/test-wheel.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=6.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
+    assert args['command_topic']=='/Car/T4/control/cmd_vel'
+    assert args['goal_topic']=='/Car/T4/navigation/goal'
     assert args['enable_controller']=='true' and args['exploration_strategy']=='frontier'
     assert args['initial_travel_direction']=='forward'
     assert args['platform_config']=='/p4/test-wheel.yaml'
@@ -44,7 +46,7 @@ def test_p4_profile_has_no_map_time_expiry_and_preflight_uses_same_policy():
     from scripts.simulation.p3_input_timing import record_sample,runtime_input_health
     profile=yaml.safe_load((Path(__file__).resolve().parents[1]/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
     assert profile['p3_map_timeout_s']==0.
-    args=launch_settings('/p4/source','/p4/cache','/p4/wheel.yaml',profile)
+    args=launch_settings(ROOT,'/p4/cache','/p4/wheel.yaml',profile)
     assert float(args['p3_map_timeout_s'])==0.
     sample=record_sample(None,95_000_000_000,100_000_000_000,10.)
     assert runtime_input_health('map',sample,1100_000_000_000,1010.,odometry_timeout_s=4.5,p3_map_timeout_s=profile['p3_map_timeout_s'])['ready']
@@ -87,8 +89,8 @@ def test_low_speed_profile_is_shared_capped_and_does_not_mutate_source():
 
 def test_private_launch_uses_same_controller_budgets_and_initial_direction():
     budgets=dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2)
-    args=launch_settings('/p4/source','/p4/cache','/p4/wheel',budgets,prefix='/check',goal_topic='/check/goal')
-    assert args['command_topic']=='/check/cmd_vel' and args['action_name']=='/check/navigate_to_pose'
+    args=launch_settings(ROOT,'/p4/cache','/p4/wheel',budgets,prefix='/check',goal_topic='/check/goal')
+    assert args['command_topic']=='/check/control/cmd_vel' and args['action_name']=='/check/navigation/navigate_to_pose'
     assert args['initial_travel_direction']=='forward'
     assert float(args['p3_map_timeout_s'])==0. and args['goal_topic']=='/check/goal'
 
@@ -409,7 +411,7 @@ def test_tcp_production_profile_overrides_only_speed_and_feeds_launch_and_relay(
     assert base==original
     for key in ('maximum_acceleration_mps2','maximum_braking_deceleration_mps2','maximum_yaw_acceleration_radps2'):
         assert merged['capability'][key]==base['capability'][key]==.5
-    assert launch_settings('/p4/source','/p4/cache','/p4/final.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))['platform_config']=='/p4/final.yaml'
+    assert launch_settings(ROOT,'/p4/cache','/p4/final.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))['platform_config']=='/p4/final.yaml'
     relay=TcpCommandRelay(merged,publish_velocity=lambda x:None,publish_mode=lambda x:None,publish_lease=lambda x:None,make_zero=message)
     assert relay.limits==(.2,.2,.1)
 
@@ -445,7 +447,7 @@ def test_both_tcp_entries_load_same_configured_limits():
 
 
 def test_direct_settings_and_body_only_telemetry():
-    args=launch_settings('/source','/cache','/tcp.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
+    args=launch_settings(ROOT,'/cache','/tcp.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
     assert args['control_backend']=='mpcc_cmd_vel'
     assert float(args['command_hold_s'])==1.2
     r,events,clock=relay_fixture()
@@ -475,7 +477,7 @@ def test_tcp_hold_contract_is_single_profile_source():
     import yaml
     profile=yaml.safe_load((Path(__file__).resolve().parents[1]/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
     assert profile['command_hold_s']==1.2
-    assert float(launch_settings('/source','/cache','/tcp.yaml',profile)['command_hold_s'])==1.2
+    assert float(launch_settings(ROOT,'/cache','/tcp.yaml',profile)['command_hold_s'])==1.2
 
 
 def test_stock_interface_optional_connection_diagnostic():
@@ -514,10 +516,10 @@ def test_global_period_uses_shared_tcp_profile_in_both_entries():
     settings = yaml.safe_load((Path(__file__).resolve().parents[1]/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
     assert settings['global_period_s'] == 15.
     for prefix in ('/p4_p3_debug', '/bounded'):
-        args = launch_settings('/p4/source', '/p4/cache', '/p4/wheel.yaml', settings, prefix=prefix)
+        args = launch_settings(ROOT, '/p4/cache', '/p4/wheel.yaml', settings, prefix=prefix)
         assert float(args['global_period_s']) == 15.
     settings['global_period_s'] = 27.
-    assert float(launch_settings('/p4/source', '/p4/cache', '/p4/wheel.yaml', settings)['global_period_s']) == 27.
+    assert float(launch_settings(ROOT, '/p4/cache', '/p4/wheel.yaml', settings)['global_period_s']) == 27.
 
 
 def test_tcp_spin_response_delay_from_shared_feedback_config():
@@ -531,13 +533,13 @@ def test_tcp_spin_response_delay_from_shared_feedback_config():
 
 def test_exploration_strategy_is_explicit_and_preserves_settings():
     budgets = dict(command_hold_s=1.2, global_period_s=15.)
-    default = launch_settings('/source', '/cache', '/tcp.yaml', budgets)
+    default = launch_settings(ROOT, '/cache', '/tcp.yaml', budgets)
     assert default['exploration_strategy'] == 'frontier'
-    disabled = launch_settings('/source', '/cache', '/tcp.yaml', budgets, exploration_strategy='none')
+    disabled = launch_settings(ROOT, '/cache', '/tcp.yaml', budgets, exploration_strategy='none')
     assert disabled == dict(default, exploration_strategy='none')
     for invalid in ('drl', '', None):
         with pytest.raises(ValueError, match='exploration_strategy'):
-            launch_settings('/source', '/cache', '/tcp.yaml', budgets, exploration_strategy=invalid)
+            launch_settings(ROOT, '/cache', '/tcp.yaml', budgets, exploration_strategy=invalid)
 
 
 def test_main_exploration_cli_choices_and_forwarding(monkeypatch, capsys):
@@ -558,3 +560,105 @@ def test_main_exploration_cli_choices_and_forwarding(monkeypatch, capsys):
         runtime.main()
     assert error.value.code == 2
     assert 'invalid choice' in capsys.readouterr().err
+
+
+def test_topic_contract_keeps_p3_and_private_layers():
+    for prefix,namespace in ((None,'/Car/T4'),('/check','/check')):
+        args=launch_settings(ROOT,'/cache','/profile',dict(command_hold_s=1.2,mppi_compute_envelope_s=.55),prefix=prefix)
+        for key,suffix in dict(goal_topic='/navigation/goal',global_route_topic='/planning/global_route',tracking_status_topic='/control/tracking_status',exploration_map_topic='/mapping/exploration_map',task_topic='/exploration/task').items():
+            assert args[key]==namespace+suffix
+        assert args['map_topic']=='/Car/T3/mapping/grid_map'
+        assert args['odometry_topic']=='/Car/T3/localization/odometry'
+        assert args['map_qos_reliability']=='reliable' and args['map_qos_durability']=='transient_local'
+        assert float(args['mppi_compute_envelope_s'])==.55
+
+
+def test_observer_actual_subscriptions_use_injected_contract():
+    from scripts.simulation.p4_tcp_runtime import attach_navigation_observer
+    topics=[];published=[]
+    contract=dict(launch=dict(odometry_topic='/input/pose',goal_topic='/operator/goal'),visualization=dict(start_marker='/view/start',goal_marker='/view/goal',actual_path='/view/path'))
+    node=S(create_publisher=lambda cls,topic,qos:(published.append(topic) or S(publish=lambda msg:None)),create_subscription=lambda cls,topic,callback,qos:topics.append(topic))
+    worker,handles=attach_navigation_observer(node,node,dict(marker=object,path=object,pose=object,odom=object),dict(display=1,odom=2,goal=3),4.5,contract=contract)
+    try:
+        assert topics==['/input/pose','/operator/goal']
+        assert published==['/view/start','/view/goal','/view/path']
+    finally:worker.stop()
+
+
+def test_runtime_relay_registers_contract_endpoints():
+    import ast,inspect
+    from scripts.simulation import p4_tcp_runtime as runtime
+    tree=ast.parse(inspect.getsource(runtime.main))
+    block=next(n.body for n in ast.walk(tree) if isinstance(n,ast.If) and any(isinstance(s,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='vel' for t in s.targets) for s in n.body))
+    start=next(i for i,s in enumerate(block) if isinstance(s,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='vel' for t in s.targets))
+    end=next(i for i,s in enumerate(block) if isinstance(s,ast.Expr) and isinstance(s.value,ast.Call) and isinstance(s.value.func,ast.Attribute) and s.value.func.attr=='acquire')
+    topics=[]
+    node=S(create_publisher=lambda cls,topic,qos:(topics.append(('pub',topic)) or S(publish=lambda m:None)),create_subscription=lambda cls,topic,callback,qos:topics.append(('sub',topic)))
+    contract=dict(vehicle=dict(command_topic='/native/command',lease_topic='/native/lease',mode_topic='/native/mode',telemetry_topic='/native/body',connected_topic='/native/connection'))
+    env=dict(PREFIX=runtime.PREFIX,target=node,contract=contract,vehicle=contract['vehicle'],args=dict(command_topic='/test/control/cmd_vel'),Twist=message,Bool=S,String=S,VehicleTelemetry=S,qos=dict(odom=1,map=2),profile=profile(),handles=[],TcpCommandRelay=runtime.TcpCommandRelay)
+    exec(compile(ast.Module(body=block[start:end],type_ignores=[]),'<relay-wiring>','exec'),env)
+    assert topics==[('pub','/native/command'),('pub','/native/lease'),('pub','/native/mode'),('sub','/native/body'),('sub','/native/connection'),('sub','/test/control/cmd_vel')]
+
+
+def test_runtime_rviz_command_uses_rendered_contract(tmp_path):
+    import ast,inspect,yaml
+    from scripts.simulation import p4_tcp_runtime as runtime
+    tree=ast.parse(inspect.getsource(runtime.main))
+    block=next(n for n in ast.walk(tree) if isinstance(n,ast.If) and any(isinstance(c,ast.Attribute) and c.attr=='append' and isinstance(c.value,ast.Name) and c.value.id=='commands' for c in ast.walk(n)) and isinstance(n.test,ast.Compare) and isinstance(n.test.left,ast.Attribute) and n.test.left.attr=='rviz_config')
+    template=tmp_path/'template.rviz';template.write_text(yaml.safe_dump({'Visualization Manager':{'Tools':[{'Class':'rviz_default_plugins/SetGoal','Topic Key':'goal_topic'}]}}))
+    contract={'launch':{'goal_topic':'/operator/navigation/goal','global_route_topic':'/route'},'visualization':{}}
+    env=dict(out=tmp_path,options=S(rviz_config=template),yaml=yaml,render_rviz_config=runtime.render_rviz_config,contract=contract,commands=[])
+    exec(compile(ast.Module(body=[block],type_ignores=[]),'<rviz-runtime>','exec'),env)
+    generated=yaml.safe_load((tmp_path/'p4_navigation.rviz').read_text())
+    assert generated['Visualization Manager']['Tools'][0]['Topic']=='/operator/navigation/goal'
+    assert env['commands'][0][1][2]==str(tmp_path/'p4_navigation.rviz')
+
+
+def test_bounded_checker_registers_returned_topics_and_action():
+    import ast
+    tree=ast.parse((ROOT/'scripts/simulation/check_tcp_navigation.py').read_text(encoding='utf-8'))
+    nodes=[]
+    for node in tree.body:
+        if isinstance(node,ast.For) and isinstance(node.target,ast.Tuple) and [x.id for x in node.target.elts]==['topic','cls','kind']:nodes.append(node)
+        elif isinstance(node,ast.Expr) and isinstance(node.value,ast.Call) and isinstance(node.value.func,ast.Attribute) and node.value.func.attr=='append' and isinstance(node.value.func.value,ast.Name) and node.value.func.value.id=='subs':nodes.append(node)
+        elif isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='client' for t in node.targets):nodes.append(node)
+    topics=[];actions=[]
+    node=S(create_subscription=lambda cls,topic,callback,qos:topics.append(topic))
+    args=dict(odometry_topic='/Car/T3/localization/odometry',map_topic='/Car/T3/mapping/grid_map',exploration_map_topic='/check/mapping/exploration_map',diagnostics_topic='/check/control/diagnostics',tracking_status_topic='/check/control/tracking_status',local_path_topic='/check/planning/local_path',global_route_topic='/check/planning/global_route',command_topic='/check/control/cmd_vel',action_name='/check/navigation/navigate_to_pose')
+    env=dict(args=args,vehicle=dict(telemetry_topic='/car/telemetry',connected_topic='/car/ue_connected'),control_node=node,subs=[],q=1,map_qos=2,callback=lambda *a:None,command_input=lambda m:None,relay=S(update_connected=lambda m:None),ActionClient=lambda node,cls,topic:actions.append(topic))
+    env.update({k:object for k in ('Odometry','GridMap','OccupancyGrid','String','TrackingStatus','RosPath','VehicleTelemetry','Bool','Twist','NavigateToPose')})
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),'<bounded-wiring>','exec'),env)
+    assert topics==['/Car/T3/localization/odometry','/Car/T3/mapping/grid_map','/check/mapping/exploration_map','/check/control/diagnostics','/check/control/tracking_status','/check/planning/local_path','/check/planning/global_route','/car/telemetry','/car/ue_connected','/check/control/cmd_vel']
+    assert actions==['/check/navigation/navigate_to_pose']
+
+
+def test_preloaded_contract_is_used_without_rereading_and_preserves_namespace(monkeypatch):
+    from scripts.simulation import p4_topics
+    contract=p4_topics.load_topic_contract(ROOT)
+    original=dict(contract['launch'])
+    monkeypatch.setattr(p4_topics,'load_topic_contract',lambda *a:pytest.fail('unexpected second config read'))
+    args=launch_settings(ROOT,'/cache','/profile',dict(command_hold_s=1.2),prefix='/isolated',contract=contract)
+    assert args['command_topic']=='/isolated/control/cmd_vel'
+    assert args['goal_topic']=='/isolated/navigation/goal'
+    assert contract['launch']==original
+
+
+def test_runtime_counter_subscription_uses_configured_static_tf_qos():
+    import ast,inspect
+    from scripts.simulation import p4_tcp_runtime as runtime
+    tree=ast.parse(inspect.getsource(runtime.main))
+    loop=next(n for n in ast.walk(tree) if isinstance(n,ast.For) and isinstance(n.target,ast.Tuple) and [v.id for v in n.target.elts]==['topic','cls'])
+    registered=[]
+    env=dict(topics=dict(map_topic='/map',odometry_topic='/odom',tf_topic='/frames/live',tf_static_topic='/frames/static'),GridMap=type('GridMap',(),{}),Odometry=type('Odometry',(),{}),TFMessage=type('TFMessage',(),{}),target=S(create_subscription=lambda cls,topic,cb,qos:registered.append((topic,qos))),source_counts={},handles=[],qos=dict(map='map',odom='odom',tf='dynamic',tf_static='latched'))
+    exec(compile(ast.Module(body=[loop],type_ignores=[]),'<counter-qos>','exec'),env)
+    assert registered[-1]==('/frames/static','latched')
+
+
+def test_checker_loads_launch_from_active_overlay(tmp_path):
+    import ast
+    launch=tmp_path/'launch';launch.mkdir();(launch/'nav1cm_exploration.launch.py').write_text('current overlay')
+    tree=ast.parse((ROOT/'scripts/simulation/check_tcp_navigation.py').read_text(encoding='utf-8'))
+    node=next(n for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='launch_source' for t in n.targets))
+    env=dict(ROOT=tmp_path/'wrong-install',Path=Path,get_package_share_directory=lambda package:str(tmp_path))
+    exec(compile(ast.Module(body=[node],type_ignores=[]),'<overlay-launch>','exec'),env)
+    assert env['launch_source']=='current overlay'

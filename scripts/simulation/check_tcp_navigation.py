@@ -6,6 +6,8 @@ from p4_tcp_runtime import (CONTROL_DOMAIN, TcpCommandRelay, load_tcp_platform_p
 import os,json,time,math,signal,subprocess,collections
 from pathlib import Path
 import yaml
+from p4_topics import load_topic_contract
+from ament_index_python.packages import get_package_share_directory
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.action import ActionClient
@@ -36,11 +38,12 @@ limits=profile_command_limits(profile)
 result['speed_limits']=dict(v=limits[0],reverse=limits[1],w=limits[2])
 config=OUT/'test-wheel.yaml';config.write_text(yaml.safe_dump(profile,sort_keys=False))
 feedback_budget=yaml.safe_load((ROOT/'source/config/tcp_p3_feedback.yaml').read_text())
+contract=load_topic_contract(ROOT/'source');vehicle=contract['vehicle']
 args=launch_settings(ROOT/'source',ROOT/'.cache/nav1cm',config,feedback_budget,
-                     prefix=PREFIX,goal_topic=PREFIX+'/goal')
+                     prefix=PREFIX,contract=contract)
 result['feedback_budget']=feedback_budget
 env=runtime_environment(ROOT,OUT)
-launch_source=(ROOT/'ros2-humble/install/lunar_pure_exploration_ros/share/lunar_pure_exploration_ros/launch/nav1cm_exploration.launch.py').read_text()
+launch_source=(Path(get_package_share_directory('lunar_pure_exploration_ros'))/'launch/nav1cm_exploration.launch.py').read_text(encoding='utf-8')
 needle='return Node(package=package, executable=executable, output="screen", parameters=[{**params,**clock}])'
 assert launch_source.count(needle)==1
 launch_source=launch_source.replace(needle,'return Node(package=package, executable=executable, namespace="/p4_tcp_navigation_check", output="screen", parameters=[{**params,**clock}])')
@@ -49,7 +52,7 @@ command=['ros2','launch',str(private_launch)]+[k+':='+str(v) for k,v in args.ite
 contexts=[];nodes=[];executors=[];subs=[];process=None;handle=None;terminal=None;nonzero=0;latest={};counts=collections.Counter();reasons=collections.Counter();positions=[];feedback=[];reference_accepted=False;initial_pose=None;goal=None
 for domain in (CONTROL_DOMAIN,):
  c=rclpy.Context();rclpy.init(context=c,domain_id=domain);contexts.append(c);n=rclpy.create_node('p4_tcp_closedloop_'+str(domain),context=c);nodes.append(n);e=SingleThreadedExecutor(context=c);e.add_node(n);executors.append(e)
-control_node=nodes[0];vel=control_node.create_publisher(Twist,'/car/cmd_vel',10);lease=control_node.create_publisher(Bool,'/car/external_control_lease',10);mode=control_node.create_publisher(String,'/car/set_mode',10)
+control_node=nodes[0];vel=control_node.create_publisher(Twist,vehicle['command_topic'],10);lease=control_node.create_publisher(Bool,vehicle['lease_topic'],10);mode=control_node.create_publisher(String,vehicle['mode_topic'],10)
 relay=TcpCommandRelay(profile,publish_velocity=vel.publish,
  publish_mode=lambda value:mode.publish(String(data=value)),
  publish_lease=lambda value:lease.publish(Bool(data=value)),make_zero=Twist)
@@ -77,10 +80,10 @@ def callback(kind,msg):
  elif kind in ('local_path','global_path'):event(kind,poses=len(msg.poses));counts[kind+'_nonempty']+=int(bool(msg.poses))
  elif kind=='telemetry':
   relay.update_telemetry(msg);event(kind,vx=msg.vx,vy=msg.vy,wz=msg.wz)
-for topic,cls,kind in [('/Car/T3/localization/odometry',Odometry,'odom'),('/Car/T3/mapping/grid_map',GridMap,'map'),(PREFIX+'/exploration_map',OccupancyGrid,'exploration_map'),(PREFIX+'/control/diagnostics',String,'diag'),(PREFIX+'/tracking_status',TrackingStatus,'tracking'),(PREFIX+'/local_path',RosPath,'local_path'),(PREFIX+'/global_route',RosPath,'global_path')]:
+for topic,cls,kind in [(args['odometry_topic'],Odometry,'odom'),(args['map_topic'],GridMap,'map'),(args['exploration_map_topic'],OccupancyGrid,'exploration_map'),(args['diagnostics_topic'],String,'diag'),(args['tracking_status_topic'],TrackingStatus,'tracking'),(args['local_path_topic'],RosPath,'local_path'),(args['global_route_topic'],RosPath,'global_path')]:
  subs.append(control_node.create_subscription(cls,topic,lambda msg,k=kind:callback(k,msg),map_qos if kind=='map' else q))
-subs.append(control_node.create_subscription(VehicleTelemetry,'/car/telemetry',lambda msg:callback('telemetry',msg),q))
-subs.append(control_node.create_subscription(Bool,'/car/ue_connected',relay.update_connected,map_qos))
+subs.append(control_node.create_subscription(VehicleTelemetry,vehicle['telemetry_topic'],lambda msg:callback('telemetry',msg),q))
+subs.append(control_node.create_subscription(Bool,vehicle['connected_topic'],relay.update_connected,map_qos))
 def command_input(msg):
  global nonzero
  counts['controller_commands']+=1;event('controller_command',v=msg.linear.x,w=msg.angular.z)
@@ -88,8 +91,8 @@ def command_input(msg):
  was_armed=relay.armed
  forwarded=relay.receive(msg)
  if forwarded and not was_armed:event('auto_mode_entered')
-subs.append(control_node.create_subscription(Twist,PREFIX+'/cmd_vel',command_input,q))
-client=ActionClient(control_node,NavigateToPose,PREFIX+'/navigate_to_pose')
+subs.append(control_node.create_subscription(Twist,args['command_topic'],command_input,q))
+client=ActionClient(control_node,NavigateToPose,args['action_name'])
 def params(name,keys):
  c=control_node.create_client(GetParameters,PREFIX+'/'+name+'/get_parameters');assert c.wait_for_service(timeout_sec=10.),name;r=GetParameters.Request();r.names=keys;f=c.call_async(r);end=time.monotonic()+10
  while not f.done() and time.monotonic()<end:spin(.05)
@@ -103,8 +106,8 @@ try:
  assert result['planner_params']['allow_unknown'] is True
  assert result['planner_params']['control_backend']=='mpcc_cmd_vel' and result['planner_params']['enable_controller']
  assert not result['planner_params']['execution_contract_enabled']
- assert result['planner_params']['command_topic']==PREFIX+'/cmd_vel'
- assert result['planner_params']['odometry_topic']=='/Car/T3/localization/odometry'
+ assert result['planner_params']['command_topic']==args['command_topic']
+ assert result['planner_params']['odometry_topic']==args['odometry_topic']
  assert abs(result['planner_params']['linear_speed_mps']-min(limits[:2]))<1e-9 and abs(result['planner_params']['angular_speed_rps']-limits[2])<1e-9
  end=time.monotonic()+15
  while not all(k in latest for k in ('odom','exploration_map','telemetry')) and time.monotonic()<end:spin(.1)
@@ -131,7 +134,7 @@ try:
  od=latest['odom'][1];p=od.pose.pose.position;initial_pose=(p.x,p.y,p.z);positions.clear();positions.append(initial_pose)
  q0=od.pose.pose.orientation;yaw=math.atan2(2*(q0.w*q0.z+q0.x*q0.y),1-2*(q0.y*q0.y+q0.z*q0.z))
  goal=(p.x+.5*math.cos(yaw),p.y+.5*math.sin(yaw));result['goal']=goal;result['initial_pose']=initial_pose;result['goal_policy']='0.5m forward in explicitly authorized UNKNOWN; known BLOCKED still vetoed by planner/controller'
- gui_publishers=[i.node_name for i in control_node.get_publishers_info_by_topic('/car/cmd_vel')];assert all(x in ('lunar_car_gui_node','p4_tcp_closedloop_10') for x in gui_publishers),gui_publishers;result['vehicle_command_publishers']=gui_publishers
+ gui_publishers=[i.node_name for i in control_node.get_publishers_info_by_topic(vehicle['command_topic'])];assert all(x in ('lunar_car_gui_node','p4_tcp_closedloop_10') for x in gui_publishers),gui_publishers;result['vehicle_command_publishers']=gui_publishers
  relay.acquire();spin(.3)
  assert client.wait_for_server(timeout_sec=5.);request=NavigateToPose.Goal();request.target_x_m=goal[0];request.target_y_m=goal[1];request.has_target_yaw=False
  f=client.send_goal_async(request,feedback_callback=lambda m:(feedback.append(m.feedback.reason_code),event('navigation_feedback',reason=m.feedback.reason_code)));end=time.monotonic()+8

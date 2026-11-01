@@ -13,30 +13,42 @@ from collections import deque
 
 CONTROL_DOMAIN=10
 P3_SOURCE_DOMAIN=57
-PREFIX='/p4_p3_debug'
+PREFIX='/Car/T4'
 TRANSPORT_TIMEOUT_S=.5
 
 
-def launch_settings(source,build_dir,profile_path,budgets,*,prefix=PREFIX,goal_topic="/goal_pose",exploration_strategy="frontier"):
+try:
+    from .p4_topics import load_topic_contract, launch_topic_arguments, render_rviz_config
+except ImportError:
+    from p4_topics import load_topic_contract, launch_topic_arguments, render_rviz_config
+
+
+def launch_settings(source,build_dir,profile_path,budgets,*,prefix=None,goal_topic=None,exploration_strategy="frontier",contract=None):
     if exploration_strategy not in ("none", "frontier"):
         raise ValueError("exploration_strategy must be none or frontier")
-    try:from .debug_p3_planning import launch_arguments
-    except ImportError:from debug_p3_planning import launch_arguments
-    args=launch_arguments(source,build_dir,profile={k:v for k,v in budgets.items() if k not in ("command_hold_s", "global_period_s", "command_spin_prepare_s")},allow_unknown=True)
-    args={key:(prefix+value[len(PREFIX):] if isinstance(value,str) and value.startswith(PREFIX+'/') else value)
-          for key,value in args.items()}
-    args.update(command_spin_prepare_s=str(budgets.get('command_spin_prepare_s',0.)),global_period_s=str(budgets.get('global_period_s',15.)),command_hold_s=str(budgets['command_hold_s']),control_backend='mpcc_cmd_vel',enable_controller='true',exploration_strategy=exploration_strategy,
-                platform_config=str(profile_path),command_topic=prefix+'/cmd_vel',goal_topic=goal_topic,
-                initial_travel_direction='forward')
+    allowed={'odometry_timeout_s','p3_map_timeout_s','mppi_time_steps','mppi_compute_envelope_s',
+             'command_hold_s','global_period_s','command_spin_prepare_s'}
+    if not isinstance(budgets,dict) or set(budgets)-allowed:
+        raise ValueError('TCP profile只能覆盖既有输入/预测/计算预算')
+    args=launch_topic_arguments(source,namespace=prefix,contract=contract)
+    args.update({k:str(v) for k,v in budgets.items()})
+    args.update(use_sim_time='false',build_dir=str(build_dir),allow_unknown='true',
+                map_qos_reliability='reliable',map_qos_durability='transient_local',
+                command_spin_prepare_s=str(budgets.get('command_spin_prepare_s',0.)),
+                global_period_s=str(budgets.get('global_period_s',15.)),command_hold_s=str(budgets['command_hold_s']),
+                control_backend='mpcc_cmd_vel',enable_controller='true',exploration_strategy=exploration_strategy,
+                platform_config=str(profile_path),initial_travel_direction='forward')
+    if goal_topic is not None:args['goal_topic']=goal_topic
     return args
 
 
-def input_bridge(source,target,classes,qos):
+def input_bridge(source,target,classes,qos,contract=None):
+    topics=(load_topic_contract() if contract is None else contract)['launch']
     # 回调直接交付原消息，禁止重标源时间、反向转发或控制转发。
     handles=[]
-    for topic,kind,key in [('/Car/T3/mapping/grid_map','map','map'),
-                           ('/Car/T3/localization/odometry','odom','odom'),
-                           ('/tf','tf','tf'),('/tf_static','tf','tf_static')]:
+    for topic,kind,key in [(topics['map_topic'],'map','map'),
+                           (topics['odometry_topic'],'odom','odom'),
+                           (topics['tf_topic'],'tf','tf'),(topics['tf_static_topic'],'tf','tf_static')]:
         publisher=target.create_publisher(classes[kind],topic,qos.get(key+'_output',qos[key]))
         subscription=source.create_subscription(classes[kind],topic,publisher.publish,qos[key])
         handles.extend((publisher,subscription))
@@ -182,9 +194,11 @@ class DisplayWorker:
         self.thread.join()
 
 
-def attach_navigation_observer(source, target, classes, qos, timeout):
-    pubs = [target.create_publisher(classes[kind], PREFIX+topic, qos['display']) for kind,topic in
-            [('marker','/start_marker'),('marker','/goal_marker'),('path','/actual_path')]]
+def attach_navigation_observer(source, target, classes, qos, timeout, contract=None):
+    contract=load_topic_contract() if contract is None else contract
+    topics=contract['launch']; visualization=contract['visualization']
+    pubs = [target.create_publisher(classes[kind], visualization[key], qos['display']) for kind,key in
+            [('marker','start_marker'),('marker','goal_marker'),('path','actual_path')]]
     start_header = [None]
     def marker(pose, index, color):
         m = classes['marker'](); m.ns='p4_navigation'; m.id=index
@@ -205,8 +219,8 @@ def attach_navigation_observer(source, target, classes, qos, timeout):
         publish_start,
         lambda p:pubs[1].publish(marker(p,1,(1.,0.,0.))),pubs[2].publish,timeout,defer_path=True)
     worker = DisplayWorker(observer,timeout); worker.start()
-    subs = [source.create_subscription(classes['odom'],'/Car/T3/localization/odometry',worker.offer_odom,qos['odom']),
-            target.create_subscription(classes['pose'],'/goal_pose',worker.offer_goal,qos['goal'])]
+    subs = [source.create_subscription(classes['odom'],topics['odometry_topic'],worker.offer_odom,qos['odom']),
+            target.create_subscription(classes['pose'],topics['goal_topic'],worker.offer_goal,qos['goal'])]
     return worker,[*pubs,*subs]
 
 
@@ -349,6 +363,7 @@ def main():
     from tf2_msgs.msg import TFMessage
     from std_msgs.msg import Bool,String
     from lunar_car_ctrl.msg import VehicleTelemetry
+    contract=load_topic_contract(root/'source');topics=contract['launch'];vehicle=contract['vehicle']
     contexts=[];nodes=[];executors=[];children=[];logs=[];stopping=[False]
     for domain,name in [(P3_SOURCE_DOMAIN,'p4_p3_input_reader'),(CONTROL_DOMAIN,'p4_tcp_runtime')]:
         context=rclpy.Context();rclpy.init(context=context,domain_id=domain)
@@ -361,12 +376,12 @@ def main():
              tf_output=QoSProfile(depth=100,reliability=ReliabilityPolicy.RELIABLE),
              odom_output=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE),
              tf_static=QoSProfile(depth=100,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL))
-    handles=input_bridge(source,target,dict(map=GridMap,odom=Odometry,tf=TFMessage),qos)
+    handles=input_bridge(source,target,dict(map=GridMap,odom=Odometry,tf=TFMessage),qos,contract=contract)
     display_worker=None
     source_counts={};relay=None;lease=None;mode=None;vel=None
-    for topic,cls in [('/Car/T3/mapping/grid_map',GridMap),('/Car/T3/localization/odometry',Odometry),('/tf',TFMessage),('/tf_static',TFMessage)]:
+    for topic,cls in [(topics['map_topic'],GridMap),(topics['odometry_topic'],Odometry),(topics['tf_topic'],TFMessage),(topics['tf_static_topic'],TFMessage)]:
         def received(msg,key=topic):source_counts[key]=source_counts.get(key,0)+1
-        key='map' if cls is GridMap else 'odom' if cls is Odometry else 'tf_static' if topic=='/tf_static' else 'tf'
+        key='map' if cls is GridMap else 'odom' if cls is Odometry else 'tf_static' if topic==topics['tf_static_topic'] else 'tf'
         handles.append(target.create_subscription(cls,topic,received,qos[key]))
     def spin(seconds):
         end=time.monotonic()+seconds
@@ -383,27 +398,29 @@ def main():
             if options.rviz_config is not None and not options.check_only:
                 qos['display']=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
                 qos['goal']=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE)
-                display_worker,display_handles=attach_navigation_observer(source,target,dict(pose=PoseStamped,path=RosPath,odom=Odometry,marker=Marker),qos,budgets['odometry_timeout_s'])
+                display_worker,display_handles=attach_navigation_observer(source,target,dict(pose=PoseStamped,path=RosPath,odom=Odometry,marker=Marker),qos,budgets['odometry_timeout_s'],contract=contract)
                 handles.extend(display_handles)
-            args=launch_settings(root/'source',root/'.cache/nav1cm',config,budgets,exploration_strategy=options.exploration_strategy)
+            args=launch_settings(root/'source',root/'.cache/nav1cm',config,budgets,exploration_strategy=options.exploration_strategy,contract=contract)
             env=runtime_environment(root,out)
             commands=[('navigation',['ros2','launch','lunar_pure_exploration_ros','nav1cm_exploration.launch.py']+[k+':='+str(v) for k,v in args.items()])]
             if options.rviz_config is not None:
-                commands.append(('rviz',['rviz2','-d',str(options.rviz_config),'--ros-args','-r','__node:=p4_planning_rviz']))
+                rviz_config=out/'p4_navigation.rviz'
+                rviz_config.write_text(yaml.safe_dump(render_rviz_config(yaml.safe_load(options.rviz_config.read_text(encoding='utf-8')),contract),sort_keys=False),encoding='utf-8')
+                commands.append(('rviz',['rviz2','-d',str(rviz_config),'--ros-args','-r','__node:=p4_planning_rviz']))
             for name,command in commands:
                 log=(out/(name+'.log')).open('w');logs.append(log)
                 child=subprocess.Popen(command,env=env,cwd=out,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
                 children.append((name,child))
             (out/'launch-arguments.json').write_text(json.dumps(args,indent=2))
-            vel=target.create_publisher(Twist,'/car/cmd_vel',10)
-            lease=target.create_publisher(Bool,'/car/external_control_lease',10)
-            mode=target.create_publisher(String,'/car/set_mode',10)
+            vel=target.create_publisher(Twist,vehicle['command_topic'],10)
+            lease=target.create_publisher(Bool,vehicle['lease_topic'],10)
+            mode=target.create_publisher(String,vehicle['mode_topic'],10)
             relay=TcpCommandRelay(profile,publish_velocity=vel.publish,
                 publish_mode=lambda value:mode.publish(String(data=value)),
                 publish_lease=lambda value:lease.publish(Bool(data=value)),make_zero=Twist)
-            handles.append(target.create_subscription(VehicleTelemetry,'/car/telemetry',relay.update_telemetry,qos['odom']))
-            handles.append(target.create_subscription(Bool,'/car/ue_connected',relay.update_connected,qos['map']))
-            handles.append(target.create_subscription(Twist,PREFIX+'/cmd_vel',relay.receive,qos['odom']))
+            handles.append(target.create_subscription(VehicleTelemetry,vehicle['telemetry_topic'],relay.update_telemetry,qos['odom']))
+            handles.append(target.create_subscription(Bool,vehicle['connected_topic'],relay.update_connected,qos['map']))
+            handles.append(target.create_subscription(Twist,args['command_topic'],relay.receive,qos['odom']))
             relay.acquire();spin(.3)
         (out/'pids.json').write_text(json.dumps(dict(operator=os.getpid(),children={name:c.pid for name,c in children})))
         while not stopping[0] and (options.duration<=0 or time.monotonic()-started<options.duration):
