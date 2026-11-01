@@ -5,7 +5,7 @@ from time import perf_counter
 import numpy as np
 
 from .contracts import Route, _readonly_array
-from .global_planner import _segment_clear
+from .global_planner import _segment_clear, path_cost
 
 
 @dataclass(frozen=True)
@@ -42,8 +42,10 @@ def _overlaps(box, blocked):
                        (blocked[:, 1] <= box[3]) & (blocked[:, 3] >= box[1])))
 
 
-def _segments_clear(starts, ends, blocked):
+def _segments_clear(starts, ends, blocked, corner_radius=0.):
     """批量执行与 _segment_clear 相同的闭区间裁剪，触边仍拒绝。"""
+    if corner_radius > 0:
+        return all(_segment_clear(a,b,blocked,corner_radius=corner_radius) for a,b in zip(starts,ends))
     lo = np.zeros((len(starts), len(blocked)))
     hi = np.ones_like(lo)
     possible = np.ones_like(lo, dtype=bool)
@@ -61,23 +63,28 @@ def _segments_clear(starts, ends, blocked):
     return not bool(np.any(possible & (lo <= hi)))
 
 
-def _overlap_mask(boxes, blocked):
+def _overlap_mask(boxes, blocked, corner_radius=0.):
     """每个凸包盒的障碍闭区间相交掩码。"""
+    if corner_radius > 0:
+        raw = blocked + [corner_radius,corner_radius,-corner_radius,-corner_radius]
+        gap = np.maximum(np.maximum(raw[None,:,:2]-boxes[:,None,2:],
+                                    boxes[:,None,:2]-raw[None,:,2:]),0.)
+        return np.any(np.sum(gap*gap,axis=2) <= (corner_radius+1e-12)**2,axis=1)
     return np.any((blocked[None, :, 0] <= boxes[:, None, 2]) &
                   (blocked[None, :, 2] >= boxes[:, None, 0]) &
                   (blocked[None, :, 1] <= boxes[:, None, 3]) &
                   (blocked[None, :, 3] >= boxes[:, None, 1]), axis=1)
 
 
-def reference_clear(shaped: ShapedRoute, blocked_boxes) -> bool:
+def reference_clear(shaped: ShapedRoute, blocked_boxes, *, corner_radius=0.) -> bool:
     """当前地图必须同时接纳采样折线与全部连续曲线凸包叶证据。"""
     try:
         blocked = _boxes(blocked_boxes)
         proof = _boxes(shaped.proof_boxes)
         points = shaped.route.points
         return bool(np.isfinite(points).all()
-                    and all(_segment_clear(a, b, blocked) for a, b in zip(points[:-1], points[1:]))
-                    and all(not _overlaps(box, blocked) for box in proof))
+                    and all(_segment_clear(a, b, blocked,corner_radius=corner_radius) for a, b in zip(points[:-1], points[1:]))
+                    and not np.any(_overlap_mask(proof,blocked,corner_radius)))
     except (ValueError, TypeError, AttributeError):
         return False
 
@@ -88,7 +95,8 @@ class _Exhausted(Exception):
 
 def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
                 step_m=.05, max_points=4096, clock=perf_counter,
-                raw_verified=False, terminal_yaw=None) -> ShapedRoute:
+                raw_verified=False, terminal_yaw=None, soft_clearance_m=0.,
+                clearance_weight=0., corner_radius=0.) -> ShapedRoute:
     """新全局路线的有界后处理；耗尽回退整条已验证原路线，不留部分曲线。
 
     terminal_yaw 可选；三次末段连接的终切线按 yaw 模 pi 选择最小转角。
@@ -105,6 +113,9 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
             or max_trim_m < 0 or not np.isfinite(step_m) or step_m <= 0
             or type(max_points) is not int or max_points < 2
             or type(raw_verified) is not bool
+            or not np.isfinite(soft_clearance_m) or soft_clearance_m < 0
+            or not np.isfinite(clearance_weight) or clearance_weight < 0
+            or not np.isfinite(corner_radius) or corner_radius < 0
             or (terminal_yaw is not None and not np.isfinite(terminal_yaw))):
         raise ValueError("invalid smoothing budget, trim, step or point limit")
     began = clock()
@@ -125,7 +136,7 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
             for offset in range(0, len(blocked), 1024):
                 check()
                 clear = _segments_clear(starts[first:first + 64], ends[first:first + 64],
-                                        blocked[offset:offset + 1024])
+                                        blocked[offset:offset + 1024],corner_radius=corner_radius)
                 check()
                 if not clear:
                     return False
@@ -138,7 +149,7 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
             for offset in range(0, len(blocked), 1024):
                 check()
                 mask[first:first + 64] |= _overlap_mask(boxes[first:first + 64],
-                                                       blocked[offset:offset + 1024])
+                                                       blocked[offset:offset + 1024],corner_radius=corner_radius)
                 check()
         return mask
 
@@ -309,6 +320,17 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
             return fallback("GEOMETRY_REJECTED")
         if np.any(overlaps(shaped.proof_boxes)):
             return fallback("GEOMETRY_REJECTED")
+        if soft_clearance_m > 0 and clearance_weight > 0:
+            # 搜索、拉直与Bezier整形复用同一路径代价，避免安全的剪角重新贴障。
+            original_cost = path_cost(points, blocked, soft_clearance_m, clearance_weight, check,corner_radius=corner_radius)
+            shaped_cost = path_cost(shaped.route.points, blocked, soft_clearance_m, clearance_weight, check,corner_radius=corner_radius)
+            original_length = np.linalg.norm(np.diff(points, axis=0), axis=1).sum()
+            shaped_length = np.linalg.norm(np.diff(shaped.route.points, axis=0), axis=1).sum()
+            has_clearance_cost = (original_cost > original_length + 1e-9 or
+                                  shaped_cost > shaped_length + 1e-9)
+            # 无近障代价时仍允许为最终朝向生成稍长的平滑末段。
+            if has_clearance_cost and shaped_cost > original_cost + 1e-9:
+                return fallback("CLEARANCE_COST")
         check()
         return shaped
     except _Exhausted as exhausted:

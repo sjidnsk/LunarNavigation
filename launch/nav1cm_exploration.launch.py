@@ -18,6 +18,8 @@ def _topic_defaults():
 
 
 DEFAULTS = {'global_period_s': '15.0',
+ 'global_soft_clearance_m': '0.4',
+ 'global_clearance_weight': '0.5',
  'command_hold_s': '0.0',
  'command_spin_prepare_s': '0.0',
  'control_backend': 'path_mppi',
@@ -44,6 +46,10 @@ DEFAULTS = {'global_period_s': '15.0',
 
 def _compose(context):
     values = {k: LaunchConfiguration(k).perform(context).strip() or v for k,v in DEFAULTS.items()}
+    for name in ('global_soft_clearance_m','global_clearance_weight'):
+        values[name] = float(values[name])
+        if not isfinite(values[name]) or values[name] < 0:
+            raise ValueError(name + ' must be finite and nonnegative')
     values["command_spin_prepare_s"] = float(values["command_spin_prepare_s"])
     if not isfinite(values["command_spin_prepare_s"]) or values["command_spin_prepare_s"] < 0:
         raise ValueError("command_spin_prepare_s must be finite and nonnegative")
@@ -95,6 +101,8 @@ def _compose(context):
         node("lunar_nav1cm_planner", "navigation_task_node", {
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
             "global_period_s":values["global_period_s"],
+            "global_soft_clearance_m":values["global_soft_clearance_m"],
+            "global_clearance_weight":values["global_clearance_weight"],
             "command_hold_s":float(values["command_hold_s"]),
             "command_spin_prepare_s":values["command_spin_prepare_s"],
             "control_backend":values["control_backend"],

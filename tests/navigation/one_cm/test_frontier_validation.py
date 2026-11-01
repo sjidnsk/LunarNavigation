@@ -301,7 +301,7 @@ def test_short_raw_command_violation_fails_even_when_plant_slews(v,w):
     assert not m.commands_in_bounds([dict(kind='COMMAND',v=v,w=w)],limits)
 
 
-@pytest.mark.parametrize('field,value',[('motion_model','ackermann'),('body_extent_m',[3,1,1]),('minimum_clearance_m',.4),('footprint_xy_m',[[0,0]]*4)])
+@pytest.mark.parametrize('field,value',[('motion_model','ackermann'),('body_extent_m',[3,1,1]),('minimum_clearance_m',-.1),('footprint_xy_m',[[0,0]]*4)])
 def test_incompatible_plant_geometry_is_rejected(tmp_path,field,value):
     import yaml
     from types import SimpleNamespace as S

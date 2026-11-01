@@ -1,5 +1,7 @@
 # 轮式实车入口：共享算法预算，保持平台原生速度出口；启动后等待外部任务。
 global_period_s: 15.0
+global_soft_clearance_m: 0.4
+global_clearance_weight: 0.5
 command_hold_s: 1.2
 command_spin_prepare_s: 0.0
 control_backend: mpcc_cmd_vel
