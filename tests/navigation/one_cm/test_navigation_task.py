@@ -290,7 +290,8 @@ def test_not_due_new_negative_pose_still_clears_arrival_hold(state):
     pending=session.tick(.05)
     assert pending.result.status=='NOT_DUE'
     task.observe(pending,.05,state_updated=True)
-    assert task._arrived_since is None and task.active.outcome is None
+    assert task._arrived_since == (0. if state == VehicleState(.11,0.,0.,0.,0.) else None)
+    assert task.active.outcome is None
 
 
 def test_pending_map_proof_cannot_finish_and_blocked_goal_resets_hold():

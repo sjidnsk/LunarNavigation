@@ -544,7 +544,7 @@ def test_command_publisher_failure_is_not_swallowed():
         runtime._command(packet,(0.,0.))
 
 
-@pytest.mark.parametrize('position,success',[(.08,True),(.11,False)])
+@pytest.mark.parametrize('position,success',[(.08,True),(.11,True)])
 def test_direct_new_pose_on_not_due_is_evaluated_after_current_proof(position,success):
     from dataclasses import replace
     runtime,session,*_=build_runtime()

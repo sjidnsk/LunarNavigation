@@ -75,6 +75,7 @@ class PlannerRuntime:
         self._last_issued_command=(0.,0.)
         self._last_issued_s=None
         self._observed_pose_stamp_ns = None
+        self._applied_pose_stamp_ns = None
 
     def configure_direct_control(self, publish_command, *, command_hold_s, reference_interval_s=.2, command_spin_prepare_s=0.):
         if isinstance(command_hold_s,bool) or not math.isfinite(command_hold_s) or command_hold_s<=0:
@@ -198,8 +199,8 @@ class PlannerRuntime:
                 source_ns=int(source.sec)*1_000_000_000+int(source.nanosec)
             except (AttributeError,ValueError,TypeError):
                 source_ns=None
-            # 复用已有消费源戳；同一P3帧不作为新的阶段完成证据。
-            accepted=self._observed_pose_stamp_ns
+            # 位姿已应用与到达证据已消费是两个时刻；NOT_DUE时仍不得重写同一源帧。
+            accepted=self._applied_pose_stamp_ns
             if source_ns is not None and accepted is not None and source_ns<=accepted:
                 return
         try:value=state_from_odometry(message,transforms,self.map_frame)
@@ -217,6 +218,8 @@ class PlannerRuntime:
             self._pose_waiting=False
             self._notice('ODOMETRY_RECOVERED','valid_pose_replanning')
         self.session.offer_state(value)
+        if self.publish_command is not None and source_ns is not None:
+            self._applied_pose_stamp_ns=source_ns
 
     def enable_execution_contract(self,timeout_s=2.):
         if self.publish_command is not None:

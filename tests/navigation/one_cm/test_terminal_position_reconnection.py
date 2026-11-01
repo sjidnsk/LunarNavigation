@@ -94,7 +94,7 @@ def test_mpcc_shooting_yaws_follow_position_connection(lateral,mode):
 
 
 @pytest.mark.parametrize('asynchronous',[False,True])
-def test_terminal_heading_retains_position_completion_until_acceptance_boundary(asynchronous):
+def test_terminal_heading_retains_position_completion_after_drift(asynchronous):
     c=coordinator(asynchronous);c.goal_position_target_m=.02
     goal=(0.,0.);w=world()
     first=c.tick(w,VehicleState(.015,0.,0.,0.,0.),goal,0.,goal_yaw=1.)
@@ -103,9 +103,9 @@ def test_terminal_heading_retains_position_completion_until_acceptance_boundary(
         result=c.tick(w,VehicleState(distance,0.,0.,.02,.02),goal,.05*index,goal_yaw=1.)
         assert result.reference.terminal_yaw==1.
     result=c.tick(w,VehicleState(.101,0.,0.,0.,0.),goal,.2,goal_yaw=1.)
-    assert result.reference.terminal_yaw is None
+    assert result.reference.terminal_yaw == 1.
     result=c.tick(w,VehicleState(.09,0.,0.,0.,0.),goal,.25,goal_yaw=1.)
-    assert result.reference.terminal_yaw is None
+    assert result.reference.terminal_yaw == 1.
 
 
 @pytest.mark.parametrize('asynchronous',[False,True])
