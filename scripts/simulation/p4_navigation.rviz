@@ -1,6 +1,10 @@
 Panels:
 - Class: rviz_common/Displays
   Name: Displays
+- Class: lunar_navigation_rviz/ExplorationPanel
+  Name: 导航与探索
+  Task Topic: /p4_p3_debug/exploration/task
+  Status Topic: /p4_p3_debug/exploration/status
 Visualization Manager:
   Class: ''
   Global Options:
@@ -114,8 +118,49 @@ Visualization Manager:
     Color: 190; 80; 255
     Line Style: Billboards
     Line Width: 0.08
+  - Class: rviz_default_plugins/Marker
+    Name: Editing exploration region
+    Enabled: true
+    Topic:
+      Value: /lunar_rviz/boundary
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/MarkerArray
+    Name: Active exploration boundary
+    Enabled: true
+    Topic:
+      Value: /p4_p3_debug/exploration/task_boundary
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/MarkerArray
+    Name: Exploration task map
+    Enabled: true
+    Topic:
+      Value: /p4_p3_debug/exploration/task_map_markers
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/MarkerArray
+    Name: Exploration frontiers
+    Enabled: true
+    Topic:
+      Value: /p4_p3_debug/exploration/frontiers
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/Pose
+    Name: Current exploration goal
+    Enabled: true
+    Topic:
+      Value: /p4_p3_debug/exploration/current_goal
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      Depth: 1
   Tools:
   - Class: rviz_default_plugins/Interact
+  - Class: lunar_navigation_rviz/BoundaryTool
   - Class: rviz_default_plugins/MoveCamera
   - Class: rviz_default_plugins/Select
   - Class: rviz_default_plugins/Measure
