@@ -24,7 +24,7 @@ def test_worker_starts_before_first_real_goal(monkeypatch):
 def request(**kwargs):
     world=WorldSnapshot(1,(),(CellRect(-2000,-2000,2000,2000),))
     return worker.make_request(world,(0,0),(4,0),1,WheelLimits(),
-        reference_smoothing=True,reference_smoothing_budget_s=.2,terminal_yaw=np.pi/2,**kwargs)
+        reference_smoothing=True,terminal_yaw=np.pi/2,**kwargs)
 
 def test_worker_returns_readonly_shaped_reference_and_separate_timings():
     result=worker.restore_result(worker.run_request(request()))
@@ -55,10 +55,10 @@ def test_parent_adopts_worker_curve_without_running_smoother(monkeypatch):
     assert any(e['kind']=='GLOBAL_REFERENCE_SHAPED' and e['changed'] for e in events)
     assert not any(e['kind']=='GLOBAL_ERROR' for e in events)
 
-@pytest.mark.parametrize('budget',[0.,-1.,float('nan'),float('inf'),True])
-def test_invalid_smoothing_budget_rejected_before_worker_creation(budget):
-    with pytest.raises(ValueError,match='reference_smoothing_budget_s'):
-        NavigationCoordinator(None,runner=SimpleNamespace(),reference_smoothing_budget_s=budget)
+@pytest.mark.parametrize('budget',[-1.,float('nan'),float('inf'),True])
+def test_invalid_total_budget_rejected_before_worker_creation(budget):
+    with pytest.raises(ValueError,match='global_budget_s'):
+        NavigationCoordinator(None,runner=SimpleNamespace(),global_budget_s=budget)
 
 
 def test_same_curve_segment_is_not_rechecked_in_one_smoothing_call(monkeypatch):
@@ -98,3 +98,27 @@ def test_shaped_payload_cannot_change_goal_identity():
     payload['shaped_reference']['route']['goal']=(8.,9.)
     with pytest.raises(ValueError,match='shaped/raw route identity'):
         worker.restore_result(payload)
+
+
+@pytest.mark.parametrize('search_elapsed,expected_remaining',[(.7,.3),(1.01,0.)])
+def test_search_and_smoothing_share_one_deadline(monkeypatch,search_elapsed,expected_remaining):
+    clock=[100.];budgets=[]
+    monkeypatch.setattr(worker,'perf_counter',lambda:clock[0])
+    original_plan=worker.AdaptiveGlobalPlanner.plan
+    original_shape=worker.shape_route
+    def plan(self,*args,**kwargs):
+        result=original_plan(self,*args,**kwargs)
+        clock[0]+=search_elapsed
+        return result
+    def shape(*args,**kwargs):
+        budgets.append(kwargs['budget_s'])
+        return original_shape(*args,**kwargs)
+    monkeypatch.setattr(worker.AdaptiveGlobalPlanner,'plan',plan)
+    monkeypatch.setattr(worker,'shape_route',shape)
+    payload=worker.run_request(request())
+    assert payload['total_budget_s']==1.
+    assert payload['smoothing_budget_s']==pytest.approx(expected_remaining)
+    assert budgets==pytest.approx([expected_remaining])
+    if expected_remaining==0:
+        assert payload['shaped_reference']['reason']=='BUDGET_EXHAUSTED'
+        assert payload['shaped_reference']['changed'] is False

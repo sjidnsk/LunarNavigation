@@ -13,7 +13,6 @@ lunar_nav1cm_planner:
     execution_period_s: 0.05
     global_period_s: 15.0
     global_budget_s: 1.0
-    global_smoothing_budget_s: 0.2
     clearance_radius_m: 0.75
     global_soft_clearance_m: 0.4
     global_clearance_weight: 1.0

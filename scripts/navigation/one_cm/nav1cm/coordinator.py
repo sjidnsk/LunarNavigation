@@ -35,8 +35,7 @@ class NavigationCoordinator:
                  allow_unknown=False, local_period_s=.05, global_period_s=15.,
                  global_budget_s=1., clearance_radius_m=.75, field_backend=None,
                  revalidate_current_map=False, reference_smoothing=False,
-                 global_soft_clearance_m=.4, global_clearance_weight=1.0,
-                 reference_smoothing_budget_s=.2):
+                 global_soft_clearance_m=.4, global_clearance_weight=1.0):
         for name,value in (("global_soft_clearance_m",global_soft_clearance_m),
                            ("global_clearance_weight",global_clearance_weight)):
             if isinstance(value,bool) or not np.isfinite(value) or value < 0:
@@ -49,7 +48,9 @@ class NavigationCoordinator:
         self.allow_unknown = allow_unknown
         # 全局低频后台刷新；目标和参考失效事件无需等待周期。
         self.local_period_s, self.global_period_s = local_period_s, global_period_s
-        self.global_budget_s = global_budget_s
+        if isinstance(global_budget_s,bool) or not np.isfinite(global_budget_s) or global_budget_s < 0:
+            raise ValueError('global_budget_s must be finite and nonnegative')
+        self.global_budget_s = float(global_budget_s)
         self.clearance_radius_m = self.limits.global_clearance_radius(clearance_radius_m)
         self.goal_tolerance_m = .1
         self.goal_position_target_m = None
@@ -59,10 +60,6 @@ class NavigationCoordinator:
         if type(reference_smoothing) is not bool:raise ValueError("reference_smoothing must be bool")
         if reference_smoothing and not revalidate_current_map:
             raise ValueError("reference smoothing requires current map revalidation")
-        if (isinstance(reference_smoothing_budget_s, bool) or
-                not np.isfinite(reference_smoothing_budget_s) or reference_smoothing_budget_s <= 0):
-            raise ValueError('reference_smoothing_budget_s must be finite and positive')
-        self.reference_smoothing_budget_s = float(reference_smoothing_budget_s)
         self.reference_smoothing=reference_smoothing
         self._raw_route=self._shaped_route=None
         self._goal = self._epoch = self._policy = None
@@ -184,7 +181,7 @@ class NavigationCoordinator:
             from .reference_smoothing import shape_route
             if not raw_verified and not self._route_clear(route):
                 raise ValueError("raw route collision")
-            shaped=shape_route(route,self._blocked_boxes,raw_verified=True,budget_s=self.reference_smoothing_budget_s,
+            shaped=shape_route(route,self._blocked_boxes,raw_verified=True,budget_s=self.global_budget_s,
                                terminal_yaw=self._goal_yaw,
                                soft_clearance_m=self.global_soft_clearance_m,
                                clearance_weight=self.global_clearance_weight,corner_radius=self.clearance_radius_m)
@@ -390,7 +387,7 @@ class NavigationCoordinator:
                 global_soft_clearance_m=self.global_soft_clearance_m,
                 global_clearance_weight=self.global_clearance_weight,
                 reference_smoothing=self.reference_smoothing,
-                reference_smoothing_budget_s=self.reference_smoothing_budget_s, terminal_yaw=self._goal_yaw)
+                terminal_yaw=self._goal_yaw)
             request['request_reason'] = reason
             # 每次尝试都消费事件并推进既有周期，submit异常也不能每tick重试。
             self._pending_reason = None

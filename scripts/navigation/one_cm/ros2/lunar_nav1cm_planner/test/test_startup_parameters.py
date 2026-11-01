@@ -18,7 +18,7 @@ def configured_node():
     try:
         prefix='/startup_parameters_test'
         overrides={'build_dir':'/unused-startup-parameter-test','linear_speed_mps':.07,
-            'global_period_s':27.,'global_smoothing_budget_s':.35,'planning_period_s':.27,'map_topic':prefix+'/map','goal_topic':prefix+'/goal',
+            'global_period_s':27.,'global_budget_s':.85,'planning_period_s':.27,'map_topic':prefix+'/map','goal_topic':prefix+'/goal',
             'odometry_topic':prefix+'/odom','tf_topic':prefix+'/tf','tf_static_topic':prefix+'/tf_static',
             'local_path_topic':prefix+'/local','global_route_topic':prefix+'/global',
             'action_name':prefix+'/navigate','minimum_clearance_m':.01,'clearance_radius_m':.409}
@@ -36,8 +36,8 @@ def test_startup_overrides_reach_resources_and_endpoints(configured_node):
     assert observed['limits'].linear_speed_mps==.07
     assert observed['settings']['planning_period_s']==.27
     assert observed['settings']['global_period_s']==27.
-    assert observed['settings']['global_smoothing_budget_s']==.35
-    assert node.describe_parameter('global_smoothing_budget_s').read_only
+    assert observed['settings']['global_budget_s']==.85
+    assert node.describe_parameter('global_budget_s').read_only
     # 实际ROS默认参数与交给资源工厂的完成合同采用同一5度容差。
     assert node.get_parameter('goal_yaw_tolerance_rad').value==pytest.approx(0.08726646259971647)
     assert observed['settings']['goal_yaw_tolerance_rad']==node.get_parameter('goal_yaw_tolerance_rad').value

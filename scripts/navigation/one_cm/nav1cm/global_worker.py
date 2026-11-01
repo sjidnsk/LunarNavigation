@@ -13,13 +13,13 @@ import numpy as np
 
 def make_request(world, start, goal, version, limits, clearance_radius_m=.75, budget_s=1., *,
                  global_soft_clearance_m=.4, global_clearance_weight=1.0,
-                 reference_smoothing=False, reference_smoothing_budget_s=.2, terminal_yaw=None):
+                 reference_smoothing=False, terminal_yaw=None):
     return {'world': asdict(world), 'start': list(start), 'goal': list(goal),
             'version': version, 'limits': asdict(limits), 'clearance_radius_m': clearance_radius_m,
             'global_soft_clearance_m': global_soft_clearance_m,
             'global_clearance_weight': global_clearance_weight,
             'reference_smoothing': reference_smoothing,
-            'reference_smoothing_budget_s': reference_smoothing_budget_s, 'terminal_yaw': terminal_yaw,
+            'terminal_yaw': terminal_yaw,
             'budget_s': budget_s, 'submitted_wall_s': perf_counter()}
 
 
@@ -32,24 +32,32 @@ def prepare_worker():
 
 def run_request(request):
     started = perf_counter()
+    budget = request['budget_s']
+    if isinstance(budget,bool) or not np.isfinite(budget) or budget < 0:
+        raise ValueError('global budget_s must be finite and nonnegative')
+    deadline = started + budget
     raw = request['world']
     world = WorldSnapshot(raw['epoch'], tuple(CellRect(**r) for r in raw['blocked']),
                           tuple(CellRect(**r) for r in raw['known_free']))
     planner = AdaptiveGlobalPlanner(WheelLimits(**request['limits']), request['clearance_radius_m'],
         soft_clearance_m=request.get('global_soft_clearance_m', .4),
         clearance_weight=request.get('global_clearance_weight', 1.0))
-    result = planner.plan(world, request['start'], request['goal'], request['version'], request['budget_s'])
+    result = planner.plan(world, request['start'], request['goal'], request['version'], max(0.,deadline-perf_counter()))
     payload = asdict(result)
     if result.route is not None:
         payload['route']['points'] = result.route.points.tolist()
+    payload['total_budget_s'] = budget
+    payload['smoothing_budget_s'] = 0.
     payload['smoothing_ms'] = 0.
     if request.get('reference_smoothing') and result.route is not None:
         began = perf_counter()
         radius = result.clearance_radius_m
         boxes = np.asarray([(r.x0/100-radius, r.y0/100-radius, r.x1/100+radius, r.y1/100+radius)
                             for r in world.blocked], dtype=float).reshape(-1, 4)
+        remaining=max(0.,deadline-perf_counter())
+        payload['smoothing_budget_s'] = remaining
         shaped = shape_route(result.route, boxes, raw_verified=True,
-            budget_s=request.get('reference_smoothing_budget_s', .2),
+            budget_s=remaining, deadline_s=deadline, clock=perf_counter,
             terminal_yaw=request.get('terminal_yaw'), corner_radius=radius,
             soft_clearance_m=request.get('global_soft_clearance_m', .4),
             clearance_weight=request.get('global_clearance_weight', 1.0))

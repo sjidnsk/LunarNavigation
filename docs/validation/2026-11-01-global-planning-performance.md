@@ -33,3 +33,28 @@ Windows相关one_cm回归1244通过95条件跳过；日志字段追加回归40�
 Humble使用既有core库，未改core/native ABI。源码/算法级与隔离ROS测试不能声称实际车辆闭环通过。已知环境SciPy/NumPy版本警告保留，未安装依赖或修改其他项目。
 产物：本机D:/CodexDownloads/lunar_navigation/global-planning-perf-20261101；远端仅/home/yanfa/P4/tmp/global-planning-perf-20261101，含原CDR、冻结JSON、prof与候选构建。正式P4源码/安装/进程未改。
 处置为已提交待合入；不push/PR/merge，其他应用分支未同步此候选。专题和产物保留待授权回收。
+
+
+## 后续：共享1秒预算及20/10/5cm复杂场景（本节替代独立200ms配置）
+
+按用户最新确认，搜索、构图、路线处理与平滑共用global_budget_s=1s。
+worker收到请求后建立同一perf_counter截止时间，搜索接收剩余预算，平滑仅使用其后剩余预算及同一绝对截止时间；移除global_smoothing_budget_s/reference_smoothing_budget_s重复配置。
+搜索已成功而平滑耗尽时保留经过认证的原路线；搜索失败不能记为平滑成功。GLOBAL_RESULT补充total_budget_s/smoothing_budget_s。
+预算仍是协作式限制，不是硬实时：ARM本轮最慢整个worker约1011.45ms，超出部分含收尾和检查粒度，不能声称每次精确不超过1000ms。未增加第二段预算，也未提高总预算。
+
+新增可复用脚本scripts/navigation/one_cm/benchmark_global_resolution.py。TCP ARM64实测4种封闭交错挡墙场景，每种20/10/5cm，各重复3次，共36次。碰撞圆0.75m、软净空范围0.4m、权重1；通道开口约4m，未使用无法通过生产车体的窄门夹具。
+三档地图来自相同解析障碍的保守栅格化，并合并为相同数量稀疏矩形。本测试衡量几何量化与规划，**不衡量P3稠密格处理、原始地图传输、地图融合或实际导航闭环**。UNKNOWN允许通行，没有伪造FREE。
+
+|场景|20cm|10cm|5cm|
+|---|---|---|---|
+|100m、6挡墙|3/3有效路线，最长352.94ms；CLEARANCE_COST回退原线|3/3，347.91ms；全部平滑|3/3，325.29ms；全部平滑|
+|300m、16挡墙|3/3，1002.40ms；平滑全部耗尽回退|3/3，981.82ms；全部平滑|3/3，1003.66ms；1次平滑、2次预算回退|
+|750m、30挡墙|0/3，预算耗尽|0/3，预算耗尽|0/3，预算耗尽|
+|180m、30挡墙密集场景|0/3，预算耗尽|0/3，预算耗尽|0/3，预算耗尽|
+
+表中时间为worker_compute_ms样本最大值，不含启动/IPC。18/36正式规划成功；有输出路线均通过独立连续线段-圆包络碰撞复核，失败18次均返回一致的无参考状态，并非18次导航成功。100m场景最终路线长度20/10/5cm分别104.96/104.44/103.93m。
+复杂场景揭示构图及搜索后的缩短/代价处理仍是瓶颈（密集场景构图约0.68–0.74s，搜索约0.022s，其后耗尽预算）。不能根据小地图毫秒级结果推断长复杂地图平滑预算充足。5cm几何更细不保证整体更快；同面积理论源格数是20cm的16倍，本脚本不模拟这部分负载。
+
+验证：Windows one_cm 1245通过、95条件跳过；TCP ARM64 Ubuntu22.04/Humble隔离包构建通过，相关算法/编排/ROS启动与日志135通过、1条件跳过。SciPy/NumPy原有版本警告保留，依赖未修改。
+新证据在本机D:/CodexDownloads/lunar_navigation/global-planning-perf-20261101/resolution-long-complex.json、shared-budget-pytest.log；远端同任务tmp目录resolution-long-complex.json/.log、shared-budget-build-test.log。
+正式P4进程和安装未切换，P3未修改。P3原生10cm/5cm输出及车辆闭环NOT_RUN。本轮已提交待合入，性能瓶颈保留为下一批；不得因状态一致就宣称全部场景通过。
