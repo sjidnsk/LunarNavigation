@@ -26,4 +26,6 @@ Humble/Orin/足式实机、DDS和车辆闭环未验证，不由静态测试推�
 - 隔离路径 /home/yanfa/P4/tmp/legged-sync-20261101，仅该P4子目录写入；未重启正式P4/P3/Env_X，未自动发目标。源码/日志本机 D:/CodexDownloads/lunar_navigation/legged-sync-20261101。Windows MSVC不能编译原有GCC overflow builtin，原生桥编译验收因此使用ARM64 g++，未为此改公共算术实现。
 - 测试发现上一轮单向终点的旧测试预期残留，以及同源P3在NOT_DUE前已应用/未消费的混淆。通用修复独立提交5aac81e2，仅增加内部已应用源戳字段，不扩ROS接口/任务实体；同步main/TCP/wheel。旧测试已按用户最终约定更新，新源帧可正常接收，不恢复外推。
 
-处置：算法/足式适配合并c567237a，通用源帧修复5aac81e2；本任务专题快进合回app/orin-legged-vehicle后再记录落地。无push/PR，无分支或工作树删除；专题待授权回收。足式真实驱动、Orin部署/闭环、横移及足端动作NOT_RUN。
+处置：算法/足式适配合并c567237a，通用源帧修复5aac81e2；已快进合回app/orin-legged-vehicle（产品合并c567237a、共享修复5aac81e2，登记提交3c8d1116）。无push/PR，无分支或工作树删除；专题待授权回收。足式真实驱动、Orin部署/闭环、横移及足端动作NOT_RUN。
+
+最终核对：与轮式相比，共用全局/MPCC/认证/参考/任务及runtime源码相同，标准控制器源码也相同；有效源码差异仅5项足式适配（配置读取、节点圆半径缺省、native地形构造/包装）。公共源帧修复已落主线aed65c90、轮式95a08047、TCP fde8a16f；main重跑122项定向回归全部通过。所有相关工作树无未提交改动，不推送。
