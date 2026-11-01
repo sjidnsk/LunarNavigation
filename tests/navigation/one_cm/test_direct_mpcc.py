@@ -373,3 +373,72 @@ def test_velocity_diagnostic_rejection_reasons(change,reason):
     assert certified_velocity_command(result,state,limits,diagnostics=diagnostic,**kwargs)==(0.,0.)
     assert diagnostic['command_reject_reason']==reason
     assert diagnostic['command_total_ms']>=0
+
+
+@pytest.mark.parametrize('tiny_v',[-5.5112880925634046e-11,5.5112880925634046e-11])
+@pytest.mark.parametrize('angular_sign',[-1.,1.])
+def test_spin_command_canonicalizes_solver_zero_in_both_command_and_proof(monkeypatch,tiny_v,angular_sign):
+    from types import SimpleNamespace as S
+    from scripts.navigation.one_cm.nav1cm import execution,certification
+    from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits
+    from tests.navigation.one_cm.test_certification import free_grid
+    limits=WheelLimits(linear_speed_mps=.2,angular_speed_rps=.1,motion_model='differential_drive')
+    grid=free_grid();state=VehicleState(0,0,0,0,0)
+    u=np.array([[tiny_v/.2,angular_sign*.49995,0.]])
+    candidate=Trajectory(grid.epoch,1,[0.,.2],rollout([0,0,0,0,0,0],u,.2),u,'forward' if tiny_v>0 else 'reverse','mpcc')
+    result=S(candidate=candidate,certificate=None,grid=grid,status='BUFFER_EXECUTING',reference_phase_s=0.)
+    proofs=[];original=certification.certify
+    def capture(proof,*args,**kwargs):
+        proofs.append(proof)
+        return original(proof,*args,**kwargs)
+    monkeypatch.setattr(certification,'certify',capture)
+    diagnostic={}
+    command=execution.certified_velocity_command(result,state,limits,reference_interval_s=.2,
+        last_command=(0.,0.),elapsed_s=.05,command_hold_s=1.2,diagnostics=diagnostic)
+    assert diagnostic['command_certificate_reason']=='VALID'
+    assert command[0]==0. and command[1]==pytest.approx(angular_sign*.025)
+    assert diagnostic['issued_vw']==list(command)
+    assert proofs[-1].mode=='spin'
+    assert np.all(proofs[-1].states[:,3]==0.)
+    assert np.all(proofs[-1].controls[:,0]==0.)
+    assert candidate.mode==('forward' if tiny_v>0 else 'reverse')
+    assert candidate.states[-1,3]!=0.
+
+
+@pytest.mark.parametrize('target_v',[-2e-10,-1e-10,1e-10,2e-10,.001,-.001])
+def test_velocity_outside_existing_spin_classification_is_not_normalized(target_v):
+    from types import SimpleNamespace as S
+    from scripts.navigation.one_cm.nav1cm.execution import certified_velocity_command
+    from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits
+    from tests.navigation.one_cm.test_certification import free_grid
+    limits=WheelLimits(motion_model='differential_drive');grid=free_grid()
+    u=np.array([[target_v/.2,.49995,0.]])
+    candidate=Trajectory(grid.epoch,1,[0.,.2],rollout([0,0,0,0,0,0],u,.2),u,'forward' if target_v>0 else 'reverse','mpcc')
+    result=S(candidate=candidate,certificate=None,grid=grid,status='BUFFER_EXECUTING',reference_phase_s=0.)
+    command=certified_velocity_command(result,VehicleState(0,0,0,0,0),limits,reference_interval_s=.2,
+        last_command=(0.,0.),elapsed_s=.05,command_hold_s=1.2)
+    assert command[0]!=0.
+    assert command[0]==pytest.approx(target_v,rel=1e-12,abs=0.)
+
+
+@pytest.mark.parametrize('measured_v',[-.0005,.0005])
+def test_spin_zero_normalization_preserves_actual_initial_speed_and_braking_prefix(monkeypatch,measured_v):
+    from types import SimpleNamespace as S
+    from scripts.navigation.one_cm.nav1cm import execution,certification
+    from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits
+    from tests.navigation.one_cm.test_certification import free_grid
+    limits=WheelLimits(motion_model='differential_drive');grid=free_grid();state=VehicleState(0,0,0,measured_v,0)
+    u=np.array([[-5.5112880925634046e-11/.2,.49995,0.]])
+    candidate=Trajectory(grid.epoch,1,[0.,.2],rollout([0,0,0,0,0,0],u,.2),u,'reverse','mpcc')
+    result=S(candidate=candidate,certificate=None,grid=grid,status='BUFFER_EXECUTING',reference_phase_s=0.)
+    proofs=[];original=certification.certify
+    def capture(proof,*args,**kwargs):
+        proofs.append(proof);return original(proof,*args,**kwargs)
+    monkeypatch.setattr(certification,'certify',capture)
+    diagnostic={};command=execution.certified_velocity_command(result,state,limits,reference_interval_s=.2,
+        last_command=(0.,0.),elapsed_s=.05,command_hold_s=1.2,diagnostics=diagnostic)
+    assert diagnostic['command_certificate_reason']=='VALID'
+    assert command[0]==0. and command[1]>0.
+    assert proofs[-1].states[0,3]==measured_v
+    assert proofs[-1].controls[0,0]*measured_v<0.
+    assert state.v==measured_v
