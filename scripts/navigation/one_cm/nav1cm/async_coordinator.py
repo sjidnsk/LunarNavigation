@@ -4,7 +4,6 @@ from time import perf_counter, process_time
 import numpy as np
 from .contracts import LocalReference
 from .maps import extract_window
-from .reference import extract_reference
 from .certification import certify, prepare_certification
 from .seeds import brake_candidate
 from .execution import action_prefix
@@ -216,7 +215,7 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
             events.append({'kind':'BRAKE_REQUIRED','reason':str(exc)})
             return None,None,'BUFFER_UNAVAILABLE'
 
-    def tick(self, world, state, goal, now_s, *, goal_yaw=None, need_action=True):
+    def tick(self, world, state, goal, now_s, *, goal_yaw=None, need_action=True, observed_state=None):
         self._velocity_reference = self.velocity_reference and self.revalidate_current_map and not need_action
         started = perf_counter()
         cpu_started = process_time()
@@ -244,7 +243,8 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
             except Exception as exc:
                 events.append({'kind':'LOCAL_WORKER_START_ERROR','reason':str(exc)})
         stage = perf_counter()
-        goal_check, arrived_xy, motion, global_result = self._update_route(world, state, goal, now_s, events, goal_yaw=goal_yaw)
+        goal_check, arrived_xy, motion, global_result = self._update_route(
+            world, state, goal, now_s, events, goal_yaw=goal_yaw, observed_state=observed_state)
         timings['ipc_schedule_goal'] = (perf_counter()-stage)*1000
         stage = perf_counter()
         grid = extract_window(world, state, self.allow_unknown)
@@ -257,7 +257,7 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         # 末端单点参考绑定当前目标朝向，不再受旧路线进度或出窗位置影响。
         if self.route is not None and not arrived_xy:
             try:
-                reference, self.progress = extract_reference(self.route, state, grid, self.progress, terminal_yaw=self._goal_yaw)
+                reference = self._local_reference(world, state, grid)
             except ValueError as exc:
                 events.append({'kind': 'REFERENCE_REJECTED', 'reason': str(exc)})
                 self._pending_reason = 'REFERENCE_REENTRY'

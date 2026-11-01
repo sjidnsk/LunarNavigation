@@ -195,6 +195,16 @@ class PlannerRuntime:
             self._notice('ODOMETRY_WAITING','missing_or_nonadvancing_pose')
             return
         if message is None:return
+        if self.publish_command is not None:
+            try:
+                source=message.header.stamp
+                source_ns=int(source.sec)*1_000_000_000+int(source.nanosec)
+            except (AttributeError,ValueError,TypeError):
+                source_ns=None
+            # 重用预测器已经接受的源戳；同帧重应用不能改变阶段观测。
+            accepted=self._command_prediction.stamp
+            if source_ns is not None and accepted is not None and source_ns<=accepted:
+                return
         try:value=state_from_odometry(message,transforms,self.map_frame)
         except MissingTransform:
             if self._pose_timeout_s is not None:self._enter_pose_wait()

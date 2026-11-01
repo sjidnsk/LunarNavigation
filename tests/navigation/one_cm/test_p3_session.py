@@ -145,7 +145,8 @@ def test_predicted_goal_cannot_replace_measured_arrival_evidence():
     assert session.offer_goal(Goal(1, 0, 0))
     packet = session.tick(0., planning_state=predicted)
     assert session.state is measured
-    assert packet.result.status == 'GOAL_BRAKING'
+    assert packet.result.status == 'WAITING_GLOBAL'
+    assert not session.coordinator._position_completed
     assert not session.arrival_current(packet)
     assert session._arrival_evidence is None
 

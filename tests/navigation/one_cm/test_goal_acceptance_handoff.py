@@ -23,7 +23,7 @@ def test_near_goal_jitter_does_not_restart_initial_route_alignment():
     c.goal_position_target_m = .02
     c.initial_travel_direction = 'forward'
     assert session.offer_goal(Goal(0, 0, 0))
-    for k, distance in enumerate([.031, .019, .035, .021]):
+    for k, distance in enumerate([.019, .031, .035, .021]):
         session.offer_state(VehicleState(distance, 0, .25-k*.01, 0, -.02))
         packet = session.tick(k*.05)
         assert packet.result.status == 'GOAL_TURNING'
@@ -51,7 +51,8 @@ def test_predicted_acceptance_cannot_finish_for_measured_pose_outside():
     assert session.offer_goal(Goal(0,0,0))
     session.offer_state(VehicleState(.12,0,0,0,0))
     packet = session.tick(0.,planning_state=VehicleState(.08,0,0,0,0))
-    assert packet.result.status == 'GOAL_BRAKING'
+    assert packet.result.status == 'WAITING_GLOBAL'
+    assert not session.coordinator._position_completed
     assert not session.arrival_current(packet)
     session.offer_state(VehicleState(.08,0,0,0,0))
     packet = session.tick(.05,planning_state=session.state)

@@ -4,6 +4,9 @@ import numpy as np
 
 from .contracts import GridSnapshot, LocalReference, ProgressToken, Route, VehicleState
 
+# 现有默认末段范围；P4的4秒预测与0.2m/s上限对应0.8m。
+TERMINAL_APPROACH_DISTANCE_M = .8
+
 
 def _arc_lengths(points):
     return np.concatenate(([0.0], np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))))

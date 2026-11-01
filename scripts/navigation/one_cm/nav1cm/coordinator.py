@@ -1,11 +1,11 @@
 """只组合地图、全局参考、MPCC 和认证；tick 只输出离线动作数据。"""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 import numpy as np
 
-from .contracts import LocalReference, WheelLimits, VehicleState
+from .contracts import CellState, LocalReference, WheelLimits, VehicleState
 from .maps import extract_window, DistanceFieldCache
-from .reference import extract_reference, project_progress, _arc_lengths, _point_at
+from .reference import extract_reference, project_progress, _arc_lengths, _point_at, TERMINAL_APPROACH_DISTANCE_M
 from .certification import certify, prepare_certification
 from .seeds import brake_candidate
 from .global_planner import AdaptiveGlobalPlanner, GoalCheck, _segment_clear
@@ -56,6 +56,7 @@ class NavigationCoordinator:
         self._raw_route=self._shaped_route=None
         self._goal = self._epoch = self._policy = None
         self._goal_yaw = None
+        self._position_completed = False
         self.goal_revision = 0
         self._global_inflight = None
         self._next_local = self._next_global = -float('inf')
@@ -86,6 +87,7 @@ class NavigationCoordinator:
         self.goal_revision += 1
         self._accepted_goal_generation = generation
         self._goal = self._goal_yaw = self.route = self.progress = None
+        self._position_completed = False
         self._global_inflight = None
         self._pending_reason = 'GOAL_CHANGED'
 
@@ -128,6 +130,7 @@ class NavigationCoordinator:
         if goal != self._goal or not same_yaw or new_generation:
             self.goal_revision += 1
             self._goal, self._goal_yaw = goal, yaw
+            self._position_completed = False
             self.route = self.progress = None
             self._pending_reason = 'GOAL_CHANGED'
         if generation is not None:
@@ -212,6 +215,41 @@ class NavigationCoordinator:
                 np.hypot(state.x-self._goal[0],state.y-self._goal[1])<=self.goal_tolerance_m and
                 (self._goal_yaw is None or abs(angle_error(self._goal_yaw,state.yaw))<=self.goal_yaw_tolerance_rad))
 
+    def _local_reference(self, world, state, grid):
+        """末段从当前状态收敛位置；不把沿线投影到头当作实际到达。"""
+        reference, self.progress = extract_reference(
+            self.route, state, grid, self.progress, terminal_yaw=self._goal_yaw)
+        distance = float(np.hypot(state.x-self._goal[0], state.y-self._goal[1]))
+        remaining = float(reference.s[-1]-reference.progress_s)
+        if (distance > TERMINAL_APPROACH_DISTANCE_M or
+                remaining > TERMINAL_APPROACH_DISTANCE_M or
+                not np.array_equal(reference.points[-1], self._goal)):
+            return reference
+        # 任务最终yaw仍保存在导航owner；未到位置时，局部参考只负责位置收敛。
+        reference = replace(reference, terminal_yaw=None)
+        if distance <= 1e-12:
+            return reference
+        self._observe_world(world)
+        xy = np.asarray((state.x, state.y))
+        # 复用现有闭边界线段几何，不越过已知膨胀障碍；实际轨迹仍须完整认证。
+        if not _segment_clear(xy, self._goal, self._blocked_boxes):
+            return reference
+        if not grid.allow_unknown:
+            # 仅检查候选直连附近未知格；不把原可用绕行参考换成穿未知的弦。
+            radius = self.clearance_radius_m
+            origin = np.asarray(grid.origin_xy)
+            shape = np.asarray(grid.cells.shape[::-1])
+            low = np.maximum(0, np.floor((np.minimum(xy, self._goal)-radius-origin)/grid.resolution_m).astype(int)-1)
+            high = np.minimum(shape, np.floor((np.maximum(xy, self._goal)+radius-origin)/grid.resolution_m).astype(int)+2)
+            rows, cols = np.nonzero(grid.cells[low[1]:high[1],low[0]:high[0]] == CellState.UNKNOWN)
+            lower = origin + np.column_stack((cols+low[0],rows+low[1]))*grid.resolution_m
+            boxes = np.column_stack((lower-radius,lower+grid.resolution_m+radius))
+            if not _segment_clear(xy, self._goal, boxes):
+                return reference
+        start_s = reference.progress_s
+        return LocalReference(reference.route_version, grid.epoch,
+                              [xy, self._goal], [start_s, start_s+distance], start_s)
+
     def _terminal_plan(self, state, grid, reference):
         yaw_satisfied = (self._goal_yaw is None or
                          abs(angle_error(self._goal_yaw, state.yaw)) <= self.goal_yaw_tolerance_rad)
@@ -224,7 +262,7 @@ class NavigationCoordinator:
         candidate = terminal_candidate(state, grid, reference, self.limits)
         return candidate, 'GOAL_TURNING' if candidate.source.startswith('terminal-yaw:bounded') else 'GOAL_BRAKING'
 
-    def _update_route(self, world, state, goal, now_s, events, *, goal_yaw=None):
+    def _update_route(self, world, state, goal, now_s, events, *, goal_yaw=None, observed_state=None):
         """共享全局身份、目标检查与非阻塞路线调度；不执行局部求解。"""
         self._set_goal(goal, goal_yaw)
         goal = self._goal
@@ -304,11 +342,22 @@ class NavigationCoordinator:
             goal_check = (self._goal_checker.check_goal(world, goal) if self._goal_yaw is None else
                           check_pose_goal(world, goal, self._goal_yaw, self.limits))
             self._goal_check_key, self._cached_goal_check = self.goal_revision, goal_check
-        distance = np.linalg.norm(np.array(goal)-motion[:2])
-        # 移动时继续收敛到位置目标；验收范围内已停下则完成位置阶段，
-        # 避免P3厘米级波动反复把最终朝向切回起步对准。
-        arrived_xy = (distance <= self.position_target_tolerance_m or
-                      distance <= self.goal_tolerance_m and abs(motion[3]) <= self.stopped_linear_mps)
+        # 规划与认证继续使用state；终点阶段只由真实观测确认。
+        observed = state if observed_state is None else observed_state
+        distance = np.hypot(goal[0]-observed.x, goal[1]-observed.y)
+        # 位置目标与任务验收上限职责不同：不能在10cm边缘因暂时低速
+        # 就提前开始最终转向。已完成的位置阶段仅在越出验收范围时重开。
+        # 这一位历史属于现有目标；路线刷新和速度波动都不能将其清除。
+        if self._goal_yaw is None:
+            # 无最终朝向的目标没有朝向阶段，保留既有位置/制动交接。
+            arrived_xy = (distance <= self.position_target_tolerance_m or
+                          distance <= self.goal_tolerance_m and abs(observed.v) <= self.stopped_linear_mps)
+        else:
+            if distance > self.goal_tolerance_m:
+                self._position_completed = False
+            elif distance <= self.position_target_tolerance_m or self.goal_reached(observed):
+                self._position_completed = True
+            arrived_xy = self._position_completed
         global_due = now_s + 1e-9 >= self._next_global
         if (goal_check.accepted and not arrived_xy and not self.runner.busy and
                 (self._pending_reason or global_due)):
@@ -334,7 +383,7 @@ class NavigationCoordinator:
                 events.append({'kind': 'GLOBAL_SUBMITTED', 'reason': reason, 'version': self._version})
         return goal_check, arrived_xy, motion, global_result
 
-    def tick(self, world, state, goal, now_s, *, goal_yaw=None, need_action=True):
+    def tick(self, world, state, goal, now_s, *, goal_yaw=None, need_action=True, observed_state=None):
         started = perf_counter()
         self._set_goal(goal, goal_yaw)
         if now_s + 1e-9 < self._next_local:
@@ -342,7 +391,8 @@ class NavigationCoordinator:
         self._next_local = now_s + self.local_period_s
         timings, events = {}, []
         stage = perf_counter()
-        goal_check, arrived_xy, motion, global_result = self._update_route(world, state, goal, now_s, events, goal_yaw=goal_yaw)
+        goal_check, arrived_xy, motion, global_result = self._update_route(
+            world, state, goal, now_s, events, goal_yaw=goal_yaw, observed_state=observed_state)
         timings['ipc_schedule_goal'] = (perf_counter()-stage)*1000
         stage = perf_counter()
         grid = extract_window(world, state, self.allow_unknown)
@@ -355,7 +405,7 @@ class NavigationCoordinator:
         # 到达位置后直接按当前目标车体朝向转向，旧路线进度和截窗不能覆盖末端参考。
         if self.route is not None and not arrived_xy:
             try:
-                reference, self.progress = extract_reference(self.route, state, grid, self.progress, terminal_yaw=self._goal_yaw)
+                reference = self._local_reference(world, state, grid)
             except ValueError as exc:
                 events.append({'kind': 'REFERENCE_REJECTED', 'reason': str(exc)})
                 self._pending_reason = 'REFERENCE_REENTRY'

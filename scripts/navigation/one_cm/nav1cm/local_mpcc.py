@@ -8,6 +8,7 @@ from .contracts import CellState, Trajectory, VehicleState, circumscribed_radius
 from .maps import build_distance_field
 from .seeds import braking_prefix, join_trajectories, initial_seed, rollout
 from .pose_goal import angle_error, terminal_candidate
+from .reference import TERMINAL_APPROACH_DISTANCE_M
 from .reference_buffer import _project, _at
 from .trajectory_buffer import FeedbackTolerance
 
@@ -97,7 +98,7 @@ def travel_target_yaw(state, reference, mode, approach_distance_m, *, initial_tr
     return yaw
 
 
-def select_mode(state, reference, *, approach_distance_m=.8, initial_travel_direction="",initial_stopped_angular_rps=.01):
+def select_mode(state, reference, *, approach_distance_m=TERMINAL_APPROACH_DISTANCE_M, initial_travel_direction="",initial_stopped_angular_rps=.01):
     if len(reference.points)<2:
         if reference.terminal_yaw is not None and abs(state.v) <= 1e-10:
             return 'spin' if abs(angle_error(reference.terminal_yaw, state.yaw)) > .05 or abs(state.w) > initial_stopped_angular_rps else 'brake'
