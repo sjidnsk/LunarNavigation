@@ -35,7 +35,8 @@ class NavigationCoordinator:
                  allow_unknown=False, local_period_s=.05, global_period_s=15.,
                  global_budget_s=1., clearance_radius_m=.75, field_backend=None,
                  revalidate_current_map=False, reference_smoothing=False,
-                 global_soft_clearance_m=.4, global_clearance_weight=1.0):
+                 global_soft_clearance_m=.4, global_clearance_weight=1.0,
+                 reference_smoothing_budget_s=.2):
         for name,value in (("global_soft_clearance_m",global_soft_clearance_m),
                            ("global_clearance_weight",global_clearance_weight)):
             if isinstance(value,bool) or not np.isfinite(value) or value < 0:
@@ -43,7 +44,6 @@ class NavigationCoordinator:
         self.global_soft_clearance_m = float(global_soft_clearance_m)
         self.global_clearance_weight = float(global_clearance_weight)
         self.planner = planner
-        self.runner = GlobalWorker() if runner is None else runner
         self.limits = WheelLimits() if limits is None else limits
         self.backend = backend
         self.allow_unknown = allow_unknown
@@ -59,6 +59,10 @@ class NavigationCoordinator:
         if type(reference_smoothing) is not bool:raise ValueError("reference_smoothing must be bool")
         if reference_smoothing and not revalidate_current_map:
             raise ValueError("reference smoothing requires current map revalidation")
+        if (isinstance(reference_smoothing_budget_s, bool) or
+                not np.isfinite(reference_smoothing_budget_s) or reference_smoothing_budget_s <= 0):
+            raise ValueError('reference_smoothing_budget_s must be finite and positive')
+        self.reference_smoothing_budget_s = float(reference_smoothing_budget_s)
         self.reference_smoothing=reference_smoothing
         self._raw_route=self._shaped_route=None
         self._goal = self._epoch = self._policy = None
@@ -77,6 +81,7 @@ class NavigationCoordinator:
         self._observed_world = self._blocked = None
         self._blocked_boxes = np.empty((0, 4))
         self._goal_check_key = self._cached_goal_check = None
+        self.runner = GlobalWorker() if runner is None else runner
 
     @property
     def position_target_tolerance_m(self):
@@ -165,13 +170,21 @@ class NavigationCoordinator:
             return self._raw_route
         return self.route
 
-    def _adopt_route(self, route, events, *, raw_verified=False):
+    def _adopt_route(self, route, events, *, raw_verified=False, shaped_reference=None, smoothing_ms=None):
         shaped=None
-        if self.reference_smoothing:
+        began=perf_counter()
+        if self.reference_smoothing and shaped_reference is not None:
+            from .reference_smoothing import reference_clear, ShapedRoute
+            shaped=shaped_reference
+            # 子进程完成的曲线只在地图变化时复验；仍使用当前地图完整几何检查。
+            if (shaped.changed and route.map_epoch != self._epoch and
+                    not reference_clear(shaped,self._blocked_boxes,corner_radius=self.clearance_radius_m)):
+                shaped=ShapedRoute(route,np.empty((0,4)),False,'CURRENT_MAP_REJECTED')
+        elif self.reference_smoothing:
             from .reference_smoothing import shape_route
             if not raw_verified and not self._route_clear(route):
                 raise ValueError("raw route collision")
-            shaped=shape_route(route,self._blocked_boxes,raw_verified=True,
+            shaped=shape_route(route,self._blocked_boxes,raw_verified=True,budget_s=self.reference_smoothing_budget_s,
                                terminal_yaw=self._goal_yaw,
                                soft_clearance_m=self.global_soft_clearance_m,
                                clearance_weight=self.global_clearance_weight,corner_radius=self.clearance_radius_m)
@@ -181,7 +194,9 @@ class NavigationCoordinator:
         if shaped is not None:
             events.append(dict(kind='GLOBAL_REFERENCE_SHAPED',version=route.version,
                 map_epoch=route.map_epoch,changed=shaped.changed,reason=shaped.reason,
-                raw_points=len(route.points),reference_points=len(self.route.points)))
+                raw_points=len(route.points),reference_points=len(self.route.points),
+                smoothing_ms=(perf_counter()-began)*1000 if smoothing_ms is None else smoothing_ms,
+                adoption_ms=(perf_counter()-began)*1000))
 
     def _route_clear(self, route, *, start_s=None):
         if start_s is not None:
@@ -333,7 +348,8 @@ class NavigationCoordinator:
                             (self.revalidate_current_map and self._same_route_geometry(self.raw_route, route) or
                              (not self.revalidate_current_map and self.route.map_epoch == route.map_epoch and global_result.get('request_reason') == 'PERIODIC')))
                     if route is not None and not keep:
-                        self._adopt_route(route,events,raw_verified=True)
+                        self._adopt_route(route,events,raw_verified=True,
+                            shaped_reference=global_result.get("shaped_reference"),smoothing_ms=global_result.get("smoothing_ms"))
                         events.append({'kind': 'ROUTE_ACCEPTED', 'version': route.version, 'map_epoch': route.map_epoch, 'points': route.points.tolist()})
                     elif route is not None:
                         events.append({'kind': 'ROUTE_CONTINUITY_RETAINED', 'version': self.route.version, 'computed_version': route.version})
@@ -372,7 +388,9 @@ class NavigationCoordinator:
             self._version += 1
             request = make_request(world, motion[:2], goal, self._version, self.limits, self.clearance_radius_m, self.global_budget_s,
                 global_soft_clearance_m=self.global_soft_clearance_m,
-                global_clearance_weight=self.global_clearance_weight)
+                global_clearance_weight=self.global_clearance_weight,
+                reference_smoothing=self.reference_smoothing,
+                reference_smoothing_budget_s=self.reference_smoothing_budget_s, terminal_yaw=self._goal_yaw)
             request['request_reason'] = reason
             # 每次尝试都消费事件并推进既有周期，submit异常也不能每tick重试。
             self._pending_reason = None

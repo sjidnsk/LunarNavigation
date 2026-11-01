@@ -466,7 +466,9 @@ class PlannerRuntime:
             if result.global_result is not None:
                 raw = result.global_result
                 record = {key: raw.get(key) for key in ('planning_outcome', 'reason_code', 'has_reference',
-                          'requested_epoch', 'requested_goal', 'requested_version')}
+                          'requested_epoch', 'requested_goal', 'requested_version',
+                          'timing','queue_ms','handoff_ms','elapsed_ms','worker_compute_ms','smoothing_ms',
+                          'worker_start_wall_s','worker_finish_wall_s')}
                 origin = next((event for event in result.events if event['kind'] == 'GLOBAL_RESULT_RECEIVED'), {})
                 record.update(accepted_generation=origin.get('accepted_generation_at_submit'),
                               goal_revision=origin.get('goal_revision_at_submit'),

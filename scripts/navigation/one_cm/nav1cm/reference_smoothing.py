@@ -129,17 +129,24 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
         if not np.isfinite(now) or now - began >= budget_s:
             raise _Exhausted("BUDGET_EXHAUSTED")
 
+    verified_segments = set()  # 仅本次不可变障碍快照内复用精确几何证明。
+
     def segments_clear(starts, ends):
         check()
-        # 两个维度均分块，避免 4096×1024 的大临时矩阵吞掉本次预算。
-        for first in range(0, len(starts), 64):
+        keys = [tuple(a)+tuple(b) for a,b in zip(starts,ends)]
+        pending = [i for i,key in enumerate(keys) if key not in verified_segments]
+        # 两个维度均分块；每段通过全部障碍检查之后才缓存，不缓存失败/部分证明。
+        for first in range(0, len(pending), 64):
+            selected=pending[first:first+64]
             for offset in range(0, len(blocked), 1024):
                 check()
-                clear = _segments_clear(starts[first:first + 64], ends[first:first + 64],
+                clear = _segments_clear(starts[selected], ends[selected],
                                         blocked[offset:offset + 1024],corner_radius=corner_radius)
                 check()
                 if not clear:
                     return False
+            verified_segments.update(keys[i] for i in selected)
+        check()
         return True
 
     def overlaps(boxes):
