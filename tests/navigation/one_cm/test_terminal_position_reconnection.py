@@ -91,3 +91,56 @@ def test_mpcc_shooting_yaws_follow_position_connection(lateral,mode):
     parameters=planner._parameters(states,np.zeros((2,3)),reference,SimpleNamespace(sample=lambda x,y:(2.,0.,0.)),0.,reference.s[-1],mode=mode)
     expected=np.arctan2(-lateral,0.)+(np.pi if mode=='reverse' else 0.)
     assert all(abs(angle_error(p[5],expected))<1e-12 for p in parameters)
+
+
+@pytest.mark.parametrize('asynchronous',[False,True])
+def test_terminal_heading_retains_position_completion_until_acceptance_boundary(asynchronous):
+    c=coordinator(asynchronous);c.goal_position_target_m=.02
+    goal=(0.,0.);w=world()
+    first=c.tick(w,VehicleState(.015,0.,0.,0.,0.),goal,0.,goal_yaw=1.)
+    assert first.reference.terminal_yaw==1.
+    for index,distance in enumerate((.03,.09,.1),1):
+        result=c.tick(w,VehicleState(distance,0.,0.,.02,.02),goal,.05*index,goal_yaw=1.)
+        assert result.reference.terminal_yaw==1.
+    result=c.tick(w,VehicleState(.101,0.,0.,0.,0.),goal,.2,goal_yaw=1.)
+    assert result.reference.terminal_yaw is None
+    result=c.tick(w,VehicleState(.09,0.,0.,0.,0.),goal,.25,goal_yaw=1.)
+    assert result.reference.terminal_yaw is None
+
+
+@pytest.mark.parametrize('asynchronous',[False,True])
+def test_stopped_near_acceptance_edge_does_not_start_heading_before_position_target(asynchronous):
+    c=coordinator(asynchronous);c.goal_position_target_m=.02
+    result=c.tick(world(),VehicleState(.099,0.,0.,0.,0.),(0.,0.),0.,goal_yaw=1.)
+    assert result.reference.terminal_yaw is None
+
+
+@pytest.mark.parametrize('asynchronous',[False,True])
+def test_already_satisfied_pose_keeps_existing_acceptance(asynchronous):
+    c=coordinator(asynchronous);c.goal_position_target_m=.02
+    result=c.tick(world(),VehicleState(.09,0.,1.,0.,0.),(0.,0.),0.,goal_yaw=1.)
+    assert result.status=='ARRIVED'
+
+
+@pytest.mark.parametrize('asynchronous',[False,True])
+@pytest.mark.parametrize('change',['xy','yaw','generation','cancel'])
+def test_completed_position_is_not_inherited_by_new_goal(asynchronous,change):
+    c=coordinator(asynchronous);c.goal_position_target_m=.02
+    goal=(0.,0.);yaw=1.
+    c.tick(world(),VehicleState(.01,0.,0.,0.,0.),goal,0.,goal_yaw=yaw)
+    if change=='xy':goal=(.01,0.)
+    elif change=='yaw':yaw=1.5
+    elif change=='generation':c._set_goal(goal,yaw,generation=17)
+    else:c.invalidate_goal(generation=18)
+    result=c.tick(world(),VehicleState(.07,0.,0.,.02,0.),goal,.05,goal_yaw=yaw)
+    assert result.reference.terminal_yaw is None
+
+
+@pytest.mark.parametrize('asynchronous',[False,True])
+def test_xy_only_goal_preserves_existing_position_and_braking_decisions(asynchronous):
+    c=coordinator(asynchronous);c.goal_position_target_m=.02
+    r=c.tick(world(),VehicleState(.09,0.,0.,0.,.02),(0.,0.),0.)
+    assert r.status=='GOAL_BRAKING'
+    c.tick(world(),VehicleState(.01,0.,0.,0.,0.),(0.,0.),.05)
+    r=c.tick(world(),VehicleState(.09,0.,0.,.03,0.),(0.,0.),.1)
+    assert r.status not in ('GOAL_BRAKING','ARRIVED')

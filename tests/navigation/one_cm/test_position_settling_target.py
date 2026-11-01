@@ -7,17 +7,18 @@ from tests.navigation.one_cm.test_navigation_task import make_session,task_api
 
 
 @pytest.mark.parametrize('asynchronous',[False,True])
-def test_stopped_inside_acceptance_band_aligns_final_yaw(asynchronous):
+def test_stopped_inside_acceptance_band_first_finishes_position_target(asynchronous):
     c=coordinator(asynchronous);c.goal_position_target_m=.02
     state=VehicleState(.08,0.,0.,0.,0.)
     c.replace_goal((0.,0.),goal_yaw=1.,generation=1)
     c.route=Route(1,1,[[.08,0.],[0.,0.]],(0.,0.))
     r=c.tick(world(),state,(0.,0.),0.,goal_yaw=1.)
-    assert r.status=='GOAL_TURNING'
+    assert r.reference.terminal_yaw is None
+    assert r.status not in ('GOAL_TURNING','ARRIVED')
     assert np.all(r.action.states[:,0]==.08)
     assert np.all(r.action.states[:,3]==0.)
-    if asynchronous:assert c.local_worker.requests==[]
-    else:assert c.planner.calls==0
+    if asynchronous:assert len(c.local_worker.requests)==1
+    else:assert c.planner.calls==1
     assert c.goal_tolerance_m==.1
 
 

@@ -56,6 +56,7 @@ class NavigationCoordinator:
         self._raw_route=self._shaped_route=None
         self._goal = self._epoch = self._policy = None
         self._goal_yaw = None
+        self._position_completed = False
         self.goal_revision = 0
         self._global_inflight = None
         self._next_local = self._next_global = -float('inf')
@@ -86,6 +87,7 @@ class NavigationCoordinator:
         self.goal_revision += 1
         self._accepted_goal_generation = generation
         self._goal = self._goal_yaw = self.route = self.progress = None
+        self._position_completed = False
         self._global_inflight = None
         self._pending_reason = 'GOAL_CHANGED'
 
@@ -128,6 +130,7 @@ class NavigationCoordinator:
         if goal != self._goal or not same_yaw or new_generation:
             self.goal_revision += 1
             self._goal, self._goal_yaw = goal, yaw
+            self._position_completed = False
             self.route = self.progress = None
             self._pending_reason = 'GOAL_CHANGED'
         if generation is not None:
@@ -340,10 +343,19 @@ class NavigationCoordinator:
                           check_pose_goal(world, goal, self._goal_yaw, self.limits))
             self._goal_check_key, self._cached_goal_check = self.goal_revision, goal_check
         distance = np.linalg.norm(np.array(goal)-motion[:2])
-        # 移动时继续收敛到位置目标；验收范围内已停下则完成位置阶段，
-        # 避免P3厘米级波动反复把最终朝向切回起步对准。
-        arrived_xy = (distance <= self.position_target_tolerance_m or
-                      distance <= self.goal_tolerance_m and abs(motion[3]) <= self.stopped_linear_mps)
+        # 位置目标与任务验收上限职责不同：不能在10cm边缘因暂时低速
+        # 就提前开始最终转向。已完成的位置阶段仅在越出验收范围时重开。
+        # 这一位历史属于现有目标；路线刷新和速度波动都不能将其清除。
+        if self._goal_yaw is None:
+            # 无最终朝向的目标没有朝向阶段，保留既有位置/制动交接。
+            arrived_xy = (distance <= self.position_target_tolerance_m or
+                          distance <= self.goal_tolerance_m and abs(motion[3]) <= self.stopped_linear_mps)
+        else:
+            if distance > self.goal_tolerance_m:
+                self._position_completed = False
+            elif distance <= self.position_target_tolerance_m or self.goal_reached(state):
+                self._position_completed = True
+            arrived_xy = self._position_completed
         global_due = now_s + 1e-9 >= self._next_global
         if (goal_check.accepted and not arrived_xy and not self.runner.busy and
                 (self._pending_reason or global_due)):
