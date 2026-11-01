@@ -1,0 +1,9 @@
+# P3应用源帧与完成观察回归
+
+LEGGED-WHEEL-SYNC-20261101测试中发现TERMINAL-YAW-ONCE-20261101遗留回归；公共owner integration/pure-planner-orin。本轮修复同步主线及TCP/轮式/足式，正式运行安装不因本提交自动切换。
+
+现有_observed_pose_stamp_ns仅在完整规划/证明后消费；NOT_DUE时已应用同一P3帧但尚未消费，不能用消费源戳代替应用源戳。重放同一源戳并更改位置的单测可导致session.state被改写。增加内部_applied_pose_stamp_ns，仅在转换成功、offer_state之后更新；同源重放不再改写已应用状态，新源戳仍正常接纳。未新增ROS接口、任务实体或超时门禁，不恢复外推。
+
+终点相关旧测试改按用户已确认的单向阶段约定：位置完成后漂移不清除阶段或到达保持；yaw或速度不满足仍清除完成保持。导航相位与runtime共用同一行为。
+
+Windows当前合并工作树相关测试1314通过、97条件跳过；Humble隔离构建和测试另见足式同步证据。未执行实车、足式步态、Orin闭环；未替换P4正式运行。
