@@ -684,7 +684,7 @@ TEST_F(IncrementalExplorationMapWaitTest,
 
 
 TEST_F(IncrementalExplorationMapWaitTest,
-       InternalErrorDuringTimeoutCancellationIsNotConvertedToRetry) {
+       InternalErrorWhileWaitingIsNotConvertedToRetry) {
   Start(false);
   WaitForMapFeedback();
   server_->Finish(Action::Result::INTERNAL_ERROR, "TEST_NAVIGATION_INTERNAL_ERROR");
@@ -695,7 +695,7 @@ TEST_F(IncrementalExplorationMapWaitTest,
 }
 
 TEST_F(IncrementalExplorationMapWaitTest,
-       GoalReachedDuringTimeoutCancellationRemainsActualSuccess) {
+       GoalReachedWhileWaitingRemainsActualSuccess) {
   Start(false);
   WaitForMapFeedback();
   server_->Finish(Action::Result::GOAL_REACHED, "GOAL_REACHED");
@@ -705,7 +705,7 @@ TEST_F(IncrementalExplorationMapWaitTest,
 }
 
 TEST_F(IncrementalExplorationMapWaitTest,
-       ActualNoPathDuringPausedTimeoutCancellationKeepsPauseAndFailure) {
+       ActualNoPathWhilePausedKeepsPauseAndFailure) {
   Start(false);
   const auto first = server_->goal(0U);
   WaitForMapFeedback();
@@ -765,13 +765,13 @@ TEST_F(IncrementalExplorationNodeTest,
     return status && status->state == Status::WAITING_FOR_INPUT;
   }));
 
+  const auto statuses_before_odometry = StatusCount();
   auto invalid_odometry = Odometry();
   invalid_odometry.child_frame_id = "base_footprint";
   odometry_publisher_->publish(std::move(invalid_odometry));
 
-  ASSERT_TRUE(WaitFor([this] {
-    const auto status = LastStatus();
-    return status && status->reason_code.rfind("INVALID_POSE_INPUT:", 0U) == 0U;
+  ASSERT_TRUE(WaitFor([this, statuses_before_odometry] {
+    return HasStatusReasonPrefixSince(statuses_before_odometry, "INVALID_POSE_INPUT:");
   }));
   EXPECT_EQ(server_->goal_count(), 0U);
 }
@@ -874,12 +874,14 @@ TEST_F(IncrementalExplorationNodeTest,
   EXPECT_DOUBLE_EQ(second.target_y_m, third.target_y_m);
   EXPECT_DOUBLE_EQ(second.target_yaw_rad, third.target_yaw_rad);
 
+  const auto failed_before_timeout = LastStatus()->failed_candidate_count;
   server_->Finish(Action::Result::TIMEOUT, "TIMEOUT");
+  ASSERT_TRUE(WaitFor([this] { return LastStatus()->state == Status::PAUSED; }));
+  EXPECT_EQ(LastStatus()->failed_candidate_count, failed_before_timeout);
+  EXPECT_EQ(server_->goal_count(), 3U);
+  task_publisher_->publish(Command(Task::RESUME));
   ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 4U; }));
-  const auto fourth = server_->goal(3U);
-  EXPECT_TRUE(third.target_x_m != fourth.target_x_m ||
-              third.target_y_m != fourth.target_y_m ||
-              third.target_yaw_rad != fourth.target_yaw_rad);
+  EXPECT_TRUE(SameNavigationPose(third, server_->goal(3U)));
 }
 
 TEST_F(IncrementalExplorationNodeTest,
