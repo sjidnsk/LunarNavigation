@@ -265,8 +265,9 @@ def test_direct_rejects_mppi_node_or_foreign_command_authority():
     assert not installed('mpcc_cmd_vel') and not installed('path_mppi')
 
 
-def test_progress_needs_same_writer_success_before_new_accepted_position():
+def test_progress_needs_same_writer_success_before_new_accepted_pose():
     import json
+    import math
     m=runner_module()
     a,b='a'*32,'b'*32
     def notice(kind,**payload):
@@ -281,6 +282,9 @@ def test_progress_needs_same_writer_success_before_new_accepted_position():
     assert not passed([first,second,reached])
     assert not passed([first,reached,second.replace('-2]', '-3]')])
     assert passed([first,reached,second])
+    for pose,expected in [([0,0,.2],True),([.01,0,0],True),([0,0,0],False),([0,0,2*math.pi],False)]:
+        successor=notice('TASK_ACCEPTED',task_id=b,accepted_generation=2,goal=pose)
+        assert passed([first,reached,successor]) is expected,pose
     e['reached'][0]['uuid']=b
     assert not passed([first,reached,second])
 

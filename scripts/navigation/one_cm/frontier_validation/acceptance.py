@@ -47,7 +47,7 @@ class AcceptanceLedger:
         except (ValueError,TypeError) as exc:self.errors.append(str(exc));return None
 
 def progress_transitions(lines):
-    """按同一 launch 进程的日志行序记录当前目标到达后接受新位置。"""
+    """按同一 launch 进程的日志行序记录当前目标到达后接受新观察位姿。"""
     transitions=[]
     writers={}
     for line_number,line in enumerate(lines,1):
@@ -66,10 +66,12 @@ def progress_transitions(lines):
         if ledger.get(payload.get('task_id')) is not None:
             continue
         accepted=ledger.record(payload,line_number)
-        if (terminal and current and accepted and accepted.generation>current.generation
-                and math.dist(current.goal[:2],accepted.goal[:2])>.1):
-            transitions.append(dict(writer=writer,reached_uuid=current.task_id,reached_generation=current.generation,
-                                    reached_line=terminal,next_uuid=accepted.task_id,next_generation=accepted.generation,
-                                    next_line=line_number))
+        if terminal and current and accepted and accepted.generation>current.generation:
+            yaw_delta=accepted.goal[2]-current.goal[2]
+            yaw_distance=abs(math.atan2(math.sin(yaw_delta),math.cos(yaw_delta)))
+            if math.dist(current.goal[:2],accepted.goal[:2])>1e-9 or yaw_distance>1e-9:
+                transitions.append(dict(writer=writer,reached_uuid=current.task_id,reached_generation=current.generation,
+                                        reached_line=terminal,next_uuid=accepted.task_id,next_generation=accepted.generation,
+                                        next_line=line_number))
         writers[writer]=(ledger,None)
     return transitions
