@@ -1,6 +1,6 @@
 # 新导航架构下的常规前沿探索适配
 
-任务：EXPLORATION-CONTINUITY-20261101；owner integration/pure-planner-orin。用户已确定先常规前沿探索，再 DRL；本设计仅第一阶段，待确认实施边界。基线 df14dfc（部署产品源码 7d7b5a7），复用已登记且干净的导航专题 hk/global-route-terminal-20261101 / D:/CodexDownloads/lunar_navigation/global-route-terminal-20261101，后续需要独立并行实现时再划分工作树。同一目录唯一写入者 ROOT。
+任务：EXPLORATION-CONTINUITY-20261101；owner integration/pure-planner-orin。用户已确定先常规前沿探索，再 DRL；本设计仅第一阶段；用户于2026-11-01明确批准逐批实施、每批复审。基线 df14dfc（部署产品源码 7d7b5a7），复用已登记且干净的导航专题 hk/global-route-terminal-20261101 / D:/CodexDownloads/lunar_navigation/global-route-terminal-20261101，后续需要独立并行实现时再划分工作树。同一目录唯一写入者 ROOT。
 
 ## 已核对事实
 
