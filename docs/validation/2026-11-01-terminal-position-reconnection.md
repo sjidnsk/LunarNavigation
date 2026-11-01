@@ -40,3 +40,5 @@ Humble planner构建通过，11/11 CTest通过。首次包测3组失败：一处
 回归先证伪：4失败28通过；独立复审发现XY-only兼容性后补2失败32通过，再收窄修复。最终本机完整导航1095通过95跳过；目标机Humble阶段相关53通过，独立构建及11/11包CTest通过。初次将ROS包测试直接放在Windows运行另有10项因无rclpy失败，不能称其在Windows通过；这些ROS功能由目标机CTest覆盖。旧2cm/10cm交接预期的3项测试相应更新。独立复审批准。真实P3/车辆末端驾驶尚未验收；预测偏差及仅在同一最终朝向阶段内的反转仍需现场区分，不能据源码回归宣称全部消失。
 
 新隔离构建位置：/home/yanfa/P4/build/terminal-phase-20261101。现场原始阶段摘要保留于P4/build/archive-preparation/terminal-phase-observation.json；冷归档不修改该文件。源码提交和部署回执将在切换后追加。
+
+部署：12b05e9已在216加载，operator235239，navigation_task_node235309实际argv指向build/terminal-phase-20261101/install；源码SHA14598d2b4036f94c27181181deaf80aacb6ae9c9b9969594c96409d9d1ac0efb。P3/车辆六进程PID不变，启动后定位36/地图21接收计数，未重放旧目标或由本会话发送新目标。运行run/p4-20261101-122228-235239。启动后收到新的外部目标并输出指令；未据此宣称终点驾驶通过。回执本机D:/CodexDownloads/lunar_navigation/p4-archive-20261101/terminal-phase-deployment.json。
