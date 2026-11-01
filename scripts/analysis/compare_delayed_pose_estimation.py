@@ -236,7 +236,7 @@ def evaluate(estimates, observations, commands, parameters):
 
 def metrics(rows):
     answer={}
-    for name in ('online','hold','p3_twist_cv','two_pose_cv','delayed_ekf'):
+    for name in rows[0]['errors']:
         p=np.array([r['errors'][name]['position_m'] for r in rows]);y=np.array([r['errors'][name]['yaw_rad'] for r in rows])
         answer[name]=dict(n=len(p),position_rmse_cm=float(np.sqrt(np.mean(p*p))*100),position_p95_cm=float(np.percentile(p,95)*100),
                           yaw_rmse_deg=float(np.sqrt(np.mean(y*y))*180/math.pi),yaw_p95_deg=float(np.percentile(y,95)*180/math.pi),

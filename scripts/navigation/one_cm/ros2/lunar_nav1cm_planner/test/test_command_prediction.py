@@ -6,34 +6,37 @@ sys.path.insert(0,str(PACKAGE)); sys.path.insert(0,str(PACKAGE.parents[1]))
 from lunar_nav1cm_planner.command_prediction import CommandPrediction
 from nav1cm.contracts import VehicleState, WheelLimits
 
-def test_acceleration_braking_and_repeated_prediction():
+def test_observed_motion_is_not_accelerated_by_command_and_brakes():
     p=CommandPrediction(); l=WheelLimits()
-    p.issue(0.,(1.,0.)); p.correct(VehicleState(0,0,0,0,0),1000000000,0.,1000000000)
+    p.issue(0.,(1.,0.)); p.correct(VehicleState(0,0,0,.2,0),1000000000,0.,1000000000)
     a=p.predict(1.,l)
-    assert a.x==pytest.approx(.25); assert a.v==pytest.approx(.5)
+    assert a.x==pytest.approx(.2); assert a.v==pytest.approx(.2)
     assert p.predict(1.,l)==a
     p.issue(1.,(0.,0.))
-    assert p.predict(2.,l).x==pytest.approx(.5)
+    assert p.predict(2.,l).x==pytest.approx(.24)
     assert p.predict(2.,l).v==pytest.approx(0.)
+
 
 def test_rotation_delayed_correction_and_old_stamp():
     p=CommandPrediction(); l=WheelLimits(); p.issue(0.,(0.,1.))
-    p.correct(VehicleState(0,0,0,0,0),1000000000,1.,2000000000)
-    assert p.predict(1.,l).yaw==pytest.approx(.25)
-    p.correct(VehicleState(3,0,.1,0,.2),1500000000,1.,2000000000)
+    p.correct(VehicleState(0,0,0,0,.1),1000000000,1.,2000000000)
+    assert p.predict(1.,l).yaw==pytest.approx(.1)
+    p.correct(VehicleState(0,0,.05,0,.1),1500000000,1.,2000000000)
     a=p.predict(1.,l)
-    assert a.x==3; assert a.yaw==pytest.approx(.2625)
+    assert a.x==0; assert a.yaw==pytest.approx(.1)
     p.correct(VehicleState(9,0,0,0,0),1000000000,1.,2000000000)
     assert p.predict(1.,l)==a
+
 
 def test_missing_history_and_clock_reset():
     p=CommandPrediction(); s=VehicleState(0,0,0,.2,0); l=WheelLimits()
     p.issue(.5,(.2,0.)); p.correct(s,1000000000,1.,2000000000)
     assert p.predict(1.,l)==s
-    p.correct(s,2000000000,2.,3000000000)
-    assert p.predict(2.,l).x==pytest.approx(.2)
+    p.correct(VehicleState(.2,0,0,.2,0),2000000000,2.,3000000000)
+    assert p.predict(2.,l).x==pytest.approx(.4)
     p.correct(s,100000000,3.,200000000)
     assert p.predict(3.,l)==s
+
 
 def test_history_bounded_and_coalesced():
     p=CommandPrediction(max_commands=3)
@@ -66,7 +69,7 @@ def test_runtime_planning_estimate_keeps_measured_state(monkeypatch):
     from test_runtime import build_runtime,pose
     runtime,session,_,_=build_runtime()
     runtime.configure_direct_control(lambda *a:None,command_hold_s=.1)
-    s=VehicleState(0,0,0,0,0)
+    s=VehicleState(0,0,0,.05,0)
     session.offer_state(s)
     runtime._command_prediction.issue(0.,(.2,0.))
     runtime._command_prediction.correct(s,1000000000,0.,1000000000)
@@ -78,8 +81,8 @@ def test_runtime_planning_estimate_keeps_measured_state(monkeypatch):
         return original(now,**kwargs)
     monkeypatch.setattr(session,'tick',tick)
     runtime._tick_once(1.)
-    assert calls[0].x==pytest.approx(.16)
-    assert calls[0].v==pytest.approx(.2)
+    assert calls[0].x==pytest.approx(.05)
+    assert calls[0].v==pytest.approx(.05)
     assert session.state==s
 
 
@@ -89,14 +92,16 @@ def test_spin_prepare_does_not_invent_yaw_and_same_direction_keeps_start():
     assert p.predict(2.,l).yaw==0
     p.issue(2.,(0.,.8))
     assert p.predict(3.,l).yaw==0
-    assert p.predict(4.,l).yaw==pytest.approx(.25)
+    assert p.predict(4.,l).yaw==0.
 
 
 def test_p3_correction_does_not_restart_preparation():
     p=CommandPrediction(spin_prepare_s=3.); l=WheelLimits()
     p.issue(0.,(0.,.5)); p.correct(VehicleState(0,0,0,0,0),1000000000,0.,1000000000)
-    p.correct(VehicleState(1,0,0,0,0),3000000000,2.,3000000000)
-    assert p.predict(4.,l).yaw==pytest.approx(.25)
+    p.correct(VehicleState(0,0,0,0,0),3000000000,2.,3000000000)
+    assert p._spin_ready_s==3.
+    p.correct(VehicleState(0,0,.02,0,.02),4200000000,3.2,4200000000)
+    assert p.predict(4.,l).yaw>.02
 
 
 def test_zero_and_sign_flip_restart_but_drive_has_no_prepare():
@@ -107,7 +112,7 @@ def test_zero_and_sign_flip_restart_but_drive_has_no_prepare():
     p.issue(5.,(0.,0.));p.issue(6.,(0.,.5))
     assert p.predict(8.,l).yaw==0
     p.issue(8.,(.2,0.))
-    assert p.predict(9.,l).x==pytest.approx(.16)
+    assert p.predict(9.,l).x==0.
 
 
 def test_truncated_history_keeps_prepare_metadata_and_missing_history_falls_back():
@@ -118,7 +123,7 @@ def test_truncated_history_keeps_prepare_metadata_and_missing_history_falls_back
     assert p.predict(4.,l)==s
     p.correct(s,3000000000,2.,3000000000)
     assert p.predict(3.,l).yaw==0
-    assert p.predict(4.,l).yaw==pytest.approx(.25)
+    assert p.predict(4.,l).yaw==0.
 
 
 def test_runtime_ros_clock_reset_remains_integrity_fault(monkeypatch):
@@ -151,3 +156,23 @@ def test_runtime_configures_platform_prepare_without_changing_issued_command():
     runtime._publish_issued((0.,.5))
     assert sent==[(0.,.5)]
     assert runtime._command_prediction.spin_prepare_s==3.
+
+
+def test_reapplied_same_source_cannot_change_position_completion_evidence(monkeypatch):
+    from types import SimpleNamespace as S
+    from test_runtime import build_runtime
+    import lunar_nav1cm_planner.runtime as runtime_module
+    runtime,session,_,_=build_runtime()
+    runtime.configure_direct_control(lambda *a:None,command_hold_s=.1)
+    observed=[VehicleState(.3,0,0,0,0)]
+    monkeypatch.setattr(runtime_module,'state_from_odometry',lambda *a:observed[0])
+    runtime.ros_now_ns=lambda:3_000_000_000
+    message=S(header=S(stamp=S(sec=1,nanosec=0)))
+    runtime._apply_pose_input(message,0.,0.,None)
+    original=session.state
+    observed[0]=VehicleState(.01,0,0,0,0)
+    runtime._apply_pose_input(message,1.,1.,None)
+    assert session.state==original
+    message.header.stamp.sec=2
+    runtime._apply_pose_input(message,2.,2.,None)
+    assert session.state==observed[0]

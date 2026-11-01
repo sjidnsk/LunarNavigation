@@ -88,7 +88,7 @@ class NavigationSession:
         # 规划可消费延迟补偿后的当前估计；self.state 始终保留 P3 实测。
         state = planning_state if self.direct_control and planning_state is not None else self.state
         result = self.coordinator.tick(self.world, state, (self.goal.x, self.goal.y),
-                                       now_s, goal_yaw=self.goal.yaw, need_action=False)
+                                       now_s, goal_yaw=self.goal.yaw, need_action=False, observed_state=self.state)
         # 预测终态只能请求保持/制动；真实 P3 未到达不能提交任务完成证据。
         if result.status == 'ARRIVED' and not self.coordinator.goal_reached(self.state):
             result = replace(result, status='GOAL_BRAKING')

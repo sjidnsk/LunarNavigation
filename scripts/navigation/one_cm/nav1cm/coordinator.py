@@ -262,7 +262,7 @@ class NavigationCoordinator:
         candidate = terminal_candidate(state, grid, reference, self.limits)
         return candidate, 'GOAL_TURNING' if candidate.source.startswith('terminal-yaw:bounded') else 'GOAL_BRAKING'
 
-    def _update_route(self, world, state, goal, now_s, events, *, goal_yaw=None):
+    def _update_route(self, world, state, goal, now_s, events, *, goal_yaw=None, observed_state=None):
         """共享全局身份、目标检查与非阻塞路线调度；不执行局部求解。"""
         self._set_goal(goal, goal_yaw)
         goal = self._goal
@@ -342,18 +342,20 @@ class NavigationCoordinator:
             goal_check = (self._goal_checker.check_goal(world, goal) if self._goal_yaw is None else
                           check_pose_goal(world, goal, self._goal_yaw, self.limits))
             self._goal_check_key, self._cached_goal_check = self.goal_revision, goal_check
-        distance = np.linalg.norm(np.array(goal)-motion[:2])
+        # 规划与认证继续使用state；终点阶段只由真实观测确认。
+        observed = state if observed_state is None else observed_state
+        distance = np.hypot(goal[0]-observed.x, goal[1]-observed.y)
         # 位置目标与任务验收上限职责不同：不能在10cm边缘因暂时低速
         # 就提前开始最终转向。已完成的位置阶段仅在越出验收范围时重开。
         # 这一位历史属于现有目标；路线刷新和速度波动都不能将其清除。
         if self._goal_yaw is None:
             # 无最终朝向的目标没有朝向阶段，保留既有位置/制动交接。
             arrived_xy = (distance <= self.position_target_tolerance_m or
-                          distance <= self.goal_tolerance_m and abs(motion[3]) <= self.stopped_linear_mps)
+                          distance <= self.goal_tolerance_m and abs(observed.v) <= self.stopped_linear_mps)
         else:
             if distance > self.goal_tolerance_m:
                 self._position_completed = False
-            elif distance <= self.position_target_tolerance_m or self.goal_reached(state):
+            elif distance <= self.position_target_tolerance_m or self.goal_reached(observed):
                 self._position_completed = True
             arrived_xy = self._position_completed
         global_due = now_s + 1e-9 >= self._next_global
@@ -381,7 +383,7 @@ class NavigationCoordinator:
                 events.append({'kind': 'GLOBAL_SUBMITTED', 'reason': reason, 'version': self._version})
         return goal_check, arrived_xy, motion, global_result
 
-    def tick(self, world, state, goal, now_s, *, goal_yaw=None, need_action=True):
+    def tick(self, world, state, goal, now_s, *, goal_yaw=None, need_action=True, observed_state=None):
         started = perf_counter()
         self._set_goal(goal, goal_yaw)
         if now_s + 1e-9 < self._next_local:
@@ -389,7 +391,8 @@ class NavigationCoordinator:
         self._next_local = now_s + self.local_period_s
         timings, events = {}, []
         stage = perf_counter()
-        goal_check, arrived_xy, motion, global_result = self._update_route(world, state, goal, now_s, events, goal_yaw=goal_yaw)
+        goal_check, arrived_xy, motion, global_result = self._update_route(
+            world, state, goal, now_s, events, goal_yaw=goal_yaw, observed_state=observed_state)
         timings['ipc_schedule_goal'] = (perf_counter()-stage)*1000
         stage = perf_counter()
         grid = extract_window(world, state, self.allow_unknown)

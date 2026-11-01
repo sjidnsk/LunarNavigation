@@ -1,4 +1,4 @@
-"""有界的已发命令延迟估计；返回值不能充当 P3 到达证据。"""
+"""P3实测运动的有界延迟预测；命令辅助减速，不作为已实现速度。"""
 from collections import deque
 import math
 from nav1cm.contracts import VehicleState
@@ -17,6 +17,7 @@ class CommandPrediction:
         self.sample_s=None
         self.clock=None
         self._cache=None
+        self._observed_velocity=None
 
     def issue(self, now_s, command):
         command=tuple(command)
@@ -41,6 +42,7 @@ class CommandPrediction:
             self._spin_ready_s=None
             self._cache=None
             self.state=state
+            self._observed_velocity=(state.v,state.w)
             self.stamp=stamp_ns
             self.sample_s=None
             self.clock=clock_ns
@@ -48,7 +50,16 @@ class CommandPrediction:
         self.clock=clock_ns
         if self.stamp is not None and stamp_ns<=self.stamp:
             return
+        velocity=(state.v,state.w)
+        if self.state is not None and self.stamp is not None:
+            dt=(stamp_ns-self.stamp)/1e9
+            yaw_delta=math.atan2(math.sin(state.yaw-self.state.yaw),math.cos(state.yaw-self.state.yaw))
+            mid=self.state.yaw+yaw_delta/2
+            chord_scale=1. if abs(yaw_delta)<1e-9 else 2*math.sin(yaw_delta/2)/yaw_delta
+            forward=((state.x-self.state.x)*math.cos(mid)+(state.y-self.state.y)*math.sin(mid))/(dt*chord_scale)
+            velocity=(forward,yaw_delta/dt)
         self.state=state
+        self._observed_velocity=velocity
         self.stamp=stamp_ns
         self._cache=None
         age=(clock_ns-stamp_ns)/1e9
@@ -66,9 +77,12 @@ class CommandPrediction:
                 not self.commands or self.commands[0][0]>start):
             return self.state
         state=self.state
-        if self._cache is not None and start<=self._cache[0]<=now_s:
+        cached=self._cache is not None and start<=self._cache[0]<=now_s
+        if cached:
             start,state=self._cache
         x,y,yaw,v,w=(state.x,state.y,state.yaw,state.v,state.w)
+        if not cached:
+            v,w=self._observed_velocity
         entries=list(self.commands)
         for i,(issued,command,ready_s) in enumerate(entries):
             end=min(now_s,entries[i+1][0] if i+1<len(entries) else now_s)
@@ -80,7 +94,12 @@ class CommandPrediction:
                 dt=min(.02,duration)
                 cursor=end-duration
                 preparing=ready_s is not None and cursor<ready_s-1e-10
-                target_command=(0.,0.) if preparing else command
+                # 已发指令只说明请求变化；没有P3运动证据就不预测自行加速。
+                # 停车/反向先按已有减速度减到零，反向运动由随后P3确认。
+                target_command=((0.,0.) if preparing else tuple(
+                    math.copysign(min(abs(observed),abs(requested)),observed)
+                    if observed*requested>0 else 0.
+                    for observed,requested in zip((v,w),command)))
                 if preparing:dt=min(dt,ready_s-cursor)
                 for speed,target,rate in ((v,target_command[0],limits.linear_accel_mps2),
                                           (w,target_command[1],limits.angular_accel_rps2)):

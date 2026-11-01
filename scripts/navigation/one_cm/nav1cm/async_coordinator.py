@@ -215,7 +215,7 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
             events.append({'kind':'BRAKE_REQUIRED','reason':str(exc)})
             return None,None,'BUFFER_UNAVAILABLE'
 
-    def tick(self, world, state, goal, now_s, *, goal_yaw=None, need_action=True):
+    def tick(self, world, state, goal, now_s, *, goal_yaw=None, need_action=True, observed_state=None):
         self._velocity_reference = self.velocity_reference and self.revalidate_current_map and not need_action
         started = perf_counter()
         cpu_started = process_time()
@@ -243,7 +243,8 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
             except Exception as exc:
                 events.append({'kind':'LOCAL_WORKER_START_ERROR','reason':str(exc)})
         stage = perf_counter()
-        goal_check, arrived_xy, motion, global_result = self._update_route(world, state, goal, now_s, events, goal_yaw=goal_yaw)
+        goal_check, arrived_xy, motion, global_result = self._update_route(
+            world, state, goal, now_s, events, goal_yaw=goal_yaw, observed_state=observed_state)
         timings['ipc_schedule_goal'] = (perf_counter()-stage)*1000
         stage = perf_counter()
         grid = extract_window(world, state, self.allow_unknown)
