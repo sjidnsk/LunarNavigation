@@ -42,3 +42,9 @@ Humble planner构建通过，11/11 CTest通过。首次包测3组失败：一处
 新隔离构建位置：/home/yanfa/P4/build/terminal-phase-20261101。现场原始阶段摘要保留于P4/build/archive-preparation/terminal-phase-observation.json；冷归档不修改该文件。源码提交和部署回执将在切换后追加。
 
 部署：12b05e9已在216加载，operator235239，navigation_task_node235309实际argv指向build/terminal-phase-20261101/install；源码SHA14598d2b4036f94c27181181deaf80aacb6ae9c9b9969594c96409d9d1ac0efb。P3/车辆六进程PID不变，启动后定位36/地图21接收计数，未重放旧目标或由本会话发送新目标。运行run/p4-20261101-122228-235239。启动后收到新的外部目标并输出指令；未据此宣称终点驾驶通过。回执本机D:/CodexDownloads/lunar_navigation/p4-archive-20261101/terminal-phase-deployment.json。
+
+## 再次现场复测未通过（采样诊断）
+
+用户反馈12b05e9仍不能对齐。只读取得360秒4109样本及60秒独立ROS订阅；未发目标/指令、不改参数。P4/车辆各698条指令逐条一致、仅3零速，模式695条全auto。源时间对齐93持续正旋转区间：指令中位0.1rad/s，对应P3姿态差分0.02769rad/s、报告0.02737rad/s；指令0.2m/s的7区间位置差分约0.049–0.063m/s。预测理想响应与实际差异，不能靠2cm/10cm阶段标志单独解决。例预测1.98cm时源时刻P3尚18.36cm，随后更新至10.79cm再退回位置；单次预测/旧实测差值含正常延迟，结论由源时刻对齐的响应数据支持。
+
+纯转向20–31度出现约4.5–6.9cm圆弧位置变化，等效偏置11–15cm是待核对线索，不能宣称固定外参或打滑。P3已有base_from_lidar，不可重复补偿。建议先核对P3车体参考点/实际旋转中心、命令响应/时间尺度，再修现有预测与阶段完成证据，不改阈值/能力上限或新增控制器。实际驾驶仍未通过。证据与图本机D:/CodexDownloads/lunar_navigation/p4-archive-20261101/terminal-sampling-report.md及terminal-sampling-manifest.json。
