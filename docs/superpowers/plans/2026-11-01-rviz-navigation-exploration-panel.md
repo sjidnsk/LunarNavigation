@@ -49,3 +49,14 @@ Files: 上述包/必要现有目标入口的最小改动；P4运行脚本；本�
 - [ ] 合并各批运行安装并启动新RViz；仅重启本会话拥有的P4进程，保留P3与Env_X。
 - [ ] 使用隔离DDS/fake导航验证界面命令，再进行P4真实输入显示检查；不未经请求另发无限车辆目标。
 - [ ] 更新任务登记/验收证据，说明NOT_RUN及待合入，不自动merge/push。
+
+## 用户确认追加：P4话题统一（2026-11-01）
+
+唯一命名配置 config/p4_topics.yaml，分 launch / visualization / vehicle 三组；launch组包括P3输入和全部P4接口参数，vehicle组保留/car原生接口。普通launch从源码或已安装包读取同一YAML；TCP入口不得再从debug脚本推导正式接口。scripts/simulation/p4_topics.py复用读取、隔离namespace映射和生成RViz配置；运行时生成RViz实际配置，模板仅保存样式及Topic Key，名称不再分别维护。
+
+- [ ] 配置/共用工具与公共launch接入：ROOT，新增tests/test_p4_topics.py，配置随exploration_ros安装；先RED后GREEN。
+- [ ] TCP运行/有界检查入口：独立writer只改p4_tcp_runtime.py、check_tcp_navigation.py、tests/test_p4_tcp_runtime.py。launch_settings保留prefix可选覆盖但默认Car/T4；私有检查读取返回的实际参数，不能再拼旧平坦路径。observer/relay/RViz生成复用契约。车辆和P3名称保留。
+- [ ] RViz面板草图区话题可配置，模板使用Topic Key，由ROOT生成真实名称；独立writer仅新包与p4_navigation.rviz。
+- [ ] 各批定向测试、独立复审，Humble构建/DDS测试和启动图检查；ROOT唯一切换P4，保留P3/Env_X及原任务记录，新界面启动IDLE不重放旧目标。
+
+命名：navigation/{goal,navigate_to_pose}；planning/{global_route,local_path}；control/{cmd_vel,path_execution_reference,tracking_status,diagnostics}；mapping/{exploration_map,get_policy_map}；exploration/{task,status,current_goal,frontiers,task_boundary,task_map_markers,diagnostics,boundary_draft}；visualization/{start_marker,goal_marker,actual_path}。global_route_reference沿用规划器global_route_topic+'_reference'派生规则，不另外建立第二个配置来源。隔离测试显式namespace覆盖保留同一层级。
