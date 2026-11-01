@@ -33,8 +33,15 @@ class CycleResult:
 class NavigationCoordinator:
     def __init__(self, planner, *, runner=None, limits=None, backend=None,
                  allow_unknown=False, local_period_s=.05, global_period_s=15.,
-                 global_budget_s=1., clearance_radius_m=.9, field_backend=None,
-                 revalidate_current_map=False, reference_smoothing=False):
+                 global_budget_s=1., clearance_radius_m=.75, field_backend=None,
+                 revalidate_current_map=False, reference_smoothing=False,
+                 global_soft_clearance_m=.4, global_clearance_weight=.5):
+        for name,value in (("global_soft_clearance_m",global_soft_clearance_m),
+                           ("global_clearance_weight",global_clearance_weight)):
+            if isinstance(value,bool) or not np.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and nonnegative")
+        self.global_soft_clearance_m = float(global_soft_clearance_m)
+        self.global_clearance_weight = float(global_clearance_weight)
         self.planner = planner
         self.runner = GlobalWorker() if runner is None else runner
         self.limits = WheelLimits() if limits is None else limits
@@ -165,7 +172,9 @@ class NavigationCoordinator:
             if not raw_verified and not self._route_clear(route):
                 raise ValueError("raw route collision")
             shaped=shape_route(route,self._blocked_boxes,raw_verified=True,
-                               terminal_yaw=self._goal_yaw)
+                               terminal_yaw=self._goal_yaw,
+                               soft_clearance_m=self.global_soft_clearance_m,
+                               clearance_weight=self.global_clearance_weight,corner_radius=self.clearance_radius_m)
         self._raw_route,self._shaped_route=route,shaped
         self.route=route if shaped is None else shaped.route
         self.progress=None
@@ -181,12 +190,12 @@ class NavigationCoordinator:
             arc = _arc_lengths(route.points)
             points = np.vstack((_point_at(route.points, arc, start_s),
                                 route.points[np.searchsorted(arc, start_s, side='right'):]))
-            return all(_segment_clear(a, b, self._blocked_boxes)
+            return all(_segment_clear(a, b, self._blocked_boxes,corner_radius=self.clearance_radius_m)
                        for a, b in zip(points[:-1], points[1:]))
         if self._shaped_route is not None and self._shaped_route.route is route:
             from .reference_smoothing import reference_clear
-            return reference_clear(self._shaped_route,self._blocked_boxes)
-        return all(_segment_clear(a, b, self._blocked_boxes) for a, b in zip(route.points[:-1], route.points[1:]))
+            return reference_clear(self._shaped_route,self._blocked_boxes,corner_radius=self.clearance_radius_m)
+        return all(_segment_clear(a, b, self._blocked_boxes,corner_radius=self.clearance_radius_m) for a, b in zip(route.points[:-1], route.points[1:]))
 
     @staticmethod
     def _same_route_geometry(current, incoming):
@@ -363,7 +372,9 @@ class NavigationCoordinator:
                 (self._pending_reason or global_due)):
             reason = self._pending_reason or 'PERIODIC'
             self._version += 1
-            request = make_request(world, motion[:2], goal, self._version, self.limits, self.clearance_radius_m, self.global_budget_s)
+            request = make_request(world, motion[:2], goal, self._version, self.limits, self.clearance_radius_m, self.global_budget_s,
+                global_soft_clearance_m=self.global_soft_clearance_m,
+                global_clearance_weight=self.global_clearance_weight)
             request['request_reason'] = reason
             # 每次尝试都消费事件并推进既有周期，submit异常也不能每tick重试。
             self._pending_reason = None

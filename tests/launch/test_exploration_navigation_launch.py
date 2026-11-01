@@ -239,7 +239,7 @@ def test_explicit_mode_platform_and_time_override_yaml_defaults(
     assert incremental_navigation["use_sim_time"].value is True
     assert all(isinstance(action, IncludeLaunchDescription) for action in legacy)
     assert not any(isinstance(action, Node) for action in legacy)
-    assert {action.source.path.rsplit("/", 1)[-1] for action in legacy} == {
+    assert {Path(action.source.path).name for action in legacy} == {
         "pure_planner.launch.py",
         "pure_exploration.launch.py",
     }
@@ -290,7 +290,7 @@ def test_explicit_legacy_needs_neither_incremental_package_nor_config_file(
     assert all(isinstance(action, IncludeLaunchDescription) for action in actions)
     assert not any(isinstance(action, Node) for action in actions)
     assert {
-        action.source.path.rsplit("/", 1)[-1] for action in actions
+        Path(action.source.path).name for action in actions
     } == {"pure_planner.launch.py", "pure_exploration.launch.py"}
 
 

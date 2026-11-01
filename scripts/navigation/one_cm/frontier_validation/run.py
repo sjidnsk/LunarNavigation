@@ -97,7 +97,8 @@ def validation_settings(args):
         if (document.get('platform')!='wheel' or cap.get('motion_model')!='differential_drive'
                 or cap.get('body_extent_m')!=[1.182,.818,1.29996]
                 or cap.get('footprint_xy_m')!=[[.591,.409],[.591,-.409],[-.591,-.409],[-.591,.409]]
-                or cap.get('minimum_clearance_m')!=.2):
+                or not isinstance(cap.get('minimum_clearance_m'),(int,float))
+                or not math.isfinite(cap['minimum_clearance_m']) or cap['minimum_clearance_m']<0):
             raise ValueError('platform geometry incompatible with independent wheel plant')
         for name,key in [('forward','maximum_forward_speed_mps'),('reverse','maximum_reverse_speed_mps'),('angular','maximum_spin_rate_radps'),('acceleration','maximum_acceleration_mps2'),('braking','maximum_braking_deceleration_mps2'),('yaw_acceleration','maximum_yaw_acceleration_radps2')]:
             value=float(cap[key])
