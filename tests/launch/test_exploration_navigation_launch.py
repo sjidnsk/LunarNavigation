@@ -198,7 +198,7 @@ def test_yaml_defaults_construct_only_incremental_action_server_and_share_endpoi
         "incremental_exploration_node",
     ]
     navigation, exploration = [action.kwargs["parameters"][0] for action in actions]
-    assert navigation["platform_type"] == exploration["platform_selector"] == "legged"
+    assert navigation["platform_type"] == exploration["platform_selector"] == "wheel"
     assert navigation["action_name"] == exploration["navigation_action"] == "/Car/T4/navigation/navigate_to_pose"
     assert navigation["exploration_map_topic"] == exploration["exploration_map_topic"] == "/Car/T4/mapping/exploration_map"
     assert navigation["local_window_size_m"] == 32.0
@@ -241,7 +241,7 @@ def test_explicit_mode_platform_and_time_override_yaml_defaults(
     assert incremental_navigation["use_sim_time"].value is True
     assert all(isinstance(action, IncludeLaunchDescription) for action in legacy)
     assert not any(isinstance(action, Node) for action in legacy)
-    assert {action.source.path.rsplit("/", 1)[-1] for action in legacy} == {
+    assert {Path(action.source.path).name for action in legacy} == {
         "pure_planner.launch.py",
         "pure_exploration.launch.py",
     }
@@ -292,7 +292,7 @@ def test_explicit_legacy_needs_neither_incremental_package_nor_config_file(
     assert all(isinstance(action, IncludeLaunchDescription) for action in actions)
     assert not any(isinstance(action, Node) for action in actions)
     assert {
-        action.source.path.rsplit("/", 1)[-1] for action in actions
+        Path(action.source.path).name for action in actions
     } == {"pure_planner.launch.py", "pure_exploration.launch.py"}
 
 
@@ -422,22 +422,20 @@ def test_qos_depth_defaults_to_one_and_invalid_depth_names_field(monkeypatch):
     with pytest.raises(RuntimeError, match="local_map_qos"):
         module._require_common(config)
 
-
 def test_generic_and_hardware_share_deployment_navigation_defaults(monkeypatch):
     module, _, _ = _launch_module(monkeypatch)
     for name in ("exploration_navigation.yaml", "orin_hardware.yaml"):
         config = module._load_config(str(ROOT / "config" / name))
         common = module._require_common(config)
-        nav, exp = module._incremental_parameters(config, common, "legged", "/default/legged_orin.yaml", False)
+        nav, exp = module._incremental_parameters(config, common, "wheel", "/default/wheel_orin.yaml", False)
         assert nav["enable_tracking_feedback"] is True
         assert nav["goal_position_tolerance_m"] == 0.1
         assert nav["goal_yaw_tolerance_rad"] == 0.05
         assert nav["clearance_weight"] == 2.0
         assert nav["tf_topic"] == exp["tf_topic"] == "/P4/input/map_to_odom"
-        assert Path(nav["platform_config"]).name == "legged_orin.yaml"
+        assert Path(nav["platform_config"]).name == "wheel_orin.yaml"
         assert Path(nav["platform_config"]).is_file()
-        assert exp["sensor_fov_deg"] == 360.0
-
+        assert exp["sensor_fov_deg"] == 90.0
 
 def test_explicit_platform_and_capability_pair_override_yaml(monkeypatch):
     module, _, _ = _launch_module(monkeypatch)

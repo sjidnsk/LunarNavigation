@@ -21,15 +21,12 @@ struct TraversabilityProfile final {
   double inflation_radius_m{};
   std::vector<Point2> planar_envelope_xy_m;
   double preferred_clearance_m{};
-  // Zero retains the historical cell-based background window.
-  double terrain_background_half_width_m{};
   double slope_weight{};
   double relief_weight{};
   double clearance_weight{};
   double start_blind_zone_margin_m{};
   double goal_position_tolerance_m{};
   double goal_yaw_tolerance_rad{};
-  double confidence_weight{2.0};
 };
 
 enum class PlatformType : std::uint8_t {

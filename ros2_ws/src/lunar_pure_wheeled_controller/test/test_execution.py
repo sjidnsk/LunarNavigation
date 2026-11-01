@@ -271,7 +271,9 @@ def test_rolling_small_heading_change_slews_without_stopping(direction):
                       identity=('a', 2), final=False)
     result = executor.update(TrackingState(direction * .5, 0, 0, linear_mps=direction * .2), .05)
     assert result.phase == 'TRACKING'
-    assert result.command.linear_x_mps == pytest.approx(direction * .2)
+    # Small reference changes retain motion while approaching the new
+    # error-based speed target at the configured braking rate.
+    assert result.command.linear_x_mps == pytest.approx(direction * .175)
     assert result.command.angular_z_radps == pytest.approx(direction * .025)
 
 

@@ -102,6 +102,10 @@ get_filename_component(
 install(
   FILES
     "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/pure_exploration.yaml"
+    "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/p4_topics.yaml"
+    "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/wheel_navigation.yaml"
+    "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/legged_navigation.yaml"
+    "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/wheel_orin.yaml"
     "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/exploration_navigation.yaml"
     "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/wheel_orin.yaml"
     "${LUNAR_PURE_EXPLORATION_CONFIG_SOURCE_DIR}/legged_orin.yaml"
@@ -111,8 +115,17 @@ install(
   DESTINATION share/${PROJECT_NAME}/launch)
 install(
   FILES "${LUNAR_PURE_EXPLORATION_LAUNCH_SOURCE_DIR}/exploration_navigation.launch.py"
+    "${LUNAR_PURE_EXPLORATION_LAUNCH_SOURCE_DIR}/nav1cm_exploration.launch.py"
+    "${LUNAR_PURE_EXPLORATION_LAUNCH_SOURCE_DIR}/wheel_navigation.launch.py"
   DESTINATION share/${PROJECT_NAME}/launch
   OPTIONAL)
+
+install(
+  FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../../scripts/simulation/p4_navigation.rviz"
+  DESTINATION share/${PROJECT_NAME}/rviz)
+install(
+  FILES "${CMAKE_CURRENT_SOURCE_DIR}/../../../scripts/simulation/p4_topics.py"
+  DESTINATION share/${PROJECT_NAME}/launch)
 
 if(BUILD_TESTING)
   find_package(action_msgs REQUIRED)

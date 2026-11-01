@@ -59,6 +59,76 @@ TEST(PolicyMapExporter, UsesFullSnapshotForBootstrapAndMapRevisionChanges) {
   const auto refresh = exporter.Export(refresh_input, fine->fine_traversability_revision());
   EXPECT_FALSE(refresh.full_snapshot);
   EXPECT_TRUE(refresh.tiles.empty());
+  // The measured map stays unknown; only a separate certified prefix may be
+  // used to leave the sensor blind zone. Connections themselves are FREE exits.
+  auto states = fine->FindTile({})->states();
+  const GridIndex start{3,3};
+  states[TileCellOffset(start)] = FineCellState::kUnknown;
+  auto directory = fine->tile_directory().WithTile({},
+      std::make_shared<const FineTraversabilityTile>(states, fine->FindTile({})->traversal_costs()));
+  auto blind = std::make_shared<const FineTraversabilitySnapshot>(fine->geometry(),
+      fine->raw_elevation_revision(), 2U, fine->platform_profile_hash(),
+      fine->hard_inflation_radius_m(), fine->preferred_clearance_m(), fine->cost_weights(),
+      fine->elevation(), std::move(directory), std::vector<TileIndex>{},
+      std::vector<TileIndex>{}, FineSnapshotMetrics{});
+  auto with_patch = exporter.Export({.fine=blind,
+      .anchor=Pose2{.position_m={.7,.7}}, .local_window_size_m=32., .epoch="e", .processed_stamp_ns=12},0);
+  ASSERT_EQ(with_patch.assumed_start_x.size(), with_patch.assumed_start_y.size());
+  ASSERT_FALSE(with_patch.assumed_start_x.empty());
+  bool found=false;
+  for(std::size_t i=0;i<with_patch.assumed_start_x.size();++i) {
+    const GridIndex cell{with_patch.assumed_start_x[i],with_patch.assumed_start_y[i]};
+    EXPECT_EQ(blind->State(cell),FineCellState::kUnknown);
+    found |= cell == start;
+  }
+  EXPECT_TRUE(found);
+  EXPECT_TRUE(with_patch.stationary_support_ready);
+  // 新出口必须拒绝 UNKNOWN 起点，不借用旧接口的盲区补丁。
+  const auto observed = exporter.ExportObserved({.fine=blind,
+      .anchor=Pose2{.position_m={.7,.7}}, .local_window_size_m=32., .epoch="e", .processed_stamp_ns=12}, 0);
+  EXPECT_TRUE(observed.assumed_start_x.empty());
+  EXPECT_FALSE(observed.stationary_support_ready);
+  EXPECT_TRUE(observed.start_connection_x.empty());
+  EXPECT_EQ(observed.reason_code, "INPUT_UNAVAILABLE");
+  const auto direct = exporter.ExportObserved({.fine=fine,
+      .anchor=Pose2{.position_m={.7,.7}}, .local_window_size_m=32., .epoch="e", .processed_stamp_ns=12}, 0);
+  EXPECT_TRUE(direct.ready);
+  EXPECT_TRUE(direct.stationary_support_ready);
+  EXPECT_FALSE(direct.start_connection_x.empty());
+  EXPECT_TRUE(direct.assumed_start_x.empty());
+  const auto bad_delta = exporter.ExportObserved({.fine=fine, .epoch="e",
+      .base_revision=999, .full_snapshot=false}, 999);
+  EXPECT_TRUE(bad_delta.full_snapshot);
+  EXPECT_EQ(bad_delta.base_revision, 0U);
+
+  // Flat measured support permits stationary yaw even with no FREE exit.
+  auto unknown_states = fine->FindTile({})->states();
+  std::fill(unknown_states.begin(), unknown_states.end(), FineCellState::kUnknown);
+  const auto make_snapshot = [&](auto cell_states) {
+    auto tiles = fine->tile_directory().WithTile({},
+        std::make_shared<const FineTraversabilityTile>(cell_states, fine->FindTile({})->traversal_costs()));
+    return std::make_shared<const FineTraversabilitySnapshot>(fine->geometry(),
+        fine->raw_elevation_revision(), 3U, fine->platform_profile_hash(),
+        fine->hard_inflation_radius_m(), fine->preferred_clearance_m(), fine->cost_weights(),
+        fine->elevation(), std::move(tiles), std::vector<TileIndex>{},
+        std::vector<TileIndex>{}, FineSnapshotMetrics{});
+  };
+  const auto stationary = exporter.Export({.fine=make_snapshot(unknown_states),
+      .anchor=Pose2{.position_m={.7,.7}}, .local_window_size_m=32., .epoch="e", .processed_stamp_ns=13},0);
+  EXPECT_TRUE(stationary.stationary_support_ready);
+  EXPECT_TRUE(stationary.start_connection_x.empty());
+  for (const auto& tile : stationary.tiles)
+    for (const auto state : tile.states) EXPECT_EQ(state, kPolicyMapUnknown);
+  unknown_states[TileCellOffset(start)] = FineCellState::kBlocked;
+  const auto blocked = exporter.Export({.fine=make_snapshot(unknown_states),
+      .anchor=Pose2{.position_m={.7,.7}}, .local_window_size_m=32., .epoch="e", .processed_stamp_ns=14},0);
+  EXPECT_FALSE(blocked.stationary_support_ready);
+  EXPECT_FALSE(bootstrap.stationary_support_ready);
+
+  for(const auto& tile:with_patch.tiles)
+    if(tile.tile_x==0 && tile.tile_y==0)
+      EXPECT_EQ(tile.states[TileCellOffset(start)],kPolicyMapUnknown);
+
 }
 
 }  // namespace lunar::incremental_navigation_ros

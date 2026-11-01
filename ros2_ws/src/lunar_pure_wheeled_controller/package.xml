@@ -15,7 +15,7 @@
   <depend>tf2_msgs</depend>
   <depend>lunar_planning_msgs</depend>
   <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
@@ -23,4 +23,7 @@
   <export>
     <build_type>ament_cmake</build_type>
   </export>
+  <exec_depend>lunar_nav1cm_planner</exec_depend>
+  <exec_depend>grid_map_msgs</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
 </package>

@@ -8,6 +8,8 @@ platform_type: WHEELED
 capability_version: wheeled-engineering-baseline-v1
 base_frame_id: base_footprint
 capability:
+  # 当前nav1cm标准Path链：v/w独立限幅；曲率数值仅供旧模型兼容。
+  motion_model: differential_drive
   footprint_xy_m: [[0.591, 0.409], [0.591, -0.409], [-0.591, -0.409], [-0.591, 0.409]]
   body_extent_m: [1.182, 0.818, 1.29996]
   wheel_diameter_m: 0.319
@@ -26,7 +28,8 @@ capability:
   maximum_lateral_acceleration_mps2: 0.5
   maximum_curvature_per_m: 1.0
   maximum_slope_rad: 0.3490658503988659
-  minimum_clearance_m: 0.2
+  # 外接圆半径约0.71872248m；仅补足到统一总硬碰撞半径0.75m，不含全局软偏好。
+  minimum_clearance_m: 0.0312775222660697
   motion_primitives:
     - {primitive_id: forward, kind: FORWARD, position_m: [0.2, 0.0, 0.0], yaw_change_rad: 0.0}
     - {primitive_id: reverse, kind: REVERSE, position_m: [-0.2, 0.0, 0.0], yaw_change_rad: 0.0}

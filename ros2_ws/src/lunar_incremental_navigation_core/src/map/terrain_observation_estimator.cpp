@@ -1,4 +1,5 @@
 #include "map/terrain_observation_estimator.hpp"
+#include "lunar_incremental_navigation_core/terrain_dependency.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -7,6 +8,13 @@
 #include "map/grid_bounds.hpp"
 
 namespace lunar::incremental_navigation::map {
+namespace {
+int ObservationRadiusCells(double support_axis_distance_m, double resolution_m) {
+  const double cells = std::floor((1.5 * support_axis_distance_m + 1e-12) / resolution_m);
+  // 超出固定计算预算时不补全地面；直接实测物理判定仍由测量窗口负责。
+  return cells > 32. ? 0 : static_cast<int>(cells);
+}
+}  // namespace
 int ObservationBackgroundRadiusCells(double half_width_m, double resolution_m) {
   if (!std::isfinite(half_width_m) || half_width_m < 0.0 ||
       !std::isfinite(resolution_m) || resolution_m <= 0.0)
@@ -29,9 +37,8 @@ TerrainObservationEstimator::TerrainObservationEstimator(
       parameters.minimum_confidence <= 0. || parameters.minimum_confidence > 1. ||
       !std::isfinite(resolution) || resolution <= 0.)
     throw std::invalid_argument("invalid terrain observation parameters");
-  const double cells = std::floor((1.5 * parameters.support_axis_distance_m + 1e-12) / resolution);
-  if (cells > 32.) throw std::invalid_argument("terrain observation radius exceeds 32 cells");
-  radius_ = static_cast<int>(cells);
+  uniform_ = dynamic_cast<const UniformPatchProvider*>(&view_);
+  radius_ = ObservationRadiusCells(parameters.support_axis_distance_m, resolution);
 }
 const std::optional<GroundEstimate>& TerrainObservationEstimator::Estimate(GridIndex index) {
   static const std::optional<GroundEstimate> empty;
@@ -77,6 +84,13 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
   std::optional<GroundEstimate> remote_jump_fallback;
   // Every candidate uses only the immutable input, never previous predictions.
   for (int r : radii) {
+    // 同一不可变视图、相同相对窗口/常量高程只复用原算法的成功结果。
+    // 首次仍执行全部拟合与支持规则；失败、洞、坡面与台阶不会被近似。
+    const auto uniform_key = uniform_ ? uniform_->UniformPatch(index, r) : std::nullopt;
+    if (uniform_key) {
+      const auto found = uniform_estimates_.find(*uniform_key);
+      if (found != uniform_estimates_.end()) return found->second;
+    }
     points.clear();
     for(int y=-r;y<=r;++y) for(int x=-r;x<=r;++x) {
       const auto cell=detail::OffsetWithinGeometry(view_.geometry(),index,x,y);
@@ -107,36 +121,51 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
       double maximum_residual=0.;
       for(const auto& p:points)maximum_residual=std::max(maximum_residual,std::abs(p.z-c-a*p.x-b*p.y));
       if(maximum_residual<1e-10)break;
+      bool weights_changed=false;
       for(std::size_t i=0;i<points.size();++i) {
         const auto& p=points[i];
-        weights[i]=std::min(1.,.5*parameters_.maximum_plane_residual_m/
+        const double weight=std::min(1.,.5*parameters_.maximum_plane_residual_m/
             std::max(1e-12,std::abs(p.z-c-a*p.x-b*p.y)));
+        weights_changed |= weight!=weights[i];weights[i]=weight;
       }
+      // 完全相同的权重、样本和累加顺序已是固定点，无需重复四轮。
+      if (!weights_changed) break;
       valid=fit();
     }
     if(!valid)continue;
-    std::size_t inliers=0;
+    std::size_t inliers=0;bool inlier_weights_changed=false;
     for(std::size_t i=0;i<points.size();++i) {
       const auto& p=points[i];
-      weights[i]=std::abs(p.z-c-a*p.x-b*p.y)<=parameters_.maximum_plane_residual_m?1.:0.;
+      const double weight=std::abs(p.z-c-a*p.x-b*p.y)<=parameters_.maximum_plane_residual_m?1.:0.;
+      inlier_weights_changed |= weight!=weights[i];weights[i]=weight;
       inliers+=weights[i]>0.;
     }
-    if(inliers<4 || double(inliers)/points.size()<.7 || !fit())continue;
+    if(inliers<4 || double(inliers)/points.size()<.7 || (inlier_weights_changed && !fit()))continue;
+    // 批处理只省去可由四个实测方向严格证明的角覆盖计算。
+    // all-inlier + 实测中心使 nearest 恰为0；±x/±y使最大角间隙≤pi/2。
+    // 缺任一方向或含拒绝样本时继续原逐角排序，不改变拟合与置信度。
+    bool cardinal_support=uniform_ && measured && inliers==points.size();
+    if (cardinal_support) for (auto d:{GridIndex{-1,0},GridIndex{1,0},GridIndex{0,-1},GridIndex{0,1}}) {
+      auto cell=detail::OffsetWithinGeometry(view_.geometry(),index,d.x,d.y);
+      cardinal_support &= cell && view_.ElevationRangeAt(*cell).has_value();
+    }
     std::vector<double> angles;
-    double nearest=std::numeric_limits<double>::infinity(),squared=0.;
+    double nearest=cardinal_support?0.:std::numeric_limits<double>::infinity(),squared=0.;
     double low=std::numeric_limits<double>::infinity(),high=-low;
     for(std::size_t i=0;i<points.size();++i) {
       const auto& p=points[i];const double plane=c+a*p.x+b*p.y;
       low=std::min(low,p.low-plane);high=std::max(high,p.high-plane);
       if(weights[i]==0.)continue;
       squared+=(p.z-plane)*(p.z-plane);
-      nearest=std::min(nearest,std::hypot(p.x,p.y));
-      if(p.x!=0. || p.y!=0.)angles.push_back(std::atan2(p.y,p.x));
+      if (!cardinal_support) {
+        nearest=std::min(nearest,std::hypot(p.x,p.y));
+        if(p.x!=0. || p.y!=0.)angles.push_back(std::atan2(p.y,p.x));
+      }
     }
     // Consensus only defines ground. Raw interval extremes remain a hard guard
     // and are separately consumed by platform obstacle/step evaluation.
     if(std::max(std::abs(low),std::abs(high))>.10 ||
-       nearest>parameters_.support_axis_distance_m+1e-12 || angles.size()<3)continue;
+       nearest>parameters_.support_axis_distance_m+1e-12 || (!cardinal_support && angles.size()<3))continue;
     bool discontinuous=false, remote_discontinuity=false, remote_consensus_conflict=false;
     const auto record_jump = [&](bool local, bool all_on_ground) {
       if(local)discontinuous=true;
@@ -216,10 +245,12 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
     if(discontinuous || (remote_discontinuity && remote_consensus_conflict))continue;
     const auto center=view_.ElevationRangeAt(index);
     if(center && std::abs(.5*(double(center->min_m)+center->max_m)-c)>.04)continue;
-    std::sort(angles.begin(),angles.end());
-    double gap=angles.front()+2.*std::acos(-1.)-angles.back();
-    for(std::size_t i=1;i<angles.size();++i)gap=std::max(gap,angles[i]-angles[i-1]);
-    if(gap>std::acos(-1.)+1e-10)continue;
+    if (!cardinal_support) {
+      std::sort(angles.begin(),angles.end());
+      double gap=angles.front()+2.*std::acos(-1.)-angles.back();
+      for(std::size_t i=1;i<angles.size();++i)gap=std::max(gap,angles[i]-angles[i-1]);
+      if(gap>std::acos(-1.)+1e-10)continue;
+    }
     const double rms=std::sqrt(squared/inliers);
     const double confidence=(measured?1.:.85)*(double(inliers)/points.size())*
         (.5+.5*std::min(1.,double(inliers)/8.))*
@@ -233,6 +264,7 @@ std::optional<GroundEstimate> TerrainObservationEstimator::Compute(GridIndex ind
       if(!remote_jump_fallback)remote_jump_fallback=candidate;
       continue;
     }
+    if (uniform_key) uniform_estimates_.emplace(*uniform_key, candidate);
     return candidate;
   }
   return remote_jump_fallback;
@@ -406,3 +438,12 @@ std::optional<TerrainPatchObservation> MeasureTerrainPatch(
       confidence, central_complete, ground.has_value(), center_available};
 }
 }  // namespace lunar::incremental_navigation::map
+
+namespace lunar::incremental_navigation {
+int TerrainIntrinsicDependencyRadiusCells(double resolution_m, double background_half_width_m) {
+  // 背景函数统一验证几何；推断半径与 estimator 共用计算及默认参数。
+  const int background = map::ObservationBackgroundRadiusCells(background_half_width_m, resolution_m);
+  const map::TerrainObservationParameters parameters;
+  return background + map::ObservationRadiusCells(parameters.support_axis_distance_m, resolution_m);
+}
+}  // namespace lunar::incremental_navigation

@@ -233,11 +233,7 @@ TEST(FineTraversabilityBuilder, PreservesWheelAndLeggedPhysicsDifferences) {
   const GridGeometry geometry = Geometry(21U, 21U);
   std::vector<float> values(geometry.CellCount(), 0.0F);
   const GridIndex bump{.x = 10, .y = 10};
-  for (int dy = 0; dy < 2; ++dy) {
-    for (int dx = 0; dx < 2; ++dx) {
-      values[Offset(geometry, {bump.x + dx, bump.y + dy})] = 0.4F;
-    }
-  }
+  values[Offset(geometry, bump)] = 0.4F;
   PersistentElevationMap map;
   const auto raw = Snapshot(map, geometry, values);
   const TraversabilityProfile profile = Profile(0.01, 0.01, 0.0, {});
@@ -258,7 +254,6 @@ TEST(FineTraversabilityBuilder, BlockedTakesPriorityOverInflatedUnknown) {
   std::vector<float> values(geometry.CellCount(), 0.0F);
   const GridIndex center{.x = 12, .y = 12};
   values[Offset(geometry, center)] = 0.5F;
-  values[Offset(geometry, {center.x, center.y + 1})] = 0.5F;
   values[Offset(geometry, {.x = 13, .y = 12})] =
       std::numeric_limits<float>::quiet_NaN();
   PersistentElevationMap map;
@@ -293,15 +288,13 @@ TEST(FineTraversabilityBuilder, InflatesUnknownWithoutChangingItToBlocked) {
 TEST(FineTraversabilityBuilder, ZeroWeightsProduceZeroFiniteTraversalCost) {
   const GridGeometry geometry = Geometry(25U, 25U);
   std::vector<float> values(geometry.CellCount(), 0.0F);
-  for (int y = 12; y <= 13; ++y)
-    for (int x = 12; x <= 13; ++x) values[Offset(geometry, {x, y})] = 0.05F;
+  values[Offset(geometry, {.x = 12, .y = 12})] = 0.05F;
   PersistentElevationMap map;
   const auto raw = Snapshot(map, geometry, values);
   FineTraversabilityBuilder builder;
 
-  auto profile = Profile(0.01, 0.01, 0.8, {});
-  profile.confidence_weight = 0.;
-  const auto fine = builder.Derive(raw, LeggedCapabilityForTest(), profile);
+  const auto fine = builder.Derive(raw, LeggedCapabilityForTest(),
+                                   Profile(0.01, 0.01, 0.8, {}));
 
   ASSERT_TRUE(fine);
   ASSERT_EQ(fine->State({.x = 12, .y = 12}), FineCellState::kFree);
@@ -314,9 +307,7 @@ TEST(FineTraversabilityBuilder,
   const GridGeometry geometry = Geometry(25U, 25U);
   std::vector<float> values(geometry.CellCount(), 0.0F);
   const GridIndex raised{.x = 12, .y = 12};
-  for (int y = 12; y <= 13; ++y)
-    for (int x = 12; x <= 13; ++x)
-      values[Offset(geometry, {x, y})] = 0.59F;
+  values[Offset(geometry, raised)] = 0.59F;
   PersistentElevationMap map;
   const auto raw = Snapshot(map, geometry, values);
   FineTraversabilityBuilder builder;
@@ -421,7 +412,6 @@ TEST(FineTraversabilityBuilder,
   const GridIndex center{.x = 12, .y = 12};
   std::vector<float> obstructed_values(geometry.CellCount(), 0.0F);
   obstructed_values[Offset(geometry, center)] = 0.5F;
-  obstructed_values[Offset(geometry, {center.x, center.y + 1})] = 0.5F;
   std::vector<float> flat_values(geometry.CellCount(), 0.0F);
   PersistentElevationMap obstructed_map;
   PersistentElevationMap flat_map;
@@ -527,15 +517,15 @@ TEST(FineTraversabilityBuilder,
 
   std::vector<GridIndex> merged_changes;
   for (const std::int64_t x : {10, 100}) {
-    const GridGeometry supported_patch{
+    const GridGeometry one_cell{
         .frame_id = "map",
-        .width = 2U,
-        .height = 2U,
+        .width = 1U,
+        .height = 1U,
         .resolution_m = geometry.resolution_m,
         .origin_m = {.x = static_cast<double>(x) * geometry.resolution_m,
                      .y = 8.0 * geometry.resolution_m},
     };
-    ASSERT_EQ(Apply(map, supported_patch, {0.1F, 0.1F, 0.1F, 0.1F}).status,
+    ASSERT_EQ(Apply(map, one_cell, {0.1F}).status,
               ElevationUpdateResult::Status::kApplied);
     const auto raw = map.Snapshot();
     merged_changes.insert(merged_changes.end(), raw->changed_cells().begin(),
@@ -561,68 +551,6 @@ TEST(FineTraversabilityBuilder,
             first->TraversalCost({.x = 100, .y = 8}));
 }
 
-TEST(FineTraversabilityBuilder, WheelTwoCellSupportUpdatesMatchFullDerivation) {
-  const GridGeometry geometry = Geometry(520U, 16U);
-  PersistentElevationMap map;
-  auto raw =
-      Snapshot(map, geometry, std::vector<float>(geometry.CellCount(), 0.0F));
-  FineTraversabilityBuilder builder;
-  const auto capability = WheelCapability();
-  const auto profile = Profile(0.01, 0.01, 0.0);
-  auto previous = builder.Derive(raw, capability, profile);
-  // Across the tile seam: flat -> isolated UNKNOWN -> supported BLOCKED ->
-  // flat.
-  for (const auto& values : {std::vector<float>{0.3F, 0.F, 0.F, 0.F},
-                             std::vector<float>{0.3F, 0.3F, 0.3F, 0.3F},
-                             std::vector<float>{0.F, 0.F, 0.F, 0.F}}) {
-    GridGeometry update = Geometry(2U, 2U);
-    update.origin_m = {.x = 255 * .2, .y = 7 * .2};
-    ASSERT_EQ(Apply(map, update, values).status,
-              ElevationUpdateResult::Status::kApplied);
-    raw = map.Snapshot();
-    const auto incremental = builder.Derive(raw, capability, profile, previous);
-    const auto fresh = builder.Derive(raw, capability, profile);
-    for (int y = 0; y < 16; ++y)
-      for (int x = 0; x < 520; ++x) {
-        EXPECT_EQ(incremental->State({x, y}), fresh->State({x, y}));
-        EXPECT_DOUBLE_EQ(incremental->TraversalCost({x, y}),
-                         fresh->TraversalCost({x, y}));
-      }
-    previous = incremental;
-  }
-}
-
-TEST(FineTraversabilityBuilder, LeggedTwoCellSupportUpdatesMatchFullDerivation) {
-  const GridGeometry geometry = Geometry(520U, 16U);
-  PersistentElevationMap map;
-  auto raw =
-      Snapshot(map, geometry, std::vector<float>(geometry.CellCount(), 0.0F));
-  FineTraversabilityBuilder builder;
-  const auto capability = LeggedCapabilityForTest();
-  const auto profile = Profile(0.01, 0.01, 0.0);
-  auto previous = builder.Derive(raw, capability, profile);
-  // Across the tile seam: flat -> isolated UNKNOWN -> supported BLOCKED ->
-  // flat.
-  for (const auto& values : {std::vector<float>{0.7F, 0.F, 0.F, 0.F},
-                             std::vector<float>{0.7F, 0.7F, 0.7F, 0.7F},
-                             std::vector<float>{0.F, 0.F, 0.F, 0.F}}) {
-    GridGeometry update = Geometry(2U, 2U);
-    update.origin_m = {.x = 255 * .2, .y = 7 * .2};
-    ASSERT_EQ(Apply(map, update, values).status,
-              ElevationUpdateResult::Status::kApplied);
-    raw = map.Snapshot();
-    const auto incremental = builder.Derive(raw, capability, profile, previous);
-    const auto fresh = builder.Derive(raw, capability, profile);
-    for (int y = 0; y < 16; ++y)
-      for (int x = 0; x < 520; ++x) {
-        EXPECT_EQ(incremental->State({x, y}), fresh->State({x, y}));
-        EXPECT_DOUBLE_EQ(incremental->TraversalCost({x, y}),
-                         fresh->TraversalCost({x, y}));
-      }
-    previous = incremental;
-  }
-}
-
 TEST(FineTraversabilityBuilder,
      GeometryGrowthDerivesNewBlockedHaloInEveryDirectionAndAtCorners) {
   struct GrowthCase {
@@ -644,15 +572,10 @@ TEST(FineTraversabilityBuilder,
     PersistentElevationMap map;
     const GridGeometry geometry = Geometry(32U, 8U);
     std::vector<float> values(geometry.CellCount(), 0.0F);
-    const GridIndex supported{std::clamp<std::int64_t>(fixture.surface.x, 2, 28),
-                              std::clamp<std::int64_t>(fixture.surface.y, 2, 4)};
-    for (int dy = 0; dy < 2; ++dy)
-      for (int dx = 0; dx < 2; ++dx)
-        values[Offset(geometry, {supported.x + dx, supported.y + dy})] = 1.3F;
+    values[Offset(geometry, fixture.surface)] = 1.3F;
     const auto first_raw = Snapshot(map, geometry, values);
-    // Both terrain models require supported surfaces to certify an obstacle.
-    const auto capability = LeggedCapabilityForTest();
-    const auto profile = Profile(0.85, 0.01, 0.0, {});
+    const auto capability = WheelCapability();
+    const auto profile = Profile(0.25, 0.01, 0.0, {});
     FineTraversabilityBuilder builder;
     const auto first = builder.Derive(first_raw, capability, profile);
     ASSERT_FALSE(first_raw->geometry().Contains(fixture.probe));
@@ -705,12 +628,10 @@ TEST(FineTraversabilityBuilder,
   PersistentElevationMap map;
   const GridGeometry geometry = Geometry(32U, 8U);
   std::vector<float> values(geometry.CellCount(), 0.0F);
-  for (int y = 2; y <= 3; ++y)
-    for (int x = 16; x <= 17; ++x) values[Offset(geometry, {x, y})] = 1.3F;
+  values[Offset(geometry, {16, 0})] = 1.3F;
   const auto first_raw = Snapshot(map, geometry, values);
-  // Both terrain models require supported surfaces to certify an obstacle.
-  const auto capability = LeggedCapabilityForTest();
-  const auto profile = Profile(0.85, 0.01, 0.0, {});
+  const auto capability = WheelCapability();
+  const auto profile = Profile(0.25, 0.01, 0.0, {});
   FineTraversabilityBuilder builder;
   const auto first = builder.Derive(first_raw, capability, profile);
   std::vector<GridIndex> merged_cells;
@@ -744,12 +665,10 @@ TEST(FineTraversabilityBuilder,
   PersistentElevationMap map;
   const GridGeometry geometry = Geometry(520U, 16U);
   std::vector<float> values(geometry.CellCount(), 0.0F);
-  for (int y = 2; y <= 3; ++y)
-    for (int x = 16; x <= 17; ++x) values[Offset(geometry, {x, y})] = 1.3F;
+  values[Offset(geometry, {16, 0})] = 1.3F;
   const auto first_raw = Snapshot(map, geometry, values);
-  // Both terrain models require supported surfaces to certify an obstacle.
-  const auto capability = LeggedCapabilityForTest();
-  const auto profile = Profile(0.85, 0.01, 0.0, {});
+  const auto capability = WheelCapability();
+  const auto profile = Profile(0.25, 0.01, 0.0, {});
   FineTraversabilityBuilder builder;
   const auto first = builder.Derive(first_raw, capability, profile);
   const auto unchanged_tile = first->FindTile({2, 0});
@@ -840,39 +759,6 @@ TEST(FineTraversabilityBuilder, PublishesCompleteImmutableSnapshotLineage) {
   EXPECT_GT(fine->metrics().allocated_cells, 0U);
   EXPECT_GT(fine->metrics().allocated_bytes, 0U);
   EXPECT_TRUE(std::isfinite(fine->metrics().derivation_ms));
-}
-
-
-TEST(FineTraversabilityBuilder, OverlappingHighResolutionUpdatesMatchFullDerive) {
-  for (double resolution : {.05, .1, .2}) {
-    auto geometry = Geometry(64, 48, resolution);
-    geometry.origin_m = {-.37, -.61, 0.};
-    PersistentElevationMap map;
-    std::vector<float> values(geometry.CellCount(), 0.F);
-    FineTraversabilityBuilder builder;
-    const auto capability = LeggedCapabilityForTest();
-    const auto profile = Profile(.34, .165, .3);
-    auto previous = builder.Derive(Snapshot(map, geometry, values), capability, profile);
-    for (int revision = 0; revision < 3; ++revision) {
-      for (int y = 15; y < 29; ++y)
-        for (int x = 20; x < 38; ++x)
-          values[y * 64 + x] = revision == 1 ? 0.F : .7F;
-      values[25 * 64 + 45] = revision == 2 ? .8F : .02F;
-      auto raw = Snapshot(map, geometry, values);
-      auto incremental = builder.Derive(raw, capability, profile, previous);
-      auto full = builder.Derive(raw, capability, profile);
-      for (auto y = raw->geometry().min_inclusive().y;
-           y < raw->geometry().max_exclusive().y; ++y)
-        for (auto x = raw->geometry().min_inclusive().x;
-             x < raw->geometry().max_exclusive().x; ++x) {
-          const GridIndex cell{x, y};
-          EXPECT_EQ(incremental->State(cell), full->State(cell));
-          EXPECT_DOUBLE_EQ(incremental->TraversalCost(cell), full->TraversalCost(cell));
-          EXPECT_DOUBLE_EQ(incremental->Confidence(cell), full->Confidence(cell));
-        }
-      previous = incremental;
-    }
-  }
 }
 
 
@@ -990,59 +876,36 @@ TEST_P(StrengthenedPartialTerrain, NewBlockingEvidenceAdvancesRevision) {
 INSTANTIATE_TEST_SUITE_P(OldCompleteness, StrengthenedPartialTerrain,
                         testing::Values(false, true));
 
-}  // namespace
-TEST(TerrainMeasurements, VisibleCenterEvidenceSurvivesApplicationBaseline) {
-  const auto geometry = Geometry(3, 3, .05);
-  const float unknown = std::numeric_limits<float>::quiet_NaN();
-  std::vector<float> visible(9, unknown);
-  visible[4] = 0.F;
-  std::vector<LocalTerrainMeasurements> stats(9);
-  stats[4] = {true, false, 0., 2., 2.};
-  PersistentElevationMap map;
-  ASSERT_EQ(map.Apply({.geometry = geometry, .elevation_m = visible,
-      .map_from_source = IdentityMapTransform(), .terrain_measurements = stats}).status,
-      ElevationUpdateResult::Status::kApplied);
-  const auto blocked = map.Snapshot();
-  class MissingCenterView final : public ElevationRangeView {
-   public:
-    explicit MissingCenterView(SparseGridGeometry geometry) : geometry_(geometry) {}
-    const SparseGridGeometry& geometry() const noexcept override { return geometry_; }
-    std::optional<ElevationRange> ElevationRangeAt(GridIndex) const noexcept override {
-      return std::nullopt;
-    }
-    std::optional<LocalTerrainMeasurements> TerrainMeasurementsAt(
-        GridIndex) const noexcept override {
-      return LocalTerrainMeasurements{false, false, 0., 2., 2.};
-    }
-   private:
-    SparseGridGeometry geometry_;
-  } missing_center(blocked->geometry());
-  {
-    EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)
-                  ->Evaluate(*blocked, {1, 1}).state, IntrinsicCellState::kBlocked);
-    EXPECT_EQ(MakePlatformElevationEvaluator(LeggedCapabilityForTest(), .2)
-                  ->Evaluate(*blocked, {1, 1}).state, IntrinsicCellState::kBlocked);
-    EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)
-                  ->Evaluate(missing_center, {1, 1}).state, IntrinsicCellState::kUnknown);
-    EXPECT_FALSE(blocked->ElevationRangeAt({2, 1}));
+
+class ProjectedFixture final : public PlatformElevationEvaluator {
+ public:
+  explicit ProjectedFixture(IntrinsicCellState state):state_(state) {}
+  IntrinsicTraversalEvaluation Evaluate(const ElevationRangeView& raw,GridIndex index) const override {
+    if(index==GridIndex{10,10}) return {.state=state_};
+    return MakePlatformElevationEvaluator(WheelCapability())->Evaluate(raw,index);
   }
-  // 完整的新观测可以释放障碍；旧稀疏快照仍保持原证据。
-  stats[4] = {true, true, 0., 0., 0.};
-  ASSERT_EQ(map.Apply({.geometry = geometry, .elevation_m = visible,
-      .map_from_source = IdentityMapTransform(), .terrain_measurements = stats}).status,
-      ElevationUpdateResult::Status::kApplied);
-  EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)->Evaluate(*map.Snapshot(), {1, 1}).state,
-      IntrinsicCellState::kFree);
-  EXPECT_EQ(MakePlatformElevationEvaluator(WheelCapability(), .2)->Evaluate(*blocked, {1, 1}).state,
-      IntrinsicCellState::kBlocked);
+ private:
+  IntrinsicCellState state_;
+};
+TEST(FineTraversabilityBuilderProjected, SameRawNewIntrinsicHasIndependentRevisionAndLegacyIsUnchanged) {
+  PersistentElevationMap raw;
+  const auto elevation=Snapshot(raw,Geometry(21,21),std::vector<float>(441,0.F));
+  FineTraversabilityBuilder builder;
+  const auto ordinary=builder.Derive(elevation,WheelCapability(),Profile());
+  ASSERT_EQ(ordinary->State({10,10}),FineCellState::kFree);
+  auto blocked=builder.DeriveProjected(elevation,WheelCapability(),Profile(),
+    std::make_unique<ProjectedFixture>(IntrinsicCellState::kBlocked));
+  EXPECT_EQ(blocked->State({10,10}),FineCellState::kBlocked);
+  auto unknown=builder.DeriveProjected(elevation,WheelCapability(),Profile(),
+    std::make_unique<ProjectedFixture>(IntrinsicCellState::kUnknown),blocked);
+  EXPECT_EQ(unknown->State({10,10}),FineCellState::kUnknown);
+  EXPECT_EQ(unknown->raw_elevation_revision(),blocked->raw_elevation_revision());
+  EXPECT_EQ(unknown->fine_traversability_revision(),blocked->fine_traversability_revision()+1);
+  EXPECT_NE(unknown->platform_profile_hash(),ordinary->platform_profile_hash());
+  EXPECT_EQ(builder.Derive(elevation,WheelCapability(),Profile(),ordinary),ordinary);
+  EXPECT_EQ(ordinary->State({10,10}),FineCellState::kFree);
+  EXPECT_THROW(builder.DeriveProjected(elevation,WheelCapability(),Profile(),nullptr),std::invalid_argument);
 }
 
-TEST(FineCellEvaluator, ExplicitNullCustomEvaluatorIsRejected) {
-  PersistentElevationMap map;
-  const auto raw = Snapshot(map, Geometry(3, 3, 1.), std::vector<float>(9, 0.F));
-  EXPECT_THROW((FineCellEvaluator(*raw, WheelCapability(), Profile(), nullptr)),
-               std::invalid_argument);
-  EXPECT_NO_THROW((FineCellEvaluator(*raw, WheelCapability(), Profile())));
-}
-
+}  // namespace
 }  // namespace lunar::incremental_navigation

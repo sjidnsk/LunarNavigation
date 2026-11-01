@@ -1,0 +1,397 @@
+{
+  "source": "integration/pure-planner-orin",
+  "wheel_source": "a86b9cb",
+  "reviewers": [
+    "audit_wheel_algorithm_merge",
+    "audit_wheel_core_merge"
+  ],
+  "synchronized": [
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/CMakeLists.txt",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/include/lunar_incremental_navigation_core/fine_traversability_builder.hpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/include/lunar_incremental_navigation_core/local_planning.hpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/include/lunar_incremental_navigation_core/traversability_snapshot.hpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/include/lunar_incremental_navigation_core/types/platform_capability.hpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/legged/legged_local_planner.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/local/phase_aware_path_simplifier.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/local/request_local_start_patch.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/map/fine_traversability_builder.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/map/persistent_elevation_map.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/map/platform_elevation_physics.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/wheel/wheel_local_astar.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/test/fine_traversability_builder_test.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/test/persistent_elevation_map_test.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/test/request_local_start_patch_test.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/elevation_pipeline.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_navigation_node.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/platform_config.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/policy_map_exporter.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/test/elevation_pipeline_test.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/test/incremental_map_publisher_test.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/test/incremental_navigation_node_test.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/test/platform_config_test.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/test/policy_map_exporter_test.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_exploration_ros/CMakeLists.txt",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_exploration_ros/package.xml",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_exploration_ros/src/incremental_exploration_node.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_exploration_ros/src/platform_config_loader.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_exploration_ros/test/test_incremental_exploration_node.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_exploration_ros/test/test_platform_config_loader.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/CMakeLists.txt",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/README.md",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/launch/nav1cm_wheel.launch.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/launch/pure_wheeled_controller.launch.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/package.xml",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/mppi.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/mppi_map.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/mppi_path_follower.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/node.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/p3_map_source.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/standard_path_follower.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/standard_path_reference.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_mppi.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_mppi_node.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_nav1cm_launch.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_node.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_p3_map_source.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_standard_path_follower.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/async_coordinator.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/certification.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/contracts.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/coordinator.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/execution.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/follower_map.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/global_planner.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/local_mpcc.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/local_worker.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/p3_map.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/p3_session.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/pose_goal.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/reference.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/reference_buffer.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/ros_conversion.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/seeds.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/terrain_bridge.cpp",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/terrain_bridge.h",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/nav1cm/terrain_native.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/CMakeLists.txt",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/README.md",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/config/planner.yaml",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/configuration.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/node.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/runtime.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/package.xml",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/test/test_configuration.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    },
+    {
+      "path": "scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/test/test_runtime.py",
+      "decision": "main 4639d0e",
+      "reason": "逐项审查：用户指定算法与TCP一致；旧轮式优化不混入新合同，来源a86b9cb保留"
+    }
+  ],
+  "kept_display_or_packaging": [
+    "ros2_ws/src/lunar_incremental_navigation_ros/CMakeLists.txt",
+    "ros2_ws/src/lunar_incremental_navigation_ros/src/planning_debug_publisher.cpp",
+    "ros2_ws/src/lunar_incremental_navigation_ros/src/planning_snapshot_visualization.cpp",
+    "ros2_ws/src/lunar_incremental_navigation_ros/test/planning_debug_publisher_test.cpp"
+  ],
+  "legacy_extra_files": "保留Git文件但不进入主线CMake有效构建；后续逐项核对测试边界"
+}

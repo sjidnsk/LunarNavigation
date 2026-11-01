@@ -159,6 +159,8 @@ def fresh_scene(config,task,ordinal,*,seed=None,split='train'):
         spec.update(sensor=sensor_spec(seed,ordinal),scene_profile=config.course_two_scene_profile)
         if task=='moon_outside':
             spec.update(outside_distance_min_m=10.,outside_distance_max_m=50.,context_margin_m=62.)
+    if getattr(config,'safe_start_radius_m',0.):
+        spec['safe_start_radius_m']=config.safe_start_radius_m
     return spec
 
 

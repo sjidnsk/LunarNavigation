@@ -12,16 +12,15 @@
 
 Humble 容器 `phase2-humble-gridmap:local`，Release，源只读，网络禁用，独立 build/install；栈上限 32 MiB（继承源功能验证中快照测试所需条件）。测试结果不代表原生 Orin、DDS 联调或真实车体通过。构建复现脚本为 artifact 根目录的 `validate-humble.sh`，参数为源码工作树路径和 `real`/`legged`/`tcp` 标签。
 
-> 后续更新：足式默认关闭的结论已由 [足式默认开启验证](2026-09-23-legged-rolling-default.md) 替代。以下保留首次同步的历史记录。
+## 实车分支
 
-## 足式分支
+目标 `app/orin-real-vehicle`，移植前 `d3b95a5a`。
 
-目标 `app/orin-legged-vehicle`，移植前 `dfa3d819`。
+- `config/exploration_navigation.yaml`：默认周期 0.5 s、提前距离 1 m、执行反馈开启。
+- `config/orin_controller.yaml`：默认 `enable_rolling_updates: true`。关闭时同时将导航周期设为 0、控制器开关设为 false；控制器 launch 可传 `enable_rolling_updates:=false`。
+- 足式适配器仍仅执行原分段语义：节点按 `platform_type` 限定轮式滚动，`orin_legged_controller.yaml` 明确 false。
+- 保留 `RealSessionPorts(capability, profile)` 与平台化控制参数、默认执行确认，不回退为来源分支的较早接口。
 
-- 同步公共候选计算与轮式滚动支持，保留足式能力、5 cm 映射配置和该分支地形算法。
-- 当前足式配置 `rolling_replan_period_s: 0.0`、`enable_rolling_updates: false`。本次源功能只支持轮式；不宣称已经实现足式移动中换路。
-- 若本分支选择轮式平台，需要配套使用轮式配置与正周期；不要给足式配置强行设置正周期，节点会明确拒绝。
+Humble 5 包构建成功；core 18/18、ROS 13/13、Python 224 项通过（`real-humble.log`）。Jazzy 配置/部署 launch 测试 25 项通过（`real-launch.log`）。未启动实车控制器，未改 TCP 或设备文件。
 
-Humble 5 包构建成功；core 19/19、ROS 13/13、Python 224 项通过（`legged-humble.log`）。Jazzy 配置/部署 launch 测试 25 项通过（`legged-launch.log`）。以上针对已提交基线加本次移植的干净树；原工作树中正在进行的搜索优化未纳入提交，也不属于此次验证范围。
-
-落地时使用已验证补丁，工作树和索引分别应用；索引只含本次改动。提交前后核对原有未提交文件和改动内容，保留其编辑状态，记录见 `legged-preservation.json`。
+后续足式默认开启和公共运行时验证见 [足式默认开启验证](2026-09-23-legged-rolling-default.md)。

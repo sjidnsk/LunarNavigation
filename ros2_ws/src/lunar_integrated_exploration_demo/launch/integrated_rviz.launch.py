@@ -25,7 +25,6 @@ def compose(context):
         tracking_status_topic=prefix+'/tracking_status',enable_debug_visualization=True,
         debug_topic_prefix=prefix+'/planning',debug_fine_window_m=28.)
     explorer=dict(sim,**sensor,platform_selector='wheel',platform_config=config,coverage_target=float(value('coverage_target')),
-        navigation_map_wait_timeout_s=float(value('navigation_map_wait_timeout_s')),
         exploration_map_topic=prefix+'/exploration_map',odometry_topic=prefix+'/exploration/odometry',tf_topic=prefix+'/exploration/tf',
         task_topic=prefix+'/exploration/task',navigation_action=prefix+'/navigate_to_pose',
         status_topic=prefix+'/exploration/status',task_boundary_topic=prefix+'/exploration/task_boundary',
@@ -56,8 +55,6 @@ def generate_launch_description():
         DeclareLaunchArgument('task_size_m',default_value='300.0'),
         DeclareLaunchArgument('time_scale',default_value='30.0'),
         DeclareLaunchArgument('coverage_target',default_value='1.0'),
-        DeclareLaunchArgument('navigation_map_wait_timeout_s',default_value='30.0',
-                              description='Simulated seconds without map evidence before canceling a waiting frontier goal; 0 disables recovery'),
         DeclareLaunchArgument('auto_start',default_value='true'),
         DeclareLaunchArgument('start_rviz',default_value='true'),
         DeclareLaunchArgument('start_local_rviz',default_value='true'),

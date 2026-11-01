@@ -1,0 +1,38 @@
+cmake_minimum_required(VERSION 3.16)
+project(lunar_navigation_rviz)
+find_package(ament_cmake REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(lunar_pure_exploration_msgs REQUIRED)
+find_package(pluginlib REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rviz_common REQUIRED)
+find_package(rviz_rendering REQUIRED)
+find_package(visualization_msgs REQUIRED)
+find_package(Qt5 REQUIRED COMPONENTS Widgets)
+set(CMAKE_AUTOMOC ON)
+add_library(${PROJECT_NAME} SHARED
+  src/exploration_panel.cpp src/boundary_tool.cpp
+  include/lunar_navigation_rviz/exploration_panel.hpp
+  include/lunar_navigation_rviz/boundary_tool.hpp)
+target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
+target_include_directories(${PROJECT_NAME} PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+ament_target_dependencies(${PROJECT_NAME} geometry_msgs lunar_pure_exploration_msgs
+  pluginlib rclcpp rviz_common rviz_rendering visualization_msgs)
+target_link_libraries(${PROJECT_NAME} Qt5::Widgets)
+pluginlib_export_plugin_description_file(rviz_common plugins.xml)
+install(TARGETS ${PROJECT_NAME} ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
+install(DIRECTORY include/ DESTINATION include)
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_boundary_selection test/test_boundary_selection.cpp)
+  target_include_directories(test_boundary_selection PRIVATE include)
+  target_compile_features(test_boundary_selection PRIVATE cxx_std_17)
+  ament_add_gtest(test_exploration_panel test/test_exploration_panel.cpp)
+  target_link_libraries(test_exploration_panel ${PROJECT_NAME} Qt5::Widgets)
+  ament_add_gtest(test_panel_dds test/test_panel_dds.cpp)
+  target_link_libraries(test_panel_dds ${PROJECT_NAME} Qt5::Widgets)
+  set_tests_properties(test_exploration_panel test_panel_dds PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+ament_package()

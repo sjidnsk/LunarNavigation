@@ -120,7 +120,7 @@ struct RuntimeParameters final {
 
 [[nodiscard]] RuntimeParameters ReadRuntimeParameters(rclcpp::Node& node) {
   const std::string platform_name =
-      node.declare_parameter<std::string>("platform_type", "legged");
+      node.declare_parameter<std::string>("platform_type", "wheel");
   const std::string configured_path =
       node.declare_parameter<std::string>("platform_config",
           ResolvePlatformConfig(platform_name, "").string());
@@ -225,19 +225,6 @@ struct RuntimeParameters final {
       !std::isfinite(parameters.profile.goal_yaw_tolerance_rad) ||
       parameters.profile.goal_yaw_tolerance_rad <= 0.0) {
     throw std::invalid_argument("goal tolerances must be finite and positive");
-  }
-  parameters.profile.terrain_background_half_width_m = node.declare_parameter<double>(
-      "terrain_background_half_width_m",
-      std::holds_alternative<core::WheeledCapability>(parameters.capability) ? 0.4 : 0.2);
-  if (!std::isfinite(parameters.profile.terrain_background_half_width_m) ||
-      parameters.profile.terrain_background_half_width_m < 0.0) {
-    throw std::runtime_error("PLANNER_ERROR: invalid terrain background half-width");
-  }
-  parameters.profile.confidence_weight = node.declare_parameter<double>(
-      "confidence_weight", parameters.profile.confidence_weight);
-  if (!std::isfinite(parameters.profile.confidence_weight) ||
-      parameters.profile.confidence_weight < 0.0) {
-    throw std::runtime_error("PLANNER_ERROR: confidence_weight must be finite and nonnegative");
   }
   parameters.profile.clearance_weight = node.declare_parameter<double>(
       "clearance_weight", parameters.profile.clearance_weight);
@@ -939,7 +926,6 @@ struct IncrementalNavigationNode::Impl final {
                   error.what());
       return;
     }
-    if (!fine_updated) return;
     if (fine_updated) {
       std::scoped_lock lock{event_mutex};
       fine_changed = true;
@@ -1162,7 +1148,7 @@ struct IncrementalNavigationNode::Impl final {
           (tracking->reason == "GOAL_POSITION_LOST" || tracking->reason == "GOAL_YAW_LOST");
       RunCycle(*state, final_pose_lost ? core::CycleTrigger::kFinalPoseLost :
           (tracking->state == lunar_planning_msgs::msg::TrackingStatus::FAILED
-          ? core::CycleTrigger::kDeviation : core::CycleTrigger::kSegmentEnd));
+          ? core::CycleTrigger::kExecutionRejected : core::CycleTrigger::kSegmentEnd));
       replan_pending = coordinator->state() == core::CoordinatorState::kReplanning;
       return;
     }

@@ -62,7 +62,10 @@ def _pending_identity(root):
     return pending
 
 
-def prepare(root,protocol_file):
+def prepare(root,protocol_file,*,safe_start_radius_m=0.):
+    from dataclasses import replace
+    from .scene import validate_safe_start_radius
+    safe_start_radius_m=validate_safe_start_radius(safe_start_radius_m)
     from .artifacts import initialize_artifact_root
     from .cave_topology import manifest_hash,manifest_record
     from .config import config_record
@@ -73,17 +76,22 @@ def prepare(root,protocol_file):
     if root.exists() and any(root.iterdir()):
         if (root/'preparation.json').is_file():
             pending=_pending_identity(root)
+            if read(root/'config.json').get('safe_start_radius_m',0.)!=safe_start_radius_m:
+                raise ValueError('safe start radius changed during preparation')
             if pending['source_protocol_sha']!=sha(protocol_file):
                 raise ValueError('protocol changed')
             return pending
         raise ValueError('refuse nonempty unmanaged preparation output')
-    config=make_config(root,manifest_hash())
+    config=replace(make_config(root,manifest_hash()),safe_start_radius_m=safe_start_radius_m)
     initialize_artifact_root(root,config.total_output_max_bytes,
                              diagnostic_max_bytes=2*1024**3)
     for folder in ('requests','qualification','logs','actors','evaluation'):
         (root/folder).mkdir()
     protocol=read(protocol_file)
     protocol.update(status='preparing',training_started=False)
+    if safe_start_radius_m:
+        protocol['safe_start_region']=dict(version='native_navigation_disk_v1',
+            navigation_radius_m=safe_start_radius_m,generation_mode='reserved_start_region_v1')
     write(root/'config.json',config_record(config));write(root/'protocol.json',protocol)
     write(root/'mother-manifest.json',manifest_record())
     input_names=['protocol.json','mother-manifest.json']
@@ -215,10 +223,11 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command',choices=('prepare','qualify'));parser.add_argument('--root',type=Path,required=True)
     parser.add_argument('--protocol',type=Path);parser.add_argument('--workers',type=int,default=8)
+    parser.add_argument('--safe-start-radius-m',type=float,default=0.)
     args=parser.parse_args()
     if args.command=='prepare':
         if args.protocol is None:parser.error('--protocol required')
-        prepare(args.root,args.protocol)
+        prepare(args.root,args.protocol,safe_start_radius_m=args.safe_start_radius_m)
     else:qualify(args.root,args.workers)
 
 

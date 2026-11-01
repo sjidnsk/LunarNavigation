@@ -43,7 +43,6 @@ struct IncrementalExplorationNodeParameters final {
   std::string current_goal_topic;
   std::string frontiers_topic;
   std::string diagnostics_topic;
-  double navigation_map_wait_timeout_s{30.0};
   std::string map_frame{"map"}, odom_frame{"odom"}, base_frame{"base_link"};
 };
 
@@ -73,11 +72,10 @@ class IncrementalExplorationNode final : public rclcpp::Node {
       exploration_map_subscription_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr
       odometry_subscription_;
-  rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_subscription_;
+  rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_subscription_, tf_static_subscription_;
   rclcpp::Subscription<
       lunar_pure_exploration_msgs::msg::PureExplorationTask>::SharedPtr
       task_subscription_;
-  rclcpp::TimerBase::SharedPtr navigation_map_wait_timer_;
 };
 
 }  // namespace lunar::pure_exploration_ros

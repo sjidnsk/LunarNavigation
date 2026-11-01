@@ -1,0 +1,234 @@
+{
+  "legged_baseline": "ff75f52",
+  "wheel_source": "9fe638f",
+  "conflicts": [
+    {
+      "path": "README.md",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "13\t49\tREADME.md"
+    },
+    {
+      "path": "config/exploration_navigation.yaml",
+      "source": "ff75f52",
+      "reason": "保留足式平台/旧栈配置",
+      "difference": "4\t4\tconfig/exploration_navigation.yaml"
+    },
+    {
+      "path": "config/orin_hardware.yaml",
+      "source": "ff75f52",
+      "reason": "保留足式平台/旧栈配置",
+      "difference": "4\t4\tconfig/orin_hardware.yaml"
+    },
+    {
+      "path": "config/wheel_orin.yaml",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "5\t4\tconfig/wheel_orin.yaml"
+    },
+    {
+      "path": "docs/DRL开发入口.md",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "36\t241\t\"docs/DRL\\345\\274\\200\\345\\217\\221\\345\\205\\245\\345\\217\\243.md\""
+    },
+    {
+      "path": "docs/drl/development-source-manifest.json",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "32\t17\tdocs/drl/development-source-manifest.json"
+    },
+    {
+      "path": "docs/validation/2026-09-23-rolling-deployment-sync.md",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "8\t9\tdocs/validation/2026-09-23-rolling-deployment-sync.md"
+    },
+    {
+      "path": "docs/validation/2026-10-17-application-public-integration.md",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "37\t30\tdocs/validation/2026-10-17-application-public-integration.md"
+    },
+    {
+      "path": "docs/当前工作入口.md",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "9\t0\t\"docs/\\345\\275\\223\\345\\211\\215\\345\\267\\245\\344\\275\\234\\345\\205\\245\\345\\217\\243.md\""
+    },
+    {
+      "path": "ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/course_two_parallel.py",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "5\t1\tros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/course_two_parallel.py"
+    },
+    {
+      "path": "ros2_ws/src/lunar_drl_exploration/test/test_course_two_parallel.py",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "30\t0\tros2_ws/src/lunar_drl_exploration/test/test_course_two_parallel.py"
+    },
+    {
+      "path": "ros2_ws/src/lunar_drl_exploration/test/test_formal_source.py",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "8\t3\tros2_ws/src/lunar_drl_exploration/test/test_formal_source.py"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/CMakeLists.txt",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "0\t23\tros2_ws/src/lunar_incremental_navigation_core/CMakeLists.txt"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/local/phase_aware_path_simplifier.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "63\t32\tros2_ws/src/lunar_incremental_navigation_core/src/local/phase_aware_path_simplifier.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/map/fine_traversability_builder.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "57\t35\tros2_ws/src/lunar_incremental_navigation_core/src/map/fine_traversability_builder.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/map/persistent_elevation_map.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "11\t80\tros2_ws/src/lunar_incremental_navigation_core/src/map/persistent_elevation_map.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/map/platform_elevation_physics.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "124\t275\tros2_ws/src/lunar_incremental_navigation_core/src/map/platform_elevation_physics.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/map/terrain_observation_estimator.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "56\t15\tros2_ws/src/lunar_incremental_navigation_core/src/map/terrain_observation_estimator.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/src/map/terrain_observation_estimator.hpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "11\t0\tros2_ws/src/lunar_incremental_navigation_core/src/map/terrain_observation_estimator.hpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/test/fine_traversability_builder_test.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "47\t184\tros2_ws/src/lunar_incremental_navigation_core/test/fine_traversability_builder_test.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/test/request_local_start_patch_test.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "8\t120\tros2_ws/src/lunar_incremental_navigation_core/test/request_local_start_patch_test.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/test/terrain_observation_estimator_test.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "39\t13\tros2_ws/src/lunar_incremental_navigation_core/test/terrain_observation_estimator_test.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_core/test/terrain_window_test.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "11\t79\tros2_ws/src/lunar_incremental_navigation_core/test/terrain_window_test.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/elevation_pipeline.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "6\t7\tros2_ws/src/lunar_incremental_navigation_ros/src/elevation_pipeline.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/src/incremental_navigation_node.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "2\t16\tros2_ws/src/lunar_incremental_navigation_ros/src/incremental_navigation_node.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/test/incremental_navigation_node_test.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "27\t50\tros2_ws/src/lunar_incremental_navigation_ros/test/incremental_navigation_node_test.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_incremental_navigation_ros/test/platform_config_test.cpp",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "65\t28\tros2_ws/src/lunar_incremental_navigation_ros/test/platform_config_test.cpp"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/CMakeLists.txt",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "23\t11\tros2_ws/src/lunar_pure_wheeled_controller/CMakeLists.txt"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/launch/pure_wheeled_controller.launch.py",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "58\t4\tros2_ws/src/lunar_pure_wheeled_controller/launch/pure_wheeled_controller.launch.py"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/package.xml",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "4\t1\tros2_ws/src/lunar_pure_wheeled_controller/package.xml"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/execution.py",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "58\t30\tros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/execution.py"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/node.py",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "705\t37\tros2_ws/src/lunar_pure_wheeled_controller/python/lunar_pure_wheeled_controller/node.py"
+    },
+    {
+      "path": "ros2_ws/src/lunar_pure_wheeled_controller/test/test_node.py",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "59\t60\tros2_ws/src/lunar_pure_wheeled_controller/test/test_node.py"
+    },
+    {
+      "path": "scripts/orin/publish_navigation_goal.sh",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "3\t23\tscripts/orin/publish_navigation_goal.sh"
+    },
+    {
+      "path": "scripts/orin/start_exploration.sh",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "19\t12\tscripts/orin/start_exploration.sh"
+    },
+    {
+      "path": "scripts/orin/start_hardware_navigation.sh",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "11\t12\tscripts/orin/start_hardware_navigation.sh"
+    },
+    {
+      "path": "scripts/orin/start_navigation.sh",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "21\t14\tscripts/orin/start_navigation.sh"
+    },
+    {
+      "path": "tests/launch/test_exploration_navigation_launch.py",
+      "source": "app/orin-real-vehicle",
+      "reason": "同步轮式公共算法与当前接口；足式历史保留于ff75f52",
+      "difference": "6\t8\ttests/launch/test_exploration_navigation_launch.py"
+    }
+  ]
+}

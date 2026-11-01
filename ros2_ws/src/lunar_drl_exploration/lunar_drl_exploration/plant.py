@@ -34,14 +34,38 @@ class KinematicPlant:
         return 0 <= y < m.shape[0] and 0 <= x < m.shape[1] and m[y, x] == 1
 
     def _swept(self, a, b):
-        # Each integration interval is <=.05 s, hence <=.01 m. Check every
-        # crossed lattice boundary; exact corners require both cardinal sides,
-        # matching native grid-step connectivity (no corner cutting).
-        x0, y0 = self._cell(a.x, a.y)
-        x1, y1 = self._cell(b.x, b.y)
-        if not self._free(x1, y1): return False
-        if x0 != x1 and y0 != y1:
-            return self._free(x0, y1) and self._free(x1, y0)
+        # Closed-segment supercover, matching native VisitSupercoverCells.
+        # Crossing X and Y at different times does not touch both side cells.
+        # Exact grid-line/corner contact still checks every adjacent cell.
+        if (a.x, a.y) > (b.x, b.y):
+            a, b = b, a
+        resolution = self.terrain.resolution_m
+        ox, oy = self.terrain.origin[:2]
+        x0, y0 = (a.x-ox)/resolution, (a.y-oy)/resolution
+        x1, y1 = (b.x-ox)/resolution, (b.y-oy)/resolution
+
+        def limits(value):
+            nearest = round(value)
+            tolerance = 64 * math.ulp(1.0) * max(1.0, abs(value))
+            return ((nearest-1, nearest) if abs(value-nearest) <= tolerance
+                    else (math.floor(value),))
+
+        def free_at(x, y):
+            return all(self._free(ix, iy) for ix in limits(x) for iy in limits(y))
+
+        if not free_at(x0, y0) or not free_at(x1, y1):
+            return False
+        if math.floor(x0) == math.floor(x1) and math.floor(y0) == math.floor(y1):
+            return True
+        for start, end, other0, other1, vertical in (
+                (x0, x1, y0, y1, True), (y0, y1, x0, x1, False)):
+            if start == end:
+                continue
+            for boundary in range(math.ceil(min(start, end)), math.floor(max(start, end))+1):
+                t = (boundary-start)/(end-start)
+                other = other0 + (other1-other0)*t
+                if not (free_at(boundary, other) if vertical else free_at(other, boundary)):
+                    return False
         return True
 
     def advance(self, command_v, command_w, dt):

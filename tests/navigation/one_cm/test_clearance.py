@@ -1,0 +1,252 @@
+"""所选能力净空必须约束真实车体外的空间，而非只保留 YAML。"""
+from dataclasses import replace
+from pathlib import Path
+import inspect
+import sys
+import math
+import numpy as np
+import pytest
+import yaml
+ROOT=Path(__file__).resolve().parents[3]
+sys.path.insert(0,str(ROOT/'scripts/navigation/one_cm'))
+sys.path.insert(0,str(ROOT/'scripts/navigation/one_cm/ros2/lunar_nav1cm_planner'))
+from nav1cm.contracts import WheelLimits,CellRect,WorldSnapshot,GridSnapshot,Trajectory,CertificationReason
+from nav1cm.certification import certify
+from nav1cm.global_planner import AdaptiveGlobalPlanner
+from nav1cm.follower_map import center_support
+from lunar_nav1cm_planner.configuration import load_configuration
+
+
+def selected(tmp_path,margin,overrides=None):
+    doc=yaml.safe_load((ROOT/'config/wheel.yaml').read_text(encoding='utf-8'))
+    doc['capability']['minimum_clearance_m']=margin
+    path=tmp_path/('wheel-'+str(margin)+'.yaml');path.write_text(yaml.safe_dump(doc),encoding='utf-8')
+    return load_configuration(path,overrides)[0]
+
+
+def wall_grid(front,unknown=False):
+    cells=np.zeros((500,500),np.int8)
+    col=int(round((front+2.5)*100));cells[225:275,col:col+1]=-1 if unknown else 1
+    return GridSnapshot(1,(-2.5,-2.5),.01,cells,False)
+
+
+def stationary(v=0.):
+    return Trajectory(1,1,[0.],[[0.,0.,0.,v,0.,0.]],np.empty((0,3)),'forward')
+
+
+@pytest.mark.parametrize('margin',[.2,.4])
+def test_selected_loader_retains_clearance_and_actual_body(tmp_path,margin):
+    limits=selected(tmp_path,margin)
+    assert getattr(limits,'minimum_clearance_m',None)==margin
+    assert (limits.body_length_m,limits.body_width_m)==(1.182,.818)
+
+
+@pytest.mark.parametrize('margin',[.2,.4])
+def test_body_free_but_clearance_insufficient_is_rejected(tmp_path,margin):
+    limits=selected(tmp_path,margin)
+    front=round(limits.body_length_m/2+margin-.05,2)
+    grid=wall_grid(front)
+    assert certify(stationary(),grid,WheelLimits(),1).valid  # 真正车体无碰撞。
+    assert certify(stationary(),grid,limits,1).reason==CertificationReason.COLLISION
+    assert certify(stationary(),wall_grid(round(limits.global_clearance_radius()+.05,2)),limits,1).valid
+
+
+@pytest.mark.parametrize('margin',[.2,.4])
+def test_required_global_radius_cannot_be_cancelled_by_request(tmp_path,margin):
+    limits=selected(tmp_path,margin);required=math.hypot(1.182,.818)/2+margin
+    planner=AdaptiveGlobalPlanner(limits,.9)
+    assert planner.clearance_radius_m>=required
+    world=WorldSnapshot(1,(CellRect(95,-10,96,10),),())
+    assert not planner.check_goal(world,(0.,0.)).accepted if margin==.4 else True
+    assert AdaptiveGlobalPlanner(WheelLimits(),.409).clearance_radius_m==.409
+
+
+def test_explicit_clearance_floor_validation_and_certificate_identity(tmp_path):
+    limits=selected(tmp_path,.2,{'minimum_clearance_m':.4})
+    assert limits.minimum_clearance_m==.4
+    assert selected(tmp_path,.4,{'minimum_clearance_m':.1}).minimum_clearance_m==.4
+    free=GridSnapshot(1,(-2.5,-2.5),.01,np.zeros((500,500),np.int8))
+    cert=certify(stationary(),free,limits,1)
+    assert not cert.matches(stationary(),free,replace(limits,minimum_clearance_m=.2),1)
+    for value in (-.1,float('nan'),float('inf')):
+        with pytest.raises(ValueError):selected(tmp_path,value)
+
+
+@pytest.mark.parametrize('margin',[.2,.4])
+def test_clearance_reaches_braking_tail_and_unknown(tmp_path,margin):
+    # 本例固定0.2m/s能力以检查制动净空，避免应用基础低速档先触发LIMIT。
+    limits=replace(selected(tmp_path,margin),linear_speed_mps=.2)
+    # 停车距离 .04m；当前统一圆包络无碰撞，制动尾段违反净空。
+    front=round(limits.global_clearance_radius()+.02,2)
+    result=certify(stationary(.2),wall_grid(front),limits,1)
+    assert result.reason==CertificationReason.BRAKING_COLLISION
+    assert certify(stationary(.2),wall_grid(front),WheelLimits(),1).valid
+    near=round(limits.body_length_m/2+margin-.05,2)
+    assert certify(stationary(),wall_grid(near,True),limits,1).reason==CertificationReason.UNKNOWN
+
+
+@pytest.mark.parametrize('margin',[.2,.4])
+def test_follower_support_margin_and_halo_without_unknown_relabel(tmp_path,margin):
+    assert 'minimum_clearance_m' in inspect.signature(center_support).parameters
+    free=(CellRect(-500,-500,500,500),)
+    x=int(round((1.182/2+margin-.05)*100))
+    world=WorldSnapshot(1,(CellRect(x,-10,x+1,10),),free)
+    raw=center_support(world,0.,0.,body_length_m=1.182,body_width_m=.818)
+    assert raw.eligible[250,250]
+    padded=center_support(world,0.,0.,body_length_m=1.182,body_width_m=.818,minimum_clearance_m=margin)
+    assert not padded.eligible[250,250]
+    far=int(math.ceil((math.hypot(1.182,.818)/2+margin+.05)*100))
+    safe=center_support(WorldSnapshot(2,(CellRect(far,-10,far+1,10),),free),0.,0.,body_length_m=1.182,body_width_m=.818,minimum_clearance_m=margin)
+    assert safe.eligible[250,250] and safe.eligible[490,250]
+    unknown=center_support(WorldSnapshot(3,(),()),0.,0.,body_length_m=1.182,body_width_m=.818,minimum_clearance_m=margin,allow_unknown=True)
+    assert np.all(unknown.cells==-1) and unknown.eligible.all()
+
+
+@pytest.mark.parametrize('margin',[.2,.4])
+def test_native_and_python_clearance_and_braking_agree(tmp_path,margin):
+    import os
+    from nav1cm.geometry_native import NativeGeometry
+    native=NativeGeometry(os.environ['NAV1CM_GEOMETRY_LIB'])
+    limits=selected(tmp_path,margin)
+    for front,velocity,unknown in [(round(.591+margin-.05,2),0.,False),
+                                   (round(.591+margin+.05,2),0.,False),
+                                   (round(.591+margin+.02,2),.2,False),
+                                   (round(.591+margin-.05,2),0.,True)]:
+        grid=wall_grid(front,unknown);trajectory=stationary(velocity)
+        reference=certify(trajectory,grid,limits,1)
+        accelerated=certify(trajectory,grid,limits,1,backend=native)
+        assert (accelerated.valid,accelerated.reason)==(reference.valid,reference.reason)
+
+
+def test_configured_clearance_optimizer_accepts_actual_obstacle_start(tmp_path):
+    import os
+    if os.environ.get('NAV1CM_REAL_SOLVER')!='1':pytest.skip('real acados required')
+    from nav1cm.local_mpcc import MpccPlanner
+    from nav1cm.maps import build_distance_field,rasterize_world
+    limits=selected(tmp_path,.4)
+    # 原实际APP障碍场景，不移动障碍/车体/预算：初态净空为 .609m。
+    world=WorldSnapshot(1,(CellRect(120,-200,150,20),),(CellRect(-500,-500,500,500),))
+    grid=GridSnapshot(1,(-2.5,-2.5),.01,rasterize_world(world,(-2.5,-2.5),(500,500)))
+    assert certify(stationary(),grid,limits,1).valid
+    planner=MpccPlanner(limits,os.environ['NAV1CM_BUILD_DIR'])
+    field=build_distance_field(grid)
+    assert all(field.sample(offset,0.)[0]>=planner.radius+.003 for offset in planner.offsets)
+    # 优化包络仍须覆盖实际矩形与半径margin圆的Minkowski和；不能靠缩车过关。
+    for x in (-limits.body_length_m/2,limits.body_length_m/2):
+        for y in (-limits.body_width_m/2,limits.body_width_m/2):
+            for angle in np.linspace(0.,2*np.pi,129):
+                px=x+limits.minimum_clearance_m*np.cos(angle);py=y+limits.minimum_clearance_m*np.sin(angle)
+                assert min(np.hypot(px-offset,py) for offset in planner.offsets)<=planner.radius+1e-12
+
+
+@pytest.mark.parametrize('margin',[.2,.4])
+def test_pose_goal_clearance_rejection_keeps_session_generation(tmp_path,margin):
+    from nav1cm.async_coordinator import AsyncNavigationCoordinator
+    from nav1cm.p3_session import NavigationSession
+    from nav1cm.ros_conversion import PoseGoal
+    from nav1cm.contracts import VehicleState
+    class Pending:
+        busy=True
+        def poll(self):return None
+        def close(self):pass
+    limits=selected(tmp_path,margin)
+    coordinator=AsyncNavigationCoordinator(limits=limits,local_worker=Pending(),global_runner=Pending(),revalidate_current_map=True)
+    session=NavigationSession(coordinator)
+    front=int(round((.591+margin-.05)*100))
+    session.set_world(WorldSnapshot(1,(CellRect(front,-10,front+1,10),),(CellRect(-500,-500,500,500),)))
+    session.offer_state(VehicleState(-1.,0.,0.,0.,0.))
+    old=PoseGoal(-1.,0.,0.);assert session.offer_goal(old)
+    generation,revision=session.accepted_generation,coordinator.goal_revision
+    assert not session.offer_goal(PoseGoal(0.,0.,0.))
+    assert session.goal==old and session.accepted_generation==generation and coordinator.goal_revision==revision
+    sufficient=PoseGoal(-.2,0.,0.);assert session.offer_goal(sufficient)
+    generation=session.accepted_generation;assert generation==2
+    session.set_world(WorldSnapshot(2,(CellRect(-25,-5,-15,5),),()))
+    assert session.offer_goal(sufficient)  # 同目标重发与后来变堵均不自动回退旧目标。
+    packet=session.tick(0.)
+    assert session.goal==sufficient and session.accepted_generation==generation
+    assert any(e['kind']=='GOAL_REJECTED' for e in packet.result.events)
+    assert packet.route is None
+    session.close()
+
+
+@pytest.mark.parametrize('native',[False,True])
+def test_euclidean_margin_accepts_full_rotation_and_braking(tmp_path,native):
+    import os
+    from nav1cm.geometry_native import NativeGeometry
+    from nav1cm.maps import rasterize_world
+    from nav1cm.pose_goal import check_pose_goal
+    backend=NativeGeometry(os.environ['NAV1CM_GEOMETRY_LIB']) if native else None
+    limits=selected(tmp_path,.4)
+    # 独立解析真值：任意yaw车体到x=1.2障碍的距离至少1.2-body外接半径>.4。
+    assert 1.2-math.hypot(1.182,.818)/2>.4
+    world=WorldSnapshot(1,(CellRect(120,-200,150,20),),(CellRect(-500,-500,500,500),))
+    grid=GridSnapshot(1,(-2.5,-2.5),.01,rasterize_world(world,(-2.5,-2.5),(500,500)))
+    angle=math.atan2(.409+.4,.591+.4)
+    assert check_pose_goal(world,(0.,0.),angle,limits).accepted
+    for yaw in (0.,angle,math.pi/2,math.pi,1.5*math.pi):
+        braking=Trajectory(1,1,[0.],[[0.,0.,yaw,0.,.1,0.]],np.empty((0,3)),'spin')
+        assert certify(braking,grid,limits,1,backend=backend).valid
+    times=np.arange(65,dtype=float)
+    states=np.column_stack((np.zeros((65,2)),.1*times,np.zeros(65),np.full(65,.1),np.zeros(65)))
+    rotation=Trajectory(1,1,times,states,np.zeros((64,3)),'spin')
+    assert certify(rotation,grid,limits,1,backend=backend).valid
+    for unknown in (False,True):
+        cells=np.zeros((500,500),np.int8);cells[50:270,360:400]=-1 if unknown else 1
+        near=GridSnapshot(1,(-2.5,-2.5),.01,cells)
+        result=certify(rotation,near,limits,1,backend=backend)
+        assert result.reason==(CertificationReason.UNKNOWN if unknown else CertificationReason.COLLISION)
+
+
+@pytest.mark.parametrize('native',[False,True])
+@pytest.mark.parametrize('margin',[.2,.4])
+def test_corner_distance_checks_both_sides_of_uniform_circle(tmp_path,margin,native):
+    import os
+    from nav1cm.geometry_native import NativeGeometry
+    from nav1cm.maps import rasterize_world
+    from nav1cm.pose_goal import check_pose_goal
+    backend=NativeGeometry(os.environ['NAV1CM_GEOMETRY_LIB']) if native else None
+    limits=selected(tmp_path,margin)
+    for gap,accepted in ((margin*.75,True),(margin*.7,False)):
+        x,y=int(round((.591+gap)*100)),int(round((.409+gap)*100))
+        independent_distance=math.hypot(x/100,y/100)
+        assert (independent_distance>limits.global_clearance_radius())==accepted
+        world=WorldSnapshot(1,(CellRect(x,y,x+1,y+1),),(CellRect(-500,-500,500,500),))
+        grid=GridSnapshot(1,(-2.5,-2.5),.01,rasterize_world(world,(-2.5,-2.5),(500,500)))
+        assert certify(stationary(),grid,limits,1,backend=backend).valid==accepted
+        assert check_pose_goal(world,(0.,0.),0.,limits).accepted==accepted
+
+
+@pytest.mark.parametrize('mode,points',[('forward',((0.,0.),(2.,0.))),('spin',((0.,0.),(0.,2.)))])
+def test_positive_margin_real_solver_motion_is_nondegenerate(tmp_path,mode,points):
+    import os
+    if os.environ.get('NAV1CM_REAL_SOLVER')!='1':pytest.skip('real acados required')
+    from nav1cm.local_mpcc import MpccPlanner
+    from nav1cm.contracts import VehicleState,Route
+    from nav1cm.reference import extract_reference
+    limits=selected(tmp_path,.4)
+    planner=MpccPlanner(limits,os.environ['NAV1CM_BUILD_DIR'])
+    state=VehicleState(0.,0.,0.,0.,0.)
+    grid=GridSnapshot(1,(-2.5,-2.5),.01,np.zeros((500,500),np.int8))
+    reference,_=extract_reference(Route(1,1,points,points[-1]),state,grid)
+    result=planner.plan(state,grid,reference)
+    candidate=result.candidate
+    assert candidate is not None and candidate.mode==mode and candidate.source.startswith('mpcc:')
+    assert candidate.states[-1,2 if mode=='spin' else 0]>.05
+    assert certify(candidate,grid,limits,1).valid
+
+
+def test_deployed_wheel_files_use_user_requested_unified_clearance():
+    for name in ('wheel.yaml','wheel_orin.yaml'):
+        limits,_=load_configuration(ROOT/'config'/name)
+        assert limits.global_clearance_radius()==pytest.approx(.75)
+
+
+@pytest.mark.parametrize('accel,brake',[(.1,.5),(.5,.1),(.5,.5)])
+def test_planner_uses_common_acceleration_braking_envelope(tmp_path,accel,brake):
+    document=yaml.safe_load((ROOT/'config/wheel.yaml').read_text(encoding='utf-8'))
+    document['capability']['maximum_acceleration_mps2']=accel
+    document['capability']['maximum_braking_deceleration_mps2']=brake
+    path=tmp_path/'wheel.yaml';path.write_text(yaml.safe_dump(document),encoding='utf-8')
+    limits,_=load_configuration(path)
+    assert limits.linear_accel_mps2==min(accel,brake)
