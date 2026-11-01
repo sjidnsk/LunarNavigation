@@ -87,7 +87,7 @@ def _segment_clear(a, b, boxes, corner_radius=0):
     return not bool(np.any(possible & (lo <= hi)))
 
 
-def path_cost(points, hard_boxes, soft_clearance_m=.4, clearance_weight=.5, check=None, *, corner_radius=0):
+def _path_cost_python(points, hard_boxes, soft_clearance_m=.4, clearance_weight=.5, check=None, *, corner_radius=0):
     """长度加硬碰撞边界外有限净空积分；仅用于偏好，绝不认证碰撞。
 
     corner_radius>0时距原矩形的距离减去圆半径，0保留AABB边界语义。
@@ -174,6 +174,28 @@ def path_cost(points, hard_boxes, soft_clearance_m=.4, clearance_weight=.5, chec
                     nearest = np.minimum(nearest, np.maximum(0.,np.sqrt(np.sum(delta*delta,axis=2)).min(axis=1)-corner_radius))
                 total += weight*(high-low)*length/count*float(np.sum(np.maximum(0.,1-nearest/soft)**2))
     return total
+
+
+def path_cost(points, hard_boxes, soft_clearance_m=.4, clearance_weight=.5, check=None, *, corner_radius=0):
+    """可选原生偏好积分；无库/旧库/有界工作量超限时回退同公式Python参考。"""
+    from .global_cost_native import load_cost_function
+    soft,weight=float(soft_clearance_m),float(clearance_weight)
+    if not all(math.isfinite(v) and v>=0 for v in (soft,weight)):
+        raise ValueError("soft clearance and weight must be finite and nonnegative")
+    if check is not None:
+        check()
+    function=load_cost_function()
+    if function is not None:
+        values=np.ascontiguousarray(points,dtype=float).reshape(-1,2)
+        boxes=np.ascontiguousarray(hard_boxes,dtype=float).reshape(-1,4)
+        if check is not None:
+            check()
+        result=function(values,len(values),boxes,len(boxes),soft,weight,float(corner_radius))
+        if check is not None:
+            check()
+        if math.isfinite(result):
+            return result
+    return _path_cost_python(points,hard_boxes,soft,weight,check,corner_radius=corner_radius)
 
 
 def _string_pull(start, goal, portals, check):

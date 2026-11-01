@@ -198,3 +198,11 @@ with new_path.open('x', encoding='utf-8') as stream:
 只有结构/动作覆盖的历史重新判定不等于重新执行长场景。
 
 最终证据修复后的短原生与Humble250ms均严格pass=true：正式全局三字段与请求/接受身份一致、完整动作覆盖及逐段审计通过，ROS探针收到对应全局结果原始消息，退出通过。旧四场raw重分析仍到达/完整覆盖/动作审计通过，但正式全局字段为NOT_RECORDED，因此严格新pass=false；不能从到达补造旧全局结果。源与报告快照保存在同任务D盘artifacts/navigation/async-execution-20261026。
+
+## 全局软净空的可选原生积分
+
+`global_planner.path_cost` 优先使用同一 ABI 3 几何库中可选的 `nav1cm_soft_path_cost` 符号。首选 `NAV1CM_GEOMETRY_LIB`，未指定时在已安装 Python 包的上级前缀及 ROS ament/动态库前缀查找 `libnav1cm_geometry.so`；每进程缓存加载结果，不下载或自动编译。旧 ABI 3 库缺少该符号、无库或单次原生工作量超过两百万次时，保留 `_path_cost_python` 参考回退。
+
+该符号只加速既有软偏好积分，不改变碰撞 ABI、候选图、硬圆半径、软范围或权重。原生调用前后均检查规划预算；原生工作量有上界，超限后 Python 分批积分继续检查预算。ROS 包现有 `nav1cm_geometry` 目标自动包含该符号；Windows 手动构建时另需 `/EXPORT:nav1cm_soft_path_cost`。
+
+原生与 Python 差分运行：设置指向本次构建库的 `NAV1CM_GEOMETRY_LIB`，从仓库根目录执行 `python3 -m pytest tests/navigation/one_cm/test_global_cost_native.py`。该测试直接调用原生符号，并覆盖圆角、轴向恒距区段、随机路线、零带宽/权重、参数拒绝与可选回退。
