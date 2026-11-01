@@ -17,13 +17,15 @@ PREFIX='/p4_p3_debug'
 TRANSPORT_TIMEOUT_S=.5
 
 
-def launch_settings(source,build_dir,profile_path,budgets,*,prefix=PREFIX,goal_topic="/goal_pose"):
+def launch_settings(source,build_dir,profile_path,budgets,*,prefix=PREFIX,goal_topic="/goal_pose",exploration_strategy="none"):
+    if exploration_strategy not in ("none", "frontier"):
+        raise ValueError("exploration_strategy must be none or frontier")
     try:from .debug_p3_planning import launch_arguments
     except ImportError:from debug_p3_planning import launch_arguments
     args=launch_arguments(source,build_dir,profile={k:v for k,v in budgets.items() if k not in ("command_hold_s", "global_period_s", "command_spin_prepare_s")},allow_unknown=True)
     args={key:(prefix+value[len(PREFIX):] if isinstance(value,str) and value.startswith(PREFIX+'/') else value)
           for key,value in args.items()}
-    args.update(command_spin_prepare_s=str(budgets.get('command_spin_prepare_s',0.)),global_period_s=str(budgets.get('global_period_s',15.)),command_hold_s=str(budgets['command_hold_s']),control_backend='mpcc_cmd_vel',enable_controller='true',exploration_strategy='none',
+    args.update(command_spin_prepare_s=str(budgets.get('command_spin_prepare_s',0.)),global_period_s=str(budgets.get('global_period_s',15.)),command_hold_s=str(budgets['command_hold_s']),control_backend='mpcc_cmd_vel',enable_controller='true',exploration_strategy=exploration_strategy,
                 platform_config=str(profile_path),command_topic=prefix+'/cmd_vel',goal_topic=goal_topic,
                 initial_travel_direction='forward')
     return args
@@ -329,6 +331,7 @@ def main():
     parser.add_argument('--root',type=Path,default=Path('/home/yanfa/P4'))
     parser.add_argument('--artifact',type=Path,required=True)
     parser.add_argument('--rviz-config',type=Path)
+    parser.add_argument('--exploration-strategy',choices=('none','frontier'),default='none',help='选择探索节点；frontier仍等待显式区域START任务')
     parser.add_argument('--check-only',action='store_true',help='只接入输入，不启动导航、RViz、租约或车控')
     parser.add_argument('--duration',type=float,default=0.,help='运行上限，0表示等待停止信号')
     options=parser.parse_args();root=options.root.resolve();out=options.artifact.resolve()
@@ -382,7 +385,7 @@ def main():
                 qos['goal']=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE)
                 display_worker,display_handles=attach_navigation_observer(source,target,dict(pose=PoseStamped,path=RosPath,odom=Odometry,marker=Marker),qos,budgets['odometry_timeout_s'])
                 handles.extend(display_handles)
-            args=launch_settings(root/'source',root/'.cache/nav1cm',config,budgets)
+            args=launch_settings(root/'source',root/'.cache/nav1cm',config,budgets,exploration_strategy=options.exploration_strategy)
             env=runtime_environment(root,out)
             commands=[('navigation',['ros2','launch','lunar_pure_exploration_ros','nav1cm_exploration.launch.py']+[k+':='+str(v) for k,v in args.items()])]
             if options.rviz_config is not None:

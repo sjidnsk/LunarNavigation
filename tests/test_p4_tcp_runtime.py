@@ -527,3 +527,34 @@ def test_tcp_spin_response_delay_from_shared_feedback_config():
     budget=yaml.safe_load((root/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
     assert budget['command_spin_prepare_s'] == 3.
     assert launch_settings(root,root/'cache',root/'profile.yaml',budget)['command_spin_prepare_s'] == '3.0'
+
+
+def test_exploration_strategy_is_explicit_and_preserves_settings():
+    budgets = dict(command_hold_s=1.2, global_period_s=15.)
+    default = launch_settings('/source', '/cache', '/tcp.yaml', budgets)
+    assert default['exploration_strategy'] == 'none'
+    frontier = launch_settings('/source', '/cache', '/tcp.yaml', budgets, exploration_strategy='frontier')
+    assert frontier == dict(default, exploration_strategy='frontier')
+    for invalid in ('drl', '', None):
+        with pytest.raises(ValueError, match='exploration_strategy'):
+            launch_settings('/source', '/cache', '/tcp.yaml', budgets, exploration_strategy=invalid)
+
+
+def test_main_exploration_cli_choices_and_forwarding(monkeypatch, capsys):
+    import ast
+    import inspect
+    from scripts.simulation import p4_tcp_runtime as runtime
+    tree = ast.parse(inspect.getsource(runtime.main))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+    option = next(n for n in calls if n.args and isinstance(n.args[0], ast.Constant) and n.args[0].value == '--exploration-strategy')
+    keywords = {k.arg: ast.literal_eval(k.value) for k in option.keywords}
+    assert keywords['choices'] == ('none', 'frontier')
+    assert keywords['default'] == 'none'
+    launch = next(n for n in calls if isinstance(n.func, ast.Name) and n.func.id == 'launch_settings')
+    strategy = next(k.value for k in launch.keywords if k.arg == 'exploration_strategy')
+    assert ast.unparse(strategy) == 'options.exploration_strategy'
+    monkeypatch.setattr('sys.argv', ['runtime', '--artifact', '/unused', '--exploration-strategy', 'drl'])
+    with pytest.raises(SystemExit) as error:
+        runtime.main()
+    assert error.value.code == 2
+    assert 'invalid choice' in capsys.readouterr().err
