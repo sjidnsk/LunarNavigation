@@ -18,5 +18,12 @@
 
 ## 验证
 
-进行中。Windows离线测试、原生桥编译/对照与可用Humble构建分别记录。首轮未预建外部pytest父目录导致临时目录创建失败，随后修正测试启动路径；Windows无ROS导致ament依赖测试不在本机执行。
+Windows源码/离线回归1314通过、97条件跳过；使用明确指定的geometry/field DLL，跳过真实acados与ROS环境不可用项。新增足式入口/配置源身份与原生能力分流已覆盖。首轮未预建外部pytest父目录导致临时目录创建失败，随后修正测试启动路径；Windows无ROS导致ament依赖测试不在本机执行。
 Humble/Orin/足式实机、DDS和车辆闭环未验证，不由静态测试推断。
+
+- ARM64 Ubuntu22.04/Humble隔离：原生桥独立g++构建成功，新增足式对照7通过/1本机Git身份检查不在隔离目录执行；同一25.8°坡面足式30°能力FREE、轮式20°能力BLOCKED，降低足式自身坡度上限后仍BLOCKED，未借用wheel evaluator。
+- Humble两个受影响包lunar_nav1cm_planner与lunar_pure_exploration_ros构建成功；运行时、旧外推离线工具、配置、启动参数、终点保持共72测试通过。首轮一项测试因裁剪上传漏带p4_tcp_runtime纯配置夹具失败，补齐源码后72全通过，无产品修补。
+- 隔离路径 /home/yanfa/P4/tmp/legged-sync-20261101，仅该P4子目录写入；未重启正式P4/P3/Env_X，未自动发目标。源码/日志本机 D:/CodexDownloads/lunar_navigation/legged-sync-20261101。Windows MSVC不能编译原有GCC overflow builtin，原生桥编译验收因此使用ARM64 g++，未为此改公共算术实现。
+- 测试发现上一轮单向终点的旧测试预期残留，以及同源P3在NOT_DUE前已应用/未消费的混淆。通用修复独立提交5aac81e2，仅增加内部已应用源戳字段，不扩ROS接口/任务实体；同步main/TCP/wheel。旧测试已按用户最终约定更新，新源帧可正常接收，不恢复外推。
+
+处置：算法/足式适配合并c567237a，通用源帧修复5aac81e2；本任务专题快进合回app/orin-legged-vehicle后再记录落地。无push/PR，无分支或工作树删除；专题待授权回收。足式真实驱动、Orin部署/闭环、横移及足端动作NOT_RUN。
