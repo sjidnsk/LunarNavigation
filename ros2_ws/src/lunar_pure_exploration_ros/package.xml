@@ -25,10 +25,14 @@
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>lunar_pure_planner_ros</exec_depend>
+  <exec_depend>lunar_nav1cm_planner</exec_depend>
+  <exec_depend>lunar_incremental_navigation_ros</exec_depend>
+  <exec_depend>lunar_navigation_rviz</exec_depend>
+  <exec_depend>rviz2</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
-  <depend>ament_index_cpp</depend>
+  <test_depend>ament_index_cpp</test_depend>
   <test_depend>action_msgs</test_depend>
   <test_depend>lunar_pure_planner_ros</test_depend>
   <test_depend>rosgraph_msgs</test_depend>

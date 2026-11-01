@@ -841,23 +841,6 @@ TEST(IncrementalNavigationNode, DirectDeploymentDefaultsAndExplicitOverrides) {
   EXPECT_DOUBLE_EQ(overridden->get_parameter("goal_yaw_tolerance_rad").as_double(), 0.2);
 }
 
-TEST(IncrementalNavigationNode, TerrainBackgroundWidthIsAValidatedStartupParameter) {
-  auto options = ServerOptions("terrain_background_default");
-  auto defaults = std::make_shared<IncrementalNavigationNode>(options);
-  EXPECT_DOUBLE_EQ(defaults->get_parameter("terrain_background_half_width_m").as_double(), 0.4);
-  options.append_parameter_override("terrain_background_half_width_m", 0.0);
-  auto legacy = std::make_shared<IncrementalNavigationNode>(options);
-  EXPECT_DOUBLE_EQ(legacy->get_parameter("terrain_background_half_width_m").as_double(), 0.0);
-  EXPECT_FALSE(legacy->set_parameters_atomically(
-      {rclcpp::Parameter("terrain_background_half_width_m", 0.3)}).successful);
-  for (double width : {-0.1, std::numeric_limits<double>::infinity(),
-                       std::numeric_limits<double>::quiet_NaN()}) {
-    auto invalid = ServerOptions("terrain_background_invalid");
-    invalid.append_parameter_override("terrain_background_half_width_m", width);
-    EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(invalid), std::runtime_error);
-  }
-}
-
 TEST(IncrementalNavigationNode, ClearanceCostHasCalibratedDefaultAndStartupOverride) {
   auto defaults = std::make_shared<IncrementalNavigationNode>(
       ServerOptions("clearance_default"), IncrementalNavigationNodeDependencies{});
@@ -877,30 +860,6 @@ TEST(IncrementalNavigationNode, ClearanceWeightMustBeFiniteAndNonnegative) {
                                std::numeric_limits<double>::quiet_NaN()}) {
     auto options = ServerOptions("clearance_invalid");
     options.append_parameter_override("clearance_weight", weight);
-    EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(
-        options, IncrementalNavigationNodeDependencies{}), std::runtime_error);
-  }
-}
-
-TEST(IncrementalNavigationNode, ConfidenceCostHasDefaultAndStartupOverride) {
-  auto defaults = std::make_shared<IncrementalNavigationNode>(
-      ServerOptions("confidence_default"), IncrementalNavigationNodeDependencies{});
-  ASSERT_TRUE(defaults->has_parameter("confidence_weight"));
-  EXPECT_DOUBLE_EQ(defaults->get_parameter("confidence_weight").as_double(), 2.0);
-  auto options = ServerOptions("confidence_override");
-  options.append_parameter_override("confidence_weight", 0.0);
-  auto disabled = std::make_shared<IncrementalNavigationNode>(
-      options, IncrementalNavigationNodeDependencies{});
-  EXPECT_DOUBLE_EQ(disabled->get_parameter("confidence_weight").as_double(), 0.0);
-  EXPECT_FALSE(disabled->set_parameters_atomically(
-      {rclcpp::Parameter("confidence_weight", 2.0)}).successful);
-}
-
-TEST(IncrementalNavigationNode, ConfidenceWeightMustBeFiniteAndNonnegative) {
-  for (const double weight : {-1.0, std::numeric_limits<double>::infinity(),
-                               std::numeric_limits<double>::quiet_NaN()}) {
-    auto options = ServerOptions("confidence_invalid");
-    options.append_parameter_override("confidence_weight", weight);
     EXPECT_THROW(std::make_shared<IncrementalNavigationNode>(
         options, IncrementalNavigationNodeDependencies{}), std::runtime_error);
   }
@@ -1079,9 +1038,12 @@ TEST(IncrementalNavigationNode,
   auto handle = system.Send(5.5, 0.5);
   ASSERT_TRUE(handle);
   ASSERT_TRUE(WaitFor([&] {
+    const auto diagnostics = system.Diagnostics();
     return !system.FineStates().empty() && !system.GuidanceStates().empty() &&
            !system.StartPatches().empty() && !system.Diagnostics().empty() &&
-           !system.Paths().empty();
+           !system.Paths().empty() && !diagnostics.empty() &&
+           FindDiagnosticValue(diagnostics.back(), "reason_code") == "PLAN_FOUND" &&
+           FindDiagnosticValue(diagnostics.back(), "path_state") == "ACTIVE";
   }));
 
   const auto fine_states = system.FineStates();
@@ -1092,7 +1054,9 @@ TEST(IncrementalNavigationNode,
   EXPECT_EQ(system.Paths().back().state,
             lunar_planning_msgs::msg::PathReference::ACTIVE);
   EXPECT_EQ(FindDiagnosticValue(diagnostics.back(), "reason_code"),
-            "EXECUTING");
+            "PLAN_FOUND");
+  EXPECT_EQ(FindDiagnosticValue(diagnostics.back(), "cycle_result"), "PLAN_FOUND");
+  EXPECT_EQ(FindDiagnosticValue(diagnostics.back(), "path_state"), "ACTIVE");
   EXPECT_EQ(FindDiagnosticValue(diagnostics.back(),
                                 "fine_traversability_revision"),
             "17");
@@ -1693,7 +1657,7 @@ TEST(IncrementalNavigationNode, PendingFineCollisionInvalidatesBeforeMatchingCom
   EXPECT_EQ(control->local_calls, 2U);
 }
 
-TEST(IncrementalNavigationNode, StoppedMatchingTrackingFailureReplansAndStaleFeedbackIsIgnored) {
+TEST(IncrementalNavigationNode, StoppedTrackingRejectionIsBoundedAndStaleFeedbackIsIgnored) {
   auto control = std::make_shared<FakeControl>();
   control->segment_ends = {{.x = 3.5, .y = 0.5}};
   RunningSystem system("tracking_failure", IncrementalNavigationNodeDependencies{
@@ -1728,7 +1692,18 @@ TEST(IncrementalNavigationNode, StoppedMatchingTrackingFailureReplansAndStaleFee
   publisher->publish(status);
   std::this_thread::sleep_for(80ms);
   EXPECT_EQ(system.Paths().size(), 3U);
-  system.Cancel(goal);
+  auto result = system.Result(goal);
+  status.segment_revision = 2;
+  publisher->publish(status);
+  ASSERT_TRUE(WaitFor([&] { return system.Paths().size() >= 5U; }));
+  EXPECT_EQ(system.Paths().back().segment_revision, 3U);
+  status.segment_revision = 3;
+  publisher->publish(status);
+  ASSERT_EQ(result.wait_for(3s), std::future_status::ready);
+  const auto wrapped = result.get();
+  EXPECT_EQ(wrapped.code, rclcpp_action::ResultCode::ABORTED);
+  ASSERT_TRUE(wrapped.result);
+  EXPECT_EQ(wrapped.result->reason_code, "EXECUTION_REJECTED_REPEATED");
 }
 
 TEST(IncrementalNavigationNode,

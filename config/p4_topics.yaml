@@ -1,0 +1,34 @@
+# P4正式接口唯一命名来源；上游P3和车辆原生名称保持。
+launch:
+  action_name: /Car/T4/navigation/navigate_to_pose
+  goal_topic: /Car/T4/navigation/goal
+  global_route_topic: /Car/T4/planning/global_route
+  local_path_topic: /Car/T4/planning/local_path
+  execution_reference_topic: /Car/T4/control/path_execution_reference
+  tracking_status_topic: /Car/T4/control/tracking_status
+  exploration_map_topic: /Car/T4/mapping/exploration_map
+  policy_map_service: /Car/T4/mapping/get_policy_map
+  task_topic: /Car/T4/exploration/task
+  status_topic: /Car/T4/exploration/status
+  current_goal_topic: /Car/T4/exploration/current_goal
+  frontiers_topic: /Car/T4/exploration/frontiers
+  task_boundary_topic: /Car/T4/exploration/task_boundary
+  task_map_markers_topic: /Car/T4/exploration/task_map_markers
+  exploration_diagnostics_topic: /Car/T4/exploration/diagnostics
+  command_topic: /Car/T4/control/cmd_vel
+  diagnostics_topic: /Car/T4/control/diagnostics
+  map_topic: /Car/T3/mapping/grid_map
+  odometry_topic: /Car/T3/localization/odometry
+  tf_topic: /tf
+  tf_static_topic: /tf_static
+visualization:
+  start_marker: /Car/T4/visualization/start_marker
+  goal_marker: /Car/T4/visualization/goal_marker
+  actual_path: /Car/T4/visualization/actual_path
+  boundary_draft: /Car/T4/exploration/boundary_draft
+vehicle:
+  command_topic: /car/cmd_vel
+  mode_topic: /car/set_mode
+  lease_topic: /car/external_control_lease
+  telemetry_topic: /car/telemetry
+  connected_topic: /car/ue_connected

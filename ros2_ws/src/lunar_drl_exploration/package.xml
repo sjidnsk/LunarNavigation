@@ -14,6 +14,7 @@
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>lunar_incremental_navigation_ros</exec_depend>
+  <exec_depend>lunar_nav1cm_planner</exec_depend>
   <exec_depend>lunar_pure_wheeled_controller</exec_depend>
   <exec_depend>lunar_planning_msgs</exec_depend>
   <exec_depend>lunar_pure_exploration_msgs</exec_depend>

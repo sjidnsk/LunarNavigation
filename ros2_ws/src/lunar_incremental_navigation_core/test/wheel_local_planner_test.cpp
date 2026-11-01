@@ -291,7 +291,9 @@ TEST(WheelLocalPlanner, SimplificationPreservesCertifiedFinalArrivalYaw) {
 
 TEST(WheelLocalPlanner,
      NeighborGoalYawUsesTheContinuousStartInsteadOfTheStartCellCenter) {
-  const auto fine = MakeFine(2U, 1U, {}, true);
+  // Keep the continuous-start heading geometry away from the map boundary;
+  // out-of-window space now requires the execution clearance too.
+  const auto fine = MakeFine(2U, 3U, {}, true, 1.0, {}, {.y = -1.0});
   const Pose2 start{.position_m = {.x = 0.99, .y = 0.01}, .yaw_rad = 0.0};
   const auto result = WheelLocalPlanner{}.Plan(
       View(fine), start, Target(1.01, 0.99, true, std::numbers::pi / 2.0),

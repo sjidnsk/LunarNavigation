@@ -3,11 +3,11 @@ import math
 
 import numpy as np
 
-from .contracts import Trajectory
+from .contracts import Trajectory, VehicleState
 from .dynamics import step
 from .global_planner import GoalCheck
 from .rectangle_distance import rectangle_distance_squared
-from .seeds import brake_candidate
+from .seeds import brake_candidate, braking_prefix, join_trajectories
 
 
 def normalize_yaw(yaw):
@@ -45,7 +45,7 @@ def check_pose_goal(world, goal_xy, goal_yaw, limits):
 def terminal_candidate(state, grid, reference, limits, *, horizon_s=4.):
     """解析角速度梯形/三角形候选，不把辅助转向冒充 acados 求解成功。
 
-    平移尚未精确停稳时先用实际初态制动。纯转向允许超过滚动时域，
+    从真实初态制动接续转向，前缀计入本次时域；时域不足时保留必要停车。
     每段保留真实角速度与角加速度；调用方必须认证整段及停车尾段。
     """
     if reference.terminal_yaw is None:
@@ -57,10 +57,16 @@ def terminal_candidate(state, grid, reference, limits, *, horizon_s=4.):
     direction = 1. if error >= 0 else -1.
     speed = direction * state.w
     distance = abs(error)
-    # 停稳判定容差不允许重写实测 v；反向/来不及停下的角速度也先物理制动。
-    if (abs(state.v) > 1e-10 or speed < 0 or abs(state.w) > maximum or
-            distance <= 1e-12 or speed * speed / (2 * alpha) > distance + 1e-12):
-        return brake_candidate(state, grid, reference, limits)
+    # 从实测初态制动接续转向，不能要求每次新测量成为数学零值。
+    if distance<=1e-12:return brake_candidate(state,grid,reference,limits)
+    angular_brake=(speed<0 or abs(state.w)>maximum or speed*speed/(2*alpha)>distance+1e-12)
+    if abs(state.v)>1e-10 or angular_brake:
+        prefix=braking_prefix(state,grid,reference,limits,retain_angular=not angular_brake)
+        remaining=horizon_s-prefix.times[-1]
+        if remaining<=1e-12:return prefix
+        endpoint=VehicleState(*prefix.states[-1,:5])
+        continuation=terminal_candidate(endpoint,grid,reference,limits,horizon_s=remaining)
+        return join_trajectories(prefix,continuation)
     peak = min(maximum, math.sqrt(alpha * distance + speed * speed / 2))
     accelerate_s = max(0., (peak - speed) / alpha)
     acceleration_distance = (peak * peak - speed * speed) / (2 * alpha)

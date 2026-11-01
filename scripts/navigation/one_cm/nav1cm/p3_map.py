@@ -202,6 +202,21 @@ def _polygon(region, update):
     return polygon
 
 
+def _axis_aligned_section(polygon, update):
+    """只缓存零旋转、坐标严格轴对齐的矩形恒定截面，不近似旋转。
+
+    仍使用 _polygon 原有浮点运算结果；不重算顶点、不调整容差。
+    自由区的整条带覆盖和内部缺口证明仍由原事件分段负责。
+    """
+    if update.yaw != 0.:
+        return None
+    a, b, c, d = polygon
+    if (a[0] == d[0] and b[0] == c[0] and
+            a[1] == b[1] and c[1] == d[1]):
+        return min(a[0], b[0]), max(a[0], b[0])
+    return None
+
+
 def _intersect_intervals(left, right):
     result = []
     a = b = 0
@@ -229,20 +244,26 @@ def _free_rows(regions, update):
         polygon = _polygon(region, update)
         minimum = min(point[1] for point in polygon)
         maximum = max(point[1] for point in polygon)
+        section = _axis_aligned_section(polygon, update)
         for y in range(math.floor(minimum + 1e-9), math.ceil(maximum - 1e-9)):
-            bands.setdefault(y, []).append((polygon, minimum, maximum))
+            bands.setdefault(y, []).append((polygon, minimum, maximum, section))
     for y, polygons in bands.items():
+        # 与行范围和截面的 1e-9 cm 容差一致：贴近整数边界的浮点顶点
+        # 不应再切出无法表示中点的数值薄片；不移动真实顶点或合并内部缺口。
         levels = sorted({float(y), float(y + 1),
-                         *(point[1] for polygon, _, _ in polygons for point in polygon if y < point[1] < y + 1)})
+                         *(point[1] for polygon, _, _, _ in polygons for point in polygon
+                           if y + 1e-9 < point[1] < y + 1 - 1e-9)})
         covered = None
         for lower_y, upper_y in zip(levels, levels[1:]):
             middle = (lower_y + upper_y) / 2
-            active = [polygon for polygon, minimum, maximum in polygons if minimum < middle < maximum]
+            active = [(polygon, section) for polygon, minimum, maximum, section in polygons
+                      if minimum < middle < maximum]
             if not active:
                 covered = []
                 break
-            sections = [(_cross_section(polygon, lower_y), _cross_section(polygon, upper_y))
-                        for polygon in active]
+            sections = [(section, section) if section is not None else
+                        (_cross_section(polygon, lower_y), _cross_section(polygon, upper_y))
+                        for polygon, section in active]
             intervals = continuous_strip_intervals((lo, hi) for lo, hi in sections
                                                    if lo is not None and hi is not None)
             covered = intervals if covered is None else _intersect_intervals(covered, intervals)
@@ -260,6 +281,14 @@ def _blocked_rows(region, update):
     tolerance = 1e-9
     first = math.floor(minimum_y + tolerance)
     last = math.ceil(maximum_y - tolerance)
+    section = _axis_aligned_section(polygon, update)
+    if section is not None:
+        # 恒定截面与条带内顶点具有相同 x 范围，保留原障碍取整。
+        left, right = math.floor(section[0] + tolerance), math.ceil(section[1] - tolerance)
+        if left < right:
+            for y in range(first, last):
+                yield y, left, right, int(CellState.BLOCKED)
+        return
     for y in range(first, last):
         lo, hi = max(float(y), minimum_y), min(float(y + 1), maximum_y)
         lower, upper = _cross_section(polygon, lo), _cross_section(polygon, hi)

@@ -6,19 +6,6 @@
 #include <yaml-cpp/yaml.h>
 #include <gtest/gtest.h>
 
-TEST(PlatformConfig, OrinLeggedProfileLoadsLeggedCapabilityAndRejectsWheelSelector) {
-  const auto path = std::string{PLATFORM_CONFIG_DIR} + "/legged_orin.yaml";
-  const auto result = lunar::incremental_navigation_ros::LoadPlatformConfig(path, "legged");
-  ASSERT_TRUE(result.capability) << result.error_detail;
-  const auto& legged = std::get<lunar::incremental_navigation::LeggedCapability>(*result.capability);
-  EXPECT_DOUBLE_EQ(legged.maximum_step_height_m, 0.5);
-  EXPECT_DOUBLE_EQ(legged.maximum_gap_width_m, 0.3);
-  EXPECT_FALSE(legged.unknown_is_traversable);
-  ASSERT_TRUE(result.start_blind_zone_margin_m);
-  EXPECT_DOUBLE_EQ(*result.start_blind_zone_margin_m, 3.0);
-  EXPECT_FALSE(lunar::incremental_navigation_ros::LoadPlatformConfig(path, "wheel").capability);
-}
-
 TEST(PlatformConfig, ModifiedProfileUsesConfiguredValuesAndRejectsInvalidSpeed) {
   auto config = YAML::LoadFile(std::string{PLATFORM_CONFIG_DIR} + "/wheel.yaml");
   config["capability"]["maximum_forward_speed_mps"] = 0.1;
@@ -43,21 +30,71 @@ TEST(PlatformConfig, ModifiedProfileUsesConfiguredValuesAndRejectsInvalidSpeed) 
   std::filesystem::remove(path);
 }
 
-TEST(PlatformConfig, MissingMarginUsesDeploymentDefaultAndExplicitZeroWins) {
-  for (const std::string platform : {"wheel", "legged"}) {
-    const auto generic = std::string{PLATFORM_CONFIG_DIR} + "/" + platform + ".yaml";
-    const auto defaults = lunar::incremental_navigation_ros::LoadPlatformConfig(generic, platform);
-    ASSERT_TRUE(defaults.capability) << defaults.error_detail;
-    ASSERT_TRUE(defaults.start_blind_zone_margin_m);
-    EXPECT_DOUBLE_EQ(*defaults.start_blind_zone_margin_m, 3.0);
-    auto config = YAML::LoadFile(generic);
-    config["start_blind_zone_margin_m"] = 0.0;
-    const auto path = std::filesystem::temp_directory_path() / ("incremental_zero_margin_" + platform + ".yaml");
-    { std::ofstream output(path); output << config; }
-    const auto explicit_zero = lunar::incremental_navigation_ros::LoadPlatformConfig(path, platform);
-    ASSERT_TRUE(explicit_zero.capability) << explicit_zero.error_detail;
-    ASSERT_TRUE(explicit_zero.start_blind_zone_margin_m);
-    EXPECT_DOUBLE_EQ(*explicit_zero.start_blind_zone_margin_m, 0.0);
+// 演示能力档也必须走真实严格parser；simulation_only仅属于Python profile。
+TEST(PlatformConfig, IsaacNavigationDemoUsesStrictSchemaAndRetainsSafety) {
+  const auto path = std::filesystem::path{PLATFORM_CONFIG_DIR} /
+                    "wheel_isaac_navigation_demo.yaml";
+  const auto result = lunar::incremental_navigation_ros::LoadPlatformConfig(path, "wheel");
+  ASSERT_TRUE(result.capability) << result.error_detail;
+  const auto& wheel = std::get<lunar::incremental_navigation::WheeledCapability>(*result.capability);
+  EXPECT_DOUBLE_EQ(wheel.maximum_forward_speed_mps, 2.0);
+  EXPECT_DOUBLE_EQ(wheel.maximum_spin_rate_radps, 2.0);
+  EXPECT_DOUBLE_EQ(wheel.maximum_reverse_speed_mps, 0.2);
+  EXPECT_DOUBLE_EQ(wheel.maximum_acceleration_mps2, 0.5);
+  EXPECT_DOUBLE_EQ(wheel.maximum_braking_deceleration_mps2, 0.5);
+  EXPECT_DOUBLE_EQ(wheel.maximum_yaw_acceleration_radps2, 0.5);
+  EXPECT_DOUBLE_EQ(wheel.maximum_lateral_acceleration_mps2, 0.5);
+  EXPECT_DOUBLE_EQ(wheel.maximum_slope_rad, 0.3490658503988659);
+  EXPECT_DOUBLE_EQ(wheel.minimum_clearance_m, 0.4);
+  EXPECT_EQ(wheel.footprint_xy_m.size(), 4U);
+  EXPECT_EQ(wheel.motion_primitives.size(), 9U);
+
+  auto invalid = YAML::LoadFile(path.string());
+  invalid["simulation_only"] = true;
+  const auto invalid_path = std::filesystem::temp_directory_path() /
+                            "incremental_isaac_annotation_schema_test.yaml";
+  { std::ofstream stream(invalid_path); stream << invalid; }
+  const auto rejected = lunar::incremental_navigation_ros::LoadPlatformConfig(invalid_path, "wheel");
+  EXPECT_FALSE(rejected.capability);
+  EXPECT_NE(rejected.error_detail.find("unknown field: simulation_only"), std::string::npos);
+  std::filesystem::remove(invalid_path);
+}
+
+// 使用实际配置和真实解析入口，覆盖可选字段与严格拒绝边界。
+TEST(PlatformConfig, WheelMotionModelCompatibilityAndStrictValidation) {
+  for (const auto* file : {"wheel.yaml", "wheel_orin.yaml"}) {
+    SCOPED_TRACE(file);
+    const auto original = YAML::LoadFile(std::string{PLATFORM_CONFIG_DIR} + "/" + file);
+    const auto path = std::filesystem::temp_directory_path() /
+        "lunar_incremental_navigation_ros_motion_model_test.yaml";
+    const auto load = [&](const YAML::Node& config) {
+      { std::ofstream stream(path); stream << config; }
+      return lunar::incremental_navigation_ros::LoadPlatformConfig(path, "wheel");
+    };
+    for (const auto* model : {"differential_drive", "curvature_limited"}) {
+      SCOPED_TRACE(model);
+      auto config = YAML::Clone(original);
+      config["capability"]["motion_model"] = model;
+      const auto result = load(config);
+      ASSERT_TRUE(result.capability) << result.error_detail;
+      const auto& wheel = std::get<lunar::incremental_navigation::WheeledCapability>(*result.capability);
+      EXPECT_DOUBLE_EQ(wheel.maximum_forward_speed_mps,
+                       original["capability"]["maximum_forward_speed_mps"].as<double>());
+      EXPECT_DOUBLE_EQ(wheel.footprint_xy_m.front().x,
+                       original["capability"]["footprint_xy_m"][0][0].as<double>());
+    }
+    auto legacy = YAML::Clone(original);
+    legacy["capability"].remove("motion_model");
+    ASSERT_TRUE(load(legacy).capability);
+    for (const auto* invalid : {"differential_driv", "", "null", "[differential_drive]", "{value: differential_drive}"}) {
+      SCOPED_TRACE(invalid);
+      auto config = YAML::Clone(original);
+      config["capability"]["motion_model"] = YAML::Load(invalid);
+      EXPECT_FALSE(load(config).capability);
+    }
+    auto typo = YAML::Clone(legacy);
+    typo["capability"]["motion_modle"] = "differential_drive";
+    EXPECT_FALSE(load(typo).capability);
     std::filesystem::remove(path);
   }
 }

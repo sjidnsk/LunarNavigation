@@ -23,7 +23,6 @@ set(LUNAR_INCREMENTAL_NAVIGATION_PRODUCTION_SOURCES
   src/map/global_guidance_builder.cpp
   src/map/adaptive_navigation_map.cpp
   src/map/persistent_elevation_map.cpp
-  src/map/terrain_observation_estimator.cpp
   src/map/platform_elevation_physics.cpp
   src/map/fine_traversability_builder.cpp
   src/global/global_route_planner.cpp
@@ -37,8 +36,6 @@ set(LUNAR_INCREMENTAL_NAVIGATION_PRODUCTION_SOURCES
   src/session/planning_cycle.cpp
   src/session/rolling_update_policy.cpp
   src/session/planning_session_coordinator.cpp
-  src/session/planning_cycle.cpp
-  src/session/rolling_update_policy.cpp
   src/legged/legged_local_planner.cpp
   src/shared/search_control.cpp
   src/wheel/wheel_local_astar.cpp)
@@ -85,20 +82,6 @@ if(BUILD_TESTING)
     lunar_enable_sanitizers(${target})
   endfunction()
 
-  lunar_add_core_gtest(lunar_incremental_navigation_core_terrain_batch_test test/terrain_batch_test.cpp)
-  lunar_add_core_gtest(lunar_incremental_navigation_core_influence_run_test test/influence_run_test.cpp)
-  target_include_directories(lunar_incremental_navigation_core_influence_run_test PRIVATE src)
-  lunar_add_core_gtest(lunar_incremental_navigation_core_terrain_observation_estimator_test test/terrain_observation_estimator_test.cpp)
-  target_include_directories(lunar_incremental_navigation_core_terrain_observation_estimator_test PRIVATE src)
-  lunar_add_core_gtest(lunar_incremental_navigation_core_terrain_window_test test/terrain_window_test.cpp)
-  lunar_add_core_gtest(
-    lunar_incremental_navigation_core_boundary_distance_index_test
-    test/boundary_distance_index_test.cpp)
-
-  lunar_add_core_gtest(
-    lunar_incremental_navigation_core_local_query_cache_test
-    test/local_query_cache_test.cpp)
-
   lunar_add_core_gtest(lunar_incremental_navigation_core_captured_start_support_regression_test test/captured_start_support_regression_test.cpp)
   lunar_add_core_gtest(lunar_incremental_navigation_core_rolling_update_policy_test test/rolling_update_policy_test.cpp)
   lunar_add_core_gtest(
@@ -110,9 +93,6 @@ if(BUILD_TESTING)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_planning_snapshot_contract_test
     test/planning_snapshot_contract_test.cpp)
-  lunar_add_core_gtest(
-    lunar_incremental_navigation_core_wheel_terrain_basic_test
-    test/wheel_terrain_basic_test.cpp)
   lunar_add_core_gtest(
     lunar_incremental_navigation_core_fine_traversability_builder_test
     test/fine_traversability_builder_test.cpp)

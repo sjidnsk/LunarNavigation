@@ -19,7 +19,7 @@ from .decision import DecisionCore
 from .plant import KinematicPlant, GeometryFailure
 from .processes import OwnedProcesses
 from .stagnation import StagnationMonitor
-from .ros_messages import (InfrastructureError, MeasurementBuffer, RosNavigationAdapter,
+from .ros_messages import (InfrastructureError, MeasurementBuffer,
                            NavigationResult, grid_message, odometry_message, ros_time, velocity_is_stopped)
 
 
@@ -66,14 +66,35 @@ def make_transition(observation,action,next_observation,privileged,next_privileg
 
 
 class RosExplorationEnv:
-    def __init__(self,config,env_id,*,domain_base=210,wall_timeout_s=120.,training=False):
+    def __init__(self,config,env_id,*,domain_base=210,wall_timeout_s=120.,training=False,simulation_step_sync=False,
+                 controller_backend=None,mppi_nominal_response_time_s=None):
         self.config=config;self.env_id=int(env_id)
+        self._navigation_backend=getattr(config,'navigation_backend','incremental_v2')
+        if self._navigation_backend=='nav1cm':
+            if simulation_step_sync:raise ValueError('nav1cm uses the independent command plant clock')
+            if controller_backend not in (None,'mppi_path_follower'):
+                raise ValueError('nav1cm requires mppi_path_follower')
+            if mppi_nominal_response_time_s not in (None,.15):
+                raise ValueError('nav1cm requires nominal response .15')
+            controller_backend='mppi_path_follower';mppi_nominal_response_time_s=.15
+        self._simulation_step_sync=bool(simulation_step_sync)
+        from .evaluation_navigation import validate_evaluation_navigation
+        navigation=validate_evaluation_navigation(dict(
+            controller_backend=controller_backend or ('mppi' if simulation_step_sync else 'pure_pursuit'),
+            simulation_step_sync=simulation_step_sync,
+            mppi_nominal_response_time_s=mppi_nominal_response_time_s))
+        self._controller_backend=navigation['controller_backend']
+        self._mppi_nominal_response_time_s=mppi_nominal_response_time_s
+        self._mppi_compute_ms=[];self._mppi_deadline_events=[]
+        if self._simulation_step_sync and abs(config.integration_step_s-.05)>1e-12:
+            raise ValueError("simulation step synchronization requires the 20Hz 0.05s integration step")
         self.sensor=config.sensor
         self._fixed_sensor=self.sensor
         self._initial_reference_coverage=0.
         self._first_roi=None;self._approach_limits={};self._approach_start_distance=0.
         self._first_entry=None;self._initial_inside_task=False
-        self.namespace=f'/lunar_training/env_{self.env_id}'
+        self.namespace=(f'/lunar_training/nav1cm_{uuid.uuid4().hex[:12]}_env_{self.env_id}'
+            if self._navigation_backend=='nav1cm' else f'/lunar_training/env_{self.env_id}')
         self._requested_domain=None if domain_base is None else domain_base+self.env_id
         self.domain_id=self._requested_domain
         self._domain_lease=None
@@ -105,8 +126,18 @@ class RosExplorationEnv:
               course_two_case=None,task_scope='',outside_distance_max_m=None,
               outside_distance_min_m=None,context_margin_m=12.,sensor=None,scene_profile='',
               cave_generator_version='',mother_graph_id=None,dataset_split='train',
-              cave_split_manifest_hash=None):
+              cave_split_manifest_hash=None,safe_start_radius_m=None):
         self.close()
+        from .scene import validate_safe_start_radius, safe_start_record
+        if safe_start_radius_m is None:safe_start_radius_m=self.config.safe_start_radius_m
+        safe_start_radius_m=validate_safe_start_radius(safe_start_radius_m)
+        if safe_start_radius_m!=self.config.safe_start_radius_m:
+            raise ValueError('safe start radius differs from frozen configuration')
+        if safe_start_radius_m:
+            if course_two_case is not None:
+                raise ValueError('safe start cannot modify a frozen course-two case')
+            if safe_start_radius_m < self.config.platform.footprint_radius_m:
+                raise ValueError('safe start radius must cover the vehicle footprint radius')
         if cave_generator_version and (family!='cave' or task_scope!='whole_cave_v1'
                                       or course_two_case is not None):
             raise ValueError('cave generator identity requires ordinary whole-cave scene')
@@ -165,13 +196,15 @@ class RosExplorationEnv:
             from .course_two_task_scope import build_rehearsal
             terrain,pose,task,descriptor=build_rehearsal(seed,extent,start_mode,self.config.platform,
                 cave_generator_version=cave_generator_version,mother_graph_id=mother_graph_id,
-                dataset_split=dataset_split,cave_split_manifest_hash=cave_split_manifest_hash)
+                dataset_split=dataset_split,cave_split_manifest_hash=cave_split_manifest_hash,
+                safe_start_radius_m=safe_start_radius_m)
             descriptor=dict(descriptor,**extra)
             terrain.generator_descriptor=MappingProxyType(dict(terrain.generator_descriptor,**extra))
             self.episode_budget=int(episode_budget or self.config.curriculum_budgets[0])
             if self.episode_budget<=0:raise ValueError('positive episode budget required')
             return self.reset_scene(terrain,pose,task,descriptor=descriptor,sensor=sensor)
-        scene=Scene(seed,family,extent,platform=self.config.platform,context_margin_m=context_margin_m)
+        scene=Scene(seed,family,extent,platform=self.config.platform,context_margin_m=context_margin_m,
+            safe_start_radius_m=safe_start_radius_m)
         terrain=TerrainGrid.from_scene(scene)
         self.episode_budget=int(episode_budget) if episode_budget is not None else self.config.curriculum_budgets[0 if extent<=80 else 1 if extent<=150 else 2]
         if self.episode_budget<=0:raise ValueError("positive episode budget required")
@@ -184,7 +217,8 @@ class RosExplorationEnv:
         if curriculum_task is not None:
             start_descriptor['curriculum_task']=curriculum_task
         pose=scene.initial_pose(terrain,start_mode=start_mode,outside_distance_max_m=outside_distance_max_m,
-            outside_distance_min_m=outside_distance_min_m)
+            outside_distance_min_m=outside_distance_min_m,safe_start_radius_m=safe_start_radius_m)
+        start_descriptor.update(safe_start_record(terrain,pose,safe_start_radius_m))
         if outside_distance_min_m is not None:
             from .scene import polygon_boundary_distance
             start_descriptor['start_boundary_distance_m']=float(polygon_boundary_distance(pose.x,pose.y,scene.task.polygon))
@@ -197,6 +231,17 @@ class RosExplorationEnv:
     def reset_scene(self,terrain,pose,task,*,descriptor=None,sensor=None):
         """Explicit deterministic fixture entry; identical sensor/navigation path."""
         self.close()
+        from .scene import safe_start_record, validate_safe_start_radius
+        assumption=(descriptor or {}).get('safe_start_region',{})
+        self._safe_start_radius_m=validate_safe_start_radius(assumption.get('navigation_radius_m',0.))
+        if self._safe_start_radius_m!=self.config.safe_start_radius_m:
+            raise ValueError('scene lacks the configured safe start region')
+        if self._safe_start_radius_m:
+            if self._safe_start_radius_m < self.config.platform.footprint_radius_m:
+                raise ValueError('safe start radius must cover the vehicle footprint radius')
+            canonical=safe_start_record(terrain,pose,self._safe_start_radius_m)
+            if assumption!=canonical['safe_start_region']:
+                raise ValueError('safe start certificate differs from actual geometry')
         from .reference import CoverageReference
         from .privileged import build_truth, PrivilegedBuilder
         from .sensor import validate_sensor
@@ -309,6 +354,9 @@ class RosExplorationEnv:
             initial_known_area_m2=self._known_area)
 
     def _start_ros(self):
+        if self._navigation_backend=='nav1cm':
+            from .navigation_backend import validate_nav1cm_platform
+            validate_nav1cm_platform(self.config.platform)
         from .domain_lease import DomainLease
         self._domain_lease=DomainLease.acquire(self._requested_domain)
         self.domain_id=self._domain_lease.domain_id
@@ -335,14 +383,35 @@ class RosExplorationEnv:
         self._tf_pub=self.node.create_publisher(TFMessage,ns+'/tf',10)
         self._map_pub=self.node.create_publisher(GridMap,ns+'/grid',qos)
         self._cmd_sub=self.node.create_subscription(Twist,ns+'/cmd_vel',self._on_command,10)
-        self.adapter=RosNavigationAdapter(self.node,action_name=ns+'/navigate',policy_map_service=ns+'/get_map',
-            odometry_topic=ns+'/odom',diagnostics_topic=ns+'/diagnostics',path_reference_topic=ns+'/reference',tf_topic=ns+'/tf')
+        if self._simulation_step_sync:
+            from std_msgs.msg import String
+            self._mppi_step_condition=threading.Condition()
+            self._mppi_step_ns=None;self._mppi_step_command=None
+            ack_qos=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,
+                               durability=DurabilityPolicy.TRANSIENT_LOCAL)
+            self._mppi_step_sub=self.node.create_subscription(String,ns+'/mppi_step_ack',self._on_mppi_step,ack_qos)
+        if self._controller_backend!='pure_pursuit':
+            from std_msgs.msg import String
+            self._mppi_diagnostics_sub=self.node.create_subscription(
+                String,ns+'/mppi_diagnostics',self._on_mppi_diagnostics,100)
+        from .navigation_backend import create_navigation_adapter
+        self.adapter=create_navigation_adapter(self.node,navigation_backend=self._navigation_backend,action_name=ns+'/navigate',policy_map_service=ns+'/get_map',
+            odometry_topic=ns+'/odom',diagnostics_topic=ns+'/diagnostics',path_reference_topic=ns+'/reference',tf_topic=ns+'/tf',tf_static_topic=ns+'/tf_static',global_route_topic=ns+'/route')
         def spin():
             try:self.executor.spin()
             except Exception as exc:self._spin_error=exc
         self._spin_thread=threading.Thread(target=spin,daemon=True);self._spin_thread.start()
         env=dict(os.environ,ROS_DOMAIN_ID=str(self.domain_id),ROS_AUTOMATIC_DISCOVERY_RANGE='LOCALHOST')
-        common={'platform_config':self.config.platform.capability_path,'use_sim_time':True,
+        if self._navigation_backend=='nav1cm':
+            from .navigation_backend import owned_nav1cm_specs
+            build_dir=str(Path(self.config.artifact_root or self.config.output_dir)/'nav1cm-cache')
+            for package,executable,parameters in owned_nav1cm_specs(ns,
+                    platform_config=self.config.platform.capability_path,build_dir=build_dir,use_sim_time=True,
+                    goal_position_tolerance_m=self.config.goal_position_tolerance_m,
+                    goal_yaw_tolerance_rad=self.config.goal_yaw_tolerance_rad):
+                self.owned.start(package,executable,ns,parameters,dict(env,ROS_LOCALHOST_ONLY='1'))
+            return
+        common={'platform_config':self._runtime_platform_config(),'use_sim_time':True,
                 'goal_position_tolerance_m':self.config.goal_position_tolerance_m,
                 'goal_yaw_tolerance_rad':self.config.goal_yaw_tolerance_rad,
                 'odometry_topic':ns+'/odom','tf_topic':ns+'/tf'}
@@ -355,9 +424,94 @@ class RosExplorationEnv:
             dict(common,input_mode='incremental_reference',path_reference_topic=ns+'/reference',
                 tracking_status_topic=ns+'/tracking',reference_topic=ns+'/wheeled_reference',path_topic=ns+'/path',
                 command_topic=ns+'/cmd_vel',execution_cancel_topic=ns+'/cancel',
-                max_linear_mps=.2,max_angular_radps=1.,control_rate_hz=20.),env)
+                max_linear_mps=.2,max_angular_radps=1.,control_rate_hz=20.,**self._controller_parameters()),env)
+
+    def _runtime_platform_config(self):
+        """Freeze unchanged native settings and check the certified disk covers them."""
+        radius=getattr(self,'_safe_start_radius_m',0.)
+        if not radius:return self.config.platform.capability_path
+        import hashlib
+        from pathlib import Path
+        import yaml
+        source=Path(self.config.platform.capability_path).read_bytes()
+        profile=yaml.safe_load(source)
+        if profile.get('capability')!=dict(self.config.platform.capability):
+            raise ValueError('runtime capability differs from frozen configuration')
+        if hashlib.sha256(source).hexdigest()!=self.config.safe_start_profile_sha256:
+            raise ValueError('runtime profile differs from frozen configuration')
+        # LoadPlatformConfig's native default is 0.2m when the field is absent.
+        patch_radius=self.config.platform.footprint_radius_m+float(profile.get('start_blind_zone_margin_m',.2))
+        if radius < patch_radius:
+            raise ValueError('safe start radius must cover the configured native start patch')
+        content=yaml.safe_dump(profile,sort_keys=True).encode('utf-8')
+        digest=hashlib.sha256(content).hexdigest()
+        folder=Path(self.config.artifact_root or self.config.output_dir)/'safe-start-profiles'
+        folder.mkdir(parents=True,exist_ok=True)
+        path=folder/(digest+'.yaml')
+        # Identical workers may create the same immutable content-addressed file.
+        # Publish atomically so another worker never observes a partial YAML.
+        import tempfile,os
+        with tempfile.NamedTemporaryFile(dir=folder,delete=False) as stream:
+            temporary=Path(stream.name);stream.write(content)
+        try:
+            os.link(temporary,path)
+        except FileExistsError:
+            if path.read_bytes()!=content:raise ValueError('safe start profile identity changed')
+        finally:temporary.unlink()
+        return str(path.resolve())
+
+    def _controller_parameters(self):
+        if self._controller_backend=='pure_pursuit':return {}
+        ns=self.namespace
+        parameters=dict(controller_backend=self._controller_backend,policy_map_service=ns+'/get_map',
+                        mppi_diagnostics_topic=ns+'/mppi_diagnostics')
+        if self._mppi_nominal_response_time_s is not None:
+            parameters['mppi_nominal_response_time_s']=self._mppi_nominal_response_time_s
+        if self._simulation_step_sync:
+            parameters.update(mppi_simulation_step_sync=True,mppi_step_ack_topic=ns+'/mppi_step_ack')
+        return parameters
+
+    def _on_mppi_diagnostics(self,message):
+        try:event=json.loads(message.data)
+        except (ValueError,TypeError):return
+        if not isinstance(event,dict) or event.get('event')!='solve_result':return
+        value=event.get('compute_ms')
+        if type(value) in (int,float) and math.isfinite(value):self._mppi_compute_ms.append(float(value))
+        if event.get('deadline_missed'):self._mppi_deadline_events.append(event)
+
+    def _on_mppi_step(self,msg):
+        import json
+        try:
+            event=json.loads(msg.data);stamp=event.get('now_ns');command=event.get('command')
+            if (event.get('event')!='control_step' or type(stamp) is not int or stamp!=self._sim_ns
+                    or not isinstance(command,list) or len(command)!=2
+                    or not all(isinstance(v,(int,float)) and math.isfinite(v) for v in command)):
+                return
+        except (ValueError,TypeError,AttributeError):return
+        with self._mppi_step_condition:
+            self._mppi_step_ns=stamp;self._mppi_step_command=tuple(command)
+            self._mppi_step_condition.notify_all()
+
+    def _wait_mppi_step(self,republish):
+        deadline=time.monotonic()+min(self.wall_timeout_s,5.)
+        while True:
+            if self._spin_error is not None:raise InfrastructureError(str(self._spin_error))
+            try:self.owned.check()
+            except RuntimeError as exc:raise InfrastructureError(str(exc)) from exc
+            with self._mppi_step_condition:
+                if self._mppi_step_ns==self._sim_ns:
+                    self._command=self._mppi_step_command
+                    self._max_command_speed=max(self._max_command_speed,abs(self._command[0]))
+                    return
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise InfrastructureError('simulation controller step synchronization timeout')
+                self._mppi_step_condition.wait(timeout=min(.02,remaining))
+            # Discovery may miss the first clock/odom/TF. Repeat this frame,
+            # never a physical integration or a sensor observation.
+            republish()
 
     def _on_command(self,msg):
+        if getattr(self,'_simulation_step_sync',False):return
         self._command=(msg.linear.x,msg.angular.z)
         self._max_command_speed=max(self._max_command_speed,abs(msg.linear.x))
         if abs(msg.linear.y)>1e-12: raise InfrastructureError('public controller issued lateral motion')
@@ -382,8 +536,9 @@ class RosExplorationEnv:
         p=self.plant.pose
         self._record_task_entry()
         x,y=self.terrain.world_to_cell(p.x,p.y)
-        self._odom_pub.publish(odometry_message(p,self.plant.linear_mps,self.plant.angular_radps,
-            self._sim_ns,self.terrain.heights[y,x]))
+        odometry=odometry_message(p,self.plant.linear_mps,self.plant.angular_radps,
+            self._sim_ns,self.terrain.heights[y,x])
+        self._odom_pub.publish(odometry)
         tf=TransformStamped();tf.header.stamp=stamp;tf.header.frame_id='map';tf.child_frame_id='odom';tf.transform.rotation.w=1.
         self._tf_pub.publish(TFMessage(transforms=[tf]))
         if self._sim_ns-self._last_sensor_ns>=round(1e9/self.config.observation_hz):
@@ -400,6 +555,12 @@ class RosExplorationEnv:
         if snap is not None:
             self.buffer.acknowledge(self.adapter.processed_stamp_ns)
             self._apply_known(snap)
+        if self._simulation_step_sync:
+            def republish():
+                self._clock_pub.publish(Clock(clock=stamp))
+                self._odom_pub.publish(odometry)
+                self._tf_pub.publish(TFMessage(transforms=[tf]))
+            self._wait_mppi_step(republish)
         self._pace()
 
     def _record_task_entry(self):
@@ -514,39 +675,11 @@ class RosExplorationEnv:
 
     def _prepare_policy_state(self, native, *, snapshot=None):
         """Adapt the Actor graph before computing real-goal Critic descriptors."""
-        started=time.perf_counter()
-        mode=self.config.policy_graph_mode
-        cap=self.config.remote_frontier_positions
-        if self.config.model.architecture_version == 'candidate_geometry_v3':
-            from .candidate_observation import prepare_candidate_observation
-            if snapshot is None:
-                raise ValueError('v5 input requires the frozen build snapshot')
-            result=prepare_candidate_observation(native,snapshot.pose,contract=mode=='a2',
-                max_remote_positions=cap if mode=='a2' else 0,
-                metadata=dict(platform_profile_hash=snapshot.profile_hash,
-                    map_resolution_m=float(snapshot.resolution_m),task_id=self.task.task_id,
-                    sensor_mount=dict(offset_x_m=self.sensor.offset_x_m,
-                        offset_y_m=self.sensor.offset_y_m,offset_yaw_rad=self.sensor.offset_yaw_rad)))
-            policy,fine=result.observation,result.fine_observation
-            diagnostics=result.diagnostics
-            virtual_nodes=int(result.virtual_mask.sum())
-        elif mode=='a2':
-            from .policy_graph import prepare_policy_graph
-            result=prepare_policy_graph(native,max_remote_positions=cap)
-            policy,fine=result.observation,result.fine_observation
-            diagnostics=result.diagnostics
-            virtual_nodes=int(result.virtual_mask.sum())
-        elif mode=='fine':
-            policy=fine=native;diagnostics={};virtual_nodes=0
-        else:
-            raise ValueError('unknown policy graph mode')
-        stats=dict(mode=mode,max_remote_positions=cap,
-            native_nodes=len(native.node_ids),fine_nodes=len(fine.node_ids),
-            coarse_nodes=len(policy.node_ids),native_edges=len(native.edges),
-            fine_edges=len(fine.edges),coarse_edges=len(policy.edges),
-            native_actions=len(native.goals),actions=len(policy.goals),virtual_nodes=virtual_nodes,
-            preparation_wall_s=time.perf_counter()-started)
-        return policy,fine,diagnostics,stats
+        from .policy_preparation import prepare_policy_state
+        return prepare_policy_state(native, snapshot=snapshot,
+            architecture_version=self.config.model.architecture_version,
+            mode=self.config.policy_graph_mode, cap=self.config.remote_frontier_positions,
+            task_id=self.task.task_id, sensor=self.sensor)
 
     @property
     def completed(self):

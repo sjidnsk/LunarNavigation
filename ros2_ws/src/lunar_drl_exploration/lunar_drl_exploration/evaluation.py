@@ -206,7 +206,7 @@ def export_actor(checkpoint, output):
     return str(output)
 
 
-def infer(config, actor_path, *, task_topic='/Car/T4/exploration/task'):
+def infer(config, actor_path, *, task_topic='/Car/T4/exploration/task',navigation_backend='incremental_v2'):
     import time
     import torch
     import rclpy
@@ -216,7 +216,10 @@ def infer(config, actor_path, *, task_topic='/Car/T4/exploration/task'):
     from rclpy.signals import SignalHandlerOptions
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = rclpy.create_node('drl_exploration_inference')
-    runtime = InferenceRuntime.attach(node, policy, sensor=config.sensor, task_topic=task_topic)
+    from .config import GraphConfig
+    runtime = InferenceRuntime.attach(node, policy, sensor=config.sensor, task_topic=task_topic,
+        graph_config=GraphConfig(platform=config.platform),navigation_backend=navigation_backend,
+        policy_graph_mode=config.policy_graph_mode,remote_frontier_positions=config.remote_frontier_positions)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt: pass

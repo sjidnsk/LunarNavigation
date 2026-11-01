@@ -203,8 +203,7 @@ class RequestLocalPlanningView final {
 
   [[nodiscard]] bool CanBeEndpoint(const GridIndex index) const noexcept {
     return geometry_.Contains(index) &&
-           base_->State(index) == FineCellState::kFree &&
-           base_->PlanningElevationRangeAt(index).has_value();
+           base_->State(index) == FineCellState::kFree;
   }
 
   // Certify the entire closed segment, including corner contacts. A prefix
@@ -214,15 +213,19 @@ class RequestLocalPlanningView final {
                                     StartPhase final,
                                     const SearchControl* control = nullptr) const noexcept;
 
+  // Extra execution clearance around the center reference, in addition to
+  // the vehicle inflation already represented by the fine map.
+  [[nodiscard]] bool CertifySegmentWithClearance(
+      Vec3 from, Vec3 to, StartPhase initial, StartPhase final,
+      double margin_m, const SearchControl* control = nullptr) const noexcept;
+
   [[nodiscard]] std::optional<StartPhase> AdvanceGridStep(
       StartPhase phase, GridIndex current, GridIndex next) const noexcept;
 
   [[nodiscard]] bool CanCertifyLeggedSupport(
       const GridIndex index, const bool is_initial_support) const noexcept {
     const LocalCellSource source = Source(index);
-    // Supported inferred ground is usable elevation; confidence contributes to cost.
-    return (source == LocalCellSource::kEvidenceFree &&
-            base_->PlanningElevationRangeAt(index).has_value()) ||
+    return source == LocalCellSource::kEvidenceFree ||
            (is_initial_support &&
             source == LocalCellSource::kStartAssumedFree);
   }

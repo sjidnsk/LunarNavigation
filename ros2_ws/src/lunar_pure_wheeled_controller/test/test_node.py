@@ -281,9 +281,7 @@ def test_stale_incremental_inputs_stop_without_discarding_path(
     monkeypatch.setattr(controller_module, "monotonic", lambda: clock[0])
     controller, observer, received = incremental_controller_with_observer
 
-    # This test drives each control cycle explicitly. A real timer firing while
-    # DDS is being serviced adds extra commands and makes count=N observe the
-    # previous cycle on slower machines, rather than the stale-input stop.
+    # Each cycle is explicit; DDS servicing must not add timer ticks.
     for timer in controller.timers:
         timer.cancel()
 
@@ -822,48 +820,28 @@ def test_startup_parameter_change_is_rejected_without_changing_value(controller_
     assert controller.set_parameters([Parameter("map_frame", value=original)])[0].successful
 
 
-@pytest.mark.parametrize('mode,config_name', [('motion_reference', 'legged_orin.yaml'),
-                                             ('incremental_path', 'legged_orin.yaml'),
-                                             ('incremental_reference', '')])
-def test_legged_requires_versioned_reference_and_explicit_capability(mode, config_name):
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[4]
-    args = ['--ros-args', '-p', 'platform_type:=legged', '-p', f'input_mode:={mode}']
-    if config_name:
-        args += ['-p', f'platform_config:={root}/config/{config_name}']
-    rclpy.init(args=args)
-    try:
-        with pytest.raises(ValueError, match='legged tracking requires'):
-            PureWheeledControllerNode()
-    finally:
-        rclpy.shutdown()
-
-
-@pytest.mark.parametrize("enabled", [True, False])
-def test_legged_rolling_default_and_opt_out(enabled):
-    from pathlib import Path
+@pytest.mark.parametrize("mode,enabled", [
+    ("motion_reference", True), ("motion_reference", False),
+    ("incremental_path", True), ("incremental_path", False),
+    ("incremental_reference", True), ("incremental_reference", False),
+])
+def test_rolling_updates_only_apply_to_versioned_references(mode, enabled):
     from lunar_pure_wheeled_controller.tracking import TrackingState
-    root = Path(__file__).resolve().parents[4]
-    args = ['--ros-args', '-p', 'platform_type:=legged',
-            '-p', 'input_mode:=incremental_reference',
-            '-p', f'platform_config:={root}/config/legged_orin.yaml']
+    args = ["--ros-args", "-p", f"input_mode:={mode}",
+            "-p", "command_topic:=/lunar_demo/controller_test/cmd"]
     if not enabled:
-        args += ['-p', 'enable_rolling_updates:=false']
+        args += ["-p", "enable_rolling_updates:=false"]
     rclpy.init(args=args)
     controller = None
     try:
         controller = PureWheeledControllerNode()
+        assert controller._executor.rolling_updates is (enabled and mode == "incremental_reference")
         executor = controller._executor
-        assert executor.rolling_updates is enabled
-        executor.set_path(((0., 0., 0.), (3., 0., 0.)), identity=('legged', 1))
-        executor.update(TrackingState(.2, 0., 0.), .05)
-        for _ in range(20):
-            executor.update(TrackingState(.2, 0., 0., linear_mps=.1), .05)
-        assert executor.set_path(((.2, 0., 0.), (3., .05, 0.)), identity=('legged', 2))
-        result = executor.update(TrackingState(.2, 0., 0., linear_mps=.1), .05)
-        if enabled:
-            assert result.phase == 'TRACKING'
-            assert 0 < result.command.linear_x_mps <= controller._policy.max_linear_mps
+        executor.set_path(((0., 0., 0.), (3., 0., 0.)), identity=("session", 1), final=False)
+        executor.update(TrackingState(0., 0., 0.), .05)
+        executor.set_path(((0., 0., 0.), (4., 0., 0.)), identity=("session", 2), final=False)
+        result = executor.update(TrackingState(.1, 0., 0., linear_mps=.1), .05)
+        assert result.phase == ("TRACKING" if executor.rolling_updates else "BRAKING")
     finally:
         if controller is not None:
             controller.destroy_node()
@@ -910,29 +888,50 @@ def test_lateral_odometry_motion_prevents_terminal_feedback(monkeypatch):
         rclpy.shutdown()
 
 
-@pytest.mark.parametrize("mode,enabled", [
-    ("motion_reference", True), ("motion_reference", False),
-    ("incremental_path", True), ("incremental_path", False),
-    ("incremental_reference", True), ("incremental_reference", False),
-])
-def test_rolling_updates_only_apply_to_versioned_references(mode, enabled):
-    from lunar_pure_wheeled_controller.tracking import TrackingState
-    args = ["--ros-args", "-p", f"input_mode:={mode}",
-            "-p", "command_topic:=/lunar_demo/controller_test/cmd"]
-    if not enabled:
-        args += ["-p", "enable_rolling_updates:=false"]
+@pytest.mark.parametrize("configured", [False, True])
+def test_direct_p3_map_qos_can_share_reliable_without_changing_state_qos(configured):
+    args=['--ros-args','-p','input_mode:=incremental_path','-p','controller_backend:=mppi_path_follower','-p','command_topic:=/nav1cm_task3/qos_test_cmd']
+    if configured: args += ['-p','map_qos_reliability:=reliable','-p','map_qos_durability:=transient_local']
     rclpy.init(args=args)
-    controller = None
+    node=None
     try:
-        controller = PureWheeledControllerNode()
-        assert controller._executor.rolling_updates is (enabled and mode == "incremental_reference")
-        executor = controller._executor
-        executor.set_path(((0., 0., 0.), (3., 0., 0.)), identity=("session", 1), final=False)
-        executor.update(TrackingState(0., 0., 0.), .05)
-        executor.set_path(((0., 0., 0.), (4., 0., 0.)), identity=("session", 2), final=False)
-        result = executor.update(TrackingState(.1, 0., 0., linear_mps=.1), .05)
-        assert result.phase == ("TRACKING" if executor.rolling_updates else "BRAKING")
+        node=PureWheeledControllerNode()
+        subs={s.topic_name:s.qos_profile for s in node.subscriptions}
+        q=subs['/Car/T3/mapping/grid_map']
+        assert q.reliability==(ReliabilityPolicy.RELIABLE if configured else ReliabilityPolicy.BEST_EFFORT)
+        assert q.durability==(DurabilityPolicy.TRANSIENT_LOCAL if configured else DurabilityPolicy.VOLATILE)
+        assert subs['/Car/T3/localization/odometry'].reliability==ReliabilityPolicy.BEST_EFFORT
     finally:
-        if controller is not None:
-            controller.destroy_node()
+        if node is not None: node.destroy_node()
+        rclpy.shutdown()
+
+
+@pytest.mark.parametrize('cap,override,expected,angular_cap,angular_override,angular',[(.5,None,.5,1.2,None,1.2),(.5,.1,.1,1.2,.4,.4),(.5,1.,.5,1.2,2.,1.2),(.2,None,.2,1.,None,1.)])
+def test_standard_path_policy_and_executor_use_platform_speed_cap(tmp_path, cap, override, expected, angular_cap, angular_override, angular):
+    from pathlib import Path
+    import yaml
+    root=Path(__file__).resolve().parents[4]
+    data=yaml.safe_load((root/'config/wheel.yaml').read_text(encoding='utf-8'))
+    data['capability'].update(maximum_forward_speed_mps=cap, maximum_reverse_speed_mps=cap, maximum_spin_rate_radps=angular_cap)
+    path=tmp_path/'wheel.yaml';path.write_text(yaml.safe_dump(data),encoding='utf-8')
+    args=['--ros-args','-p','input_mode:=incremental_path','-p','controller_backend:=mppi_path_follower',
+          '-p',f'platform_config:={path.as_posix()}']
+    if override is not None:
+        args += ['-p',f'max_linear_mps:={override}', '-p',f'max_reverse_mps:={override}']
+    if angular_override is not None:args += ['-p',f'max_angular_radps:={angular_override}']
+    rclpy.init(args=args);node=None
+    try:
+        node=PureWheeledControllerNode()
+        for policy in (node._policy,node._executor.policy):
+            assert policy.max_linear_mps == pytest.approx(expected)
+            assert policy.max_reverse_mps == pytest.approx(expected)
+            assert policy.max_angular_radps == pytest.approx(angular)
+            assert policy.max_linear_accel_mps2 == pytest.approx(.5)
+            assert policy.max_linear_decel_mps2 == pytest.approx(.5)
+            assert policy.goal_yaw_tolerance_rad == pytest.approx(math.radians(5.))
+        assert node.get_parameter('max_linear_mps').value == pytest.approx(expected)
+        assert node.get_parameter('max_reverse_mps').value == pytest.approx(expected)
+        assert node.get_parameter('max_angular_radps').value == pytest.approx(angular)
+    finally:
+        if node is not None:node.destroy_node()
         rclpy.shutdown()

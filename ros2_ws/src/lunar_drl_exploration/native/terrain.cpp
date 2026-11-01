@@ -10,10 +10,20 @@ class GridView final : public nav::ElevationRangeView {
   GridView(float* h, float* s, int w, int height, double r, double ox,
            double oy)
       : heights(h), stats(s), width(w) {
-    // 与持久地图一致保留全部输入边界；NaN边框仍是UNKNOWN，但已观测障碍
-    // 必须能向边框内做足迹膨胀，不能因有限观测的包围盒裁剪而消失。
-    geometry_ = nav::SparseGridGeometry("map", r, {ox, oy, 0}, {0, 0},
-                                        {w, height});
+    // PersistentElevationMap bounds expand only around finite centers. A
+    // requested buffer's NaN padding does not enlarge the producer geometry.
+    int minx = w, miny = height, maxx = 0, maxy = 0;
+    for (int y = 0; y < height; ++y)
+      for (int x = 0; x < w; ++x)
+        if (std::isfinite(h[static_cast<std::size_t>(y) * w + x])) {
+          minx = std::min(minx, x);
+          miny = std::min(miny, y);
+          maxx = std::max(maxx, x + 1);
+          maxy = std::max(maxy, y + 1);
+        }
+    if (minx == w) minx = miny = maxx = maxy = 0;
+    geometry_ = nav::SparseGridGeometry("map", r, {ox, oy, 0}, {minx, miny},
+                                        {maxx, maxy});
   }
   const nav::SparseGridGeometry& geometry() const noexcept override {
     return geometry_;

@@ -31,6 +31,7 @@ enum class CycleTrigger : std::uint8_t {
   kSegmentEnd,
   kFinalPoseLost,
   kDeviation,
+  kExecutionRejected,
 };
 
 enum class CancelReason : std::uint8_t {

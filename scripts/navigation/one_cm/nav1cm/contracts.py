@@ -44,6 +44,14 @@ class CertificationReason(str, Enum):
     BRAKING_LIMIT = "BRAKING_LIMIT"
 
 
+def circumscribed_radius(body_length_m, body_width_m, minimum_clearance_m=0.0):
+    """任意朝向车体外接圆加一次几何净空；不包含离散/执行数值余量。"""
+    length,width,clearance=map(float,(body_length_m,body_width_m,minimum_clearance_m))
+    if not all(np.isfinite((length,width,clearance))) or min(length,width)<=0 or clearance<0:
+        raise ValueError('body dimensions must be positive and clearance nonnegative')
+    return float(np.hypot(length,width)/2+clearance)
+
+
 @dataclass(frozen=True)
 class WheelLimits:
     body_length_m: float = 1.182
@@ -54,17 +62,21 @@ class WheelLimits:
     angular_accel_rps2: float = 0.5
     curvature_inv_m: float = 1.0
     minimum_clearance_m: float = 0.0
+    motion_model: str = "curvature_limited"
 
     def __post_init__(self):
-        values = tuple(vars(self).values())
+        if self.motion_model not in ("differential_drive", "curvature_limited"):
+            raise ValueError("unknown wheel motion_model")
+        numeric = {name: value for name, value in vars(self).items() if name != "motion_model"}
+        values = tuple(numeric.values())
         if (not all(np.isfinite(values)) or self.minimum_clearance_m < 0 or
-                any(value <= 0 for name,value in vars(self).items() if name != "minimum_clearance_m")):
+                any(value <= 0 for name,value in numeric.items() if name != "minimum_clearance_m")):
             raise ValueError("wheel limits must be finite and positive")
 
     def global_clearance_radius(self, requested=None):
         # 零净空纯原型保留显式半车宽参考；生产非零净空采用任意yaw外接圆下限。
         base = self.body_width_m / 2
-        required = (np.hypot(self.body_length_m,self.body_width_m)/2 + self.minimum_clearance_m
+        required = (circumscribed_radius(self.body_length_m,self.body_width_m,self.minimum_clearance_m)
                     if self.minimum_clearance_m > 0 else base)
         radius = required if requested is None else float(requested)
         if not np.isfinite(radius) or radius < base:
@@ -78,7 +90,7 @@ class WheelLimits:
             self.angular_speed_rps, self.linear_accel_mps2,
             self.angular_accel_rps2, self.curvature_inv_m, self.minimum_clearance_m,
         ), dtype="<f8")
-        return hashlib.sha256(b"WheelLimits-v3-euclidean-clearance" + values.tobytes()).hexdigest()
+        return hashlib.sha256(b"WheelLimits-v4-motion-model:" + self.motion_model.encode("ascii") + b":" + values.tobytes()).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -267,11 +279,20 @@ class Certification:
     trajectory_digest: str = ""
     grid_digest: str = ""
     limits_digest: str = ""
+    # False只证明轨迹本体，不包含末端停车保障，不能满足默认完整认证消费端。
+    braking_tail_checked: bool = True
+
+    def __post_init__(self):
+        if type(self.braking_tail_checked) is not bool:
+            raise TypeError('braking_tail_checked must be bool')
 
     def matches(self, trajectory: Trajectory, grid: GridSnapshot,
-                limits: WheelLimits, route_version: int) -> bool:
-        """唯一可复用门禁：成功状态与轨迹、完整地图、约束均须完全相同。"""
+                limits: WheelLimits, route_version: int, *, check_braking_tail: bool = True) -> bool:
+        """绑定轨迹/地图/约束；默认还要求停车尾，False不承诺末端停车。"""
+        if type(check_braking_tail) is not bool:
+            raise TypeError('check_braking_tail must be bool')
         return bool(self.valid and self.reason == CertificationReason.VALID and
+                    (not check_braking_tail or self.braking_tail_checked) and
                     self.map_epoch == grid.epoch and self.route_version == route_version and
                     self.trajectory_digest == trajectory.digest() and
                     self.grid_digest == grid.digest() and

@@ -20,8 +20,14 @@ namespace {
 
 void RequireExactKeys(
     const YAML::Node& node,
-    const std::initializer_list<std::string_view> expected_keys) {
-  if (!node.IsMap() || node.size() != expected_keys.size()) {
+    const std::initializer_list<std::string_view> expected_keys,
+    const std::initializer_list<std::string_view> optional_keys = {}) {
+  if (!node.IsMap()) InvalidConfig();
+  std::size_t optional_count = 0U;
+  for (const auto key : optional_keys) {
+    if (node[std::string{key}]) ++optional_count;
+  }
+  if (node.size() != expected_keys.size() + optional_count) {
     InvalidConfig();
   }
 
@@ -37,6 +43,9 @@ void RequireExactKeys(
         expected = true;
         break;
       }
+    }
+    for (const auto candidate : optional_keys) {
+      if (key == candidate) expected = true;
     }
     if (!expected || !seen.insert(key).second) {
       InvalidConfig();
@@ -78,23 +87,11 @@ double RequireFiniteDouble(const YAML::Node& node,
   return result;
 }
 
-// Navigation and exploration share deployment capability files. This optional
-// navigation-only field is validated here but never changes exploration geometry.
-void RequirePlatformRoot(const YAML::Node& root) {
-  if (root["start_blind_zone_margin_m"]) {
-    RequireExactKeys(root, {"platform", "platform_id", "platform_type",
-                            "capability_version", "base_frame_id", "capability",
-                            "start_blind_zone_margin_m"});
-    if (RequireFiniteDouble(root, "start_blind_zone_margin_m") < 0.0) InvalidConfig();
-  } else {
-    RequireExactKeys(root, {"platform", "platform_id", "platform_type",
-                            "capability_version", "base_frame_id", "capability"});
-  }
-}
-
 lunar::pure_exploration::PlatformGeometry ParseWheel(
     const YAML::Node& root) {
-  RequirePlatformRoot(root);
+  RequireExactKeys(root, {"platform", "platform_id", "platform_type",
+                          "capability_version", "base_frame_id",
+                          "capability"});
 
   if (RequireNonemptyString(root, "platform") != "wheel" ||
       RequireNonemptyString(root, "platform_type") != "WHEELED" ||
@@ -117,7 +114,15 @@ lunar::pure_exploration::PlatformGeometry ParseWheel(
        "maximum_braking_deceleration_mps2",
        "maximum_yaw_acceleration_radps2",
        "maximum_lateral_acceleration_mps2", "maximum_curvature_per_m",
-       "maximum_slope_rad", "minimum_clearance_m", "motion_primitives"});
+       "maximum_slope_rad", "minimum_clearance_m", "motion_primitives"},
+      {"motion_model"});
+  // 探索只消费原 footprint/净空，标签不改变几何或规划行为。
+  if (capability["motion_model"]) {
+    const auto model = RequireNonemptyString(capability, "motion_model");
+    if (model != "differential_drive" && model != "curvature_limited") {
+      InvalidConfig();
+    }
+  }
 
   const YAML::Node footprint = Require(capability, "footprint_xy_m");
   if (!footprint.IsSequence() || footprint.size() < 3U) {
@@ -155,7 +160,9 @@ lunar::pure_exploration::PlatformGeometry ParseWheel(
 
 lunar::pure_exploration::PlatformGeometry ParseLegged(
     const YAML::Node& root) {
-  RequirePlatformRoot(root);
+  RequireExactKeys(root, {"platform", "platform_id", "platform_type",
+                          "capability_version", "base_frame_id",
+                          "capability"});
 
   if (RequireNonemptyString(root, "platform") != "legged" ||
       RequireNonemptyString(root, "platform_type") != "LEGGED" ||

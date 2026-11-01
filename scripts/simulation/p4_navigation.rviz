@@ -1,0 +1,171 @@
+Panels:
+- Class: rviz_common/Displays
+  Name: Displays
+- Class: lunar_navigation_rviz/ExplorationPanel
+  Name: 导航与探索
+  Task Topic Key: task_topic
+  Status Topic Key: status_topic
+  Boundary Topic Key: boundary_draft
+Visualization Manager:
+  Class: ''
+  Global Options:
+    Background Color: 24; 27; 32
+    Fixed Frame: map
+    Frame Rate: 5
+  Displays:
+  - Class: rviz_default_plugins/Grid
+    Name: Ground grid
+    Enabled: true
+    Cell Size: 1.0
+    Plane Cell Count: 100
+  - Class: rviz_default_plugins/Odometry
+    Name: P3 odometry
+    Enabled: true
+    Topic Key: odometry_topic
+    Topic:
+      Reliability Policy: Best Effort
+      Durability Policy: Volatile
+      Depth: 1
+    Keep: 20
+  - Class: rviz_default_plugins/TF
+    Name: TF
+    Enabled: true
+    Show Names: true
+    Show Axes: true
+    Show Arrows: true
+    Frame Timeout: 10.0
+  - Class: rviz_default_plugins/Map
+    Name: P4 exploration grid
+    Enabled: true
+    Topic Key: exploration_map_topic
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+    Alpha: 0.35
+  - Class: rviz_default_plugins/Path
+    Name: P4 raw global route (diagnostic)
+    Enabled: false
+    Topic Key: global_route_topic
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      Depth: 1
+    Color: 150; 150; 150
+    Line Style: Billboards
+    Line Width: 0.07
+  - Class: rviz_default_plugins/Path
+    Name: P4 certified local path
+    Enabled: true
+    Topic Key: local_path_topic
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      Depth: 1
+    Color: 255; 210; 0
+    Line Style: Billboards
+    Line Width: 0.1
+  - Class: rviz_default_plugins/Path
+    Name: P4 smoothed global reference
+    Enabled: true
+    Topic Key: global_reference_topic
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      Depth: 1
+    Color: 0; 220; 255
+    Line Style: Billboards
+    Line Width: 0.07
+  - Class: rviz_default_plugins/Marker
+    Name: Start from P3 (waiting if absent)
+    Enabled: true
+    Topic Key: start_marker
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/Marker
+    Name: Selected goal (not arrival)
+    Enabled: true
+    Topic Key: goal_marker
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/Path
+    Name: Actual P3 observations
+    Enabled: true
+    Topic Key: actual_path
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+    Color: 190; 80; 255
+    Line Style: Billboards
+    Line Width: 0.08
+  - Class: rviz_default_plugins/Marker
+    Name: Editing exploration region
+    Enabled: true
+    Topic Key: boundary_draft
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/MarkerArray
+    Name: Active exploration boundary
+    Enabled: true
+    Topic Key: task_boundary_topic
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/MarkerArray
+    Name: Exploration task map
+    Enabled: true
+    Topic Key: task_map_markers_topic
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/MarkerArray
+    Name: Exploration frontiers
+    Enabled: true
+    Topic Key: frontiers_topic
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Transient Local
+      Depth: 1
+  - Class: rviz_default_plugins/Pose
+    Name: Current exploration goal
+    Enabled: true
+    Topic Key: current_goal_topic
+    Topic:
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      Depth: 1
+  Tools:
+  - Class: rviz_default_plugins/Interact
+  - Class: lunar_navigation_rviz/BoundaryTool
+  - Class: rviz_default_plugins/MoveCamera
+  - Class: rviz_default_plugins/Select
+  - Class: rviz_default_plugins/Measure
+  - Class: rviz_default_plugins/SetGoal
+    Topic Key: goal_topic
+    Topic: ''
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 25.0
+      Pitch: 1.1
+      Yaw: 0.8
+      Target Frame: base_link
+      Focal Point:
+        X: 0.0
+        Y: 0.0
+        Z: 0.0
+Window Geometry:
+  Width: 1580
+  Height: 960
+  X: 30
+  Y: 30

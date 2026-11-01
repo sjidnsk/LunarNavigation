@@ -3,7 +3,7 @@ set -eo pipefail
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 build_scope="${1:-runtime}"
 case "$build_scope" in
-  runtime) packages=(lunar_incremental_navigation_ros lunar_pure_exploration_ros lunar_pure_wheeled_controller lunar_nav1cm_planner) ;;
+  runtime) packages=(lunar_incremental_navigation_ros lunar_pure_exploration_ros lunar_pure_wheeled_controller lunar_nav1cm_planner lunar_navigation_rviz) ;;
   demos) packages=(lunar_integrated_exploration_demo) ;;
   *) echo "用法：bash scripts/orin/build.sh [runtime|demos]" >&2; exit 2 ;;
 esac

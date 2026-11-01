@@ -373,3 +373,64 @@ def test_stagnation_uses_executed_xy_even_when_requested_targets_keep_changing(m
     for action in [actions[0],actions[1],actions[0]]: assert not env.step(action).truncated
     assert env.step(actions[1]).truncated
     assert env.progress()['stagnation_position_count']==1
+
+
+def synchronized_env():
+    import threading
+    from types import SimpleNamespace
+    from lunar_drl_exploration.ros_env import RosExplorationEnv
+    env=object.__new__(RosExplorationEnv)
+    env._simulation_step_sync=True;env._sim_ns=50_000_000
+    env._mppi_step_condition=threading.Condition();env._mppi_step_ns=None;env._mppi_step_command=None
+    env._spin_error=None;env._cancel=threading.Event();env.wall_timeout_s=.1
+    env.owned=SimpleNamespace(check=lambda:None);env._command=(.2,0.);env._max_command_speed=0.
+    return env
+
+
+def test_sync_does_not_accept_a_wrong_stamp_or_nonfinite_command():
+    from types import SimpleNamespace
+    import json
+    env=synchronized_env()
+    for stamp,command in [(0,[0.,0.]),(100_000_000,[0.,0.]),(50_000_000,[float('nan'),0.])]:
+        env._on_mppi_step(SimpleNamespace(data=json.dumps(dict(event='control_step',now_ns=stamp,command=command))))
+        assert env._mppi_step_ns is None
+
+
+def test_sync_wait_republishes_same_frame_without_advancing_physical_time():
+    from types import SimpleNamespace
+    import json
+    env=synchronized_env();frames=[]
+    def repeat():
+        frames.append(env._sim_ns)
+        env._on_mppi_step(SimpleNamespace(data=json.dumps(dict(event='control_step',now_ns=env._sim_ns,command=[.05,-.01]))))
+    env._wait_mppi_step(repeat)
+    assert frames==[50_000_000] and env._sim_ns==50_000_000
+    assert env._command==(.05,-.01) and env._max_command_speed==.05
+    env._on_command(SimpleNamespace(linear=SimpleNamespace(x=-.2,y=0.),angular=SimpleNamespace(z=.5)))
+    assert env._command==(.05,-.01)  # Delayed untagged Twist cannot overwrite the acknowledged command.
+
+
+def test_sync_wait_times_out_without_creating_a_fake_ack():
+    from lunar_drl_exploration.ros_env import InfrastructureError
+    env=synchronized_env();env.wall_timeout_s=.01
+    with pytest.raises(InfrastructureError,match='controller step'):env._wait_mppi_step(lambda:None)
+    assert env._command==(.2,0.) and env._sim_ns==50_000_000
+
+
+def test_sync_requires_the_control_period_as_physical_step():
+    from dataclasses import replace
+    from lunar_drl_exploration.config import TrainingConfig
+    from lunar_drl_exploration.ros_env import RosExplorationEnv
+    with pytest.raises(ValueError,match='0.05s'):
+        RosExplorationEnv(replace(TrainingConfig(),integration_step_s=.025),0,simulation_step_sync=True)
+
+
+
+def test_sync_cancel_preserves_the_outer_native_cancel_and_stop_wait():
+    from types import SimpleNamespace
+    import json
+    env=synchronized_env();env._cancel.set()
+    def stopped():
+        env._on_mppi_step(SimpleNamespace(data=json.dumps(dict(event='control_step',now_ns=env._sim_ns,command=[0.,0.]))))
+    env._wait_mppi_step(stopped)
+    assert env._command==(0.,0.)

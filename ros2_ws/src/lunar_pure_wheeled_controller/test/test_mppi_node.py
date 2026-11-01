@@ -323,7 +323,7 @@ def test_standard_path_backend_startup_and_volatile_qos():
         qos=subscriptions[0].qos_profile
         assert qos.depth==1 and qos.durability==DurabilityPolicy.VOLATILE
         assert qos.reliability==ReliabilityPolicy.RELIABLE
-        assert node.get_parameter('path_timeout_s').value==.35
+        assert not node.has_parameter('path_timeout_s')
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()
@@ -347,18 +347,50 @@ def test_standard_path_receipt_liveness_and_empty_stop_preserve_history(monkeypa
         clock[0]=11.;path.header.stamp.sec=2;node._on_path(path)
         assert node._path_received_at==11. and len(node._executor._command_history)==1
         from nav_msgs.msg import Odometry
-        odom=Odometry();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.
+        odom=Odometry();odom.header.stamp=node.get_clock().now().to_msg();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.
         node._on_odometry(odom)
+        from test_standard_path_follower import follower
+        node._executor.set_map(follower().map)
+        monkeypatch.setattr(node,'_publish_twist',lambda *a:None)
         monkeypatch.setattr(node,'_standard_grid',lambda state:node._executor.map)
         monkeypatch.setattr(node,'_standard_unavailable',lambda reason:None)
         clock[0]=11.36;node._tick()
-        assert node._executor._stop_reason=='STALE_PATH'
+        assert node._executor._stop_reason is None
         assert node._executor._last_command[0]==.2
         node._on_path(path)
         assert node._executor._stop_reason is None
         node._on_path(Path())
         assert node._active is not None and len(node._executor._command_history)==1
         assert node._executor._last_command[0]==.2
+    finally:
+        if node is not None:node.destroy_node()
+        rclpy.shutdown()
+
+
+@pytest.mark.parametrize('timeout,old_map_valid',[(0.,True),(3.,False)])
+def test_direct_p3_node_static_map_age_policy_keeps_missing_map_gate(monkeypatch,timeout,old_map_valid):
+    from types import SimpleNamespace as S
+    from lunar_pure_wheeled_controller import node as module
+    rclpy.init(args=['--ros-args','-p','controller_backend:=mppi_path_follower',
+        '-p','input_mode:=incremental_path','-p',f'p3_map_timeout_s:={timeout}'])
+    node=None
+    try:
+        node=PureWheeledControllerNode()
+        monkeypatch.setattr(module,'monotonic',lambda:10000.)
+        grid=object()
+        receipt=[S(received_at=1.,grid=grid)]
+        # 保留真实节点worker生命周期；仅替换外部快照输入。
+        monkeypatch.setattr(node._p3_source,'snapshot',lambda:receipt[0])
+        assert (node._standard_grid(None) is grid)==old_map_valid
+        receipt[0]=None
+        assert node._standard_grid(None) is None
+        receipt[0]=S(received_at=None,grid=grid)
+        assert node._standard_grid(None) is None
+        receipt[0]=S(received_at=9999.,grid=grid)
+        assert node._standard_grid(None) is grid
+        assert node._input_is_stale(1.,.5) is True
+        assert node._input_is_stale(None,.5) is True
+        assert node._input_is_stale(9999.9,.5) is False
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()

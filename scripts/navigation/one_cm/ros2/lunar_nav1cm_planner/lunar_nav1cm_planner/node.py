@@ -1,11 +1,12 @@
-"""P3 GridMap/Odometry/TF/PoseStamped → 两条标准 nav_msgs/Path。"""
+"""P3 GridMap/Odometry/TF/PoseStamped → 原始路线、几何参考和局部轨迹三条标准 nav_msgs/Path。"""
 from dataclasses import fields
+import json
 import math
 import os
 from pathlib import Path
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 from grid_map_msgs.msg import GridMap
 from nav_msgs.msg import Odometry, Path as PathMessage
 import rclpy
@@ -16,6 +17,7 @@ from tf2_msgs.msg import TFMessage
 
 from nav1cm.async_coordinator import AsyncNavigationCoordinator
 from rclpy.parameter import Parameter
+from rcl_interfaces.msg import ParameterDescriptor
 from nav1cm.contracts import WheelLimits
 from nav1cm.field_native import NativeDistanceField
 from nav1cm.geometry_native import NativeGeometry
@@ -25,6 +27,17 @@ from nav1cm.ros_conversion import frame_name
 
 from .configuration import load_configuration
 from .runtime import PlannerRuntime
+
+
+STARTUP_PARAMETER_DESCRIPTION = '仅启动时读取；修改启动参数后重启节点 (restart required).'
+
+def map_input_qos(reliability, durability):
+    """地图独立QoS；位姿/TF继续使用原配置。"""
+    reliabilities = {"best_effort": ReliabilityPolicy.BEST_EFFORT, "reliable": ReliabilityPolicy.RELIABLE}
+    durabilities = {"volatile": DurabilityPolicy.VOLATILE, "transient_local": DurabilityPolicy.TRANSIENT_LOCAL}
+    if reliability not in reliabilities or durability not in durabilities:
+        raise ValueError("invalid map input QoS")
+    return QoSProfile(depth=1, reliability=reliabilities[reliability], durability=durabilities[durability])
 
 
 def create_resources(limits, capability, settings):
@@ -37,15 +50,22 @@ def create_resources(limits, capability, settings):
             backend=NativeGeometry(prefix / 'lib/libnav1cm_geometry.so'),
             field_backend=NativeDistanceField(prefix / 'lib/libnav1cm_distance_field.so'),
             allow_unknown=settings['allow_unknown'],
+            initial_travel_direction=settings.get('initial_travel_direction',''),
             planning_period_s=settings['planning_period_s'], execution_period_s=settings['execution_period_s'],
             global_period_s=settings['global_period_s'], global_budget_s=settings['global_budget_s'],
             clearance_radius_m=settings['clearance_radius_m'], revalidate_current_map=True,
+            reference_smoothing=settings['smooth_global_reference'],
             planner_options={'n': settings['horizon_steps'], 'dt': settings['horizon_dt_s']})
     except Exception:
         terrain._terrain.close()
         raise
-    for key in ('goal_tolerance_m', 'goal_yaw_tolerance_rad', 'stopped_linear_mps', 'stopped_angular_rps'):
-        value = float(settings[key])
+    for key in ('goal_tolerance_m', 'goal_yaw_tolerance_rad', 'stopped_linear_mps', 'stopped_angular_rps', 'goal_position_target_m'):
+        try:
+            value = float(settings.get(key,coordinator.goal_tolerance_m) if key=='goal_position_target_m' else settings[key])
+        except (TypeError,ValueError) as exc:
+            coordinator.close()
+            terrain._terrain.close()
+            raise ValueError(f'{key} must be finite and positive') from exc
         if not math.isfinite(value) or value <= 0:
             coordinator.close()
             terrain._terrain.close()
@@ -79,45 +99,100 @@ class PlannerNode(Node):
         limits, capability = load_configuration(capability_file, overrides)
         defaults = {
             'map_frame': 'map', 'build_dir': os.environ.get('NAV1CM_BUILD_DIR', ''),
-            'allow_unknown': False, 'planning_period_s': .1, 'execution_period_s': .05,
-            'global_period_s': 1., 'global_budget_s': 1., 'clearance_radius_m': limits.global_clearance_radius(.9),
+            'allow_unknown': False, 'smooth_global_reference': True, 'initial_travel_direction': '', 'planning_period_s': .1, 'execution_period_s': .05,
+            'global_period_s': 15., 'global_budget_s': 1., 'clearance_radius_m': limits.global_clearance_radius(.9),
             'horizon_steps': 20, 'horizon_dt_s': .2,
-            'goal_tolerance_m': .1, 'goal_yaw_tolerance_rad': .05,
+            'goal_tolerance_m': .1, 'goal_position_target_m': .02, 'goal_yaw_tolerance_rad': .08726646259971647,
             'stopped_linear_mps': .01, 'stopped_angular_rps': .01,
             'map_topic': '/Car/T3/mapping/grid_map',
+            'map_qos_reliability': 'best_effort', 'map_qos_durability': 'volatile',
             'odometry_topic': '/Car/T3/localization/odometry',
             'goal_topic': '/Car/T4/navigation/goal',
             'tf_topic': '/tf', 'tf_static_topic': '/tf_static',
-            'global_route_topic': '/Car/T4/planning/global_route',
+            'global_route_topic': '/Car/T4/planning/global_route', 'global_reference_topic': '',
             'local_path_topic': '/Car/T4/planning/local_path',
+            'control_backend':'path_mppi', 'enable_controller':False, 'command_hold_s':0., 'command_spin_prepare_s':0.,
+            'command_topic':'/Car/T4/control/cmd_vel',
+            'execution_contract_enabled':False,'execution_feedback_timeout_s':2.,
+            'odometry_timeout_s':.5,
+            'execution_reference_topic':'/Car/T4/control/path_execution_reference',
+            'tracking_status_topic':'/Car/T4/control/tracking_status',
         }
-        settings = {name: self.declare_parameter(name, default).value for name, default in defaults.items()}
+        settings={name:self.declare_parameter(name,default).value for name,default in defaults.items()}
+        if settings['control_backend'] not in ('path_mppi','mpcc_cmd_vel'):
+            raise ValueError('invalid control_backend')
+        if settings['control_backend']=='mpcc_cmd_vel' and settings['enable_controller']:
+            hold=settings['command_hold_s']
+            if isinstance(hold,bool) or not math.isfinite(hold) or hold<=0:
+                raise ValueError('command_hold_s must be explicitly finite and positive')
+        if not settings['global_reference_topic']:
+            settings['global_reference_topic']=settings['global_route_topic']+'_reference'
+            self.set_parameters([Parameter('global_reference_topic',value=settings['global_reference_topic'])])
+        topics={self.resolve_topic_name(settings[key]) for key in
+                ('global_route_topic','global_reference_topic','local_path_topic')}
+        if len(topics)!=3:
+            raise ValueError('global reference, raw route and local path topics must be distinct')
         settings['clearance_radius_m']=limits.global_clearance_radius(settings['clearance_radius_m'])
-        self.set_parameters([Parameter('minimum_clearance_m',value=limits.minimum_clearance_m),
-                             Parameter('clearance_radius_m',value=settings['clearance_radius_m'])])
+        # 先保留启动覆盖并回写收敛后的净空，再冻结；不得冻结ROS自身有更新路径的use_sim_time。
+        result=self.set_parameters_atomically([
+            Parameter('minimum_clearance_m',value=limits.minimum_clearance_m),
+            Parameter('clearance_radius_m',value=settings['clearance_radius_m'])])
+        if not result.successful:
+            raise ValueError(f'启动参数回写失败: {result.reason}')
+        startup_names=('wheel_config',*overrides,*defaults)
+        for name in startup_names:
+            self.set_descriptor(name,ParameterDescriptor(type=self.describe_parameter(name).type,
+                read_only=True,description=STARTUP_PARAMETER_DESCRIPTION))
         if not settings['build_dir']:
             raise ValueError('build_dir 必须显式指定仓库外 acados 构建/缓存目录，或设置 NAV1CM_BUILD_DIR')
+        source_qos = map_input_qos(settings['map_qos_reliability'], settings['map_qos_durability'])
         factory = create_resources if resource_factory is None else resource_factory
         session, store = factory(limits, capability, settings)
         self._global_publisher = self.create_publisher(PathMessage, settings['global_route_topic'], 1)
+        self._reference_publisher = self.create_publisher(PathMessage, settings['global_reference_topic'], 1)
         self._local_publisher = self.create_publisher(PathMessage, settings['local_path_topic'], 1)
         self.runtime = PlannerRuntime(session, store, publish=self._publish,
                                       ros_now_ns=lambda: self.get_clock().now().nanoseconds,
                                       notice=lambda kind, detail: self.get_logger().info(f'{kind}: {detail}'),
                                       map_frame=frame_name(settings['map_frame']) or 'map')
+        direct=settings['control_backend']=='mpcc_cmd_vel' and settings['enable_controller']
+        if direct:
+            self._command_publisher=self.create_publisher(Twist,settings['command_topic'],1)
+            self.runtime.configure_direct_control(self._publish_command,command_hold_s=float(settings['command_hold_s']),
+                reference_interval_s=float(settings['horizon_dt_s']),
+                command_spin_prepare_s=float(settings['command_spin_prepare_s']))
+        self.runtime.configure_pose_input(float(settings['odometry_timeout_s']))
         latest = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                             durability=DurabilityPolicy.VOLATILE)
         dynamic_tf = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
                                 durability=DurabilityPolicy.VOLATILE)
-        static_tf = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+        # 晚加入需保留同一发布端分批发送的多条静态边，不能只留最后一帧。
+        static_tf = QoSProfile(depth=100, reliability=ReliabilityPolicy.RELIABLE,
                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.create_subscription(GridMap, settings['map_topic'], self.runtime.offer_map, latest)
+        self.create_subscription(GridMap, settings['map_topic'], self.runtime.offer_map, source_qos)
         self.create_subscription(Odometry, settings['odometry_topic'], self.runtime.offer_odometry, latest)
         self.create_subscription(PoseStamped, settings['goal_topic'], self.runtime.offer_goal, 10)
         self.create_subscription(TFMessage, settings['tf_topic'], self._tf_input, dynamic_tf)
         self.create_subscription(TFMessage, settings['tf_static_topic'], self._tf_input, static_tf)
         self.get_logger().info(f'wheel={capability_file}; limits={limits}; local=0.01m/500x500; build={settings["build_dir"]}')
+        self.get_logger().info('startup_parameters (read-only; restart required): '+json.dumps(
+            {name:self.get_parameter(name).value for name in startup_names},ensure_ascii=False,sort_keys=True))
+        self._execution_contract_enabled=settings['execution_contract_enabled'] and settings['control_backend']=='path_mppi'
+        self._execution_revision=0
+        if self._execution_contract_enabled:
+            from lunar_planning_msgs.msg import PathExecutionReference,TrackingStatus
+            timeout=float(settings['execution_feedback_timeout_s'])
+            self._execution_feedback_timeout_s=timeout
+            self.runtime.enable_execution_contract(timeout)
+            self._execution_publisher=self.create_publisher(PathExecutionReference,settings['execution_reference_topic'],10)
+            self.create_subscription(TrackingStatus,settings['tracking_status_topic'],self._on_execution_status,10)
         self.runtime.start()
+
+    def _publish_command(self, v, w):
+        message=Twist()
+        message.linear.x=float(v)
+        message.angular.z=float(w)
+        self._command_publisher.publish(message)
 
     def _tf_input(self, message):
         try:
@@ -125,9 +200,32 @@ class PlannerNode(Node):
         except (ValueError, AttributeError, TypeError) as exc:
             self.get_logger().warning(f'TF_REJECTED: {exc}')
 
+    def _on_execution_status(self,message):
+        from nav1cm.execution_ros import status_from_message
+        try:
+            status=status_from_message(message)
+            now=self.get_clock().now().nanoseconds
+            if message.header.frame_id!=self.runtime.map_frame or status.stamp_ns>now or now-status.stamp_ns>self._execution_feedback_timeout_s*1e9:return
+            self.runtime.offer_tracking_status(status)
+        except (ValueError,TypeError,AttributeError,OverflowError):
+            self.get_logger().warning('EXECUTION_STATUS_REJECTED')
+
     def _publish(self, data):
+        local=path_message(data.local)
+        if getattr(self,'_execution_contract_enabled',False) and self.runtime.execution_context is not None:
+            from nav1cm.execution_contract import ExecutionReference,execution_session_id,path_fingerprint
+            from nav1cm.execution_ros import reference_message,stamp_ns
+            task_id,generation,intent=self.runtime.execution_context
+            self._execution_revision+=1
+            coordinator=self.runtime.session.coordinator
+            reference=ExecutionReference(execution_session_id(task_id,generation),self._execution_revision,
+                path_fingerprint(local),intent,stamp_ns(local.header),coordinator.position_target_tolerance_m,
+                coordinator.goal_yaw_tolerance_rad,coordinator.stopped_linear_mps,coordinator.stopped_angular_rps)
+            self.runtime.register_execution_reference(reference)
+            self._execution_publisher.publish(reference_message(reference,self.runtime.map_frame))
         self._global_publisher.publish(path_message(data.global_route))
-        self._local_publisher.publish(path_message(data.local))
+        self._reference_publisher.publish(path_message(data.global_reference or data.global_route))
+        self._local_publisher.publish(local)
 
     def stop_runtime(self):
         result = self.runtime.close(timeout_s=2.)

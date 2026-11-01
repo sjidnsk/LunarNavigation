@@ -1,0 +1,311 @@
+"""联合证据门禁不可把局部Path或传输接受当实际探索到达。"""
+from importlib.util import spec_from_file_location,module_from_spec
+from pathlib import Path
+import pytest
+
+FILE=Path(__file__).resolve().parents[3]/"scripts/navigation/one_cm/frontier_validation/grade.py"
+def load():
+    assert FILE.exists(), "前沿联合门禁尚未实现"
+    spec=spec_from_file_location("frontier_grade",FILE);m=module_from_spec(spec);spec.loader.exec_module(m);return m
+
+def evidence():
+    return dict(case="frontier_progress",common={k:True for k in ("graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received","sensor_timing","authoritative_identity")},
+                reached=[dict(uuid="current",xy_error=.05,yaw_error=.02,v=0.,w=0.,hold_s=.3,status=4,outcome=0,sample_age_s=0.)],
+                distinct_goals=2,observed_growth=20,waits=0,canceled_stopped=0,cancel_while_moving=False,no_goals_after_cancel=True)
+
+def test_actual_terminal_requires_uuid_xy_yaw_stop_and_hold():
+    grade=load().grade
+    e=evidence();assert grade(e)["pass_"]
+    for key,bad in [("uuid",""),("xy_error",.2),("yaw_error",.1),("v",.02),("w",.02),("hold_s",.1),("status",6),("outcome",5)]:
+        x=evidence();x["reached"][0][key]=bad;assert not grade(x)["pass_"],key
+
+def test_path_or_no_map_cannot_count_as_frontier_completion():
+    e=evidence();e["reached"]=[];e["nonempty_paths"]=100
+    assert not load().grade(e)["pass_"]
+
+@pytest.mark.parametrize("key",["graph","formal","motion","bounds","clearance","cleanup","installed","no_exceptions","source_received","sensor_timing","authoritative_identity"])
+def test_every_common_safety_and_identity_gate_is_independent(key):
+    e=evidence();e["common"][key]=False;assert not load().grade(e)["pass_"]
+
+def test_blocked_wait_requires_real_cancel_stop_and_distinct_frontend_goal():
+    e=evidence();e.update(case="blocked_wait_reselect",waits=3,canceled_stopped=1,distinct_goals=2)
+    assert load().grade(e)["pass_"]
+    for k,v in [("waits",0),("canceled_stopped",0),("distinct_goals",1)]:
+        x={**e,k:v};assert not load().grade(x)["pass_"]
+
+def test_external_cancel_requires_measured_motion_stop_and_no_reselection():
+    e=evidence();e.update(case="task_cancel_stop",canceled_stopped=1,cancel_while_moving=True)
+    assert load().grade(e)["pass_"]
+    e["no_goals_after_cancel"]=False;assert not load().grade(e)["pass_"]
+
+
+def test_passive_action_probe_uuid_uses_python_wire_integers():
+    import sys
+    import numpy as np
+    path=FILE.with_name("run.py")
+    spec=spec_from_file_location("frontier_runner",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    assert hasattr(module,"uuid_values"), "UUID旁观请求缺少wire整数规范化"
+    values=module.uuid_values(np.arange(16,dtype=np.uint8))
+    assert values==list(range(16)) and all(type(v) is int for v in values)
+
+
+def test_queued_feedback_cannot_turn_plant_into_unbounded_odometry_publisher():
+    import sys,time
+    path=FILE.with_name("run.py");spec=spec_from_file_location("frontier_pacing",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    assert hasattr(module,"pace_cycle"), "plant缺少独立50Hz时钟约束"
+    # Windows单调时钟可有15.625ms量化；算法门禁用确定性时钟，实际Hz由ROS raw另验。
+    from types import SimpleNamespace as NS
+    clock=[0.]
+    def sleep(seconds):clock[0]+=seconds
+    module.time=NS(monotonic=lambda:clock[0],sleep=sleep)
+    for _ in range(5):
+        # 队列一直有事件，spin_once可立即返回；仍须遵守外部测量时钟。
+        module.pace_cycle(clock[0])
+    assert clock[0]==pytest.approx(.1)
+
+
+def test_plant_services_busy_callback_queue_within_each_sensor_deadline():
+    import sys,time
+    path=FILE.with_name("run.py");spec=spec_from_file_location("frontier_callback_cycle",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    assert hasattr(module,"service_cycle"), "plant每个测量周期只能消费一个callback"
+    consumed=[];started=time.monotonic()
+    module.service_cycle(started,lambda timeout:consumed.append(timeout))
+    assert len(consumed)>1 and time.monotonic()-started>=.019
+
+
+def test_blocked_v2_only_translates_declared_unknown_feature():
+    import sys,numpy as np
+    path=FILE.with_name("fixtures.py");spec=spec_from_file_location("frontier_fixture_version",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    assert hasattr(module,"measurement_mask"), "fixture版本平移合同尚未实现"
+    c=5-(np.arange(100)+.5)*.1;x,y=np.meshgrid(c,c,indexing='ij')
+    a=module.measurement_mask(x,y,"blocked_wait_reselect","v1")
+    b=module.measurement_mask(x,y,"blocked_wait_reselect","v2")
+    allowed=(((x>=.9)&(x<=1.3))|((x>=1.6)&(x<=2.0)))&(abs(y)<=1.3)
+    assert np.array_equal(a[~allowed],b[~allowed])
+    assert a.sum()==b.sum() and not np.array_equal(a,b)
+
+
+def test_terminal_hold_never_uses_future_state_samples():
+    import sys
+    path=FILE.with_name("run.py");spec=spec_from_file_location("frontier_strict_terminal",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    rows=[dict(monotonic_s=t,x=0.,y=0.,yaw=0.,v=0.,w=0.) for t in (0.,.1,.2,.3)]
+    assert module.held(rows,(0.,0.,0.),.26)["hold_s"]<=.26
+
+def test_cancel_stop_measurement_must_precede_terminal_receipt():
+    import sys
+    path=FILE.with_name("run.py");spec=spec_from_file_location("frontier_strict_cancel",path)
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
+    assert hasattr(module,"measured_stopped_before"), "取消停稳缺少严格终态前测量门禁"
+    assert not module.measured_stopped_before([dict(monotonic_s=.3,v=0.,w=0.)],.26)
+    assert module.measured_stopped_before([dict(monotonic_s=.2,v=0.,w=0.)],.26)
+
+
+def obstacle_evidence():
+    e=evidence();e['case']='blocked_obstacle_update'
+    e['obstacle_sequence']={
+      'event':dict(uuid='a',monotonic_s=1.,pose=[2.,0.,0.],distance_m=2.,accepted_at=.9,active=True,generation=1,binding_source='TASK_ACCEPTED'),
+      'source':dict(monotonic_s=1.1,changed=True),
+      'map':dict(monotonic_s=1.2,changed=True),
+      'wait':dict(uuid='a',monotonic_s=1.3,reason='WAITING_FOR_PATH'),
+      'terminal':dict(uuid='a',monotonic_s=3.3,status=5,outcome=5,reason='CANCELED_STOPPED',stopped_before=True),
+      'next':dict(uuid='b',monotonic_s=3.4,pose=[2.,1.,0.],logical_accepted=True,generation=2,binding_source='TASK_ACCEPTED')}
+    return e
+
+def test_obstacle_update_requires_real_event_source_map_current_uuid_stop_and_new_xy():
+    e=obstacle_evidence();assert load().grade(e)['pass_']
+
+@pytest.mark.parametrize('fault',['no_event','no_source_change','no_map_change','wrong_wait_uuid','wrong_terminal_uuid','no_stop','only_yaw','not_logically_accepted','wrong_order'])
+def test_obstacle_update_false_positive_evidence_is_rejected(fault):
+    e=obstacle_evidence();s=e['obstacle_sequence']
+    if fault=='no_event':s['event']=None
+    elif fault=='no_source_change':s['source']['changed']=False
+    elif fault=='no_map_change':s['map']['changed']=False
+    elif fault=='wrong_wait_uuid':s['wait']['uuid']='stale'
+    elif fault=='wrong_terminal_uuid':s['terminal']['uuid']='stale'
+    elif fault=='no_stop':s['terminal']['stopped_before']=False
+    elif fault=='only_yaw':s['next']['pose']=[2.,0.,1.]
+    elif fault=='not_logically_accepted':s['next']['logical_accepted']=False
+    elif fault=='wrong_order':s['terminal']['monotonic_s']=1.15
+    assert not load().grade(e)['pass_']
+
+
+def runner_for_fix():
+    import sys
+    spec=spec_from_file_location("frontier_fix_runner",FILE.with_name("run.py"))
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module);return module
+
+def test_latest_invalid_measurement_revokes_historical_goal_hold():
+    m=runner_for_fix()
+    rows=[dict(monotonic_s=t,x=0.,y=0.,yaw=0.,v=0.,w=0.) for t in (0.,.1,.2,.31)]
+    rows.append(dict(monotonic_s=.4,x=.2,y=0.,yaw=0.,v=.1,w=0.))
+    assert m.held(rows,(0.,0.,0.),.41)['hold_s']==0.
+    assert not m.measured_stopped_before([dict(monotonic_s=.3,v=0.,w=0.),dict(monotonic_s=.4,v=.1,w=0.)],.41)
+
+def test_hold_is_latest_continuous_suffix_and_freshness_is_required():
+    m=runner_for_fix()
+    rows=[dict(monotonic_s=t,x=0.,y=0.,yaw=0.,v=0.,w=0.) for t in (0.,.1,.2,.31)]
+    assert m.held(rows,(0.,0.,0.),.6)['hold_s']==0.
+    assert not m.measured_stopped_before([dict(monotonic_s=.1,v=0.,w=0.)],.3)
+    rows.append(dict(monotonic_s=.4,x=.2,y=0.,yaw=0.,v=.1,w=0.))
+    rows.extend(dict(monotonic_s=t,x=0.,y=0.,yaw=0.,v=0.,w=0.) for t in (.5,.6))
+    assert m.held(rows,(0.,0.,0.),.61)['hold_s']==pytest.approx(.1)
+
+def acceptance_module():
+    path=FILE.with_name('acceptance.py')
+    assert path.exists(), '缺少权威任务接受身份账'
+    spec=spec_from_file_location('frontier_acceptance',path);m=module_from_spec(spec);spec.loader.exec_module(m);return m
+
+def test_status_current_goal_and_feedback_order_cannot_create_pose_binding():
+    m=acceptance_module();ledger=m.AcceptanceLedger()
+    a,b='a'*32,'b'*32
+    assert ledger.get(a) is None and ledger.current is None
+    # status/feedback/current_goal无权绑定；只有exact TASK_ACCEPTED可给坐标。
+    ledger.record(dict(task_id=b,accepted_generation=2,goal=[2.,3.,.4]),2.)
+    ledger.record(dict(task_id=a,accepted_generation=1,goal=[-1.,0.,.1]),3.)
+    assert ledger.current.task_id==b and ledger.get(a).goal==(-1.,0.,.1)
+    assert ledger.get(b).goal==(2.,3.,.4)
+    ledger.finish(b)
+    ledger.record(dict(task_id=b,accepted_generation=2,goal=[2.,3.,.4]),4.)
+    assert ledger.current is None
+
+def test_acceptance_conflicts_and_missing_binding_fail_closed():
+    m=acceptance_module();ledger=m.AcceptanceLedger();a='a'*32
+    assert ledger.get(a) is None
+    ledger.record(dict(task_id=a,accepted_generation=1,goal=[0.,0.,0.]),1.)
+    ledger.record(dict(task_id=a,accepted_generation=1,goal=[1.,0.,0.]),2.)
+    assert not ledger.ok and ledger.current is None and ledger.get(a) is None
+
+
+@pytest.mark.parametrize('order',[("current_goal","feedback","status"),("current_goal","status","feedback"),("feedback","current_goal","status"),("feedback","status","current_goal"),("status","current_goal","feedback"),("status","feedback","current_goal")])
+def test_all_cross_topic_orders_wait_for_authoritative_exact_binding(order):
+    ledger=acceptance_module().AcceptanceLedger();old,new='a'*32,'b'*32
+    ledger.record(dict(task_id=old,accepted_generation=1,goal=[-1.,0.,0.]),0.)
+    for event in order:
+        if event=='current_goal':ledger.observe_frontend_goal([3.,4.,.5])
+        else:assert ledger.observe_uuid(new) is None
+    assert ledger.get(new) is None
+    ledger.record(dict(task_id=new,accepted_generation=2,goal=[3.,4.,.5]),1.)
+    ledger.observe_frontend_goal([-100.,100.,1.])
+    assert ledger.observe_uuid(old).goal==(-1.,0.,0.)
+    assert ledger.observe_uuid(new).goal==(3.,4.,.5) and ledger.current.task_id==new
+
+
+def runner_module():
+    import sys
+    spec=spec_from_file_location("frontier_control_test",FILE.with_name("run.py"))
+    module=module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module);return module
+
+
+def test_current_terminal_five_degrees_is_explicit_without_changing_history():
+    import math
+    e=evidence();e['reached'][0]['yaw_error']=math.radians(4.)
+    assert not load().grade(e)['pass_']
+    e['goal_yaw_tolerance_rad']=math.radians(5.)
+    assert load().grade(e)['pass_']
+    e['reached'][0]['yaw_error']=math.radians(5.01)
+    assert not load().grade(e)['pass_']
+
+
+def test_direct_validation_commands_preserve_private_topics_and_platform(tmp_path):
+    from types import SimpleNamespace as S
+    import yaml
+    profile=tmp_path/'wheel.yaml'
+    wheel=yaml.safe_load((FILE.parents[4]/'config/wheel.yaml').read_text(encoding='utf8'))
+    wheel['capability'].update(dict(maximum_forward_speed_mps=.2,maximum_reverse_speed_mps=.2,maximum_spin_rate_radps=.1,maximum_acceleration_mps2=.5,maximum_braking_deceleration_mps2=.5,maximum_yaw_acceleration_radps2=.5))
+    profile.write_text(yaml.safe_dump(wheel),encoding='utf-8')
+    m=runner_module();args=S(case='frontier_progress',build_dir=str(tmp_path/'cache'),control_backend='mpcc_cmd_vel',platform_config=str(profile))
+    settings=m.validation_settings(args);command=m.launch_command(args,settings)
+    assert 'control_backend:=mpcc_cmd_vel' in command and 'command_hold_s:=1.2' in command
+    assert 'platform_config:='+str(profile.resolve()) in command
+    assert 'command_topic:=/nav1cm_task3/cmd' in command
+    assert not any('navigation_map_wait_timeout_s' in a for a in command)
+    assert settings['limits']['angular']==.1
+
+
+def test_direct_evidence_requires_actual_map_input_not_absent_mppi_diagnostics():
+    m=runner_module();identities=[{'cmdline':'/task/install/lunar_nav1cm_planner/navigation_task_node'}]
+    graph={'nodes':['lunar_nav1cm_planner'],'publishers':{m.TOPICS['cmd']:[{'node_name':'lunar_nav1cm_planner'}]}}
+    received=[{'kind':'EXPLORATION_MAP','counts':{'0':12}}]
+    assert m.backend_evidence('mpcc_cmd_vel',identities,[{'epoch':1}],[{'ready':True}],[],received,graph)==(True,True)
+    assert m.backend_evidence('mpcc_cmd_vel',identities,[],[{'ready':True}],[],received,graph)==(True,False)
+    assert m.backend_evidence('path_mppi',identities,[{'epoch':1}],[{'ready':True}],[],received,graph)==(False,False)
+
+
+def test_obsolete_wait_cancel_qualification_is_rejected_before_ros():
+    from types import SimpleNamespace as S
+    with pytest.raises(ValueError,match='等待保留'):
+        runner_module().validation_settings(S(case='blocked_wait_reselect',control_backend='path_mppi',platform_config=None))
+
+def test_run_has_no_unbound_global_reads_including_cleanup():
+    import dis
+    import builtins
+    runner=runner_module()
+    missing={op.argval for op in dis.get_instructions(runner.run)
+             if op.opname=='LOAD_GLOBAL' and op.argval not in vars(runner) and not hasattr(builtins,op.argval)}
+    assert not missing
+
+
+def test_direct_rejects_mppi_node_or_foreign_command_authority():
+    m=runner_module()
+    planner='lunar_nav1cm_planner'
+    follower='lunar_pure_wheeled_controller'
+    pid=[{'cmdline':'/task/install/'+planner+'/navigation_task_node'}]
+    graph={'nodes':[planner],'publishers':{m.TOPICS['cmd']:[{'node_name':follower}]}}
+    def installed(backend):return m.backend_evidence(backend,pid,[],[],[],[],graph)[0]
+    assert not installed('mpcc_cmd_vel')
+    graph['nodes'].append(follower)
+    pid.append({'cmdline':'/task/install/'+follower+'/controller'})
+    assert installed('path_mppi')
+    graph['publishers'][m.TOPICS['cmd']][0]['node_name']=planner
+    assert not installed('mpcc_cmd_vel') and not installed('path_mppi')
+
+
+def test_progress_needs_same_writer_success_before_new_accepted_pose():
+    import json
+    import math
+    m=runner_module()
+    a,b='a'*32,'b'*32
+    def notice(kind,**payload):
+        return '[navigation_task_node-2] [INFO] [lunar_nav1cm_planner]: '+kind+': '+json.dumps(payload)
+    first=notice('TASK_ACCEPTED',task_id=a,accepted_generation=1,goal=[0,0,0])
+    reached=notice('TASK_STATE',task_id=a,generation=1,phase='FINISHED',outcome='GOAL_REACHED',reason_code='GOAL_REACHED')
+    second=notice('TASK_ACCEPTED',task_id=b,accepted_generation=2,goal=[1,0,0])
+    e=evidence();e.update(validation_settings={});e['reached'][0]['uuid']=a
+    def passed(lines):
+        e['progress_transitions']=m.progress_transitions(lines)
+        return load().grade(e)['pass_']
+    assert not passed([first,second,reached])
+    assert not passed([first,reached,second.replace('-2]', '-3]')])
+    assert passed([first,reached,second])
+    for pose,expected in [([0,0,.2],True),([.01,0,0],True),([0,0,0],False),([0,0,2*math.pi],False)]:
+        successor=notice('TASK_ACCEPTED',task_id=b,accepted_generation=2,goal=pose)
+        assert passed([first,reached,successor]) is expected,pose
+    e['reached'][0]['uuid']=b
+    assert not passed([first,reached,second])
+
+
+def test_unapproved_yaw_tolerance_rejected():
+    import math
+    with pytest.raises(ValueError):load().grade(dict(evidence(),goal_yaw_tolerance_rad=math.pi))
+
+
+@pytest.mark.parametrize('v,w',[(.3,0.),(-.201,0.),(0.,.101),(float('nan'),0.)])
+def test_short_raw_command_violation_fails_even_when_plant_slews(v,w):
+    m=runner_module()
+    limits=dict(forward=.2,reverse=.2,angular=.1)
+    assert not m.commands_in_bounds([dict(kind='COMMAND',v=v,w=w)],limits)
+
+
+@pytest.mark.parametrize('field,value',[('motion_model','ackermann'),('body_extent_m',[3,1,1]),('minimum_clearance_m',.4),('footprint_xy_m',[[0,0]]*4)])
+def test_incompatible_plant_geometry_is_rejected(tmp_path,field,value):
+    import yaml
+    from types import SimpleNamespace as S
+    wheel=yaml.safe_load((FILE.parents[4]/'config/wheel.yaml').read_text(encoding='utf8'))
+    wheel['capability'][field]=value
+    p=tmp_path/'wheel.yaml';p.write_text(yaml.safe_dump(wheel),encoding='utf8')
+    with pytest.raises(ValueError):runner_module().validation_settings(S(case='frontier_progress',platform_config=str(p)))

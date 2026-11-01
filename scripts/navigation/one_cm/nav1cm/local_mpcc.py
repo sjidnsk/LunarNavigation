@@ -4,10 +4,13 @@ from pathlib import Path
 from time import perf_counter, process_time
 import hashlib
 import numpy as np
-from .contracts import CellState, Trajectory
+from .contracts import CellState, Trajectory, VehicleState, circumscribed_radius
 from .maps import build_distance_field
-from .seeds import initial_seed, rollout
+from .seeds import braking_prefix, join_trajectories, initial_seed, rollout
 from .pose_goal import angle_error, terminal_candidate
+from .reference import TERMINAL_APPROACH_DISTANCE_M
+from .reference_buffer import _project, _at
+from .trajectory_buffer import FeedbackTolerance
 
 
 # 固定 SDK acados-get-stats-source.txt 实际支持；时间值保留 SDK 原始秒单位。
@@ -44,21 +47,78 @@ def _wrap(angle):
     return float(np.arctan2(np.sin(angle), np.cos(angle)))
 
 
-def select_mode(state, reference):
+def _approach_yaw(reference, progress_s, travel_yaw, approach_distance_m):
+    """末段软朝向目标；不改变路线、方向约束或位置到达判据。"""
+    if reference.terminal_yaw is None or approach_distance_m <= 0:
+        return travel_yaw
+    remaining = max(0., float(reference.s[-1]) - progress_s)
+    fraction = float(np.clip(1. - remaining / approach_distance_m, 0., 1.))
+    weight = fraction * fraction * (3. - 2. * fraction)
+    return travel_yaw + weight * angle_error(reference.terminal_yaw, travel_yaw)
+
+
+# 局部阶段切换滞回（弧度），不放宽最终到达角度判据。
+_APPROACH_YAW_HYSTERESIS_RAD = .05
+
+
+def _continuing_approach(state, reference, travel_yaw, approach_distance_m):
+    approach_yaw = _approach_yaw(reference, reference.progress_s, travel_yaw, approach_distance_m)
+    turn = angle_error(approach_yaw, travel_yaw)
+    actual = angle_error(state.yaw, travel_yaw)
+    # 只放行已位于平滑转向区间内且有正行进投影的车体姿态。
+    in_turn = (turn > 0 and -1e-8 <= actual <= turn + _APPROACH_YAW_HYSTERESIS_RAD or
+               turn < 0 and turn - _APPROACH_YAW_HYSTERESIS_RAD <= actual <= 1e-8)
+    return in_turn and np.cos(actual) > 1e-8
+
+
+def _travel_direction(state, reference, approach_distance_m, *, initial_travel_direction=""):
+    """同一方向决策供模式选择及对准使用；末段兼顾最终车体姿态。"""
+    if initial_travel_direction not in ('','forward','reverse'):
+        raise ValueError('initial_travel_direction must be forward or reverse')
+    delta = reference.points[1] - reference.points[0]
+    heading = float(np.arctan2(delta[1], delta[0]))
+    reverse = abs(_wrap(heading-state.yaw)) > np.pi*.75
+    remaining = max(0., float(reference.s[-1])-reference.progress_s)
+    if reference.terminal_yaw is not None and 0. < remaining <= approach_distance_m:
+        projection = float(np.cos(angle_error(reference.terminal_yaw, heading)))
+        # 正交时两方向等价，保留原偏好，避免浮点正负决定换向。
+        if abs(projection) > 1e-8:
+            reverse = projection < 0.
+    return heading, initial_travel_direction or ('reverse' if reverse else 'forward')
+
+
+def travel_target_yaw(state, reference, mode, approach_distance_m, *, initial_travel_direction=""):
+    """spin固定对准行进车体方向，减速期间不以实时yaw重置目标。"""
+    heading, desired = _travel_direction(state, reference, approach_distance_m,initial_travel_direction=initial_travel_direction)
+    if mode == 'reverse' or (mode == 'spin' and desired == 'reverse'):
+        heading += np.pi
+    yaw = state.yaw + _wrap(heading-state.yaw)
+    if mode == 'spin' and not initial_travel_direction and _continuing_approach(state, reference, yaw, approach_distance_m):
+        yaw = state.yaw + angle_error(_approach_yaw(reference, reference.progress_s, yaw, approach_distance_m), state.yaw)
+    return yaw
+
+
+def select_mode(state, reference, *, approach_distance_m=TERMINAL_APPROACH_DISTANCE_M, initial_travel_direction="",initial_stopped_angular_rps=.01):
     if len(reference.points)<2:
         if reference.terminal_yaw is not None and abs(state.v) <= 1e-10:
-            return 'spin' if abs(angle_error(reference.terminal_yaw, state.yaw)) > .05 or abs(state.w) > 1e-10 else 'brake'
+            return 'spin' if abs(angle_error(reference.terminal_yaw, state.yaw)) > .05 or abs(state.w) > initial_stopped_angular_rps else 'brake'
         return 'brake'
-    delta=reference.points[1]-reference.points[0]
-    error=_wrap(np.arctan2(delta[1],delta[0])-state.yaw)
-    desired='reverse' if abs(error)>np.pi*.75 else 'forward'
+    heading, desired = _travel_direction(state, reference, approach_distance_m,initial_travel_direction=initial_travel_direction)
+    error = _wrap(heading-state.yaw)
+    if initial_travel_direction:
+        if abs(state.v)>1e-8:return 'brake'
+        aligned=_wrap(error-(np.pi if desired=='reverse' else 0.))
+        return 'spin' if abs(aligned)>.08 or abs(state.w)>initial_stopped_angular_rps else desired
     if abs(state.v)>1e-8:
         current='forward' if state.v>0 else 'reverse'
         return current if current==desired else 'brake'
-    if abs(state.w)>1e-8:
+    if abs(state.w)>initial_stopped_angular_rps:
         return 'spin'
     aligned=_wrap(error-(np.pi if desired=='reverse' else 0.))
-    return 'spin' if abs(aligned)>.3 else desired
+    travel_yaw = state.yaw + aligned
+    if not initial_travel_direction and _continuing_approach(state, reference, travel_yaw, approach_distance_m):
+        return desired
+    return 'spin' if abs(aligned)>(.08 if initial_travel_direction else .3) else desired
 
 
 class MpccPlanner:
@@ -70,7 +130,7 @@ class MpccPlanner:
         if type(n) is not int or n < 1 or not np.isfinite(dt) or dt <= 0:
             raise ValueError('horizon requires positive integer n and finite positive dt')
         self.N, self.dt = n, float(dt)
-        self.model_fingerprint = hashlib.sha256(f'pose-terminal-clearance-v3:{self.N}:{self.dt.hex()}:{limits.digest()}'.encode()).hexdigest()[:12]
+        self.model_fingerprint = hashlib.sha256(f'pose-terminal-single-circle-v4:{self.N}:{self.dt.hex()}:{limits.digest()}'.encode()).hexdigest()[:12]
         try:
             import casadi as ca
             from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -84,10 +144,10 @@ class MpccPlanner:
         self._solvers={}
         # 零margin保留原三圆条带；非零margin用实际body外接圆的Minkowski膨胀，
         # 与global/follower同义，避免各条带矩形扩张在前缘重复保守。
-        # 保留固定22维参数/三个约束槽；中心圆重复不改变可行集合。
+        # 非零margin只生成一个中心圆；零margin保留历史三圆，布局参与模型版本。
         if limits.minimum_clearance_m > 0:
-            self.offsets=np.zeros(3)
-            self.radius=float(np.hypot(limits.body_length_m,limits.body_width_m)/2+limits.minimum_clearance_m)
+            self.offsets=np.zeros(1)
+            self.radius=circumscribed_radius(limits.body_length_m,limits.body_width_m,limits.minimum_clearance_m)
         else:
             self.offsets=np.array([-limits.body_length_m/3,0.,limits.body_length_m/3])
             self.radius=float(np.hypot(limits.body_length_m/6,limits.body_width_m/2))
@@ -97,8 +157,8 @@ class MpccPlanner:
             model=AcadosModel()
             model.name='nav1cm_'+mode+'_'+self.model_fingerprint
             x=ca.SX.sym('x',6); u=ca.SX.sym('u',3)
-            # route xy/tangent/s/yaw, previous controls, three affine circle clearances
-            p=ca.SX.sym('p',22)
+            # route xy/tangent/s/yaw、前次控制、每个实际圆的仿射净空、参考终点
+            p=ca.SX.sym('p',self.parameter_count)
             vm=x[3]+.5*u[0]*self.dt; wm=x[4]+.5*u[1]*self.dt
             ym=x[2]+.5*wm*self.dt
             model.x=x; model.u=u; model.p=p
@@ -112,15 +172,15 @@ class MpccPlanner:
             model.cost_expr_ext_cost+=.2*ca.sumsqr(u-p[6:9])
             model.cost_expr_ext_cost_e=tracking-2*x[5]
             hs=[]
-            for j in range(3):
+            for j in range(len(self.offsets)):
                 q=p[9+4*j:13+4*j]
                 hs.append(q[0]*x[0]+q[1]*x[1]+q[2]*x[2]+q[3])
             sign=-1 if mode=='reverse' else 1
-            if mode!='spin':
+            if mode!='spin' and limits.motion_model=='curvature_limited':
                 hs += [sign*limits.curvature_inv_m*x[3]-x[4],sign*limits.curvature_inv_m*x[3]+x[4]]
             # 刹停距离不超过有效参考余量，终点自然减速。
             # 在 |v|<=vmax 内，vmax*|v|/(2a) 保守上界 v²/(2a)，且 RTI 不再低估凸制动项。
-            hs.append(p[21]-x[5]-sign*x[3]*limits.linear_speed_mps/(2*limits.linear_accel_mps2))
+            hs.append(p[-1]-x[5]-sign*x[3]*limits.linear_speed_mps/(2*limits.linear_accel_mps2))
             model.con_h_expr=ca.vertcat(*hs); model.con_h_expr_e=ca.vertcat(*hs)
             ocp.model=model; ocp.solver_options.N_horizon=self.N
             ocp.solver_options.tf=self.N*self.dt
@@ -147,35 +207,68 @@ class MpccPlanner:
             ocp.constraints.ubu=np.array([0. if mode=='spin' else amin,almax,0. if mode=='spin' else vmax])
             ocp.constraints.lh=np.zeros(len(hs)); ocp.constraints.uh=np.ones(len(hs))*1e6
             ocp.constraints.lh_e=ocp.constraints.lh.copy(); ocp.constraints.uh_e=ocp.constraints.uh.copy()
-            ocp.constraints.x0=np.zeros(6); ocp.parameter_values=np.zeros(22)
+            ocp.constraints.x0=np.zeros(6); ocp.parameter_values=np.zeros(self.parameter_count)
             ocp.code_export_directory=str(self.build_dir/mode)
             self._solvers[mode]=AcadosOcpSolver(ocp,json_file=str(self.build_dir/(mode+'.json')),verbose=False)
         self.build_ms=(perf_counter()-started)*1000
 
-    def _parameters(self, states, controls, reference, field, target_yaw, end):
+    @property
+    def parameter_count(self):
+        return 9+4*len(self.offsets)+1
+
+    def _warm_seed(self, initial, key):
+        """只复用优化初值：按实际pose/yaw消费，不以地图身份或墙钟推进相位。"""
+        if self._warm is None or self._warm[0] != key:
+            return None
+        _, old_states, old_controls, floor = self._warm
+        source = Trajectory(0, key[0], np.arange(len(old_states))*self.dt,
+                            old_states, old_controls, key[1], 'mpcc:warm-seed')
+        phase = _project(source, initial, floor, FeedbackTolerance())
+        self._warm = (key, old_states, old_controls, phase)
+        controls = np.zeros((self.N, 3))
+        for k in range(self.N):
+            sample = phase + k*self.dt
+            if sample < source.times[-1] - 1e-10:
+                _, index = _at(source, sample)
+                stop = min(sample + self.dt, float(source.times[-1]))
+                # 对旧ZOH区间积分后投到新shooting步，避免把剩余半段加速重放整步。
+                while sample < stop - 1e-12:
+                    boundary = min(stop, float(source.times[index + 1]))
+                    controls[k] += source.controls[index] * ((boundary - sample) / self.dt)
+                    sample = boundary
+                    index += 1
+        # 尾部零加速度只是不外推旧加速；不是停稳保证，整段仍须按新图验证。
+        return rollout(initial, controls, self.dt), controls
+
+    def _parameters(self, states, controls, reference, field, target_yaw, end, *, mode="forward", initial_travel_direction=""):
         params=[]
         for k,z in enumerate(states):
             s=float(max(reference.s[0],min(end,z[5])))
             i=max(0,min(len(reference.s)-2,int(np.searchsorted(reference.s,s,side='right'))-1))
             tangent=(reference.points[i+1]-reference.points[i])/(reference.s[i+1]-reference.s[i])
             xy=reference.points[i]+tangent*(s-reference.s[i])
-            yaw=z[2]+_wrap(target_yaw-z[2])
-            # 只有当前参考实际到达最终路线终点且该终点进入求解时域时，
-            # 终端代价才采用目标车体 yaw；倒车也不能给最终朝向再加 pi。
-            if k == len(states)-1 and reference.terminal_yaw is not None and end == float(reference.s[-1]):
-                yaw=z[2]+angle_error(reference.terminal_yaw,z[2])
-            p=np.zeros(22); p[:6]=[*xy,*tangent,s,yaw]
+            desired_yaw = target_yaw
+            if mode != 'spin':
+                desired_yaw = float(np.arctan2(tangent[1], tangent[0]))
+                if mode == 'reverse':
+                    desired_yaw += np.pi
+                if not initial_travel_direction:
+                    desired_yaw = _approach_yaw(reference, s, desired_yaw,
+                        self.N * self.dt * self.limits.linear_speed_mps)
+            # 各节点使用本段车体切线；末段融合绝对最终yaw，spin保持固定目标。
+            yaw=z[2]+angle_error(desired_yaw,z[2])
+            p=np.zeros(self.parameter_count); p[:6]=[*xy,*tangent,s,yaw]
             p[6:9]=controls[min(k,len(controls)-1)]
             for j,offset in enumerate(self.offsets):
                 cx=z[0]+offset*np.cos(z[2]); cy=z[1]+offset*np.sin(z[2])
                 d,gx,gy=field.sample(cx,cy)
                 gyaw=offset*(-gx*np.sin(z[2])+gy*np.cos(z[2]))
                 p[9+4*j:13+4*j]=[gx,gy,gyaw,d-self.radius-.003-gx*z[0]-gy*z[1]-gyaw*z[2]]
-            p[21]=end
+            p[-1]=end
             params.append(p)
         return params
 
-    def plan(self,state,grid,reference,*,distance_field=None,field_grid_digest=None):
+    def plan(self,state,grid,reference,*,distance_field=None,field_grid_digest=None,initial_travel_direction="",initial_stopped_angular_rps=.01):
         """外部净空场必须显式附带其来源 grid.digest()；仅生成未认证候选。"""
         started=perf_counter(); started_cpu=process_time(); timing={'field':0.,'reference':0.,'seed':0.,'solve':0.,'candidate':0.}
         for stage in ('reset','input_set','solve_call','read_validate','diagnostics','solve'):
@@ -193,7 +286,21 @@ class MpccPlanner:
                               'TERMINAL_CANDIDATE_UNCERTIFIED')
             return finish(None,'REFERENCE_END')
         if grid.cell_at_world(*reference.points[-1])==CellState.BLOCKED: return finish(None,'KNOWN_BLOCKED_GOAL')
-        mode=select_mode(state,reference)
+        if initial_travel_direction and abs(state.v)>1e-10:
+            # 从真实测量推导制动终点，不把测量重标为零；保留转动连续性。
+            prefix=braking_prefix(state,grid,reference,self.limits,retain_angular=True)
+            endpoint=prefix.states[-1]
+            derived=VehicleState(*endpoint[:5])
+            continuation=self.plan(derived,grid,reference,distance_field=distance_field,
+                field_grid_digest=field_grid_digest,initial_travel_direction=initial_travel_direction,
+                initial_stopped_angular_rps=initial_stopped_angular_rps)
+            timing.update(continuation.timings_ms);attempts.extend(continuation.attempts)
+            if continuation.candidate is None:return finish(None,continuation.reason)
+            c=continuation.candidate
+            candidate=join_trajectories(prefix,c)
+            return finish(candidate,'CANDIDATE_UNCERTIFIED')
+        mode=select_mode(state,reference,approach_distance_m=self.N*self.dt*self.limits.linear_speed_mps,
+            initial_travel_direction=initial_travel_direction,initial_stopped_angular_rps=initial_stopped_angular_rps)
         if mode=='brake': return finish(None,'MODE_CHANGE_REQUIRES_BRAKE')
         t=perf_counter()
         if distance_field is not None:
@@ -204,28 +311,22 @@ class MpccPlanner:
         else: field=build_distance_field(grid)
         timing['field']=(perf_counter()-t)*1000
         t=perf_counter()
-        delta=reference.points[1]-reference.points[0]
-        heading=float(np.arctan2(delta[1],delta[0]))
-        if mode=='reverse' or (mode=='spin' and abs(_wrap(heading-state.yaw))>np.pi*.75): heading+=np.pi
-        # 转向已对准但尚有角速度时，目标保持当前航向以受限角制动。
-        yaw=state.yaw+_wrap(heading-state.yaw)
-        if mode=='spin' and abs(_wrap(yaw-state.yaw))<=.3: yaw=state.yaw
+        yaw=travel_target_yaw(state,reference,mode,self.N*self.dt*self.limits.linear_speed_mps,initial_travel_direction=initial_travel_direction)
         end=min(float(reference.s[-1]),reference.progress_s+self.N*self.dt*self.limits.linear_speed_mps)
         initial=np.array([state.x,state.y,state.yaw,state.v,state.w,reference.progress_s])
         initial_circle_feasible=all(field.sample(state.x+offset*np.cos(state.yaw),
             state.y+offset*np.sin(state.yaw))[0]>=self.radius+.003 for offset in self.offsets)
-        key=(grid.digest(),reference.route_version,mode)
-        if reference.terminal_yaw is not None:
-            key+=(reference.terminal_yaw,)
+        key=(reference.route_version,mode,reference.terminal_yaw)
         timing['reference']=(perf_counter()-t)*1000
         solver=self._solvers[mode]
         for attempt,side in enumerate((0,1,-1)):
             t=perf_counter()
-            warmed=attempt==0 and self._warm is not None and self._warm[0]==key
+            warm=self._warm_seed(initial,key) if attempt==0 else None
+            warmed=warm is not None
             if warmed:
-                controls=self._warm[2].copy(); states=rollout(initial,controls,self.dt)
+                states,controls=warm
             else: states,controls=initial_seed(initial,mode,self.limits,yaw,side,n=self.N,dt=self.dt)
-            params=self._parameters(states,controls,reference,field,yaw,end)
+            params=self._parameters(states,controls,reference,field,yaw,end,mode=mode,initial_travel_direction=initial_travel_direction)
             timing['seed']+=(perf_counter()-t)*1000
             row={'seed':(('warm' if warmed else 'nominal') if attempt==0 else ('left' if side>0 else 'right'))}
             def measure(stage, operation):
@@ -274,7 +375,7 @@ class MpccPlanner:
             row['reason']=reason
             if reason!='CANDIDATE': continue
             candidate=Trajectory(grid.epoch,reference.route_version,np.arange(self.N+1)*self.dt,xs,us,mode,'mpcc:acados-sqp-rti')
-            self._warm=(key,xs,us)
+            self._warm=(key,xs,us,0.)
             return finish(candidate,'CANDIDATE_UNCERTIFIED')
         self._warm=None
         return finish(None,'NO_FEASIBLE_MPCC_CANDIDATE')
@@ -287,8 +388,8 @@ class MpccPlanner:
             or np.min(us[:,2]) < -1e-9): return 'LIMIT'
         if mode!='spin':
             sign=-1 if mode=='reverse' else 1
-            if np.min(sign*xs[:,3]) < -1e-9 or np.any(np.abs(xs[:,4])>l.curvature_inv_m*np.abs(xs[:,3])+1e-9): return 'CURVATURE'
-            if xs[-1,5]-xs[0,5]<.005: return 'NO_PROGRESS'
+            if np.min(sign*xs[:,3]) < -1e-9: return 'MODE'
+            if l.motion_model=='curvature_limited' and np.any(np.abs(xs[:,4])>l.curvature_inv_m*np.abs(xs[:,3])+1e-9): return 'CURVATURE'
         if np.any(xs[:,5]+xs[:,3]**2/(2*l.linear_accel_mps2)>end+1e-6): return 'REFERENCE_BRAKING_BOUND'
         for z in xs:
             for offset in self.offsets:

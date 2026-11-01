@@ -137,7 +137,7 @@ def _state_limit_reason(state, limits, mode):
         return CertificationReason.MODE
     if mode == "reverse" and v > eps:
         return CertificationReason.MODE
-    if abs(w) > limits.curvature_inv_m * abs(v) + eps:
+    if limits.motion_model == "curvature_limited" and abs(w) > limits.curvature_inv_m * abs(v) + eps:
         return CertificationReason.LIMIT
     return None
 
@@ -179,7 +179,7 @@ def _brake_tail(last, context, limits, mode):
     elapsed = 0.0
     while abs(current[3]) > 1e-10 or abs(current[4]) > 1e-10:
         a_capacity = limits.linear_accel_mps2
-        if abs(current[3]) > 1e-10 and abs(current[4]) > 1e-10:
+        if limits.motion_model == "curvature_limited" and abs(current[3]) > 1e-10 and abs(current[4]) > 1e-10:
             # 行进时角速度不能在线速度归零后继续存在；限制线制动使 w/v 不增。
             a_capacity = min(a_capacity, limits.angular_accel_rps2 * abs(current[3]) / abs(current[4]))
         v_time = abs(current[3]) / a_capacity if abs(current[3]) > 1e-10 else math.inf
@@ -207,8 +207,8 @@ def _brake_tail(last, context, limits, mode):
 
 
 def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimits,
-                  current_route_version: int, backend=None, context=None) -> Certification:
-    """版本、数值、动力学、约束、整车连续扫掠与制动尾段全部通过才有效。"""
+                  current_route_version: int, backend=None, context=None, check_braking_tail=True) -> Certification:
+    """检查版本、数值、动力学、约束与整车连续扫掠；默认还检查末端制动尾。"""
     if trajectory.map_epoch != grid.epoch:
         return _reject(CertificationReason.EPOCH_MISMATCH, 0)
     if trajectory.route_version != current_route_version:
@@ -226,13 +226,35 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
         np.abs(controls[:, 1]) > limits.angular_accel_rps2 + 1e-9
     ) or np.any(controls[:, 2] < -1e-9):
         return _reject(CertificationReason.LIMIT, 0)
-    if trajectory.mode == "spin" and np.any(np.abs(controls[:, 0]) > 1e-9):
-        return _reject(CertificationReason.MODE, 0)
+    # 模式开始前可含显式、单调且无进展信用的真实制动段。
+    # 起点测量不归零；到零速结点后才按主模式检查，所有段仍完整积分和扫掠。
+    prefix_end=0;prefix_mode=trajectory.mode
+    initial_reason=_state_limit_reason(states[0],limits,trajectory.mode)
+    needs_entry=(initial_reason==CertificationReason.MODE or
+                 trajectory.mode=='spin' and np.any(np.abs(controls[:,0])>1e-9))
+    if needs_entry:
+        zero=np.flatnonzero(np.abs(states[1:,3])<=1e-9)
+        if states[0,3]==0. or not len(controls):
+            return _reject(CertificationReason.MODE,0)
+        # 截断段可在制动尚未完成时结束；该段末端和制动尾仍按实际方向认证。
+        prefix_end=int(zero[0])+1 if len(zero) else len(states)
+        sign=float(np.sign(states[0,3]));speeds=states[:prefix_end+1,3]
+        if (np.any(sign*speeds<-1e-9) or np.any(np.diff(np.abs(speeds))>1e-12) or
+                np.any(sign*controls[:prefix_end,0]>1e-12) or
+                np.any(np.abs(controls[:prefix_end,2])>1e-12)):
+            return _reject(CertificationReason.MODE,0)
+        prefix_mode='forward' if sign>0 else 'reverse'
+        if prefix_end < len(states):
+            reason=_state_limit_reason(states[prefix_end],limits,prefix_mode)
+            if reason is not None:return _reject(reason,0)
+    if trajectory.mode == 'spin' and np.any(np.abs(controls[prefix_end:,0])>1e-9):
+        return _reject(CertificationReason.MODE,0)
     if context is None:
         context = prepare_certification(grid, backend=backend)
     checked = 0
     for index, state in enumerate(states):
-        reason = _state_limit_reason(state, limits, trajectory.mode)
+        mode=prefix_mode if index<prefix_end else trajectory.mode
+        reason = _state_limit_reason(state, limits, mode)
         if reason is not None:
             return _reject(reason, checked)
         if index == len(states) - 1:
@@ -243,12 +265,12 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
             return _reject(CertificationReason.DYNAMICS, checked)
         # v(t) 过零处仍有 w 会违反行进曲率；端点检查不足以发现。
         a = controls[index, 0]
-        if trajectory.mode != "spin" and abs(a) > 1e-12:
+        if limits.motion_model == "curvature_limited" and mode != "spin" and abs(a) > 1e-12:
             crossing = -state[3] / a
             if 0 < crossing < dt and abs(state[4] + controls[index, 1] * crossing) > 1e-9:
                 return _reject(CertificationReason.LIMIT, checked)
         midpoint = step(state, controls[index], dt / 2)
-        reason = _state_limit_reason(midpoint, limits, trajectory.mode)
+        reason = _state_limit_reason(midpoint, limits, mode)
         if reason is not None:
             return _reject(reason, checked)
         collision, count = _sweep(state, controls[index], dt, context, limits)
@@ -260,7 +282,10 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
         checked += 1
         if collision is not None:
             return _reject(collision, checked)
-    collision, brake_time, count = _brake_tail(states[-1], context, limits, trajectory.mode)
+    if not check_braking_tail:
+        return Certification(True, CertificationReason.VALID, checked_poses=checked)
+    tail_mode = prefix_mode if prefix_end == len(states) else trajectory.mode
+    collision, brake_time, count = _brake_tail(states[-1], context, limits, tail_mode)
     checked += count
     if collision is not None:
         braking_reasons = {
@@ -279,15 +304,17 @@ def prepare_certification(grid: GridSnapshot, *, backend=None):
 
 
 def certify(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimits,
-            current_route_version: int, *, backend=None, context=None) -> Certification:
-    """返回与完整地图、车体约束、路线版本和轨迹内容绑定的认证。"""
+            current_route_version: int, *, backend=None, context=None, check_braking_tail=True) -> Certification:
+    """绑定完整地图/约束/轨迹；默认检查停车尾，False仅检查实际轨迹本体。"""
+    if type(check_braking_tail) is not bool:
+        raise TypeError('check_braking_tail must be bool')
     if context is not None:
         if not isinstance(context, _CollisionContext) or context.grid_digest != grid.digest():
             raise ValueError("certification context grid mismatch")
         if context.backend is not backend:
             raise ValueError("certification context backend mismatch")
-    result = _certify_impl(trajectory, grid, limits, current_route_version, backend, context)
-    return replace(result, map_epoch=trajectory.map_epoch,
+    result = _certify_impl(trajectory, grid, limits, current_route_version, backend, context, check_braking_tail)
+    return replace(result, braking_tail_checked=check_braking_tail, map_epoch=trajectory.map_epoch,
                    route_version=trajectory.route_version,
                    trajectory_source=trajectory.source,
                    trajectory_digest=trajectory.digest(),

@@ -4,7 +4,6 @@
 
 # Pure Planner 操作手册
 
-104 实机非 TCP 对齐配置见 [Orin 静态 TF 与导航配置](docs/STATIC_TF_INPUT.md)，源码范围与分层验证见 [104/216 对齐记录](docs/ORIN_NON_TCP_ALIGNMENT.md)。实机启动脚本仅启动导航，不启动控制器。
 强化学习统一开发整合线为 `dev/drl-exploration`，下设功能、修复、测试和文档专项分支；分支层级、当前算法及运行命令见[强化学习开发入口](docs/DRL开发入口.md)。
 
 本次主线导入及 30 秒默认等待超时的验证见[集成记录](docs/集成地图探索规划控制修改.md)。下文历史 demo 数据保留其当时参数。
@@ -610,50 +609,6 @@ Action Result 不提供分阶段耗时或调用次数；不能把其中的 `elap
 `e93a4685ed4cebbe06bc2983b6ea3e03159554c5`；core+ROS、pure tests 和完整 foundation 均通过。
 真实 bag、月表全局输入、生产 ROS domain 原子切换与 Jetson AGX Orin 仍受下表边界约束。
 
-## 移动中滚动局部规划（隔离轮式闭环）
-
-在同一 NavigateToPose 任务内周期生成新 PathReference，正常 TRACKING 中更新路径不强制停车。
-导航协调器管理任务与版本，后台单任务计算候选，控制器负责跟踪、限速和必要的转向/换向制动。
-滚动更新失败时保留仍有效的旧路径；地图失效仍立即停止该引用，最终目标保持停稳确认。
-
-仅在统一 demo launch 中通过下列参数同时启用导航与控制器；不要只给导航打开周期而保留旧控制器行为：
-
-```bash
-source /opt/ros/jazzy/setup.bash
-source "$HOME/CodexDownloads/lunar_navigation/rolling-local-planning-20260923/install/setup.bash"
-export ROS_DOMAIN_ID=179  # 先确认该域未被其他实例使用
-ros2 launch lunar_incremental_controller_demo controller_rviz.launch.py \
-  case:=multiple_exits start_rviz:=false \
-  rolling_replan_period_s:=0.5 rolling_replan_distance_m:=1.0
-```
-
-0.5 秒和 1.0 米为本机实验起点，不是 Orin 标定值；根据实测规划耗时、速度和制动余量调整。
-周期设为 0.0 可恢复原分段模式，统一 launch 同时关闭控制器滚动更新。
-参数只在启动时读取。正常更新在转向、制动和最终对齐期间暂停；恢复跟踪后继续。
-局部路径耗尽而新路径未就绪时仍停车；最终目标之外的局部末端在滚动模式下不做末端朝向对齐。
-
-接口定义不变，控制器仍是唯一速度发布者。演示只使用 `/lunar_demo/controller/*`，不连接车辆速度话题。
-设计见 `docs/superpowers/specs/2026-09-23-rolling-local-planning-design.md`；
-验证与未执行环境见 `docs/validation/2026-09-23-rolling-local-planning.md`。
-
-平顺接续观察可用 `case:=rolling_straight observation_radius_m:=3.0`（6 米目标、局部合成观测）。
-在同一 overlay、同一 ROS 域的新终端记录：
-
-```bash
-ros2 run lunar_incremental_controller_demo run_case --case rolling_straight \
-  --timeout 180 --output /tmp/rolling-straight.json
-```
-
-该场景可能因观测边缘局部目标变化触发原有曲率制动；“滚动启用”不表示忽略转弯或换向限制。
-查看报告的 `events` 和 `rolling_summary`：移动中版本更新应出现，不能仅凭 `update_stops` 将必要转向计为异常。
-当前证据与 Humble 栈条件见验证记录；未进行 Orin 或实车验证。
-
-2026-09-23 默认配置更新：上述 incremental 轮式与足式平面闭环现默认开启滚动规划（0.5 s / 1 m）；省略周期参数即可启用。轮式或足式导航启用执行反馈时默认使用 0.5 s，关闭反馈时默认为 0；控制器仅在 incremental_reference 输入中默认启用。统一 launch 指定 `rolling_replan_period_s:=0.0` 会同时关闭两端。
-
-本部署分支的移动中持续规划配置、移植差异与验证结果见 [部署同步记录](docs/validation/2026-09-23-rolling-deployment-sync.md)。
-
-足式 `incremental_reference` 默认持续规划（0.5 s / 1 m），两端开关与验证边界见 [足式默认开启验证](docs/validation/2026-09-23-legged-rolling-default.md)。
-
 ## 当前证据边界
 
 | key | status | 边界 |
@@ -668,19 +623,14 @@ ros2 run lunar_incremental_controller_demo run_case --case rolling_straight \
 | `synthetic_global` | `FORBIDDEN` | 禁止生成或使用假全局图；不得用合成、零填充或局部图替代真实 `/Car/T3/mapping/global_overview`；月表验收仍需实机在线全局总览，或重新录制并核验包含该 Topic 的 rosbag。 |
 
 
-### 轮式导航入口（NAV-1CM Task4）
+## 轮式标准 Path 入口（NAV-1CM-20261026 Task4）
 
-`bash scripts/orin/start_navigation.sh wheel false` 与硬件源码入口
-`bash scripts/orin/start_hardware_navigation.sh` 默认选择 `nav1cm_wheel.launch.py`，
-只启动导航，不自动启用控制器或探索。新模式直接接收 P3 GridMap 并发布标准 Path；
-P3 和 `/P4/input/map_to_odom` TF 输入仍需独立启动。硬件入口保留 domain 59、
-CycloneDDS 与外部 P4 runtime 配置，本文未把测试台式结果当作硬件验收。
+轮式 `bash scripts/orin/start_navigation.sh wheel false` 选择 `nav1cm_wheel.launch.py`，默认仅启动规划器。第三个位置参数是新规划器 ROS 参数文件（不要传旧 exploration 配置）；第四个为 RViz，直接 PoseStamped，不启动旧 Action bridge。第五个 `incremental_v2` 显式恢复旧导航；足式默认保持旧导航。
 
-应用 planner/follower 共用 app `wheel_orin.yaml`，保留 `.2 m/s`、`.1 rad/s`、
-位置 `.1 m`、航向 `.02 rad` 和 nominal response `.15 s`；通用 wheel 配置仍保留
-minimum_clearance 按用户最新要求统一为 `.2 m`。显式旧模式：硬件脚本附加 `incremental_v2`；普通脚本第五参数
-`incremental_v2`，足式仍使用旧入口。
+预先配置外部 acados SDK 环境及 `NAV1CM_BUILD_DIR` 缓存目录，入口不自动下载。`ROS_SETUP` 可指定 Humble 环境脚本，`LUNAR_INSTALL_ROOT` 可指向独立安装目录，构建脚本另支持 `LUNAR_BUILD_ROOT`。`bash scripts/orin/build.sh runtime` 明确发现 ros2_ws/src 与仓库外层 one_cm planner 包；demos 模式保留。
 
-应用自己的 Humble core/native 已重建，最终受影响三包923检查通过；统一0.2 m净空的原45/75秒短例与最终完整1 cm缓坡20秒短程闭环通过。
-细源图保留实测物理判定、真实UNKNOWN和未证区域scalar回退。两项最终Important均经独立复审关闭，已合入app owner；
-Jetson Orin、真实车辆、生产DDS、真实硬件脚本运行均NOT_RUN。详见[集成收尾](docs/validation/2026-10-29-nav1cm-final-integration.md)。
+新目标：`bash scripts/orin/publish_navigation_goal.sh 1 2 0.5`，省略 yaw 为 0；旧入口/足式用 `--mode incremental_v2`/`--mode legged`，省略 yaw 保留旧 Action 的无朝向语义。`--frame`/`--topic` 显式覆盖目标帧及主题；数值参数不作为 shell 代码求值。
+
+显式控制器入口：`ros2 launch lunar_pure_wheeled_controller nav1cm_wheel.launch.py start_controller:=true command_topic:=/nav1cm_integration/cmd_vel`。共享 wheel_config、地图、里程计、TF、Path、unknown 策略及终点阈值；组合入口把请求上限限制到能力文件上限，保持生产 nominal response 0.15s。旧 pure_wheeled_controller launch 不变。
+
+2026-10-29：净空统一为0.2 m，标准Path跟踪及自适应P3地图接入已通过最终复审并合入远程主线和轮式应用线。MAIN最终467包检查、639源码测试通过/1跳过；APP最终923包检查及完整1 cm缓坡短程闭环通过。原Windows主工作区其他任务的未提交改动保留；Orin/实车仍NOT_RUN。身份、净空短例与边界见[集成收尾](docs/validation/2026-10-29-nav1cm-final-integration.md)。

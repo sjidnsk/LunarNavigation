@@ -15,16 +15,18 @@ def load_configuration(path, overrides=None):
     extent = capability['body_extent_m']
     limits = WheelLimits(
         body_length_m=float(extent[0]), body_width_m=float(extent[1]),
+        motion_model=capability.get('motion_model','curvature_limited'),
         linear_speed_mps=min(float(capability['maximum_forward_speed_mps']),
                              float(capability['maximum_reverse_speed_mps'])),
         angular_speed_rps=float(capability['maximum_spin_rate_radps']),
+        # 规划模型只有一项对称导数上限，取增速/制动共同可执行的包络；不混用正负方向。
         linear_accel_mps2=min(float(capability['maximum_acceleration_mps2']),
                               float(capability['maximum_braking_deceleration_mps2'])),
         angular_accel_rps2=float(capability['maximum_yaw_acceleration_radps2']),
         curvature_inv_m=float(capability['maximum_curvature_per_m']),
         minimum_clearance_m=resolve_minimum_clearance(capability.get('minimum_clearance_m',0.0)))
     if overrides:
-        values = {key: float(value) for key,value in overrides.items()}
+        values = {key: (value if key=='motion_model' else float(value)) for key,value in overrides.items()}
         values["minimum_clearance_m"] = resolve_minimum_clearance(limits.minimum_clearance_m, values.get("minimum_clearance_m"))
         limits = replace(limits, **values)
     return limits, WheelTerrainCapability.from_mapping(document)

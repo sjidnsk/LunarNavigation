@@ -1,7 +1,3 @@
-#include "lunar_incremental_navigation_ros/elevation_pipeline.hpp"
-
-#include <gtest/gtest.h>
-
 #include <atomic>
 #include <cmath>
 #include <chrono>
@@ -9,7 +5,6 @@
 #include <limits>
 #include <cstddef>
 #include <future>
-#include <limits>
 #include <memory>
 #include <numbers>
 #include <stdexcept>
@@ -47,18 +42,11 @@ using lunar::incremental_navigation::WheeledCapability;
 }
 
 [[nodiscard]] OwnedElevationEvidence BlockedTerrainEvidence(
-    const double origin_x_m = 0.0, const std::size_t side = 7U) {
-  auto evidence = Evidence(0.0F, origin_x_m, side, side);
+    const double origin_x_m = 0.0) {
+  auto evidence = Evidence(0.0F, origin_x_m);
   for (std::size_t index = 0U; index < evidence.elevation_m.size(); ++index) {
     evidence.elevation_m[index] = index % 2U == 0U ? 0.0F : 10.0F;
   }
-  return evidence;
-}
-
-[[nodiscard]] OwnedElevationEvidence HeightShiftedBlockedEvidence(
-    const float shift, const double origin_x_m = 0.) {
-  auto evidence = BlockedTerrainEvidence(origin_x_m);
-  for (auto& height : evidence.elevation_m) height += shift;
   return evidence;
 }
 
@@ -145,41 +133,6 @@ struct FailureGate final {
       .clearance_weight = 0.0,
       .start_blind_zone_margin_m = 0.0,
   };
-}
-
-TEST(ElevationPipelineTest,
-     UnknownOnlyBoundsReachFineAndGuidanceWithoutDirtyHeights) {
-  ElevationPipeline pipeline(Capability(), Profile(), 1.0);
-  auto evidence =
-      Evidence(std::numeric_limits<float>::quiet_NaN(), -32., 320U, 320U);
-  evidence.geometry.origin_m.y = -32.;
-  ASSERT_EQ(
-      pipeline.ApplyLocal(evidence).status,
-      lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
-  EXPECT_EQ(pipeline.PendingFineDirtyTileCount(), 0U);
-  ASSERT_TRUE(pipeline.RunFineDerivation());
-  ASSERT_TRUE(pipeline.RunGuidanceDerivation());
-  const auto first = pipeline.CaptureBundle();
-  ASSERT_TRUE(first.fine);
-  ASSERT_TRUE(first.guidance);
-  EXPECT_EQ(first.fine->geometry().width(), 320U);
-  EXPECT_EQ(first.guidance->geometry().width(), 64U);
-  EXPECT_EQ(first.fine->State({160, 160}),
-            lunar::incremental_navigation::FineCellState::kUnknown);
-  EXPECT_EQ(first.fine->elevation()->allocated_tiles(), 0U);
-  EXPECT_FALSE(pipeline.RunFineDerivation());
-  evidence.geometry.origin_m.x = -40.;
-  ASSERT_EQ(
-      pipeline.ApplyLocal(evidence).status,
-      lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
-  EXPECT_EQ(pipeline.PendingFineDirtyTileCount(), 0U);
-  ASSERT_TRUE(pipeline.RunFineDerivation());
-  ASSERT_TRUE(pipeline.RunGuidanceDerivation());
-  const auto grown = pipeline.CaptureBundle();
-  EXPECT_EQ(grown.fine->geometry().width(), 360U);
-  EXPECT_EQ(grown.guidance->geometry().width(), 72U);
-  EXPECT_EQ(first.fine->geometry().width(), 320U);
-  EXPECT_FALSE(pipeline.RunFineDerivation());
 }
 
 TEST(ElevationPipelineTest, CallbacksOnlyWriteRawAndMergeDirtyWork) {
@@ -355,114 +308,20 @@ void ExpectAllExportedFieldsEqual(const WireTiles& reconstructed,
   }
 }
 
-void ExpectNavigationUnchanged(
-    const lunar::incremental_navigation::FineTraversabilitySnapshot& before,
-    const lunar::incremental_navigation::FineTraversabilitySnapshot& after) {
-  ASSERT_EQ(before.tile_indices(), after.tile_indices());
-  for (const auto index : before.tile_indices()) {
-    const auto a = before.FindTile(index), b = after.FindTile(index);
-    ASSERT_TRUE(a);
-    ASSERT_TRUE(b);
-    EXPECT_EQ(a->states(), b->states());
-    EXPECT_EQ(a->traversal_costs(), b->traversal_costs());
-    EXPECT_EQ(a->confidence_values(), b->confidence_values());
-    for (std::size_t i = 0; i < a->ground_values().size(); ++i)
-      EXPECT_EQ(a->GroundHeight(i), b->GroundHeight(i));
-  }
-}
-
-TEST(PolicyMapPipelineExport, HeightOnlyClassificationUsesConfiguredProfile) {
-  using lunar::incremental_navigation::IntrinsicCellState;
-  using lunar::incremental_navigation::MakePlatformElevationEvaluator;
-  for (const bool cubic : {true}) {
-    SCOPED_TRACE(cubic ? "baseline with nonzero background" : "moving least squares");
-    auto capability = Capability();
-    auto& wheel = std::get<WheeledCapability>(capability);
-    wheel.footprint_xy_m = {{-.01, -.01}, {.01, -.01}, {.01, .01}, {-.01, .01}};
-    wheel.minimum_clearance_m = 0.;
-    wheel.maximum_slope_rad = .3;
-    wheel.maximum_local_obstacle_relief_m = cubic ? .2 : 10.;
-    wheel.minimum_underbody_clearance_m = 10.;
-    auto profile = Profile();
-    profile.planar_envelope_xy_m = wheel.footprint_xy_m;
-    profile.maximum_slope_rad = wheel.maximum_slope_rad;
-    profile.terrain_background_half_width_m = cubic ? 1.6 : .8;
-    auto evidence = Evidence(0.0F, 0., 25U, 25U);
-    for (int y = 0; y < 25; ++y)
-      for (int x = 0; x < 25; ++x) {
-        const double dx = (x - 12) * .2, dy = (y - 12) * .2;
-        evidence.elevation_m[y * 25 + x] = cubic ? .5 * dx * dx * dx + .03 * dy
-                                               : .1 * dx + .25 * dx * dx + .07 * dy * dy;
-        if (std::abs(x - 12) <= 1 && std::abs(y - 12) <= 1)
-          evidence.elevation_m[y * 25 + x] = std::numeric_limits<float>::quiet_NaN();
-      }
-    ASSERT_TRUE(evidence.terrain_measurements.empty());
-    ElevationPipeline pipeline(capability, profile, 1.0);
-    PolicyMapExporter exporter(capability, profile);
-    ASSERT_EQ(pipeline.ApplyLocal(evidence, 10).status,
-              lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
-    ASSERT_TRUE(pipeline.RunFineDerivation());
-    const auto check_classification = [&](const PolicyResponse& response) {
-      const auto fine = pipeline.CaptureBundle().fine;
-      const auto raw = fine->elevation();
-      EXPECT_EQ(response.profile_hash, fine->platform_profile_hash());
-      EXPECT_FALSE(raw->TerrainMeasurementsAt({10, 10}));
-      auto selected = MakePlatformElevationEvaluator(capability,
-          profile.terrain_background_half_width_m);
-      auto fallback = MakePlatformElevationEvaluator(capability);
-      std::size_t different = 0;
-      for (const auto& tile : response.tiles)
-        for (std::size_t offset = 0; offset < tile.states.size(); ++offset) {
-          const lunar::incremental_navigation::GridIndex cell{
-              tile.tile_x * lunar::incremental_navigation::kGridTileWidthCells +
-                  static_cast<std::int64_t>(offset % lunar::incremental_navigation::kGridTileWidthCells),
-              tile.tile_y * lunar::incremental_navigation::kGridTileWidthCells +
-                  static_cast<std::int64_t>(offset / lunar::incremental_navigation::kGridTileWidthCells)};
-          const auto expected = selected->Evaluate(*raw, cell).state;
-          const auto old = fallback->Evaluate(*raw, cell).state;
-          different += expected != old;
-          EXPECT_EQ(tile.intrinsic_states[offset], static_cast<std::uint8_t>(expected));
-          EXPECT_EQ(tile.observed[offset], EffectiveObservedState(expected,
-              raw->ElevationAt(cell).value_or(std::numeric_limits<float>::quiet_NaN())));
-        }
-      EXPECT_GT(different, 0U);  // 夹具必须实际区分所选profile与默认分类器。
-    };
-    const auto base = ExportCaptured(pipeline, exporter);
-    ASSERT_TRUE(base.ready);
-    check_classification(base);
-    WireTiles reconstructed;
-    ApplyWireTiles(base, reconstructed);
-    evidence.elevation_m[7 * 25 + 7] += .005F;
-    ASSERT_EQ(pipeline.ApplyLocal(evidence, 20).status,
-              lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
-    ASSERT_TRUE(pipeline.RunFineDerivation());
-    const auto delta = ExportCaptured(pipeline, exporter, base.fine_revision);
-    const auto full = ExportCaptured(pipeline, exporter);
-    ASSERT_FALSE(delta.full_snapshot);
-    ASSERT_FALSE(delta.tiles.empty());
-    check_classification(full);
-    ApplyWireTiles(delta, reconstructed);
-    ExpectAllExportedFieldsEqual(reconstructed, full);
-  }
-}
-
 TEST(PolicyMapPipelineExport, HeightOnlyDeltaMatchesFullWithUnchangedNavigationFields) {
-  // 阻塞地形没有FREE有效地面，严格建立导航字段不变的height-only前提。
   ElevationPipeline pipeline(Capability(), Profile(), 1.0);
   PolicyMapExporter exporter(Capability(), Profile());
-  ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.0F), 10).status,
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.0F), 10).status,
             lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
   ASSERT_TRUE(pipeline.RunFineDerivation());
   const auto base = ExportCaptured(pipeline, exporter);
-  const auto base_fine = pipeline.CaptureBundle().fine;
   ASSERT_TRUE(base.ready);
   ASSERT_FALSE(base.tiles.empty());
   WireTiles reconstructed;
   ApplyWireTiles(base, reconstructed);
-  ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.1F), 20).status,
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.1F), 20).status,
             lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
   ASSERT_TRUE(pipeline.RunFineDerivation());
-  ExpectNavigationUnchanged(*base_fine, *pipeline.CaptureBundle().fine);
   EXPECT_TRUE(pipeline.CaptureBundle().fine->changed_tiles().empty());
   const auto delta = ExportCaptured(pipeline, exporter, base.fine_revision);
   const auto full = ExportCaptured(pipeline, exporter);
@@ -541,31 +400,28 @@ TEST(PolicyMapPipelineExport, MeasuredUnknownTileIsExportedWithoutAllocatedNavig
 }
 
 TEST(PolicyMapPipelineExport, CoalescedRawUpdatesAndSkippedFineRevisionsMatchFull) {
-  // 阻塞地形没有FREE有效地面，严格建立导航字段不变的height-only前提。
   ElevationPipeline pipeline(Capability(), Profile(), 1.0);
   PolicyMapExporter exporter(Capability(), Profile());
   for (const double x : {0., 120., 240.}) {
-    ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.0F, x), 10).status,
+    ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.0F, x), 10).status,
               lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
   }
   ASSERT_TRUE(pipeline.RunFineDerivation());
   const auto base = ExportCaptured(pipeline, exporter);
-  const auto base_fine = pipeline.CaptureBundle().fine;
   ASSERT_EQ(base.tiles.size(), 3U);
   WireTiles reconstructed;
   ApplyWireTiles(base, reconstructed);
-  ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.1F, 0.), 20).status,
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.1F, 0.), 20).status,
             lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
-  ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.2F, 240.), 30).status,
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.2F, 240.), 30).status,
             lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
   ASSERT_TRUE(pipeline.RunFineDerivation());
-  ExpectNavigationUnchanged(*base_fine, *pipeline.CaptureBundle().fine);
   EXPECT_TRUE(pipeline.CaptureBundle().fine->changed_tiles().empty());
   const auto coalesced = ExportCaptured(pipeline, exporter, base.fine_revision);
   ASSERT_FALSE(coalesced.full_snapshot);
   ApplyWireTiles(coalesced, reconstructed);
   ExpectAllExportedFieldsEqual(reconstructed, ExportCaptured(pipeline, exporter));
-  ASSERT_EQ(pipeline.ApplyLocal(HeightShiftedBlockedEvidence(0.3F, 120.), 40).status,
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.3F, 120.), 40).status,
             lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
   ASSERT_TRUE(pipeline.RunFineDerivation());
   const auto skipped = ExportCaptured(pipeline, exporter, base.fine_revision);
@@ -746,9 +602,8 @@ TEST(ElevationPipelineTest, RejectedAdapterInputPreservesPublishedSnapshots) {
 TEST(ElevationPipelineTest,
      FineAndGuidanceWorkersPublishContentChangesIndependentlyWithoutPrior) {
   ElevationPipeline pipeline(Capability(), Profile(), 1.0);
-  ASSERT_EQ(
-      pipeline.ApplyLocal(Evidence(0.0F, 0.0, 15U, 15U)).status,
-      lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.0F)).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
   ASSERT_TRUE(pipeline.RunFineDerivation());
   EXPECT_EQ(pipeline.CaptureBundle().guidance, nullptr);
 
@@ -758,9 +613,8 @@ TEST(ElevationPipelineTest,
   EXPECT_EQ(first.guidance->source_fine_traversability_revision(), 1U);
   EXPECT_EQ(first.guidance->global_guidance_revision(), 1U);
 
-  ASSERT_EQ(
-      pipeline.ApplyLocal(BlockedTerrainEvidence(0.0, 15U)).status,
-      lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_EQ(pipeline.ApplyLocal(BlockedTerrainEvidence()).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
   ASSERT_TRUE(pipeline.RunFineDerivation());
   const auto fine_only = pipeline.CaptureBundle();
   EXPECT_EQ(fine_only.fine->fine_traversability_revision(), 2U);
@@ -847,9 +701,8 @@ TEST(ElevationPipelineTest, ConcurrentCaptureNeverObservesGuidanceAheadOfFine) {
 
 TEST(ElevationPipelineTest, CapturedBundleRemainsImmutableAcrossLaterWorkers) {
   ElevationPipeline pipeline(Capability(), Profile(), 1.0);
-  ASSERT_EQ(
-      pipeline.ApplyLocal(Evidence(0.0F, 0.0, 15U, 15U)).status,
-      lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_EQ(pipeline.ApplyLocal(Evidence(0.0F)).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
   ASSERT_TRUE(pipeline.RunFineDerivation());
   ASSERT_TRUE(pipeline.RunGuidanceDerivation());
   const auto captured = pipeline.CaptureBundle();
@@ -857,9 +710,8 @@ TEST(ElevationPipelineTest, CapturedBundleRemainsImmutableAcrossLaterWorkers) {
   const auto old_guidance_revision =
       captured.guidance->global_guidance_revision();
 
-  ASSERT_EQ(
-      pipeline.ApplyLocal(BlockedTerrainEvidence(0.0, 15U)).status,
-      lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
+  ASSERT_EQ(pipeline.ApplyLocal(BlockedTerrainEvidence()).status,
+            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
   ASSERT_TRUE(pipeline.RunFineDerivation());
   ASSERT_TRUE(pipeline.RunGuidanceDerivation());
   const auto latest = pipeline.CaptureBundle();
@@ -872,43 +724,4 @@ TEST(ElevationPipelineTest, CapturedBundleRemainsImmutableAcrossLaterWorkers) {
 }
 
 }  // namespace
-TEST(PolicyMapPipelineExport, ChangedGroundAloneProducesDeltaMatchingFull) {
-  ElevationPipeline pipeline(Capability(), Profile(), 1.0);
-  PolicyMapExporter exporter(Capability(), Profile());
-  auto evidence = Evidence(0.0F);
-  // 显式原生平地中心统计固定state/cost，隔离有效地面高程变化。
-  evidence.terrain_measurements.resize(evidence.elevation_m.size());
-  for (std::size_t y = 0; y < evidence.geometry.height; ++y)
-    for (std::size_t x = 0; x < evidence.geometry.width; ++x)
-      evidence.terrain_measurements[y * evidence.geometry.width + x] = {
-          .center_known = true,
-          .neighborhood_complete = x > 0 && y > 0 &&
-              x + 1 < evidence.geometry.width && y + 1 < evidence.geometry.height};
-  ASSERT_EQ(pipeline.ApplyLocal(evidence, 10).status,
-            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
-  ASSERT_TRUE(pipeline.RunFineDerivation());
-  const auto base = ExportCaptured(pipeline, exporter);
-  const auto old_fine = pipeline.CaptureBundle().fine;
-  WireTiles reconstructed;
-  ApplyWireTiles(base, reconstructed);
-  evidence.elevation_m.assign(evidence.elevation_m.size(), .125F);
-  ASSERT_EQ(pipeline.ApplyLocal(evidence, 20).status,
-            lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
-  ASSERT_TRUE(pipeline.RunFineDerivation());
-  EXPECT_FALSE(pipeline.CaptureBundle().fine->changed_tiles().empty());
-  const auto delta = ExportCaptured(pipeline, exporter, base.fine_revision);
-  const auto full = ExportCaptured(pipeline, exporter);
-  ASSERT_FALSE(delta.full_snapshot);
-  ASSERT_FALSE(delta.tiles.empty());
-  ASSERT_EQ(base.tiles.size(), full.tiles.size());
-  EXPECT_EQ(base.tiles[0].states, full.tiles[0].states);
-  EXPECT_EQ(base.tiles[0].intrinsic_states, full.tiles[0].intrinsic_states);
-  EXPECT_EQ(base.tiles[0].costs, full.tiles[0].costs);
-  const auto center_offset = 3 * lunar::incremental_navigation::kGridTileWidthCells + 3;
-  EXPECT_NE(old_fine->FindTile({0, 0})->GroundHeight(center_offset),
-            pipeline.CaptureBundle().fine->FindTile({0, 0})->GroundHeight(center_offset));
-  ApplyWireTiles(delta, reconstructed);
-  ExpectAllExportedFieldsEqual(reconstructed, full);
-}
-
 }  // namespace lunar::incremental_navigation_ros

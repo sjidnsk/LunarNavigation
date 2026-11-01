@@ -20,7 +20,7 @@ def test_standard_defaults_use_direct_p3_and_wheel_capability():
         node=PureWheeledControllerNode()
         assert node._map_client is None
         assert node._p3_source is not None
-        assert node._executor.config.state_age_budget_s==.5
+        assert node._executor.config.state_age_budget_s is None
         assert node._body_dimensions==pytest.approx((1.182,.818))
         import yaml
         from pathlib import Path
@@ -84,7 +84,7 @@ def test_worker_pending_tf_sameepoch_and_malformed_liveness():
             message.info.pose.orientation.z=np.sin(.1*index)
             message.info.pose.orientation.w=np.cos(.1*index)
             source.submit_map(message,4.+index);assert source.wait_idle()
-            assert source._store.source_resolution_m==pytest.approx(resolution)
+            assert source._source_resolution_m==pytest.approx(resolution)
             assert source.snapshot().received_at==4.+index
             assert source.snapshot().grid.states.shape==(500,500)
     finally:source.close()
@@ -104,7 +104,7 @@ def test_latest_zero_stamp_chain_and_missing_feedback_diagnostic(monkeypatch):
         node._tick()
         assert diagnostics[-1]['measured_stopped'] is None
         assert not diagnostics[-1]['certified_stop']
-        odom=Odometry();odom.header.frame_id='arbitrary_odom';odom.child_frame_id='wheel_body'
+        odom=Odometry();odom.header.stamp=node.get_clock().now().to_msg();odom.header.frame_id='arbitrary_odom';odom.child_frame_id='wheel_body'
         odom.pose.pose.orientation.w=1.;odom.twist.twist.linear.x=-.12
         node._on_odometry(odom)
         assert node._odometry is None
@@ -119,7 +119,8 @@ def test_latest_zero_stamp_chain_and_missing_feedback_diagnostic(monkeypatch):
         rclpy.shutdown()
 
 
-def test_map_replaced_during_solve_rejects_stale_command(monkeypatch):
+@pytest.mark.parametrize('new_state',[0,2])
+def test_map_replaced_during_solve_rejects_stale_command(monkeypatch,new_state):
     import time
     from types import SimpleNamespace as S
     from nav_msgs.msg import Odometry,Path
@@ -134,9 +135,9 @@ def test_map_replaced_during_solve_rejects_stale_command(monkeypatch):
         for x in (0.,1.):
             p=PoseStamped();p.pose.position.x=x;p.pose.orientation.w=1.;path.poses.append(p)
         node._on_path(path)
-        odom=Odometry();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.;node._on_odometry(odom)
-        free=GridMap(np.ones((500,500),np.uint8),.01,(-2.5,-2.5),revision=1)
-        blocked=GridMap(np.full((500,500),2,np.uint8),.01,(-2.5,-2.5),revision=2)
+        odom=Odometry();odom.header.stamp=node.get_clock().now().to_msg();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.;node._on_odometry(odom)
+        free=GridMap(np.ones((500,500),np.uint8),.01,(-2.5,-2.5),revision=1,epoch='1')
+        blocked=GridMap(np.full((500,500),new_state,np.uint8),.01,(-2.5,-2.5),revision=2,epoch='2')
         current=[free]
         monkeypatch.setattr(node,'_standard_grid',lambda state:current[0])
         def solve(*args,**kwargs):
@@ -193,7 +194,7 @@ def test_full_body_map_delayed_braking_tail_reaches_intrinsic_wall():
     assert not follower.certify_publication(state,0.,0.,.1)
 
 
-def test_slow_publication_recertification_covers_current_ros_age(monkeypatch):
+def test_slow_publication_recertification_expires_without_chasing_current_ros_age(monkeypatch):
     from types import SimpleNamespace as S
     from nav_msgs.msg import Odometry,Path
     from geometry_msgs.msg import PoseStamped
@@ -205,7 +206,7 @@ def test_slow_publication_recertification_covers_current_ros_age(monkeypatch):
     try:
         node=PureWheeledControllerNode();clock=[10_000_000_000]
         monkeypatch.setattr(node,'get_clock',lambda:S(now=lambda:Time(nanoseconds=clock[0])))
-        odom=Odometry();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.
+        odom=Odometry();odom.header.stamp=node.get_clock().now().to_msg();odom.header.frame_id='map';odom.pose.pose.orientation.w=1.
         node._on_odometry(odom)
         path=Path();path.header.frame_id='map'
         for x in (0.,1.):
@@ -223,8 +224,12 @@ def test_slow_publication_recertification_covers_current_ros_age(monkeypatch):
             if len(ages)==1:clock[0]+=100_000_000
             return True
         monkeypatch.setattr(node._executor,'certify_publication',certify)
+        rejected=[];published=[]
+        monkeypatch.setattr(node,'_standard_unavailable',lambda reason,**kw:rejected.append(reason))
+        monkeypatch.setattr(node,'_publish_twist',lambda *a:published.append(a))
         node._tick()
-        assert len(ages)==2 and ages[-1]>=.2
+        assert len(ages)==1 and ages[0]>=.1
+        assert rejected==['publication_certificate_expired'] and not published
     finally:
         if node is not None:node.destroy_node()
         rclpy.shutdown()
@@ -261,7 +266,7 @@ def test_lateral_feedback_is_preserved_in_body_frame_and_is_not_stopped(monkeypa
         tf.transform.rotation.z=np.sin(np.pi/4)
         tf.transform.rotation.w=np.cos(np.pi/4)
         node._on_tf(TFMessage(transforms=[tf]))
-        odom=Odometry();odom.header.frame_id='sensor_odom';odom.child_frame_id='wheel_body'
+        odom=Odometry();odom.header.stamp=node.get_clock().now().to_msg();odom.header.frame_id='sensor_odom';odom.child_frame_id='wheel_body'
         odom.pose.pose.orientation.w=1.;odom.twist.twist.linear.y=.1
         node._on_odometry(odom)
         assert node._standard_state.yaw_rad==pytest.approx(np.pi/2)
@@ -285,10 +290,10 @@ def test_nan_lateral_feedback_is_rejected_and_cannot_renew_liveness():
     node=None
     try:
         node=PureWheeledControllerNode()
-        good=Odometry();good.header.frame_id='map';good.pose.pose.orientation.w=1.
+        good=Odometry();good.header.stamp=node.get_clock().now().to_msg();good.header.frame_id='map';good.pose.pose.orientation.w=1.
         node._on_odometry(good)
         assert node._odometry is good and node._odometry_received_at is not None
-        bad=Odometry();bad.header.frame_id='map';bad.pose.pose.orientation.w=1.
+        bad=Odometry();bad.header.stamp=node.get_clock().now().to_msg();bad.header.frame_id='map';bad.pose.pose.orientation.w=1.
         bad.twist.twist.linear.y=float('nan')
         node._on_odometry(bad)
         assert node._odometry is None and node._odometry_received_at is None
@@ -296,6 +301,7 @@ def test_nan_lateral_feedback_is_rejected_and_cannot_renew_liveness():
         diagnostics=[];node._mppi_diagnostics=S(publish=lambda msg:diagnostics.append(json.loads(msg.data)))
         node._tick()
         assert diagnostics[-1]['event']=='certificate_unavailable'
+        assert node._executor.failure=='INVALID_FEEDBACK'
         assert diagnostics[-1]['measured_stopped'] is None
         assert not diagnostics[-1]['certified_stop']
     finally:
@@ -326,7 +332,17 @@ def test_r7_fractional_p3_native_map_and_zero_history_stop():
         message.data[0].data=h.ravel(order='F').tolist()
         source.set_center(x,y);source.submit_map(message,1.);assert source.wait_idle()
         assert source.error is None
-        grid=source.snapshot().grid;world=source._world
+        grid=source.snapshot().grid
+        # 原生地图已由子进程独占；独立重建参考，不从生产源导出累计私有状态。
+        from ament_index_python.packages import get_package_prefix
+        from nav1cm.p3_map import P3MapStore
+        from nav1cm.terrain_native import WheelTerrainCapability
+        import hashlib
+        native_prefix=Path(get_package_prefix('lunar_nav1cm_planner'))/'lib'
+        reference_store=P3MapStore(library_path=native_prefix/'libnav1cm_terrain.so',
+            capability=WheelTerrainCapability.from_mapping(capability))
+        try:world=reference_store.apply(message)
+        finally:reference_store._terrain.close()
         reference=center_support(world,x,y,body_length_m=1.182,body_width_m=.818,
                                  minimum_clearance_m=capability["minimum_clearance_m"])
         np.testing.assert_array_equal(grid.states,reference.cells+1)
@@ -344,8 +360,8 @@ def test_r7_fractional_p3_native_map_and_zero_history_stop():
             planner_digest=planner.digest(),free_rectangles=len(world.known_free),
             states=dict(zip(*[a.tolist() for a in np.unique(grid.states,return_counts=True)])),
             eligible=int(grid.eligible.sum()),center_state=int(grid.states[250,250]),
-            certified_stop=bool(certified),terrain_sha=source._store._terrain.library_sha256,
-            field_sha=source._backend.library_sha256)))
+            certified_stop=bool(certified),terrain_sha=hashlib.sha256((native_prefix/'libnav1cm_terrain.so').read_bytes()).hexdigest(),
+            field_sha=hashlib.sha256((native_prefix/'libnav1cm_distance_field.so').read_bytes()).hexdigest())))
         assert grid.origin==(x-2.5,y-2.5)
         assert grid.states[250,250]==1
         assert certified
@@ -373,3 +389,23 @@ def test_direct_p3_clearance_support_drives_continuous_command_certificate(margi
     far=int(np.ceil((np.hypot(1.182,.818)/2+margin+.05)*100))
     # 支撑图已包含配置净空；command层只追加执行误差，不能再加一遍净空。
     assert grid_at(far,margin).valid_motion(poses,velocity,.1,0.).all()
+
+
+def test_computation_reprojects_same_world_without_mutating_old_receipt():
+    from nav1cm.contracts import WorldSnapshot
+    from lunar_pure_wheeled_controller.p3_map_source import _MapComputation
+    computation=_MapComputation(None,None,(1.182,.818),0.,False,'map')
+    computation.world=WorldSnapshot(7,(),())
+    computation.valid_received=1.
+    first,_,error,_=computation.process_inputs(None,None,(0.,0.))
+    assert error is None
+    original=first.grid.states.copy()
+    second,_,error,_=computation.process_inputs(None,None,(.013,.027))
+    assert error is None
+    assert first.grid.epoch==second.grid.epoch=='7'
+    assert second.grid.revision>first.grid.revision and second.grid.origin!=first.grid.origin
+    assert np.array_equal(first.grid.states,original) and not first.grid.states.flags.writeable
+    # 真实物理身份改变仍生成新 epoch，不复用旧窗口身份。
+    computation.world=WorldSnapshot(8,(),())
+    third,_,error,_=computation.process_inputs(None,None,(.013,.027))
+    assert error is None and third.grid.epoch=='8' and third.grid.revision>second.grid.revision

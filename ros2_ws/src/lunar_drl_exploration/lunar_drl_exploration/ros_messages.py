@@ -2,6 +2,7 @@
 
 No Scene, environment, reference calculator, learner or Critic dependency.
 """
+from array import array
 from dataclasses import dataclass
 from collections import deque
 from threading import Lock
@@ -75,7 +76,7 @@ def grid_message(planes, origin, resolution, nanoseconds, frame='odom'):
         value=Float32MultiArray()
         value.layout.dim=[MultiArrayDimension(label='column_index',size=height,stride=height*width),
                           MultiArrayDimension(label='row_index',size=width,stride=width)]
-        value.data=np.ascontiguousarray(plane[::-1,::-1],dtype=np.float32).ravel()
+        value.data=array('f',np.ascontiguousarray(plane[::-1,::-1],dtype=np.float32).ravel())
         msg.data.append(value)
     return msg
 
@@ -114,7 +115,99 @@ class NavigationResult:
     last_segment_revision: int
 
 
-class RosNavigationAdapter:
+class PolicyMapClient:
+    """只读取实际里程计、TF 与增量策略地图的非阻塞客户端。"""
+    def __init__(self, node, *, policy_map_service, odometry_topic, tf_topic='/tf',
+                 tf_static_topic='/tf_static', map_frame='map', odom_frame='odom'):
+        from lunar_planning_msgs.srv import GetPolicyMap
+        from nav_msgs.msg import Odometry
+        from tf2_msgs.msg import TFMessage
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+        self.node=node;self._service_type=GetPolicyMap
+        self.map_frame=map_frame;self.odom_frame=odom_frame;self._map_from_odom=None
+        self.client=node.create_client(GetPolicyMap,policy_map_service)
+        self.store=PolicyMapStore();self.snapshot=None;self.processed_stamp_ns=0
+        self.pose=None;self.pose_history=deque(maxlen=4096)
+        self.velocity=(float('nan'),float('nan'));self.pose_received_monotonic=0.
+        self._map_future=None;self._force_full=False;self.map_reason='NO_RESPONSE'
+        self._request_serial=0;self._minimum_response_serial=1;self._current_input=False
+        live=QoSProfile(depth=10,reliability=ReliabilityPolicy.BEST_EFFORT,
+                        durability=DurabilityPolicy.VOLATILE)
+        static=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,
+                          durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.subscriptions=[node.create_subscription(Odometry,odometry_topic,self._pose,live),
+            node.create_subscription(TFMessage,tf_topic,self._tf,live),
+            node.create_subscription(TFMessage,tf_static_topic,self._tf,static)]
+
+    def _tf(self,msg):
+        for transform in msg.transforms:
+            if transform.header.frame_id==self.map_frame and transform.child_frame_id==self.odom_frame:
+                self._map_from_odom=transform
+
+    def _pose(self,msg):
+        if msg.header.frame_id==self.map_frame:
+            self.pose=pose_in_map(msg)
+        elif msg.header.frame_id==self.odom_frame and self._map_from_odom is not None:
+            self.pose=pose_in_map(msg,self._map_from_odom)
+        else:return
+        self.velocity=(msg.twist.twist.linear.x,msg.twist.twist.angular.z)
+        self.pose_received_monotonic=time.monotonic()
+        self.pose_history.append((stamp_ns(msg.header.stamp),self.pose))
+
+    def observation_pose(self,stamp):
+        for stamp_value,pose in reversed(self.pose_history):
+            if stamp_value<=stamp:return pose
+        return None
+
+    def require_fresh_snapshot(self):
+        """Require a successful request issued after this lifecycle boundary.
+
+        Keep the applied snapshot for delta recovery and cumulative evidence.
+        An already-outstanding request cannot certify the new current anchor.
+        """
+        self._minimum_response_serial=self._request_serial+1
+        self._current_input=False
+
+    def poll_snapshot(self,minimum_map_stamp_ns=0,*,refresh=True):
+        service_ready=self.client.service_is_ready()
+        if not service_ready:
+            self.require_fresh_snapshot()
+            self.map_reason="SERVICE_UNAVAILABLE"
+            if self._map_future is not None:
+                # Only this adapter's request is retired; a dead server need
+                # never resolve it, and its eventual reply must be ignored.
+                self.client.remove_pending_request(self._map_future)
+                self._map_future=None
+        if self._map_future is not None and self._map_future.done():
+            future=self._map_future;self._map_future=None
+            self._current_input=False
+            try:response=future.result()
+            except Exception as exc:
+                self.map_reason="MAP_TRANSPORT_ERROR: "+str(exc)
+            else:
+                self.map_reason=response.reason_code if response is not None else "NO_RESPONSE"
+                if response is not None and response.ready:
+                    try:self.snapshot=self.store.apply(response)
+                    except (ValueError,TypeError,AttributeError) as exc:
+                        self.map_reason=str(exc);self._force_full=True
+                    else:
+                        self._force_full=False
+                        self.processed_stamp_ns=stamp_ns(response.processed_stamp)
+                        self._current_input=service_ready and self._request_serial>=self._minimum_response_serial
+        current=(self._current_input and self.snapshot is not None
+                 and self.processed_stamp_ns>=minimum_map_stamp_ns)
+        if self._map_future is None and service_ready and (refresh or not current):
+            req=self._service_type.Request()
+            req.since_revision=0 if self._force_full or self.snapshot is None else self.snapshot.revision
+            req.minimum_map_stamp_ns=int(minimum_map_stamp_ns)
+            self._map_future=self.client.call_async(req)
+            self._request_serial+=1
+        if self._current_input and self.snapshot is not None and self.processed_stamp_ns>=minimum_map_stamp_ns:
+            return self.snapshot
+        return None
+
+
+class RosNavigationAdapter(PolicyMapClient):
     """Nonblocking action/map client; caller owns spinning, time and lifecycle."""
     def __init__(self,node,*,action_name,policy_map_service,odometry_topic,
                  diagnostics_topic,path_reference_topic,tf_topic="/tf",map_frame="map",odom_frame="odom",
@@ -156,26 +249,6 @@ class RosNavigationAdapter:
         self._cancel=False;self._cancel_future=None;self.sent_goal=None
         self._force_full=False;self.map_reason="NO_RESPONSE"
         self._request_serial=0;self._minimum_response_serial=1;self._current_input=False
-
-    def _tf(self,msg):
-        for transform in msg.transforms:
-            if transform.header.frame_id==self.map_frame and transform.child_frame_id==self.odom_frame:
-                self._map_from_odom=transform
-
-    def _pose(self,msg):
-        if msg.header.frame_id==self.map_frame:
-            self.pose=pose_in_map(msg)
-        elif msg.header.frame_id==self.odom_frame and self._map_from_odom is not None:
-            self.pose=pose_in_map(msg,self._map_from_odom)
-        else:return
-        self.velocity=(msg.twist.twist.linear.x,msg.twist.twist.angular.z)
-        self.pose_received_monotonic=time.monotonic()
-        self.pose_history.append((stamp_ns(msg.header.stamp),self.pose))
-
-    def observation_pose(self,stamp):
-        for stamp_value,pose in reversed(self.pose_history):
-            if stamp_value<=stamp:return pose
-        return None
 
     def _current_session(self,session):
         handle=self._handle
@@ -269,53 +342,6 @@ class RosNavigationAdapter:
 
     @property
     def ready(self): return self.client.service_is_ready() and self.action.server_is_ready()
-
-    def require_fresh_snapshot(self):
-        """Require a successful request issued after this lifecycle boundary.
-
-        Keep the applied snapshot for delta recovery and cumulative evidence.
-        An already-outstanding request cannot certify the new current anchor.
-        """
-        self._minimum_response_serial=self._request_serial+1
-        self._current_input=False
-
-    def poll_snapshot(self,minimum_map_stamp_ns=0,*,refresh=True):
-        service_ready=self.client.service_is_ready()
-        if not service_ready:
-            self.require_fresh_snapshot()
-            self.map_reason="SERVICE_UNAVAILABLE"
-            if self._map_future is not None:
-                # Only this adapter's request is retired; a dead server need
-                # never resolve it, and its eventual reply must be ignored.
-                self.client.remove_pending_request(self._map_future)
-                self._map_future=None
-        if self._map_future is not None and self._map_future.done():
-            future=self._map_future;self._map_future=None
-            self._current_input=False
-            try:response=future.result()
-            except Exception as exc:
-                self.map_reason="MAP_TRANSPORT_ERROR: "+str(exc)
-            else:
-                self.map_reason=response.reason_code if response is not None else "NO_RESPONSE"
-                if response is not None and response.ready:
-                    try:self.snapshot=self.store.apply(response)
-                    except (ValueError,TypeError,AttributeError) as exc:
-                        self.map_reason=str(exc);self._force_full=True
-                    else:
-                        self._force_full=False
-                        self.processed_stamp_ns=stamp_ns(response.processed_stamp)
-                        self._current_input=service_ready and self._request_serial>=self._minimum_response_serial
-        current=(self._current_input and self.snapshot is not None
-                 and self.processed_stamp_ns>=minimum_map_stamp_ns)
-        if self._map_future is None and service_ready and (refresh or not current):
-            req=self._service_type.Request()
-            req.since_revision=0 if self._force_full or self.snapshot is None else self.snapshot.revision
-            req.minimum_map_stamp_ns=int(minimum_map_stamp_ns)
-            self._map_future=self.client.call_async(req)
-            self._request_serial+=1
-        if self._current_input and self.snapshot is not None and self.processed_stamp_ns>=minimum_map_stamp_ns:
-            return self.snapshot
-        return None
 
     def begin_goal(self,goal):
         if self._send_future is not None: raise RuntimeError('navigation action already in flight')

@@ -52,6 +52,15 @@ bool WaitFor(Predicate&& predicate,
   return predicate();
 }
 
+class ExecutorCancelGuard final {
+ public:
+  explicit ExecutorCancelGuard(rclcpp::executors::MultiThreadedExecutor& executor)
+      : executor_{executor} {}
+  ~ExecutorCancelGuard() { executor_.cancel(); }
+ private:
+  rclcpp::executors::MultiThreadedExecutor& executor_;
+};
+
 class FakeNavigationServer final {
  public:
   FakeNavigationServer(rclcpp::Node& node, const std::string& action_name) {
@@ -135,7 +144,9 @@ TEST(NavigationClient, OwnsOneGoalMapsFeedbackAndWaitsForTerminalResult) {
       *client_node, "/test/navigation",
       [&](const NavigationFeedbackState state) {
         std::scoped_lock lock{mutex};
-        feedback.push_back(state);
+        if (feedback.empty() || feedback.back() != state) {
+          feedback.push_back(state);
+        }
       },
       [&](NavigationTerminal terminal) {
         std::scoped_lock lock{mutex};
@@ -146,19 +157,32 @@ TEST(NavigationClient, OwnsOneGoalMapsFeedbackAndWaitsForTerminalResult) {
   executor.add_node(server_node);
   executor.add_node(client_node);
   std::jthread spin([&executor] { executor.spin(); });
+  ExecutorCancelGuard cancel_guard{executor};
 
   client.Navigate({.pose = {1.0, 2.0, 0.3}});
   EXPECT_THROW(client.Navigate({.pose = {3.0, 4.0, 0.0}}),
                std::logic_error);
   ASSERT_TRUE(WaitFor([&] { return server.goal_count() == 1U; }));
-  server.PublishFeedback(Action::Feedback::PLANNING);
-  server.PublishFeedback(Action::Feedback::EXECUTING);
-  server.PublishFeedback(Action::Feedback::REPLANNING);
-  server.PublishFeedback(Action::Feedback::PLANNING, "WAITING_FOR_MAP");
-  ASSERT_TRUE(WaitFor([&] {
-    std::scoped_lock lock{mutex};
-    return feedback.size() == 4U;
-  }));
+  const auto deadline = std::chrono::steady_clock::now() + 4s;
+  const auto publish_until_observed = [&](std::uint8_t state, const char* reason,
+                                          NavigationFeedbackState expected) {
+    while (std::chrono::steady_clock::now() < deadline) {
+      server.PublishFeedback(state, reason);
+      if (WaitFor([&] {
+            std::scoped_lock lock{mutex};
+            return !feedback.empty() && feedback.back() == expected;
+          }, 20ms)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  ASSERT_TRUE(publish_until_observed(Action::Feedback::PLANNING, "NAVIGATION_ACTIVE", NavigationFeedbackState::kPlanning));
+  ASSERT_TRUE(publish_until_observed(Action::Feedback::EXECUTING, "NAVIGATION_ACTIVE", NavigationFeedbackState::kExecuting));
+  ASSERT_TRUE(publish_until_observed(Action::Feedback::REPLANNING, "NAVIGATION_ACTIVE", NavigationFeedbackState::kReplanning));
+  ASSERT_TRUE(publish_until_observed(Action::Feedback::PLANNING, "WAITING_FOR_MAP", NavigationFeedbackState::kWaitingForMap));
+  ASSERT_TRUE(publish_until_observed(Action::Feedback::PLANNING, "WAITING_FOR_PATH", NavigationFeedbackState::kWaitingForPath));
+  ASSERT_TRUE(publish_until_observed(Action::Feedback::PLANNING, "WAITING_FOR_POSE", NavigationFeedbackState::kWaitingForPose));
   std::this_thread::sleep_for(100ms);
   {
     std::scoped_lock lock{mutex};
@@ -177,7 +201,9 @@ TEST(NavigationClient, OwnsOneGoalMapsFeedbackAndWaitsForTerminalResult) {
                   NavigationFeedbackState::kPlanning,
                   NavigationFeedbackState::kExecuting,
                   NavigationFeedbackState::kReplanning,
-                  NavigationFeedbackState::kWaitingForMap}));
+                  NavigationFeedbackState::kWaitingForMap,
+                  NavigationFeedbackState::kWaitingForPath,
+                  NavigationFeedbackState::kWaitingForPose}));
     EXPECT_EQ(terminals.front().outcome, Action::Result::GOAL_REACHED);
     EXPECT_EQ(terminals.front().reason_code, "GOAL_REACHED");
   }
@@ -195,6 +221,7 @@ TEST(NavigationClient, CancelActiveCancelsTheOwnedActionGoal) {
   executor.add_node(server_node);
   executor.add_node(client_node);
   std::jthread spin([&executor] { executor.spin(); });
+  ExecutorCancelGuard cancel_guard{executor};
 
   client.Navigate({.pose = {1.0, 2.0, 0.0}});
   ASSERT_TRUE(WaitFor([&] { return server.goal_count() == 1U; }));
