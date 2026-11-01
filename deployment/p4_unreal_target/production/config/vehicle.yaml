@@ -1,0 +1,16 @@
+lunar_car_node:
+  ros__parameters:
+    big_endian: false
+    cmd_timeout: 1.0
+    control_mode: park
+    max_linear_speed: 0.2
+    max_wheel_speed: 10.0
+    spin_max_linear_speed: 0.051261803518799456
+    spin_prep_time: 3.0
+    steer_step_deg: 5.0
+    tcp_host: 192.168.10.23
+    tcp_port: 6668
+    track_width: 0.622
+    wheel_base: 0.815
+    wheel_radius: 0.12
+    control_period: 0.05
