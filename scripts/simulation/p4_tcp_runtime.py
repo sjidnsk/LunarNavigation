@@ -17,7 +17,7 @@ PREFIX='/p4_p3_debug'
 TRANSPORT_TIMEOUT_S=.5
 
 
-def launch_settings(source,build_dir,profile_path,budgets,*,prefix=PREFIX,goal_topic="/goal_pose",exploration_strategy="none"):
+def launch_settings(source,build_dir,profile_path,budgets,*,prefix=PREFIX,goal_topic="/goal_pose",exploration_strategy="frontier"):
     if exploration_strategy not in ("none", "frontier"):
         raise ValueError("exploration_strategy must be none or frontier")
     try:from .debug_p3_planning import launch_arguments
@@ -331,7 +331,7 @@ def main():
     parser.add_argument('--root',type=Path,default=Path('/home/yanfa/P4'))
     parser.add_argument('--artifact',type=Path,required=True)
     parser.add_argument('--rviz-config',type=Path)
-    parser.add_argument('--exploration-strategy',choices=('none','frontier'),default='none',help='选择探索节点；frontier仍等待显式区域START任务')
+    parser.add_argument('--exploration-strategy',choices=('none','frontier'),default='frontier',help='选择探索节点；frontier仍等待显式区域START任务')
     parser.add_argument('--check-only',action='store_true',help='只接入输入，不启动导航、RViz、租约或车控')
     parser.add_argument('--duration',type=float,default=0.,help='运行上限，0表示等待停止信号')
     options=parser.parse_args();root=options.root.resolve();out=options.artifact.resolve()

@@ -9,7 +9,7 @@ def test_control_launch_uses_existing_wheel_limits_and_private_adapter_input():
     args=launch_settings('/p4/source','/p4/cache','/p4/test-wheel.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=6.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
     assert args['command_topic']=='/p4_p3_debug/cmd_vel'
     assert args['goal_topic']=='/goal_pose'
-    assert args['enable_controller']=='true' and args['exploration_strategy']=='none'
+    assert args['enable_controller']=='true' and args['exploration_strategy']=='frontier'
     assert args['initial_travel_direction']=='forward'
     assert args['platform_config']=='/p4/test-wheel.yaml'
 
@@ -532,9 +532,9 @@ def test_tcp_spin_response_delay_from_shared_feedback_config():
 def test_exploration_strategy_is_explicit_and_preserves_settings():
     budgets = dict(command_hold_s=1.2, global_period_s=15.)
     default = launch_settings('/source', '/cache', '/tcp.yaml', budgets)
-    assert default['exploration_strategy'] == 'none'
-    frontier = launch_settings('/source', '/cache', '/tcp.yaml', budgets, exploration_strategy='frontier')
-    assert frontier == dict(default, exploration_strategy='frontier')
+    assert default['exploration_strategy'] == 'frontier'
+    disabled = launch_settings('/source', '/cache', '/tcp.yaml', budgets, exploration_strategy='none')
+    assert disabled == dict(default, exploration_strategy='none')
     for invalid in ('drl', '', None):
         with pytest.raises(ValueError, match='exploration_strategy'):
             launch_settings('/source', '/cache', '/tcp.yaml', budgets, exploration_strategy=invalid)
@@ -549,7 +549,7 @@ def test_main_exploration_cli_choices_and_forwarding(monkeypatch, capsys):
     option = next(n for n in calls if n.args and isinstance(n.args[0], ast.Constant) and n.args[0].value == '--exploration-strategy')
     keywords = {k.arg: ast.literal_eval(k.value) for k in option.keywords}
     assert keywords['choices'] == ('none', 'frontier')
-    assert keywords['default'] == 'none'
+    assert keywords['default'] == 'frontier'
     launch = next(n for n in calls if isinstance(n.func, ast.Name) and n.func.id == 'launch_settings')
     strategy = next(k.value for k in launch.keywords if k.arg == 'exploration_strategy')
     assert ast.unparse(strategy) == 'options.exploration_strategy'
