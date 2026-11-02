@@ -24,6 +24,7 @@ set(LUNAR_INCREMENTAL_NAVIGATION_PRODUCTION_SOURCES
   src/map/adaptive_navigation_map.cpp
   src/map/persistent_elevation_map.cpp
   src/map/platform_elevation_physics.cpp
+  src/map/platform_terrain_window.cpp
   src/map/fine_traversability_builder.cpp
   src/global/global_route_planner.cpp
   src/global/adaptive_route_planner.cpp
@@ -82,6 +83,7 @@ if(BUILD_TESTING)
     lunar_enable_sanitizers(${target})
   endfunction()
 
+  lunar_add_core_gtest(lunar_incremental_navigation_core_platform_terrain_window_test test/platform_terrain_window_test.cpp)
   lunar_add_core_gtest(lunar_incremental_navigation_core_captured_start_support_regression_test test/captured_start_support_regression_test.cpp)
   lunar_add_core_gtest(lunar_incremental_navigation_core_rolling_update_policy_test test/rolling_update_policy_test.cpp)
   lunar_add_core_gtest(

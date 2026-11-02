@@ -36,6 +36,10 @@ NAV1CM_TERRAIN_EXPORT const char* nav1cm_terrain_last_error_v2(void);
 NAV1CM_TERRAIN_EXPORT void* nav1cm_terrain_create_v2(
     double maximum_slope_rad, double maximum_local_obstacle_relief_m,
     double minimum_underbody_clearance_m);
+// 平台窗口入口；1轮式/2足式。旧三参数入口仅保留legacy3x3兼容。
+NAV1CM_TERRAIN_EXPORT void* nav1cm_terrain_create_platform_window_v2(
+    int platform_kind, double long_side_m, double maximum_slope_rad,
+    double maximum_relief_m, double minimum_clearance_m);
 NAV1CM_TERRAIN_EXPORT void nav1cm_terrain_destroy_v2(void* handle);
 
 // 输入是按升序 [y,x] 连续排列的原始高程，NaN/Inf 为没有新观测。

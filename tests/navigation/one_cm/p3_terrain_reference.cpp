@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "lunar_incremental_navigation_core/fine_traversability_builder.hpp"
+#include "lunar_incremental_navigation_core/platform_terrain_window.hpp"
 
 namespace nav = lunar::incremental_navigation;
 
@@ -33,7 +34,7 @@ class DirectGrid final : public nav::ElevationRangeView {
 
 extern "C" TERRAIN_EXPORT int nav1cm_terrain_reference_v1(
     const float* data, int height, int width, double resolution, double slope,
-    double relief, double clearance, std::int8_t* intrinsic, std::int8_t* inflated) {
+    double relief, double clearance, double long_side, std::int8_t* intrinsic, std::int8_t* inflated) {
   try {
     DirectGrid grid(data, height, width, resolution);
     nav::WheeledCapability wheel;
@@ -43,8 +44,9 @@ extern "C" TERRAIN_EXPORT int nav1cm_terrain_reference_v1(
     wheel.footprint_xy_m = {{.591, .409}, {.591, -.409}, {-.591, -.409}, {-.591, .409}};
     nav::TraversabilityProfile profile;
     profile.planar_envelope_xy_m = wheel.footprint_xy_m;
-    auto evaluator = nav::MakePlatformElevationEvaluator(wheel);
-    nav::FineCellEvaluator fine(grid, wheel, profile);
+    if(long_side>0)wheel.body_extent_m={long_side,long_side,1.};
+    auto evaluator = long_side>0 ? nav::MakePlatformWindowElevationEvaluator(grid,wheel) : nav::MakePlatformElevationEvaluator(wheel);
+    nav::FineCellEvaluator fine(grid, wheel, profile, long_side>0 ? nav::MakePlatformWindowElevationEvaluator(grid,wheel) : nav::MakePlatformElevationEvaluator(wheel));
     for (int y = 0; y < height; ++y) {
       for (int x = 0; x < width; ++x) {
         const auto raw = evaluator->Evaluate(grid, {x, y}).state;

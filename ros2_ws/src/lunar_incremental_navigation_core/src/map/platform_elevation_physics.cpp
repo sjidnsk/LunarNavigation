@@ -1,3 +1,4 @@
+#include "lunar_incremental_navigation_core/platform_terrain_window.hpp"
 #include "lunar_incremental_navigation_core/fine_traversability_builder.hpp"
 
 #include <algorithm>
@@ -449,7 +450,7 @@ FineCellEvaluator::FineCellEvaluator(
     const PlatformCapability& capability,
     const TraversabilityProfile& profile)
     : FineCellEvaluator(elevation, capability, profile,
-                        MakePlatformElevationEvaluator(capability)) {}
+                        MakePlatformWindowElevationEvaluator(elevation, capability)) {}
 
 FineCellEvaluator::FineCellEvaluator(
     const ElevationRangeView& elevation,

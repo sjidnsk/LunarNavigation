@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "map/grid_bounds.hpp"
+#include "lunar_incremental_navigation_core/platform_terrain_window.hpp"
 
 namespace lunar::incremental_navigation {
 namespace {
@@ -389,8 +390,9 @@ FineTraversabilityBuilder::Derive(
     const TraversabilityProfile& profile,
     std::shared_ptr<const FineTraversabilitySnapshot> previous,
     std::optional<FineElevationChangeSet> merged_changes) const {
-  return DeriveImpl(std::move(raw),capability,profile,std::move(previous),merged_changes,
-      MakePlatformElevationEvaluator(capability),false);
+  if (!raw) throw std::invalid_argument("terrain derivation requires elevation");
+  return DeriveImpl(raw,capability,profile,std::move(previous),merged_changes,
+      MakePlatformWindowElevationEvaluator(*raw, capability),false);
 }
 
 std::shared_ptr<const FineTraversabilitySnapshot>
@@ -446,7 +448,9 @@ FineTraversabilityBuilder::DeriveImpl(
     const std::set<GridIndex> changed_raw(changed.begin(), changed.end());
     const double influence_m =
         hard_radius_m + profile.preferred_clearance_m +
-        std::sqrt(2.0) * raw->geometry().resolution_m();
+        std::sqrt(2.0) * raw->geometry().resolution_m() *
+          PlatformTerrainWindowRadiusCells(PlatformTerrainLongSide(capability),
+                                           raw->geometry().resolution_m());
     recompute_cells =
         InfluenceCells(raw->geometry(), changed_raw, influence_m);
     IncludeNewGeometryCells(*raw, previous->geometry(), hard_radius_m,

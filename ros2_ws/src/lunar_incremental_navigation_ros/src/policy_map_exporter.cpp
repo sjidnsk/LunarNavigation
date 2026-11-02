@@ -1,3 +1,4 @@
+#include "lunar_incremental_navigation_core/platform_terrain_window.hpp"
 #include "lunar_incremental_navigation_ros/policy_map_exporter.hpp"
 
 #include <algorithm>
@@ -127,7 +128,7 @@ lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::ExportImpl(
           center.x+radius<=origin.x+geometry.max_exclusive().x*resolution &&
           center.y-radius>=origin.y+geometry.min_inclusive().y*resolution &&
           center.y+radius<=origin.y+geometry.max_exclusive().y*resolution;
-      const auto native=core::MakePlatformElevationEvaluator(capability_);
+      const auto native=core::MakePlatformWindowElevationEvaluator(*fine.elevation(),capability_);
       const auto* support=intrinsic?intrinsic:native.get();
       const auto minx=static_cast<std::int64_t>(std::floor((center.x-radius-origin.x)/resolution));
       const auto maxx=static_cast<std::int64_t>(std::floor((center.x+radius-origin.x)/resolution));
@@ -192,7 +193,7 @@ lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::ExportImpl(
     std::sort(indices.begin(), indices.end());
     indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
   }
-  const auto intrinsic_evaluator = core::MakePlatformElevationEvaluator(capability_);
+  const auto intrinsic_evaluator = core::MakePlatformWindowElevationEvaluator(*fine.elevation(),capability_);
   for (const core::TileIndex index : indices) {
     const auto tile = fine.FindTile(index);
     // Native M elides tiles whose navigation states are all UNKNOWN. Their
