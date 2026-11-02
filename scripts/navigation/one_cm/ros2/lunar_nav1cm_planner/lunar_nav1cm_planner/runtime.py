@@ -123,17 +123,14 @@ class PlannerRuntime:
         except (AttributeError,ValueError,TypeError):return now_s
 
     def _new_body_observation(self, sequence):
-        if self.publish_command is None:
-            return sequence != self._observed_odometry_sequence
         try:
             stamp=self._odometry.header.stamp
             source=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
         except (AttributeError,ValueError,TypeError):
-            return False
+            return self.publish_command is None and sequence != self._observed_odometry_sequence
         return source>0 and (self._observed_pose_stamp_ns is None or source>self._observed_pose_stamp_ns)
 
     def _observe_body_stamp(self):
-        if self.publish_command is None:return
         try:
             stamp=self._odometry.header.stamp
             source=int(stamp.sec)*1_000_000_000+int(stamp.nanosec)
@@ -175,6 +172,13 @@ class PlannerRuntime:
         self.session.offer_state(None)
 
     def _apply_pose_input(self,message,received_s,now_s,transforms):
+        try:
+            source=message.header.stamp
+            source_ns=int(source.sec)*1_000_000_000+int(source.nanosec)
+        except (AttributeError,ValueError,TypeError):source_ns=None
+        # 迟到旧包不退休当前有效状态，也不变成时钟完整性故障。
+        accepted=self._applied_pose_stamp_ns
+        if source_ns is not None and accepted is not None and source_ns<accepted:return
         valid,stamp=self._pose_source_current(message,received_s,now_s)
         if self._pose_timeout_s is not None:
             clock=self.ros_now_ns()
@@ -193,16 +197,6 @@ class PlannerRuntime:
             self._notice('ODOMETRY_WAITING','missing_or_nonadvancing_pose')
             return
         if message is None:return
-        if self.publish_command is not None:
-            try:
-                source=message.header.stamp
-                source_ns=int(source.sec)*1_000_000_000+int(source.nanosec)
-            except (AttributeError,ValueError,TypeError):
-                source_ns=None
-            # 位姿已应用与到达证据已消费是两个时刻；NOT_DUE时仍不得重写同一源帧。
-            accepted=self._applied_pose_stamp_ns
-            if source_ns is not None and accepted is not None and source_ns<=accepted:
-                return
         try:value=state_from_odometry(message,transforms,self.map_frame)
         except MissingTransform:
             if self._pose_timeout_s is not None:self._enter_pose_wait()
@@ -214,11 +208,13 @@ class PlannerRuntime:
                 self._enter_pose_wait()
             else:self.session.offer_state(None)
             raise
+        # 同戳有效修正仍应用；完全相同的转换后状态无需重写。
+        if source_ns is not None and source_ns==self._applied_pose_stamp_ns and value==self.session.state:return
         if self._pose_timeout_s is not None and self._pose_waiting:
             self._pose_waiting=False
             self._notice('ODOMETRY_RECOVERED','valid_pose_replanning')
         self.session.offer_state(value)
-        if self.publish_command is not None and source_ns is not None:
+        if source_ns is not None:
             self._applied_pose_stamp_ns=source_ns
 
     def enable_execution_contract(self,timeout_s=2.):
@@ -252,11 +248,14 @@ class PlannerRuntime:
 
     def offer_odometry(self, message):
         with self._condition:
-            if self.publish_command is not None and self._odometry is not None:
+            if self._odometry is not None:
                 try:
                     old=self._odometry.header.stamp
                     new=message.header.stamp
-                    if (int(new.sec)*1_000_000_000+int(new.nanosec) <=
+                    if (int(new.sec)*1_000_000_000+int(new.nanosec) ==
+                            int(old.sec)*1_000_000_000+int(old.nanosec) and message==self._odometry):
+                        return
+                    if (int(new.sec)*1_000_000_000+int(new.nanosec) <
                             int(old.sec)*1_000_000_000+int(old.nanosec)):
                         return
                 except (AttributeError,ValueError,TypeError):
