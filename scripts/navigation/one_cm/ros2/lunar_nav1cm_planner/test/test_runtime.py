@@ -171,6 +171,10 @@ def test_actual_grid_and_original_global_success_fields_are_logged_separately():
     assert results[0]['has_reference'] is True
     assert results[0]['requested_epoch'] == 1
     assert results[0]['accepted_generation'] == 1
+    assert results[0]['timing']['total_s'] >= 0
+    assert results[0]['worker_compute_ms'] >= 0
+    assert results[0]['smoothing_ms'] == 0.
+    assert results[0]['queue_ms'] >= 0 and results[0]['handoff_ms'] >= 0
 
 
 def test_brake_diagnostic_keeps_real_rejection_and_snapshot():

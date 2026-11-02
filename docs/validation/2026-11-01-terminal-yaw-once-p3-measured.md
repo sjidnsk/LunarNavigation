@@ -9,3 +9,5 @@
 修改前新阶段回归已复现12cm漂移后清除位置标记。随后用户明确取消测试，本轮不运行pytest、ROS闭环或实车测试，仅语法解析、diff核对及部署后进程/参数读取；不能声明回归通过。之前版本的测试不覆盖本轮新行为。
 
 owner integration/pure-planner-orin，专题hk/terminal-yaw-once-weight1-20261101，基线9aa27e6；应用同步与P4替换沿本会话授权，不push，P3/Env_X文件不改。
+
+正式已部署6a5d4de，运行参数global_clearance_weight=1.0；P4与RViz正常存活，P3实测日志已生效且无外推日志。TCP90380fc、轮式9fe638f本地接收，轮式显式weight配置同步1。按用户要求未跑测试，无push；当前用户已在RViz重新选点。

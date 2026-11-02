@@ -94,7 +94,7 @@ class _Exhausted(Exception):
 
 
 def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
-                step_m=.05, max_points=4096, clock=perf_counter,
+                step_m=.05, max_points=4096, clock=perf_counter, deadline_s=None,
                 raw_verified=False, terminal_yaw=None, soft_clearance_m=0.,
                 clearance_weight=0., corner_radius=0.) -> ShapedRoute:
     """新全局路线的有界后处理；耗尽回退整条已验证原路线，不留部分曲线。
@@ -118,7 +118,10 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
             or not np.isfinite(corner_radius) or corner_radius < 0
             or (terminal_yaw is not None and not np.isfinite(terminal_yaw))):
         raise ValueError("invalid smoothing budget, trim, step or point limit")
+    if deadline_s is not None and (isinstance(deadline_s, bool) or not np.isfinite(deadline_s)):
+        raise ValueError("invalid smoothing deadline")
     began = clock()
+    deadline = began + budget_s if deadline_s is None else min(began + budget_s, deadline_s)
     points = route.points
 
     def fallback(reason):
@@ -126,20 +129,27 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
 
     def check():
         now = clock()
-        if not np.isfinite(now) or now - began >= budget_s:
+        if not np.isfinite(now) or now >= deadline:
             raise _Exhausted("BUDGET_EXHAUSTED")
+
+    verified_segments = set()  # 仅本次不可变障碍快照内复用精确几何证明。
 
     def segments_clear(starts, ends):
         check()
-        # 两个维度均分块，避免 4096×1024 的大临时矩阵吞掉本次预算。
-        for first in range(0, len(starts), 64):
+        keys = [tuple(a)+tuple(b) for a,b in zip(starts,ends)]
+        pending = [i for i,key in enumerate(keys) if key not in verified_segments]
+        # 两个维度均分块；每段通过全部障碍检查之后才缓存，不缓存失败/部分证明。
+        for first in range(0, len(pending), 64):
+            selected=pending[first:first+64]
             for offset in range(0, len(blocked), 1024):
                 check()
-                clear = _segments_clear(starts[first:first + 64], ends[first:first + 64],
+                clear = _segments_clear(starts[selected], ends[selected],
                                         blocked[offset:offset + 1024],corner_radius=corner_radius)
                 check()
                 if not clear:
                     return False
+            verified_segments.update(keys[i] for i in selected)
+        check()
         return True
 
     def overlaps(boxes):
