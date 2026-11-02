@@ -47,14 +47,14 @@ def test_terminal_approach_does_not_reset_to_route_tangent(reverse):
 
 
 def test_wrong_side_heading_still_requires_travel_alignment():
-    assert select_mode(VehicleState(0,0,-.5,0,0),reference(1.,progress=.6))=='spin'
+    assert select_mode(VehicleState(0,0,-.6,0,0),reference(1.,progress=.6))=='spin'
     assert select_mode(VehicleState(0,0,1.8,0,0),reference(2.5,progress=.6))=='spin'
 
 
 def test_partial_reference_does_not_invent_final_orientation():
     yaw=[p[5] for p in parameters(reference(None))]
     assert yaw==pytest.approx([0.]*5)
-    assert select_mode(VehicleState(0,0,.5,0,0),reference(None,progress=.6))=='spin'
+    assert select_mode(VehicleState(0,0,.6,0,0),reference(None,progress=.6))=='spin'
 
 
 def test_reverse_final_body_yaw_is_not_shifted_by_pi():
