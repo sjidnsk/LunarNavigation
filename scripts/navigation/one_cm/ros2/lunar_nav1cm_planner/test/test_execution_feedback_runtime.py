@@ -84,7 +84,7 @@ def test_local_recovery_hold_keeps_only_fresh_matched_wait_heartbeat_alive(state
     assert task._execution_accepted_reference is None
 
 
-def test_pose_source_rollback_during_recovery_never_restores_motion(monkeypatch):
+def test_late_old_pose_does_not_retire_current_valid_state(monkeypatch):
     runtime,session,published,logs=build_runtime();runtime.configure_pose_input(4.5)
     module=__import__('lunar_nav1cm_planner.runtime',fromlist=['state_from_odometry'])
     monkeypatch.setattr(module,'state_from_odometry',lambda *a:VehicleState(0.,0.,0.,0.,0.))
@@ -94,7 +94,9 @@ def test_pose_source_rollback_during_recovery_never_restores_motion(monkeypatch)
     runtime._apply_pose_input(odom(98,500_000_000),1.,1.,S())
     clock[0]=100_100_000_000
     runtime._apply_pose_input(odom(98,200_000_000),2.1,2.1,S())
-    assert session.state is None and runtime._pose_integrity_fault=='POSE_SOURCE_ROLLBACK'
+    assert session.state is not None and runtime._pose_integrity_fault is None
+    assert runtime._pose_source_high_water==98_500_000_000
+    assert runtime._pose_advanced_received_s==1.
 
 
 @pytest.mark.parametrize("cancel_during_wait",[False,True])

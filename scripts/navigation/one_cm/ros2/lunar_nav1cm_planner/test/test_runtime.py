@@ -572,3 +572,60 @@ def test_direct_new_pose_on_not_due_is_evaluated_after_current_proof(position,su
             assert runtime._observed_pose_stamp_ns==1000000000
             assert runtime.tasks._arrived_since==(1. if success else None)
     assert (runtime.tasks.active.outcome=='GOAL_REACHED')==success
+
+
+@pytest.mark.parametrize('direct',[False,True])
+def test_same_stamp_correction_updates_state_without_new_observation(direct):
+    runtime,session,*_=build_runtime()
+    if direct:runtime.configure_direct_control(lambda *args:None,command_hold_s=1.2)
+    runtime.configure_pose_input(4.5)
+    runtime.ros_now_ns=lambda:20_000_000_000
+    def feedback(stamp,x):
+        return NS(header=NS(frame_id='map',stamp=NS(sec=stamp,nanosec=0)),
+                  pose=NS(pose=pose(x).pose),twist=NS(twist=NS(linear=NS(x=0.),angular=NS(z=0.))))
+    original=feedback(10,.1)
+    runtime.offer_odometry(original)
+    runtime._apply_pose_input(original,1.,1.,runtime._transforms)
+    runtime._observe_body_stamp()
+    applied=runtime._pose_advanced_received_s
+    correction=feedback(10,.2)
+    runtime.offer_odometry(correction)
+    runtime._apply_pose_input(correction,2.,2.,runtime._transforms)
+    assert session.state.x==.2
+    assert not runtime._new_body_observation(runtime._odometry_sequence)
+    assert runtime._pose_advanced_received_s==applied
+    state=session.state
+    runtime._apply_pose_input(correction,2.,2.,runtime._transforms)
+    assert session.state is state
+    older=feedback(9,.9)
+    runtime._apply_pose_input(older,3.,3.,runtime._transforms)
+    assert session.state is state
+    newer=feedback(11,.3)
+    runtime.offer_odometry(newer)
+    runtime._apply_pose_input(newer,3.,3.,runtime._transforms)
+    assert session.state.x==.3
+    assert runtime._new_body_observation(runtime._odometry_sequence)
+
+
+@pytest.mark.parametrize('corrected_yaw',[0.,.4])
+def test_pose_correction_does_not_complete_goal_and_can_revoke_arrival(corrected_yaw):
+    import math
+    runtime,session,*_=build_runtime()
+    runtime.configure_direct_control(lambda *args:None,command_hold_s=1.2)
+    runtime.tasks.submit('corrected-arrival',(0,0,0),0.)
+    def feedback(stamp,yaw):
+        p=pose(.08).pose
+        p.orientation=NS(x=0.,y=0.,z=math.sin(yaw/2),w=math.cos(yaw/2))
+        return NS(header=NS(frame_id='map',stamp=NS(sec=stamp,nanosec=0)),
+                  pose=NS(pose=p),twist=NS(twist=NS(linear=NS(x=0.),angular=NS(z=0.))))
+    runtime.offer_odometry(feedback(1,0.));runtime._tick_once(0.)
+    assert runtime.tasks._arrived_since==1.
+    generation=session.accepted_generation
+    runtime.offer_odometry(feedback(1,corrected_yaw));runtime._tick_once(2.)
+    assert session.state.yaw==pytest.approx(corrected_yaw)
+    assert session.accepted_generation==generation
+    assert runtime.tasks.active.outcome is None
+    assert runtime.tasks._arrived_since==(1. if corrected_yaw==0. else None)
+    runtime.offer_odometry(feedback(3,0.));runtime._tick_once(3.)
+    if corrected_yaw==0.:assert runtime.tasks.active.outcome=='GOAL_REACHED'
+    else:assert runtime.tasks._arrived_since==3.
