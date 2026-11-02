@@ -224,3 +224,30 @@ def test_default_topics_are_loaded_from_single_contract(monkeypatch):
     from scripts.simulation.p4_topics import launch_topic_arguments
     module = load(monkeypatch)
     assert {key:module.DEFAULTS[key] for key in launch_topic_arguments(ROOT)} == launch_topic_arguments(ROOT)
+
+
+def test_local_mpcc_horizon_forwarded_without_changing_hold(monkeypatch):
+    g=nodes(graph(monkeypatch,horizon_steps='40',horizon_dt_s='0.2'))
+    planner=next(n['parameters'][0] for n in g if n['executable']=='navigation_task_node')
+    assert planner['horizon_steps']==40
+    assert planner['horizon_dt_s']==.2
+    assert planner['command_hold_s']==0.
+
+@pytest.mark.parametrize('values',[{'horizon_steps':'0'},{'horizon_steps':'2.5'},{'horizon_dt_s':'0'},{'horizon_dt_s':'nan'}])
+def test_invalid_local_mpcc_horizon_rejected(monkeypatch,values):
+    with pytest.raises((ValueError,RuntimeError)):graph(monkeypatch,**values)
+
+
+def test_published_command_prediction_is_explicit_and_forwarded(monkeypatch):
+    p=nodes(graph(monkeypatch,control_backend='mpcc_cmd_vel',enable_controller='true',
+        command_prediction_enabled='true',prediction_command_topic='/vehicle/final_cmd'))[1]['parameters'][0]
+    assert p['command_prediction_enabled'] is True
+    assert p['prediction_command_topic']=='/vehicle/final_cmd'
+    assert nodes(graph(monkeypatch))[1]['parameters'][0]['command_prediction_enabled'] is False
+
+
+def test_prediction_requires_final_command_topic_and_direct_backend(monkeypatch):
+    with pytest.raises(RuntimeError,match='prediction'):
+        graph(monkeypatch,control_backend='mpcc_cmd_vel',enable_controller='true',command_prediction_enabled='true')
+    with pytest.raises(RuntimeError,match='prediction'):
+        graph(monkeypatch,command_prediction_enabled='true',prediction_command_topic='/vehicle/final_cmd')

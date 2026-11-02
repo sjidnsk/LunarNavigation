@@ -407,13 +407,13 @@ def test_tcp_production_profile_overrides_only_speed_and_feeds_launch_and_relay(
     original=deepcopy(base)
     override=yaml.safe_load((root/'config/tcp_wheel_speed.yaml').read_text(encoding='utf-8'))
     merged=tcp_platform_profile(base,override)
-    assert profile_command_limits_for_test(merged)==(.2,.2,.1)
+    assert profile_command_limits_for_test(merged)==(.1,.1,.1)
     assert base==original
     for key in ('maximum_acceleration_mps2','maximum_braking_deceleration_mps2','maximum_yaw_acceleration_radps2'):
         assert merged['capability'][key]==base['capability'][key]==.5
     assert launch_settings(ROOT,'/p4/cache','/p4/final.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))['platform_config']=='/p4/final.yaml'
     relay=TcpCommandRelay(merged,publish_velocity=lambda x:None,publish_mode=lambda x:None,publish_lease=lambda x:None,make_zero=message)
-    assert relay.limits==(.2,.2,.1)
+    assert relay.limits==(.1,.1,.1)
 
 
 def profile_command_limits_for_test(profile):
@@ -443,7 +443,7 @@ def test_both_tcp_entries_load_same_configured_limits():
     from pathlib import Path
     from scripts.simulation.p4_tcp_runtime import load_tcp_platform_profile
     root=Path(__file__).resolve().parents[1]
-    assert profile_command_limits_for_test(load_tcp_platform_profile(root))==(.2,.2,.1)
+    assert profile_command_limits_for_test(load_tcp_platform_profile(root))==(.1,.1,.1)
 
 
 def test_direct_settings_and_body_only_telemetry():
@@ -662,3 +662,15 @@ def test_checker_loads_launch_from_active_overlay(tmp_path):
     env=dict(ROOT=tmp_path/'wrong-install',Path=Path,get_package_share_directory=lambda package:str(tmp_path))
     exec(compile(ast.Module(body=[node],type_ignores=[]),'<overlay-launch>','exec'),env)
     assert env['launch_source']=='current overlay'
+
+
+def test_tcp_uses_sixteen_second_local_horizon_and_final_published_velocity():
+    from pathlib import Path
+    from scripts.simulation.p4_topics import load_topic_contract
+    from scripts.simulation.p4_tcp_runtime import launch_settings
+    root=Path(__file__).resolve().parents[1]
+    args=launch_settings(root,'/unused/build','/unused/profile.yaml',{'command_hold_s':1.2})
+    assert args['horizon_steps']=='80' and float(args['horizon_dt_s'])==.2
+    assert args['command_prediction_enabled']=='true'
+    assert args['prediction_command_topic']==load_topic_contract(root)['vehicle']['command_topic']
+    assert float(args['command_hold_s'])==1.2

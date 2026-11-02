@@ -18,9 +18,13 @@ def _topic_defaults():
 
 
 DEFAULTS = {'global_period_s': '15.0',
+ 'horizon_steps': '20',
+ 'horizon_dt_s': '0.2',
  'global_soft_clearance_m': '0.4',
  'global_clearance_weight': '1.0',
  'command_hold_s': '0.0',
+ 'command_prediction_enabled': 'false',
+ 'prediction_command_topic': '',
  'command_spin_prepare_s': '0.0',
  'control_backend': 'path_mppi',
  'exploration_strategy': 'none',
@@ -52,6 +56,10 @@ def _compose(context):
     values["command_spin_prepare_s"] = float(values["command_spin_prepare_s"])
     if not isfinite(values["command_spin_prepare_s"]) or values["command_spin_prepare_s"] < 0:
         raise ValueError("command_spin_prepare_s must be finite and nonnegative")
+    values["horizon_steps"] = int(values["horizon_steps"])
+    values["horizon_dt_s"] = float(values["horizon_dt_s"])
+    if values["horizon_steps"] <= 0 or not isfinite(values["horizon_dt_s"]) or values["horizon_dt_s"] <= 0:
+        raise ValueError("local MPCC horizon must be finite and positive")
     values["global_period_s"] = float(values["global_period_s"])
     if not isfinite(values["global_period_s"]) or values["global_period_s"] <= 0:
         raise ValueError("global_period_s must be finite and positive")
@@ -76,8 +84,12 @@ def _compose(context):
     strategy = values["exploration_strategy"]
     if strategy not in {"none", "frontier", "drl"}:
         raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
-    for key in ("enable_controller", "use_sim_time", "allow_unknown"):
+    for key in ("enable_controller", "use_sim_time", "allow_unknown", "command_prediction_enabled"):
         if values[key] not in {"true", "false"}: raise RuntimeError(key+" 必须为 true/false")
+    if values['command_prediction_enabled']=='true' and (
+            values['control_backend']!='mpcc_cmd_vel' or values['enable_controller']!='true' or
+            not values['prediction_command_topic']):
+        raise RuntimeError('command prediction requires direct control and final command topic')
     if strategy == "drl" and not values["drl_actor"]:
         raise RuntimeError("drl 策略需要显式 drl_actor；权重加载与校验由可选 DRL 包负责")
     values["build_dir"] = values["build_dir"] or os.environ.get("NAV1CM_BUILD_DIR", "")
@@ -99,9 +111,13 @@ def _compose(context):
         node("lunar_nav1cm_planner", "navigation_task_node", {
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
             "global_period_s":values["global_period_s"],
+            "horizon_steps":values["horizon_steps"],
+            "horizon_dt_s":values["horizon_dt_s"],
             "global_soft_clearance_m":values["global_soft_clearance_m"],
             "global_clearance_weight":values["global_clearance_weight"],
             "command_hold_s":float(values["command_hold_s"]),
+            "command_prediction_enabled":values["command_prediction_enabled"]=="true",
+            "prediction_command_topic":values["prediction_command_topic"],
             "command_spin_prepare_s":values["command_spin_prepare_s"],
             "control_backend":values["control_backend"],
             "enable_controller":values["enable_controller"]=="true",

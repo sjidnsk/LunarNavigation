@@ -90,6 +90,42 @@ class PlannerRuntime:
         self.execution_contract_enabled = False
         self.tasks.configure_execution_feedback(required=False)
 
+    def configure_command_prediction(self, *, spin_prepare_s=0.):
+        """只预测最终发布速度的运动；P3实测和完成证据保留原归属。"""
+        if self.publish_command is None:
+            raise ValueError('command prediction requires direct command control')
+        from .command_prediction import CommandPrediction
+        self._command_prediction=CommandPrediction(
+            spin_prepare_s=spin_prepare_s,use_published_velocity=True)
+        self._published_command_inputs=deque(maxlen=512)
+
+    def offer_published_command(self, message, *, received_s=None):
+        if getattr(self,'_command_prediction',None) is None:return
+        command=(float(message.linear.x),float(message.angular.z))
+        stamp=time.monotonic() if received_s is None else float(received_s)
+        if not math.isfinite(stamp) or not all(math.isfinite(v) for v in command):
+            raise ValueError('published velocity must be finite')
+        with self._condition:
+            self._published_command_inputs.append((stamp,command))
+
+    def _prediction_snapshot(self, now_s):
+        measured=self.session.state
+        predictor=getattr(self,'_command_prediction',None)
+        if predictor is None:return measured,None
+        with self._condition:
+            commands=tuple(self._published_command_inputs)
+            self._published_command_inputs.clear()
+        for stamp,command in commands:predictor.issue(stamp,command)
+        stamp=self._applied_pose_stamp_ns
+        if measured is None or stamp is None:return measured,dict(used_prediction=False)
+        predictor.correct(measured,stamp,now_s,self.ros_now_ns())
+        covered=predictor.covered(now_s)
+        estimated=predictor.predict(now_s,self.session.coordinator.limits)
+        fields=lambda value:[value.x,value.y,value.yaw,value.v,value.w]
+        return estimated,dict(used_prediction=covered,source_stamp_ns=stamp,
+            measured_state=fields(measured),estimated_state=fields(estimated),
+            proof_basis='published_velocity_model' if covered else 'p3_measured_pose')
+
     def _publish_issued(self, command):
         self._command_previous=self._last_issued_command
         self.publish_command(*command)
@@ -405,15 +441,19 @@ class PlannerRuntime:
             if fault:self.tasks.fail_tracking(fault,now_s)
         # 本周期认证使用实际采样快照；终态观测仍可读取随后推进的定位。
         p3_new_sample=odometry_sequence != self._observed_odometry_sequence
-        proof_state=self.session.state
+        proof_state,prediction_diagnostics=self._prediction_snapshot(now_s)
         proof_stamp=self._pose_source_high_water
         if self.publish_command is not None:
             value=self.session.state
             self._notice('COMMAND_STATE_MEASURED',json.dumps(dict(
                 measured_state=None if value is None else [value.x,value.y,value.yaw,value.v,value.w],
                 source_stamp_ns=proof_stamp,proof_basis='p3_measured_pose')))
-        # 规划、认证和发布均从最新P3实测快照出发，不按命令外推当前位姿。
-        packet = self.session.tick(now_s)
+        # 同一个不可变估计供本次规划和短令认证；任务观测仍读取session.state。
+        if prediction_diagnostics is not None:
+            self._notice('COMMAND_STATE_ESTIMATE',json.dumps(prediction_diagnostics))
+            packet=self.session.tick(now_s,planning_state=proof_state)
+        else:
+            packet=self.session.tick(now_s)
         proposal = self.tasks.observe(packet, self._body_observation_time(now_s),
                                       state_updated=self._new_body_observation(odometry_sequence),
                                       defer_commit=True)

@@ -30,12 +30,15 @@ def launch_settings(source,build_dir,profile_path,budgets,*,prefix=None,goal_top
              'command_hold_s','global_period_s','command_spin_prepare_s'}
     if not isinstance(budgets,dict) or set(budgets)-allowed:
         raise ValueError('TCP profile只能覆盖既有输入/预测/计算预算')
+    contract=load_topic_contract(source) if contract is None else contract
     args=launch_topic_arguments(source,namespace=prefix,contract=contract)
     args.update({k:str(v) for k,v in budgets.items()})
     args.update(use_sim_time='false',build_dir=str(build_dir),allow_unknown='true',
                 map_qos_reliability='reliable',map_qos_durability='transient_local',
                 command_spin_prepare_s=str(budgets.get('command_spin_prepare_s',0.)),
                 global_period_s=str(budgets.get('global_period_s',15.)),command_hold_s=str(budgets['command_hold_s']),
+                horizon_steps='80',horizon_dt_s='0.2',command_prediction_enabled='true',
+                prediction_command_topic=contract['vehicle']['command_topic'],
                 control_backend='mpcc_cmd_vel',enable_controller='true',exploration_strategy=exploration_strategy,
                 platform_config=str(profile_path),initial_travel_direction='forward')
     if goal_topic is not None:args['goal_topic']=goal_topic

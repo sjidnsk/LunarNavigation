@@ -116,6 +116,7 @@ class PlannerNode(Node):
             'local_path_topic': '/Car/T4/planning/local_path',
             'control_backend':'path_mppi', 'enable_controller':False, 'command_hold_s':0., 'command_spin_prepare_s':0.,
             'command_topic':'/Car/T4/control/cmd_vel',
+            'command_prediction_enabled':False,'prediction_command_topic':'',
             'execution_contract_enabled':False,'execution_feedback_timeout_s':2.,
             'odometry_timeout_s':.5,
             'execution_reference_topic':'/Car/T4/control/path_execution_reference',
@@ -132,6 +133,10 @@ class PlannerNode(Node):
             hold=settings['command_hold_s']
             if isinstance(hold,bool) or not math.isfinite(hold) or hold<=0:
                 raise ValueError('command_hold_s must be explicitly finite and positive')
+        if settings['command_prediction_enabled'] and (
+                settings['control_backend']!='mpcc_cmd_vel' or not settings['enable_controller'] or
+                not settings['prediction_command_topic']):
+            raise ValueError('command prediction requires direct control and final command topic')
         if not settings['global_reference_topic']:
             settings['global_reference_topic']=settings['global_route_topic']+'_reference'
             self.set_parameters([Parameter('global_reference_topic',value=settings['global_reference_topic'])])
@@ -168,6 +173,8 @@ class PlannerNode(Node):
             self.runtime.configure_direct_control(self._publish_command,command_hold_s=float(settings['command_hold_s']),
                 reference_interval_s=float(settings['horizon_dt_s']),
                 command_spin_prepare_s=float(settings['command_spin_prepare_s']))
+        if settings['command_prediction_enabled']:
+            self.runtime.configure_command_prediction(spin_prepare_s=float(settings['command_spin_prepare_s']))
         self.runtime.configure_pose_input(float(settings['odometry_timeout_s']))
         latest = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                             durability=DurabilityPolicy.VOLATILE)
@@ -178,6 +185,8 @@ class PlannerNode(Node):
                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(GridMap, settings['map_topic'], self.runtime.offer_map, source_qos)
         self.create_subscription(Odometry, settings['odometry_topic'], self.runtime.offer_odometry, latest)
+        if settings['command_prediction_enabled']:
+            self.create_subscription(Twist,settings['prediction_command_topic'],self._on_published_command,latest)
         self.create_subscription(PoseStamped, settings['goal_topic'], self.runtime.offer_goal, 10)
         self.create_subscription(TFMessage, settings['tf_topic'], self._tf_input, dynamic_tf)
         self.create_subscription(TFMessage, settings['tf_static_topic'], self._tf_input, static_tf)
@@ -194,6 +203,11 @@ class PlannerNode(Node):
             self._execution_publisher=self.create_publisher(PathExecutionReference,settings['execution_reference_topic'],10)
             self.create_subscription(TrackingStatus,settings['tracking_status_topic'],self._on_execution_status,10)
         self.runtime.start()
+
+    def _on_published_command(self, message):
+        try:self.runtime.offer_published_command(message)
+        except (ValueError,AttributeError,TypeError):
+            self.get_logger().warning('PUBLISHED_COMMAND_REJECTED: invalid velocity')
 
     def _publish_command(self, v, w):
         message=Twist()
