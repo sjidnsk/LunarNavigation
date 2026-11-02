@@ -17,7 +17,7 @@ capability:
   wheelbase_m: 0.8175
   track_width_m: 0.67
   minimum_underbody_clearance_m: 0.21
-  maximum_local_obstacle_relief_m: 0.2
+  maximum_local_obstacle_relief_m: 0.3
   allow_unsupported_gap: false
   maximum_forward_speed_mps: 0.2
   maximum_reverse_speed_mps: 0.2
