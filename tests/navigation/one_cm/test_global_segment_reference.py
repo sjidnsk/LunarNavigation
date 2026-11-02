@@ -74,3 +74,19 @@ def test_contacts_parallel_signed_zero_and_nextafter_match_reference():
     distant = boxes+100
     assert _segment_clear((0.,0.),(1.,1.),distant,corner_radius=radius)
     assert not _segment_clear((0.,0.),(1.,1.),np.vstack((distant,boxes)),corner_radius=radius)
+
+
+def test_collision_free_broad_phase_uses_bounded_scalar_prefix(monkeypatch):
+    from scripts.navigation.one_cm.nav1cm import global_planner as api
+    raw = np.array([(float(i), float(i)+10., float(i)+.2, float(i)+10.2)
+                    for i in range(1000)])
+    boxes = raw+[-.75,-.75,.75,.75]
+    calls = []
+    original = api._segment_hits_box
+    def recording(a,b,box):
+        calls.append(1)
+        return original(a,b,box)
+    monkeypatch.setattr(api, '_segment_hits_box', recording)
+    a,b = (0.,0.),(1000.,1000.)
+    assert api._segment_clear(a,b,boxes,corner_radius=.75) == _segment_clear_reference(a,b,boxes,corner_radius=.75)
+    assert len(calls) <= 8

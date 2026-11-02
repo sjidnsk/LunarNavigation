@@ -77,7 +77,11 @@ def _segment_clear(a, b, boxes, corner_radius=0):
         return True
     if corner_radius:
         raw = boxes + np.array([corner_radius, corner_radius, -corner_radius, -corner_radius])
-        if any(_segment_hits_box(a, b, box) for box in raw):
+        # 固定短前缀获得常见碰撞早退；余量沿原向量slab判据批量处理。
+        # 8仅限制Python循环工作量，不改变碰撞阈值或遗漏任何障碍。
+        if any(_segment_hits_box(a, b, box) for box in raw[:8]):
+            return False
+        if len(raw) > 8 and not _segment_clear(a, b, raw[8:]):
             return False
         a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
         # 凸矩形与线段的最短距离出现在端点到矩形或角点到线段。
