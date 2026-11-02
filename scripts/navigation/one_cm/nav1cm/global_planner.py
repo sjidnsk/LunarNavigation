@@ -41,6 +41,25 @@ def _point(value):
     return point
 
 
+def _segment_hits_box(a, b, box):
+    """闭区间slab相交；与向量参考同判据，接触算相交。"""
+    lo, hi = 0., 1.
+    for axis in (0, 1):
+        origin, end = float(a[axis]), float(b[axis])
+        low, high = float(box[axis]), float(box[axis+2])
+        delta = end-origin
+        if delta == 0:
+            if origin < low or origin > high:
+                return False
+        else:
+            near, far = (low-origin)/delta, (high-origin)/delta
+            lo = max(lo, min(near, far))
+            hi = min(hi, max(near, far))
+            if lo > hi:
+                return False
+    return True
+
+
 def _segment_clear(a, b, boxes, corner_radius=0):
     """连续认证整条线段；接触也视为碰撞，不做离散采样。
 
@@ -54,9 +73,11 @@ def _segment_clear(a, b, boxes, corner_radius=0):
                   (boxes[:, 2] >= min(a[0], b[0])) &
                   (boxes[:, 1] <= max(a[1], b[1])) &
                   (boxes[:, 3] >= min(a[1], b[1]))]
+    if not len(boxes):
+        return True
     if corner_radius:
         raw = boxes + np.array([corner_radius, corner_radius, -corner_radius, -corner_radius])
-        if not _segment_clear(a, b, raw):
+        if any(_segment_hits_box(a, b, box) for box in raw):
             return False
         a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
         # 凸矩形与线段的最短距离出现在端点到矩形或角点到线段。

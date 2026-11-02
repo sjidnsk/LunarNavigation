@@ -262,3 +262,18 @@ def test_lazy_edge_integration_obeys_budget(monkeypatch):
     assert result.reason_code == 'BUDGET_EXHAUSTED'
     assert result.route is None and not result.has_reference
     assert result.storage['edges'] > 0
+
+
+def test_scalar_segment_box_overlap_matches_vector_reference():
+    api = load_api()
+    rng = np.random.default_rng(71)
+    for _ in range(600):
+        low = rng.uniform(-3, 3, 2)
+        box = np.r_[low, low+rng.uniform(.01, 2, 2)]
+        a, b = rng.uniform(-5, 5, (2, 2))
+        assert api._segment_hits_box(a, b, box) == (not api._segment_clear(a, b, box[None, :]))
+    box = (0., 0., 1., 1.)
+    for a, b in [((-1., 0.), (2., 0.)), ((0., 0.), (0., 0.)),
+                 ((-1., -1.), (0., 0.)), ((.5, -1.), (.5, 2.))]:
+        assert api._segment_hits_box(a, b, box)
+    assert not api._segment_hits_box((-1., -.01), (2., -.01), box)
