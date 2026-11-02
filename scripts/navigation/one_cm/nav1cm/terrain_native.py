@@ -21,20 +21,39 @@ from .contracts import _readonly_array
 
 @dataclass(frozen=True)
 class WheelTerrainCapability:
+    # 保留旧类型名/三参数构造兼容；结构化平台配置启用尺寸感知窗口。
     maximum_slope_rad: float
     maximum_local_obstacle_relief_m: float
     minimum_underbody_clearance_m: float
+    body_long_side_m: float | None = None
+    platform_kind: str = "wheel"
 
     def __post_init__(self):
-        values = tuple(vars(self).values())
+        values=(self.maximum_slope_rad,self.maximum_local_obstacle_relief_m,self.minimum_underbody_clearance_m)
         if not all(np.isfinite(values)) or any(value < 0 for value in values):
-            raise ValueError("wheel terrain limits must be finite and nonnegative")
+            raise ValueError("terrain limits must be finite and nonnegative")
+        if self.platform_kind not in ("wheel","legged"):
+            raise ValueError("unknown terrain platform kind")
+        if self.body_long_side_m is not None and (not np.isfinite(self.body_long_side_m) or self.body_long_side_m <= 0):
+            raise ValueError("platform long side must be finite and positive")
 
     @classmethod
     def from_mapping(cls, mapping: Mapping):
-        # 只转送既有 core intrinsic 判定所读的能力字段，不另写阈值。
-        values = mapping.get("capability", mapping)
-        return cls(**{name: float(values[name]) for name in cls.__dataclass_fields__})
+        values=mapping.get("capability",mapping)
+        kind=mapping.get("platform", "legged" if "maximum_step_height_m" in values else "wheel")
+        extent=values.get("body_extent_m")
+        if extent is not None:
+            if len(extent)<2 or not np.isfinite(extent[:2]).all() or max(extent[:2])<=0 or min(extent[:2])<=0:
+                raise ValueError("invalid platform planar body extent")
+            long_side=float(max(extent[:2]))
+        elif "platform" in mapping:
+            raise ValueError("platform terrain requires body_extent_m")
+        else:
+            long_side=values.get("body_long_side_m")
+        return cls(float(values["maximum_slope_rad"]),
+            float(values["maximum_step_height_m"] if kind=="legged" else values["maximum_local_obstacle_relief_m"]),
+            float(values["minimum_body_clearance_m"] if kind=="legged" else values["minimum_underbody_clearance_m"]),
+            long_side,kind)
 
 
 def load_wheel_capability(path=None) -> WheelTerrainCapability:
@@ -120,9 +139,20 @@ class NativeTerrain:
         self.capability = (load_wheel_capability() if capability is None else
                            capability if isinstance(capability, WheelTerrainCapability) else
                            WheelTerrainCapability.from_mapping(capability))
-        self._handle = create(self.capability.maximum_slope_rad,
-                              self.capability.maximum_local_obstacle_relief_m,
-                              self.capability.minimum_underbody_clearance_m)
+        if self.capability.body_long_side_m is None:
+            self._handle = create(self.capability.maximum_slope_rad,
+                                  self.capability.maximum_local_obstacle_relief_m,
+                                  self.capability.minimum_underbody_clearance_m)
+        else:
+            try:
+                platform_create=self._lib.nav1cm_terrain_create_platform_window_v2
+            except AttributeError as error:
+                raise RuntimeError("native terrain library lacks platform-window support; rebuild required") from error
+            platform_create.argtypes=[ctypes.c_int]+[ctypes.c_double]*4
+            platform_create.restype=ctypes.c_void_p
+            self._handle=platform_create(1 if self.capability.platform_kind=="wheel" else 2,
+                self.capability.body_long_side_m,self.capability.maximum_slope_rad,
+                self.capability.maximum_local_obstacle_relief_m,self.capability.minimum_underbody_clearance_m)
         if not self._handle:
             raise RuntimeError(f"native terrain create failed: {self._last_error()}")
         self._lock = threading.RLock()

@@ -79,10 +79,10 @@ TEST(ExplorationMap, PartialCoverageUnknownAndNanHistory) {
   ASSERT_TRUE(map.Apply(holes, 4));
   EXPECT_NE(map.Capture().map.fine->State({4, 4}), core::FineCellState::kFree);
 }
-TEST(ExplorationMap, ThinSteepFeatureSurvivesConservativeProjection) {
+TEST(ExplorationMap, ThinHeightObstacleSurvivesConservativeProjection) {
   ExplorationMap map(Wheel(), Profile(), .2, 1.);
   auto source = Flat(.01);
-  source.elevation_m[100 * 200 + 100] = .04F;
+  source.elevation_m[100 * 200 + 100] = .21F;
   ASSERT_TRUE(map.Apply(source, 1));
   const auto result = map.Capture();
   EXPECT_EQ(result.map.fine->State({5, 5}), core::FineCellState::kBlocked);
@@ -113,39 +113,27 @@ TEST(ExplorationMap, RotatedTranslatedSourceKeepsActualWorldGeometry) {
             core::FineCellState::kUnknown);
 }
 
-TEST(ExplorationMap, FiniteUnknownChangesFineAtUnchangedRawAndDeltaEqualsFull) {
+TEST(ExplorationMap, LegacyIncompleteStatisticDoesNotInvalidateObservedGround) {
   ExplorationMap map(Wheel(), Profile(), .2, 1.);
   ASSERT_TRUE(map.Apply(Flat(.2), 1));
   const auto before = map.Capture();
   auto source = Flat(.2);
-  source.terrain_measurements.resize(source.elevation_m.size(),
-                                     {true, true, 0., 0., 0.});
-  source.terrain_measurements[4 * 10 + 4] = {true, false, 0., 0., 0.};
-  ASSERT_TRUE(map.Apply(source, 2));
-  const auto after = map.Capture();
-  EXPECT_EQ(after.map.fine->raw_elevation_revision(),
-            before.map.fine->raw_elevation_revision());
-  EXPECT_GT(after.map.fine->fine_traversability_revision(),
-            before.map.fine->fine_traversability_revision());
-  EXPECT_EQ(before.map.fine->State({4, 4}), core::FineCellState::kFree);
-  EXPECT_EQ(after.map.fine->State({4, 4}), core::FineCellState::kUnknown);
-  PolicyMapExporter exporter(Wheel(), Profile());
-  const auto full = exporter.ExportObserved(after, 0);
-  const auto delta = exporter.ExportObserved(
-      map.Capture(before.map.fine->fine_traversability_revision()),
-      before.map.fine->fine_traversability_revision());
-  ASSERT_FALSE(delta.full_snapshot);
-  ASSERT_EQ(full.tiles.size(), delta.tiles.size());
-  for (std::size_t i = 0; i < full.tiles.size(); ++i) {
-    EXPECT_EQ(full.tiles[i].states, delta.tiles[i].states);
-    EXPECT_EQ(full.tiles[i].intrinsic_states, delta.tiles[i].intrinsic_states);
-    EXPECT_EQ(full.tiles[i].observed, delta.tiles[i].observed);
-    EXPECT_EQ(full.tiles[i].costs, delta.tiles[i].costs);
-    const auto index = core::TileCellOffset({4, 4});
-    EXPECT_EQ(full.tiles[i].observed[index], kPolicyMapUnknown);
-  }
+  source.terrain_measurements.resize(source.elevation_m.size(), {true,true,0.,0.,0.});
+  source.terrain_measurements[4*10+4] = {true,false,0.,0.,0.};
+  ASSERT_TRUE(map.Apply(source,2));
+  const auto after=map.Capture();
+  EXPECT_EQ(after.map.fine->raw_elevation_revision(),before.map.fine->raw_elevation_revision());
+  EXPECT_EQ(after.map.fine->fine_traversability_revision(),before.map.fine->fine_traversability_revision());
+  EXPECT_EQ(after.map.fine->State({4,4}),core::FineCellState::kFree);
+  PolicyMapExporter exporter(Wheel(),Profile());
+  const auto full=exporter.ExportObserved(after,0);
+  const auto delta=exporter.ExportObserved(map.Capture(before.map.fine->fine_traversability_revision()),before.map.fine->fine_traversability_revision());
+  EXPECT_TRUE(full.full_snapshot);
+  EXPECT_FALSE(delta.full_snapshot);
+  EXPECT_TRUE(delta.tiles.empty());
+  EXPECT_EQ(full.fine_revision,delta.fine_revision);
 }
-TEST(ExplorationMap, OptionalStatisticsRemainSourceLocalUnderYawAndCoarsening) {
+TEST(ExplorationMap, LegacyDerivativeStatisticsDoNotOverridePlatformWindow) {
   ExplorationMap map(Wheel(), Profile(), .2, 1.);
   auto source = Flat(.05);
   source.terrain_measurements.resize(source.elevation_m.size(),
@@ -160,7 +148,15 @@ TEST(ExplorationMap, OptionalStatisticsRemainSourceLocalUnderYawAndCoarsening) {
     blocked |= std::find(t->states().begin(), t->states().end(),
                          core::FineCellState::kBlocked) != t->states().end();
   }
-  EXPECT_TRUE(blocked);
+  EXPECT_FALSE(blocked);  // 旧3x3坡度标量不能否决新的平台尺度原始高程证据。
+  source.elevation_m[20*40+20]=.21F;
+  ASSERT_TRUE(map.Apply(source,2));
+  bool height_blocked=false;
+  for(const auto tile:map.Capture().map.fine->tile_indices()){
+    const auto states=map.Capture().map.fine->FindTile(tile)->states();
+    height_blocked|=std::find(states.begin(),states.end(),core::FineCellState::kBlocked)!=states.end();
+  }
+  EXPECT_TRUE(height_blocked);  // 真正超过平台高差能力的原始高程仍须保留。
   for (const auto tile : snapshot.map.fine->elevation()->tile_indices())
     for (std::int64_t y = 0; y < 256; ++y)
       for (std::int64_t x = 0; x < 256; ++x)

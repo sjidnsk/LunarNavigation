@@ -1,3 +1,4 @@
+#include "lunar_incremental_navigation_core/platform_terrain_window.hpp"
 #include <algorithm>
 #include <cmath>
 #include <deque>
@@ -184,7 +185,7 @@ bool ExplorationMap::Apply(const OwnedElevationEvidence& source,
       source.map_from_source.parent_frame != m.fine->geometry().frame_id())
     return false;
   SourceView view(source);
-  const auto evaluator = core::MakePlatformElevationEvaluator(m.capability);
+  const auto evaluator = core::MakePlatformWindowElevationEvaluator(view,m.capability);
   const double cell_area = m.resolution * m.resolution,
                epsilon = cell_area * 1e-10;
   std::map<core::GridIndex, std::vector<Fragment>> incoming;

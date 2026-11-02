@@ -1,5 +1,6 @@
 // 仅做 ABI、源栅格累计与结果行程合并；物理阈值与判定全部调用既有 core。
 #include "terrain_bridge.h"
+#include "lunar_incremental_navigation_core/platform_terrain_window.hpp"
 
 #include <algorithm>
 #include <array>
@@ -74,6 +75,22 @@ struct Terrain final {
     // 使用 intrinsic evaluator，避免 FineCellEvaluator 的整车膨胀再进入
     // nav1cm 的矩形车体认证，造成双重膨胀。
     evaluator = nav::MakePlatformElevationEvaluator(wheel);
+  }
+
+  Terrain(int kind,double length,double slope,double relief,double clearance)
+      : Terrain(slope,relief,clearance) {
+    if (!std::isfinite(length)||length<=0||kind<1||kind>2)
+      throw std::invalid_argument("invalid platform terrain window");
+    long_side_m=length;
+    if(kind==1){
+      nav::WheeledCapability wheel;wheel.body_extent_m={length,length,1.};
+      wheel.maximum_slope_rad=slope;wheel.maximum_local_obstacle_relief_m=relief;
+      wheel.minimum_underbody_clearance_m=clearance;platform=wheel;
+    }else{
+      nav::LeggedCapability legged;legged.body_extent_m={length,length,1.};
+      legged.maximum_slope_rad=slope;legged.maximum_step_height_m=relief;
+      legged.minimum_body_clearance_m=clearance;platform=legged;
+    }
   }
 
   std::pair<Lattices::iterator, nav::GridIndex> FindLattice(
@@ -180,19 +197,28 @@ struct Terrain final {
       }
     }
     if (applied.status == nav::ElevationUpdateResult::Status::kApplied) {
-      // 原生 3x3 判定会使旧窗口边缘或相邻旧格改变，不能只发布新格。
-      for (const auto changed : snapshot->changed_cells()) {
-        for (std::int64_t dy = -1; dy <= 1; ++dy) {
-          for (std::int64_t dx = -1; dx <= 1; ++dx) {
-            touched.insert({changed.x + dx, changed.y + dy});
-          }
-        }
+      // 按行合并外扩影响域，避免每个changed cell枚举整个L窗口。
+      const auto radius=platform ? nav::PlatformTerrainWindowRadiusCells(long_side_m,resolution) : 1;
+      std::map<std::int64_t,std::pair<std::int64_t,std::int64_t>> changed_rows,expanded;
+      auto include=[](auto& rows,std::int64_t y,std::int64_t lo,std::int64_t hi){
+        auto [it,added]=rows.try_emplace(y,std::pair{lo,hi});
+        if(!added){it->second.first=std::min(it->second.first,lo);it->second.second=std::max(it->second.second,hi);}
+      };
+      for(auto c:snapshot->changed_cells())include(changed_rows,c.y,c.x,c.x);
+      for(auto [y,span]:changed_rows){
+        if(y<std::numeric_limits<std::int64_t>::min()+radius||y>std::numeric_limits<std::int64_t>::max()-radius||
+           span.first<std::numeric_limits<std::int64_t>::min()+radius||span.second>std::numeric_limits<std::int64_t>::max()-radius)
+          throw std::invalid_argument("terrain dependency coordinate overflow");
+        for(std::int64_t dy=-radius;dy<=radius;++dy)include(expanded,y+dy,span.first-radius,span.second+radius);
       }
+      for(auto [y,span]:expanded)for(auto x=span.first;;++x){touched.insert({x,y});if(x==span.second)break;}
     }
+    auto window_evaluator=platform ? nav::MakePlatformWindowElevationEvaluator(*snapshot,*platform) : nullptr;
+    const auto* active_evaluator=window_evaluator ? window_evaluator.get() : evaluator.get();
     std::map<std::int64_t, std::map<std::int64_t, std::int64_t>> labels;
     for (const auto index : touched) {
       if (!snapshot->ElevationRangeAt(index)) continue;
-      const auto state = evaluator->Evaluate(*snapshot, index).state;
+      const auto state = active_evaluator->Evaluate(*snapshot, index).state;
       labels[index.y][index.x] = state == nav::IntrinsicCellState::kBlocked ? 1 :
           state == nav::IntrinsicCellState::kFree ? 0 : -1;
     }
@@ -216,6 +242,8 @@ struct Terrain final {
   }
 
   std::unique_ptr<const nav::PlatformElevationEvaluator> evaluator;
+  std::optional<nav::PlatformCapability> platform;
+  double long_side_m{};
   Lattices lattices;
   std::uint64_t next_source_id = 1;
   std::vector<Region> regions;
@@ -236,6 +264,13 @@ void* nav1cm_terrain_create_v2(double slope, double relief, double clearance) {
   } catch (...) {
     last_error = "unknown native terrain create failure";
   }
+  return nullptr;
+}
+
+void* nav1cm_terrain_create_platform_window_v2(int kind,double length,double slope,double relief,double clearance) {
+  try{last_error.clear();return new Terrain(kind,length,slope,relief,clearance);}
+  catch(const std::exception& e){last_error=e.what();}
+  catch(...){last_error="unknown platform terrain create failure";}
   return nullptr;
 }
 

@@ -61,7 +61,7 @@ def compiled(tmp_path_factory):
     common = [compiler, "-O2", "-std=c++20", "-shared", "-fPIC", "-pthread",
               "-I", str(core / "include"), "-I", str(core / "src")]
     sources = [str(core / "src/map" / name) for name in
-               ("persistent_elevation_map.cpp", "platform_elevation_physics.cpp", "fine_traversability_builder.cpp")]
+               ("persistent_elevation_map.cpp", "platform_elevation_physics.cpp", "platform_terrain_window.cpp", "fine_traversability_builder.cpp")]
     explicit = os.environ.get("NAV1CM_TERRAIN_LIB")
     if not explicit:
         subprocess.run(common + [str(ROOT / "scripts/navigation/one_cm/nav1cm/terrain_bridge.cpp")] + sources + ["-o", str(bridge)], check=True)
@@ -70,7 +70,7 @@ def compiled(tmp_path_factory):
     reference = lib.nav1cm_terrain_reference_v1
     array_f = np.ctypeslib.ndpointer(dtype=np.float32, ndim=2, flags="C_CONTIGUOUS")
     array_b = np.ctypeslib.ndpointer(dtype=np.int8, ndim=2, flags=("C_CONTIGUOUS", "WRITEABLE"))
-    reference.argtypes = [array_f, ctypes.c_int, ctypes.c_int] + [ctypes.c_double] * 4 + [array_b, array_b]
+    reference.argtypes = [array_f, ctypes.c_int, ctypes.c_int] + [ctypes.c_double] * 5 + [array_b, array_b]
     reference.restype = ctypes.c_int
     return str(explicit or bridge), reference
 
@@ -81,7 +81,7 @@ def reference_cells(reference, elevation, resolution, capability):
     inflated = np.empty(elevation.shape, dtype=np.int8)
     assert reference(elevation, *elevation.shape, resolution, capability.maximum_slope_rad,
                      capability.maximum_local_obstacle_relief_m,
-                     capability.minimum_underbody_clearance_m, intrinsic, inflated) == 0
+                     capability.minimum_underbody_clearance_m, capability.body_long_side_m or 0., intrinsic, inflated) == 0
     return intrinsic, inflated
 
 
