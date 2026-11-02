@@ -25,3 +25,11 @@ TCP覆写horizon_steps=80、horizon_dt_s=.2，即16秒，.1m/s下理论1.6m。�
 ## 处置
 
 本提交保存源码/接线/测试，正式部署回执另补；不自动移动长期线、不push，不删除工作树或证据。最终状态以部署receipt与startup_parameters为准。
+
+## 正式部署收尾（按用户免测）
+
+预测源码93ee4257已正式替换14个明确副本，TCP设备原有global_soft_clearance_m预算允许项保留并同步回专题源码。未覆盖其他设备变体，未改P3/Env_X。正式导入、AST、SHA、startup参数核对通过；operator87088/navigation87161/RViz87142，运行/P4/run/p4-20261102-210301-87088。
+
+实际启动command_prediction_enabled=true、prediction_command_topic=/car/cmd_vel、horizon_steps=80、horizon_dt_s=.2、前后.1m/s、角.1rad/s；20度/relief.3/clearance.21/soft.5/UNKNOWN保留。P3输入持续，COMMAND_STATE_ESTIMATE出现used_prediction=true/proof_basis=published_velocity_model；当时为零速，不代表运动预测或闭环验收。未代发目标，未跑用户已叫停的测试。
+
+回滚和部署回执/home/yanfa/P4/build/rollback-command-prediction-20261102/receipt.json。处置已提交/已部署TCP候选；不push/长期线合入，不删除分支/工作树，模型误差和后续用户观察结果单列。
