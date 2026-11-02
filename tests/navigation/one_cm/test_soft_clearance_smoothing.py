@@ -1,4 +1,4 @@
-"""全局软净空是路径代价，不得被后续Bezier剪角抹掉。"""
+"""全局搜索保留软净空；平滑接受由连续碰撞证明决定。"""
 import numpy as np
 import pytest
 from scripts.navigation.one_cm.nav1cm.contracts import Route
@@ -6,15 +6,15 @@ from scripts.navigation.one_cm.nav1cm.global_planner import path_cost
 from scripts.navigation.one_cm.nav1cm.reference_smoothing import shape_route
 
 
-def test_corner_smoothing_keeps_the_same_clearance_objective():
+def test_safe_corner_smoothing_is_not_vetoed_by_soft_cost():
     raw=Route(3,4,((0.,0.),(2.,0.),(2.,2.)),(2.,2.))
     boxes=np.array([[1.65,.30,1.70,.35]])
     plain=shape_route(raw,boxes,budget_s=2.)
     assert plain.changed
     assert path_cost(plain.route.points,boxes,.4,20.) > path_cost(raw.points,boxes,.4,20.)
     shaped=shape_route(raw,boxes,budget_s=2.,soft_clearance_m=.4,clearance_weight=20.)
-    assert path_cost(shaped.route.points,boxes,.4,20.) <= path_cost(raw.points,boxes,.4,20.)+1e-9
-    assert not shaped.changed and shaped.reason=='CLEARANCE_COST'
+    assert shaped.changed and shaped.reason=='SMOOTHED'
+    np.testing.assert_array_equal(shaped.route.points,plain.route.points)
 
 
 def test_soft_cost_disabled_keeps_existing_corner_smoothing():

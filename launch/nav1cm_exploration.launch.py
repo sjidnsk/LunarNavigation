@@ -18,6 +18,8 @@ def _topic_defaults():
 
 
 DEFAULTS = {'global_period_s': '15.0',
+ 'global_budget_s': '1.0',
+ 'coverage_target': '0.80',
  'horizon_steps': '20',
  'horizon_dt_s': '0.2',
  'global_soft_clearance_m': '0.4',
@@ -60,6 +62,12 @@ def _compose(context):
     values["horizon_dt_s"] = float(values["horizon_dt_s"])
     if values["horizon_steps"] <= 0 or not isfinite(values["horizon_dt_s"]) or values["horizon_dt_s"] <= 0:
         raise ValueError("local MPCC horizon must be finite and positive")
+    values["global_budget_s"] = float(values["global_budget_s"])
+    if not isfinite(values["global_budget_s"]) or values["global_budget_s"] < 0:
+        raise ValueError("global_budget_s must be finite and nonnegative")
+    values["coverage_target"] = float(values["coverage_target"])
+    if not isfinite(values["coverage_target"]) or not 0 < values["coverage_target"] <= 1:
+        raise ValueError("coverage_target must be finite and in (0, 1]")
     values["global_period_s"] = float(values["global_period_s"])
     if not isfinite(values["global_period_s"]) or values["global_period_s"] <= 0:
         raise ValueError("global_period_s must be finite and positive")
@@ -111,6 +119,7 @@ def _compose(context):
         node("lunar_nav1cm_planner", "navigation_task_node", {
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
             "global_period_s":values["global_period_s"],
+            "global_budget_s":values["global_budget_s"],
             "horizon_steps":values["horizon_steps"],
             "horizon_dt_s":values["horizon_dt_s"],
             "global_soft_clearance_m":values["global_soft_clearance_m"],
@@ -135,7 +144,8 @@ def _compose(context):
         actions.append(node("lunar_pure_exploration_ros", "incremental_exploration_node", {
             **shared_policy, **{k: values[k] for k in ("current_goal_topic","frontiers_topic","task_boundary_topic","task_map_markers_topic")},
             "diagnostics_topic": values["exploration_diagnostics_topic"], "platform_selector": "wheel", "navigation_action": values["action_name"],
-            "exploration_map_topic": values["exploration_map_topic"]}))
+            "exploration_map_topic": values["exploration_map_topic"],
+            "coverage_target": values["coverage_target"]}))
     elif strategy == "drl":
         actions.append(node("lunar_drl_exploration", "lunar_drl_inference_node", {
             **shared_policy, "navigation_backend": "nav1cm", "actor_path": values["drl_actor"],

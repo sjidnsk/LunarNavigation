@@ -251,3 +251,24 @@ def test_prediction_requires_final_command_topic_and_direct_backend(monkeypatch)
         graph(monkeypatch,control_backend='mpcc_cmd_vel',enable_controller='true',command_prediction_enabled='true')
     with pytest.raises(RuntimeError,match='prediction'):
         graph(monkeypatch,command_prediction_enabled='true',prediction_command_topic='/vehicle/final_cmd')
+
+
+def test_tcp_global_budget_and_coverage_target_reach_owners(monkeypatch):
+    g = nodes(graph(monkeypatch, exploration_strategy="frontier",
+                    global_budget_s="2.0", coverage_target="0.99"))
+    params = {n["executable"]: n["parameters"][0] for n in g}
+    assert params["navigation_task_node"]["global_budget_s"] == 2.0
+    assert params["incremental_exploration_node"]["coverage_target"] == 0.99
+    assert "coverage_target" not in params["navigation_task_node"]
+    assert "global_budget_s" not in params["incremental_exploration_node"]
+
+
+
+@pytest.mark.parametrize("values", [
+    {"global_budget_s": "-1"}, {"global_budget_s": "nan"},
+    {"coverage_target": "0"}, {"coverage_target": "1.01"},
+    {"coverage_target": "nan"},
+])
+def test_budget_and_coverage_reject_invalid_parameters(monkeypatch, values):
+    with pytest.raises(ValueError):
+        graph(monkeypatch, **values)

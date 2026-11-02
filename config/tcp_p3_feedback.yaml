@@ -12,8 +12,15 @@ command_hold_s: 1.2
 
 # 全局有效路线在后台低频刷新；目标/真实阻塞/参考重入立即重算。
 global_period_s: 15.0
-# 保留TCP正式运行的50厘米全局软净空偏好。
-global_soft_clearance_m: 0.5
 
 # 复用现有TCP底盘原地转向准备时间，仅用于预测响应，不延迟或拦截命令。
 command_spin_prepare_s: 3.0
+
+# Global clearance preference; collision radius remains unchanged.
+global_soft_clearance_m: 0.5
+
+# 单次搜索、拉直和平滑共享预算；独立于15秒刷新周期。
+global_budget_s: 2.0
+
+# 已知区域（自由及障碍）占所选探索区域的比例。
+coverage_target: 0.99
