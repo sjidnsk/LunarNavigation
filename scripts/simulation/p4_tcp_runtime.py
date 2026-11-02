@@ -27,7 +27,7 @@ def launch_settings(source,build_dir,profile_path,budgets,*,prefix=None,goal_top
     if exploration_strategy not in ("none", "frontier"):
         raise ValueError("exploration_strategy must be none or frontier")
     allowed={'odometry_timeout_s','p3_map_timeout_s','mppi_time_steps','mppi_compute_envelope_s',
-             'command_hold_s','global_period_s','command_spin_prepare_s'}
+             'command_hold_s','global_period_s','command_spin_prepare_s','global_soft_clearance_m'}
     if not isinstance(budgets,dict) or set(budgets)-allowed:
         raise ValueError('TCP profile只能覆盖既有输入/预测/计算预算')
     args=launch_topic_arguments(source,namespace=prefix,contract=contract)

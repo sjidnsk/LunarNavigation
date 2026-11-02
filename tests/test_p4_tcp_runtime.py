@@ -662,3 +662,12 @@ def test_checker_loads_launch_from_active_overlay(tmp_path):
     env=dict(ROOT=tmp_path/'wrong-install',Path=Path,get_package_share_directory=lambda package:str(tmp_path))
     exec(compile(ast.Module(body=[node],type_ignores=[]),'<overlay-launch>','exec'),env)
     assert env['launch_source']=='current overlay'
+
+
+def test_tcp_soft_clearance_override_reaches_existing_launch_interface():
+    import yaml
+    profile=yaml.safe_load((ROOT/'config/tcp_p3_feedback.yaml').read_text(encoding='utf-8'))
+    profile['global_soft_clearance_m']=.5
+    args=launch_settings(ROOT,'/cache','/wheel.yaml',profile)
+    assert float(args['global_soft_clearance_m'])==.5
+    assert args['platform_config']=='/wheel.yaml'

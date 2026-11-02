@@ -15,3 +15,6 @@ global_period_s: 15.0
 
 # 复用现有TCP底盘原地转向准备时间，仅用于预测响应，不延迟或拦截命令。
 command_spin_prepare_s: 3.0
+
+# 全局避障软偏好范围；硬碰撞半径和平台能力由原能力配置决定。
+global_soft_clearance_m: 0.5
