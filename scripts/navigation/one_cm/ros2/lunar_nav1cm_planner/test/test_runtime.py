@@ -575,7 +575,7 @@ def test_direct_new_pose_on_not_due_is_evaluated_after_current_proof(position,su
 
 
 @pytest.mark.parametrize('direct',[False,True])
-def test_same_stamp_correction_updates_state_without_new_observation(direct):
+def test_same_stamp_correction_is_ignored_without_new_observation(direct):
     runtime,session,*_=build_runtime()
     if direct:runtime.configure_direct_control(lambda *args:None,command_hold_s=1.2)
     runtime.configure_pose_input(4.5)
@@ -591,7 +591,8 @@ def test_same_stamp_correction_updates_state_without_new_observation(direct):
     correction=feedback(10,.2)
     runtime.offer_odometry(correction)
     runtime._apply_pose_input(correction,2.,2.,runtime._transforms)
-    assert session.state.x==.2
+    assert session.state.x==.1
+    assert runtime._odometry is original
     assert not runtime._new_body_observation(runtime._odometry_sequence)
     assert runtime._pose_advanced_received_s==applied
     state=session.state
@@ -608,7 +609,7 @@ def test_same_stamp_correction_updates_state_without_new_observation(direct):
 
 
 @pytest.mark.parametrize('corrected_yaw',[0.,.4])
-def test_pose_correction_does_not_complete_goal_and_can_revoke_arrival(corrected_yaw):
+def test_ignored_pose_correction_does_not_change_arrival_evidence(corrected_yaw):
     import math
     runtime,session,*_=build_runtime()
     runtime.configure_direct_control(lambda *args:None,command_hold_s=1.2)
@@ -622,10 +623,9 @@ def test_pose_correction_does_not_complete_goal_and_can_revoke_arrival(corrected
     assert runtime.tasks._arrived_since==1.
     generation=session.accepted_generation
     runtime.offer_odometry(feedback(1,corrected_yaw));runtime._tick_once(2.)
-    assert session.state.yaw==pytest.approx(corrected_yaw)
+    assert session.state.yaw==pytest.approx(0.)
     assert session.accepted_generation==generation
     assert runtime.tasks.active.outcome is None
-    assert runtime.tasks._arrived_since==(1. if corrected_yaw==0. else None)
+    assert runtime.tasks._arrived_since==1.
     runtime.offer_odometry(feedback(3,0.));runtime._tick_once(3.)
-    if corrected_yaw==0.:assert runtime.tasks.active.outcome=='GOAL_REACHED'
-    else:assert runtime.tasks._arrived_since==3.
+    assert runtime.tasks.active.outcome=='GOAL_REACHED'

@@ -233,6 +233,8 @@ class PlannerRuntime:
             self._notice('ODOMETRY_WAITING','missing_or_nonadvancing_pose')
             return
         if message is None:return
+        # 判活仍逐周期执行；同戳不再覆盖已应用的P3状态。
+        if source_ns is not None and source_ns==accepted and self.session.state is not None:return
         try:value=state_from_odometry(message,transforms,self.map_frame)
         except MissingTransform:
             if self._pose_timeout_s is not None:self._enter_pose_wait()
@@ -244,8 +246,6 @@ class PlannerRuntime:
                 self._enter_pose_wait()
             else:self.session.offer_state(None)
             raise
-        # 同戳有效修正仍应用；完全相同的转换后状态无需重写。
-        if source_ns is not None and source_ns==self._applied_pose_stamp_ns and value==self.session.state:return
         if self._pose_timeout_s is not None and self._pose_waiting:
             self._pose_waiting=False
             self._notice('ODOMETRY_RECOVERED','valid_pose_replanning')
@@ -288,10 +288,8 @@ class PlannerRuntime:
                 try:
                     old=self._odometry.header.stamp
                     new=message.header.stamp
-                    if (int(new.sec)*1_000_000_000+int(new.nanosec) ==
-                            int(old.sec)*1_000_000_000+int(old.nanosec) and message==self._odometry):
-                        return
-                    if (int(new.sec)*1_000_000_000+int(new.nanosec) <
+                    # 同戳修正与迟到包均不替换已接收观测，也不刷新接收计时。
+                    if (int(new.sec)*1_000_000_000+int(new.nanosec) <=
                             int(old.sec)*1_000_000_000+int(old.nanosec)):
                         return
                 except (AttributeError,ValueError,TypeError):
