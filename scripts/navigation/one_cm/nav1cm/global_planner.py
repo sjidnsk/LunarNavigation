@@ -343,8 +343,9 @@ class AdaptiveGlobalPlanner:
             if not proven_free and not _segment_clear(nodes[i], nodes[j], physical, corner_radius=self.clearance_radius_m):
                 return
             # 候选连接先保留几何证明，搜索真正展开时才积分软代价。
-            # 两个方向共享一个记录；求值后释放局部障碍数组引用。
-            value = [None, cost_boxes] if soft_enabled else [math.dist(nodes[i], nodes[j]), None]
+            # 两个方向共享一个记录，保留connect端点顺序以稳定浮点积分。
+            # 求值后释放局部障碍数组和端点索引引用。
+            value = [None, cost_boxes, (i, j)] if soft_enabled else [math.dist(nodes[i], nodes[j]), None, None]
             edges[i].append((j, value))
             edges[j].append((i, value))
             storage["edges"] += 1
@@ -566,8 +567,9 @@ class AdaptiveGlobalPlanner:
                 for neighbor, value in edges[current]:
                     check()
                     if value[0] is None:
-                        value[0] = cost([nodes[current], nodes[neighbor]], value[1])
-                        value[1] = None
+                        first, second = value[2]
+                        value[0] = cost([nodes[first], nodes[second]], value[1])
+                        value[1] = value[2] = None
                         storage["edge_cost_evaluations"] += 1
                     length = value[0]
                     new_cost = g_cost + length
