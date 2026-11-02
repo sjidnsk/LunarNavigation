@@ -305,7 +305,7 @@ class AdaptiveGlobalPlanner:
         nodes, edges, boundary = [], [], []
         portals = {}
         storage = {"obstacles": len(world.blocked), "nodes": 0, "edges": 0, "slabs": 0,
-                   "free_cells": 0, "dense_cells": 0}
+                   "free_cells": 0, "dense_cells": 0, "edge_cost_evaluations": 0}
         timing = {}
         expanded = 0
 
@@ -342,9 +342,11 @@ class AdaptiveGlobalPlanner:
             # 仅同一凸自由矩形内部或其portal边界可复用分解几何证明。
             if not proven_free and not _segment_clear(nodes[i], nodes[j], physical, corner_radius=self.clearance_radius_m):
                 return
-            length = cost([nodes[i], nodes[j]],cost_boxes) if soft_enabled else math.dist(nodes[i], nodes[j])
-            edges[i].append((j, length))
-            edges[j].append((i, length))
+            # 候选连接先保留几何证明，搜索真正展开时才积分软代价。
+            # 两个方向共享一个记录；求值后释放局部障碍数组引用。
+            value = [None, cost_boxes] if soft_enabled else [math.dist(nodes[i], nodes[j]), None]
+            edges[i].append((j, value))
+            edges[j].append((i, value))
             storage["edges"] += 1
 
         try:
@@ -561,7 +563,13 @@ class AdaptiveGlobalPlanner:
                 reaches_boundary |= boundary[current]
                 if current == target_id:
                     break
-                for neighbor, length in edges[current]:
+                for neighbor, value in edges[current]:
+                    check()
+                    if value[0] is None:
+                        value[0] = cost([nodes[current], nodes[neighbor]], value[1])
+                        value[1] = None
+                        storage["edge_cost_evaluations"] += 1
+                    length = value[0]
                     new_cost = g_cost + length
                     if new_cost < dist.get(neighbor, math.inf):
                         dist[neighbor] = new_cost

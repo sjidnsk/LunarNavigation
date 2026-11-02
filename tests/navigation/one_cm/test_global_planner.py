@@ -194,3 +194,11 @@ def test_benchmark_rejects_route_identity_mismatch(changed):
               "path": altered.route.points.tolist(), "validation": evidence,
               "rss_after": {}, "storage": altered.storage}
     assert benchmark.summarize([record])["successes"] == 0
+
+def test_soft_edge_costs_are_only_evaluated_on_search_demand():
+    api = load_api()
+    source = world([CellRect(200, -100, 210, 100)])
+    result = api.AdaptiveGlobalPlanner(WheelLimits(), soft_clearance_m=.5).plan(
+        source, (0, 0), (5, 0), 1, budget_s=10.)
+    assert result.has_reference
+    assert 0 < result.storage['edge_cost_evaluations'] < result.storage['edges']
