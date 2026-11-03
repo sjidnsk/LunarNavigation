@@ -48,9 +48,10 @@ def argument(name):
         if value==name and index+1<len(command):return command[index+1]
         if value.startswith(name+'='):return value[len(name)+1:]
     return None
-runtime=str(Path(os.environ.get('P4_SOURCE_DIR',root/'source'))/'scripts/simulation/p4_tcp_runtime.py')
+runtimes=[value for value in command if Path(value).as_posix().endswith('/scripts/simulation/p4_tcp_runtime.py')
+          and Path(value).is_absolute() and Path(value).resolve().is_relative_to(root)]
 root_arg=argument('--root') or str(Path('/home/yanfa/P4').resolve());artifact=argument('--artifact')
-matching=(runtime in command and Path(root_arg).is_absolute() and Path(root_arg).resolve()==root
+matching=(bool(runtimes) and Path(root_arg).is_absolute() and Path(root_arg).resolve()==root
           and artifact is not None and Path(artifact).is_absolute() and Path(artifact).resolve().is_relative_to(root/'run'))
 if state not in ('Z','X') and matching:
     sys.exit('P4已经运行，PID '+str(pid)+'，运行目录 '+str(artifact))

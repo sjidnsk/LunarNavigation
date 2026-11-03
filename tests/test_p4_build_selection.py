@@ -21,13 +21,16 @@ def api():
 def make_build(root,name,*,qualified=True):
     import hashlib
     target=root/'build'/name
-    (target/'source').mkdir(parents=True)
-    (target/'install').mkdir()
-    (target/'install/local_setup.bash').write_text('# test install\n')
+    target.mkdir(parents=True)
+    for relative in api().REQUIRED_FILES:
+        p=target/relative;p.parent.mkdir(parents=True,exist_ok=True)
+        p.write_bytes(('test '+relative).encode())
     env=target/'environment.sh';env.write_text('export BUILD_TEST='+name+'\n')
     digest=hashlib.sha256(env.read_bytes()).hexdigest()
+    files={relative:hashlib.sha256((target/relative).read_bytes()).hexdigest()
+           for relative in api().REQUIRED_FILES}
     (target/'manifest.json').write_text(json.dumps(dict(qualified=qualified,
-        environment_sha256=digest,files={'environment.sh':digest})))
+        environment_sha256=digest,files=files)))
     return target
 
 
@@ -79,3 +82,15 @@ def test_switch_refuses_live_start_lock_without_changing_selection(tmp_path):
         fcntl.flock(held,fcntl.LOCK_EX|fcntl.LOCK_NB)
         with pytest.raises(RuntimeError,match='P4'):module.switch_build(root,target=second)
     assert (root/'config/p4_active_build.json').read_bytes()==original
+
+
+
+@pytest.mark.parametrize('missing',['all','source','install','library'])
+def test_incomplete_qualified_manifest_cannot_be_selected(tmp_path,missing):
+    module=api();root=tmp_path/'P4';target=make_build(root,'formal-new')
+    p=target/'manifest.json';data=json.loads(p.read_text())
+    data['files']={k:v for k,v in data['files'].items() if not (
+        missing=='all' or missing=='source' and k.startswith('source/') or
+        missing=='install' and k.startswith('install/') or missing=='library' and k.endswith('.so'))}
+    p.write_text(json.dumps(data))
+    with pytest.raises(ValueError,match='incomplete'):module.validate_build(root,target)

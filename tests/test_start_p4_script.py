@@ -125,3 +125,21 @@ def test_selected_build_supplies_runtime_and_rviz_without_editing_legacy_source(
     assert args[1]==str(folder/'p4_tcp_runtime.py')
     assert args[-1]==str(folder/'p4_navigation.rviz')
     assert old.exists()
+
+
+
+def test_pointer_blocks_unlocked_old_operator_from_other_source(fake_p4):
+    root,start,ready=fake_p4
+    legacy=root/'source/scripts/simulation/p4_tcp_runtime.py'
+    selected=root/'build/formal-new/source/scripts/simulation';selected.mkdir(parents=True)
+    (selected/'p4_tcp_runtime.py').write_bytes(legacy.read_bytes())
+    (root/'config/p4_environment.sh').write_text('export P4_TEST_ENV=loaded\nexport P4_SOURCE_DIR="'+str(selected.parents[1])+'"\n')
+    foreign=subprocess.Popen([sys.executable,str(legacy),'--root',str(root),'--artifact',str(root/'run/legacy')],env=dict(os.environ,P4_TEST_ENV='loaded'))
+    try:
+        ready(foreign)
+        (root/'run/p4-current.json').write_text(json.dumps(dict(operator_pid=foreign.pid)))
+        child=start();child.wait(timeout=5)
+        assert child.returncode!=0
+        assert not (root/'run'/str(child.pid)).exists()
+    finally:
+        foreign.terminate();foreign.wait(timeout=5)

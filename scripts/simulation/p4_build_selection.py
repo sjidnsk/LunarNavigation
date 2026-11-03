@@ -6,6 +6,28 @@ import os
 from pathlib import Path
 
 
+# 固定正式部署闭包的关键入口；完整清单另外覆盖全部源码和安装文件。
+REQUIRED_FILES=frozenset([
+    'environment.sh','install/local_setup.bash',
+    'source/scripts/simulation/start_p4.sh',
+    'source/scripts/simulation/p4_tcp_runtime.py',
+    'source/scripts/simulation/p4_topics.py',
+    'source/config/p4_topics.yaml','source/config/wheel.yaml',
+    'source/config/tcp_wheel_speed.yaml','source/config/tcp_p3_feedback.yaml',
+    'source/scripts/navigation/one_cm/nav1cm/execution.py',
+    'source/scripts/navigation/one_cm/ros2/lunar_nav1cm_planner/lunar_nav1cm_planner/runtime.py',
+    'install/lunar_nav1cm_planner/lib/lunar_nav1cm_planner/navigation_task_node',
+    'install/lunar_nav1cm_planner/lib/libnav1cm_terrain.so',
+    'install/lunar_nav1cm_planner/lib/libnav1cm_geometry.so',
+    'install/lunar_nav1cm_planner/lib/libnav1cm_distance_field.so',
+    'install/lunar_incremental_navigation_core/lib/liblunar_incremental_navigation_core.so',
+    'install/lunar_incremental_navigation_ros/lib/liblunar_incremental_navigation_ros.so',
+    'install/lunar_pure_planner_core/lib/liblunar_pure_planner_core.so',
+    'install/lunar_pure_exploration_core/lib/liblunar_pure_exploration_core.so',
+    'install/lunar_pure_exploration_ros/lib/liblunar_pure_exploration_ros_incremental.so',
+    'install/lunar_navigation_rviz/lib/liblunar_navigation_rviz.so'])
+
+
 def validate_build(root,target):
     root,target=Path(root).resolve(),Path(target).resolve()
     if not target.is_relative_to(root/'build') or not target.name.startswith('formal-'):
@@ -18,7 +40,11 @@ def validate_build(root,target):
     if not (target/'source').is_dir():raise ValueError('source missing')
     if manifest.get('mode')!='baseline' and not (target/'install/local_setup.bash').is_file():
         raise ValueError('install missing')
-    for relative,expected in manifest.get('files',{}).items():
+    files=manifest.get('files',{})
+    baseline=manifest.get('mode')=='baseline' and target.name.startswith('formal-baseline-')
+    if not baseline and (not isinstance(files,dict) or not REQUIRED_FILES.issubset(files)):
+        raise ValueError('incomplete source/config/install/library manifest')
+    for relative,expected in files.items():
         path=(target/relative).resolve()
         if not path.is_relative_to(target):raise ValueError('manifest file is outside build')
         if hashlib.sha256(path.read_bytes()).hexdigest()!=expected:

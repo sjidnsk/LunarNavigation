@@ -168,6 +168,7 @@ def test_invalid_telemetry_is_not_measured_stop(changes):
 
 def test_reverse_limit_and_environment_come_from_shared_configuration(monkeypatch):
     monkeypatch.delenv('ROS_DOMAIN_ID',raising=False)
+    monkeypatch.delenv('NAV1CM_BUILD_DIR',raising=False)
     from scripts.simulation.p4_tcp_runtime import TcpCommandRelay,low_speed_profile,runtime_environment
     source=profile();source['capability']['maximum_reverse_speed_mps']=.03
     events=[]
