@@ -282,13 +282,14 @@ def test_mpcc_horizon_configuration_validated_before_dependencies(tmp_path):
 def test_shared_build_root_keeps_configuration_artifacts_separate(tmp_path, monkeypatch):
     import sys
     from scripts.navigation.one_cm.nav1cm.local_mpcc import MpccPlanner
+    from scripts.navigation.one_cm.nav1cm import local_mpcc
     class Symbol:
         def __getitem__(self, key): return self
         def operation(self, *args): return self
         __add__ = __radd__ = __sub__ = __rsub__ = __mul__ = __rmul__ = operation
         __truediv__ = __rtruediv__ = __pow__ = __neg__ = operation
     symbolic = Symbol()
-    fake_ca = SimpleNamespace(SX=SimpleNamespace(sym=lambda *args: symbolic),
+    fake_ca = SimpleNamespace(__version__='test-casadi', SX=SimpleNamespace(sym=lambda *args: symbolic),
         cos=lambda *args: symbolic, sin=lambda *args: symbolic,
         vertcat=lambda *args: symbolic, sumsqr=lambda *args: symbolic)
     captured = []
@@ -298,11 +299,17 @@ def test_shared_build_root_keeps_configuration_artifacts_separate(tmp_path, monk
         Path(json_file).write_text(ocp.model.name, encoding='utf-8')
         captured.append((export, Path(json_file)))
         return SimpleNamespace()
-    fake_acados = SimpleNamespace(AcadosModel=SimpleNamespace,
-        AcadosOcp=lambda: SimpleNamespace(solver_options=SimpleNamespace(), cost=SimpleNamespace(), constraints=SimpleNamespace()),
+    fake_acados = SimpleNamespace(__file__=str(tmp_path/'sdk'/'__init__.py'), AcadosModel=SimpleNamespace,
+        AcadosOcp=lambda: SimpleNamespace(acados_lib_path=str(tmp_path/'sdk'/'lib'), solver_options=SimpleNamespace(), cost=SimpleNamespace(), constraints=SimpleNamespace()),
         AcadosOcpSolver=capture)
     monkeypatch.setitem(sys.modules, 'casadi', fake_ca)
     monkeypatch.setitem(sys.modules, 'acados_template', fake_acados)
+    # 本测试只验证配置隔离与产物保留；编译缓存由专用测试和真实 SDK 验证覆盖。
+    monkeypatch.setitem(sys.modules, 'acados_template.utils', SimpleNamespace(
+        get_shared_lib_prefix=lambda:'lib', get_shared_lib_ext=lambda:'.so', get_shared_lib_dir=lambda:'lib'))
+    monkeypatch.setattr(local_mpcc, '_acados_cache_identity', lambda *args, **kwargs:'test-sdk')
+    monkeypatch.setattr(local_mpcc, '_cached_acados_solver',
+        lambda solver_type, ocp, json_file, identity, **kwargs:solver_type(ocp, json_file=str(json_file), verbose=False))
     baseline = MpccPlanner(WheelLimits(), tmp_path)
     first = {p for pair in captured for p in pair}
     originals = {p: p.read_bytes() for p in first if p.is_file()}
@@ -312,8 +319,8 @@ def test_shared_build_root_keeps_configuration_artifacts_separate(tmp_path, monk
     assert first.isdisjoint(second), 'shared root must not overwrite another configuration'
     assert all(p.read_bytes() == content for p, content in originals.items())
     assert baseline.build_root == fast.build_root == tmp_path.resolve()
-    assert baseline.build_dir == baseline.build_root / baseline.model_fingerprint
-    assert fast.build_dir == fast.build_root / fast.model_fingerprint
+    assert baseline.build_dir == baseline.build_root / baseline.model_fingerprint / 'test-sdk'
+    assert fast.build_dir == fast.build_root / fast.model_fingerprint / 'test-sdk'
     assert (baseline.N, baseline.dt) == (20, .2)
 
 
@@ -348,7 +355,7 @@ def test_fast_profile_real_horizon_and_certified_action():
     limits=WheelLimits(linear_speed_mps=.5, angular_speed_rps=.5)
     shared_root=Path(os.environ['NAV1CM_BUILD_DIR']).parent/'mpcc-shared-root-regression'
     baseline=MpccPlanner(WheelLimits(),shared_root)
-    preserved={p:p.read_bytes() for p in baseline.build_dir.glob('*.json')}
+    preserved={p:p.read_bytes() for p in (baseline.build_dir/(mode+'.json') for mode in ('forward','reverse','spin'))}
     planner=MpccPlanner(limits,shared_root,n=20,dt=.1)
     assert baseline.build_dir != planner.build_dir
     assert len(preserved)==3 and all(p.read_bytes()==data for p,data in preserved.items())

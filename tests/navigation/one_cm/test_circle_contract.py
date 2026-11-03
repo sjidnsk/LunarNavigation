@@ -8,20 +8,28 @@ import pytest
 from scripts.navigation.one_cm.nav1cm import contracts
 from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits,LocalReference
 from scripts.navigation.one_cm.nav1cm.local_mpcc import MpccPlanner
+from scripts.navigation.one_cm.nav1cm import local_mpcc
 
 
 def assembled(monkeypatch,tmp_path,margin,model='differential_drive',**options):
     built=[]
     class Ocp:
         def __init__(self):
+            self.acados_lib_path=str(tmp_path / "sdk" / "lib")
             self.solver_options=NS();self.constraints=NS();self.cost=NS()
     def solver(ocp,**kwargs):
         built.append(ocp);return NS()
-    fake_ca=NS(SX=NS(sym=lambda name,n:np.zeros(n)),sin=np.sin,cos=np.cos,
+    fake_ca=NS(__version__='test-casadi',SX=NS(sym=lambda name,n:np.zeros(n)),sin=np.sin,cos=np.cos,
                vertcat=lambda *v:np.concatenate([np.atleast_1d(x) for x in v]),
                sumsqr=lambda v:np.sum(v*v),fmax=np.maximum)
     monkeypatch.setitem(sys.modules,'casadi',fake_ca)
-    monkeypatch.setitem(sys.modules,'acados_template',NS(AcadosModel=NS,AcadosOcp=Ocp,AcadosOcpSolver=solver))
+    monkeypatch.setitem(sys.modules,'acados_template',NS(__file__=str(tmp_path / 'sdk' / '__init__.py'),AcadosModel=NS,AcadosOcp=Ocp,AcadosOcpSolver=solver))
+    # 此处只验证模型表达式装配；缓存行为由专用缓存测试和真实 SDK 验证覆盖。
+    monkeypatch.setitem(sys.modules,'acados_template.utils',NS(
+        get_shared_lib_prefix=lambda:'lib',get_shared_lib_ext=lambda:'.so',get_shared_lib_dir=lambda:'lib'))
+    monkeypatch.setattr(local_mpcc,'_acados_cache_identity',lambda *args,**kwargs:'test-sdk')
+    monkeypatch.setattr(local_mpcc,'_cached_acados_solver',
+        lambda solver_type,ocp,json_file,identity,**kwargs:solver_type(ocp,json_file=str(json_file),verbose=False))
     limits=replace(WheelLimits(),minimum_clearance_m=margin,motion_model=model)
     return MpccPlanner(limits,tmp_path,n=2,**options),built
 
@@ -93,7 +101,8 @@ def test_new_circle_layout_does_not_reuse_old_generated_model(monkeypatch,tmp_pa
     p,_=assembled(monkeypatch,tmp_path,.2)
     old=hashlib.sha256(f'pose-terminal-clearance-v3:{p.N}:{p.dt.hex()}:{p.limits.digest()}'.encode()).hexdigest()[:12]
     assert p.model_fingerprint!=old
-    assert p.build_dir.name==p.model_fingerprint
+    assert p.build_dir.parent.name==p.model_fingerprint
+    assert p.build_dir.name=='test-sdk'
 
 
 def test_soft_clearance_prefers_distance_without_changing_hard_constraints(monkeypatch,tmp_path):
