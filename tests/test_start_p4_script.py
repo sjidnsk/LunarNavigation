@@ -29,7 +29,10 @@ def fake_p4(tmp_path):
     def ready(child):
         deadline=time.monotonic()+5
         while time.monotonic()<deadline:
-            if (root/'run'/str(child.pid)).exists():return
+            try:
+                if json.loads((root/'run'/str(child.pid)).read_text()):return
+            except (FileNotFoundError,json.JSONDecodeError):
+                pass  # 文件创建早于内容写完；等待完整就绪回执，不改变启动超时。
             if child.poll() is not None:pytest.fail(child.communicate()[1])
             time.sleep(.02)
         pytest.fail('fake runtime did not start')
