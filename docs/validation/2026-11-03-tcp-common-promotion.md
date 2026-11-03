@@ -28,3 +28,10 @@
 - 42个C++源码逐项同源，Humble隔离域93直接运行RViz3组及活动探索3组全部通过；测试日志interaction-humble-results.json在前述P4/tmp目录。
 - 清理只作用探索持有的导航句柄和专用图层；相机只订阅现有话题，不新增采集节点。
 - 无正式RViz界面操作/现场交互验收，不重启正式P4。
+
+## 批次3 TCP应用
+
+专题hk/tcp-app-sync-20261103：49c9418c合部署来源，183c865c接公共算法，23708429接公共交互，dc4585c0接最终公共验收。独立复审无P1/P2；旧TCP应用专用目录和接口保留。基础wheel配置与正式来源一致，实际速度由TCP overlay限制为0.1m/s及0.1rad/s，30cm起伏只在TCP应用保留。
+
+Windows入口/配置/runtime187pass9skip。ARM Linux隔离源码入口112/112通过。首次111pass1fail来自测试夹具ready仅看文件存在、在JSON写完前读取；5836a8f6只等待完整JSON，不改产品逻辑/5秒期限，已独立定向复审通过，原失败日志保留。
+正式active/previous保持formal-20261103-unified/formal-baseline-20261103，未部署本次Git合并、不重启、不发目标。Linux证据P4/tmp/branch-sync-20261103/tcp-entry-linux-fixed.log。
