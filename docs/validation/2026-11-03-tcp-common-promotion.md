@@ -35,3 +35,11 @@
 
 Windows入口/配置/runtime187pass9skip。ARM Linux隔离源码入口112/112通过。首次111pass1fail来自测试夹具ready仅看文件存在、在JSON写完前读取；5836a8f6只等待完整JSON，不改产品逻辑/5秒期限，已独立定向复审通过，原失败日志保留。
 正式active/previous保持formal-20261103-unified/formal-baseline-20261103，未部署本次Git合并、不重启、不发目标。Linux证据P4/tmp/branch-sync-20261103/tcp-entry-linux-fixed.log。
+
+## 最终复审 fix wave：平台配置消费者
+
+最终复审发现P1：足式launch传legged_orin.yaml，但共享地图节点硬编码按wheel加载，构造失败。公共修复efded1fc复用PlatformProfileFor既有能力变体/轮廓及净空，仅将已有platform_selector贯穿map/frontier，不新增地图实体或阈值。轮式默认及原地图权重保持。
+
+新增真实ROS目标exploration_map_consumer_test：实际足式配置创建节点、发布facts、接OccupancyGrid；含默认wheel与非法selector。Windows launch RED4failed后GREEN84pass；ARM独立CMake构建地图库及节点成功，旧源码RED足式platform wheel mismatch，新源码GREEN3/3。首次GREEN误加载正式旧库；显式LD_LIBRARY_PATH选择隔离build并ldd确认后全部通过，原日志保留。
+
+隔离路径P4/tmp/branch-sync-20261103/platform-map-fix，编译与测试未更改正式source/install。足式候选75389f22已接修复且独立最终复审确认P1关闭，轮式/TCP接收相同公共修复后再结案。

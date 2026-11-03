@@ -18,6 +18,7 @@
 #include "lunar_incremental_navigation_ros/exploration_facts_codec.hpp"
 #include "lunar_incremental_navigation_ros/exploration_map_node.hpp"
 #include "lunar_incremental_navigation_ros/input_store.hpp"
+#include "lunar_incremental_navigation_ros/incremental_navigation_node.hpp"
 #include "lunar_incremental_navigation_ros/platform_config.hpp"
 #include "lunar_incremental_navigation_ros/state_adapter.hpp"
 #include "lunar_incremental_navigation_ros/traversability_qos.hpp"
@@ -76,16 +77,22 @@ struct ExplorationMapNode::Impl {
         text("platform_config", ament_index_cpp::get_package_share_directory(
                                     "lunar_incremental_navigation_ros") +
                                     "/config/wheel.yaml");
-    auto loaded = LoadPlatformConfig(path, "wheel");
+    const auto selector = text("platform_selector", "wheel");
+    if (selector != "wheel" && selector != "legged")
+      throw std::invalid_argument("platform_selector must be wheel or legged");
+    auto loaded = LoadPlatformConfig(path, selector);
     if (!loaded.capability) throw std::runtime_error(loaded.error_detail);
     auto capability = *loaded.capability;
-    const auto& wheel = std::get<core::WheeledCapability>(capability);
-    const double radius = core::CircumscribedRadius(wheel.footprint_xy_m);
+    // 复用规划节点的能力轮廓与净空；地图自身的其余profile约定保持原值。
+    const auto platform_profile = PlatformProfileFor(capability, 0.);
+    const auto& envelope = platform_profile.planar_envelope_xy_m;
+    const double clearance = platform_profile.preferred_clearance_m;
+    const double radius = core::CircumscribedRadius(envelope);
     if (radius <= 0.)
-      throw std::invalid_argument("wheel footprint must have positive radius");
+      throw std::invalid_argument("platform footprint must have positive radius");
     core::TraversabilityProfile profile{
-        .planar_envelope_xy_m = wheel.footprint_xy_m,
-        .preferred_clearance_m = wheel.minimum_clearance_m,
+        .planar_envelope_xy_m = envelope,
+        .preferred_clearance_m = clearance,
         .slope_weight = 1.,
         .relief_weight = 1.,
         .clearance_weight = 1.,
@@ -95,8 +102,8 @@ struct ExplorationMapNode::Impl {
             node.declare_parameter<double>("goal_yaw_tolerance_rad", .05)};
     // 硬包络真实覆盖车体外接圆加选定能力净空，不把离地高度当导航净空。
     for (auto& p : profile.planar_envelope_xy_m) {
-      p.x *= 1. + wheel.minimum_clearance_m / radius;
-      p.y *= 1. + wheel.minimum_clearance_m / radius;
+      p.x *= 1. + clearance / radius;
+      p.y *= 1. + clearance / radius;
     }
     window = node.declare_parameter<double>("local_window_size_m", 64.);
     if (!std::isfinite(window) || window <= 0 ||

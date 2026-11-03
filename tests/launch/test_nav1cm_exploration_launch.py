@@ -304,3 +304,18 @@ def test_independent_map_mode_remains_explicitly_available(monkeypatch):
     participants = [n["parameters"][0] for n in g if n["executable"] in
                     ("lunar_exploration_map_node", "navigation_task_node")]
     assert all(p["base_map_facts_topic"] == "" for p in participants)
+
+@pytest.mark.parametrize('selector', ['wheel', 'legged'])
+def test_platform_selector_reaches_map_and_frontier(monkeypatch, selector):
+    g = nodes(graph(monkeypatch, platform_selector=selector, exploration_strategy='frontier'))
+    assert g[0]['parameters'][0]['platform_selector'] == selector
+    assert g[2]['parameters'][0]['platform_selector'] == selector
+
+
+def test_platform_selector_defaults_to_wheel(monkeypatch):
+    assert nodes(graph(monkeypatch))[0]['parameters'][0]['platform_selector'] == 'wheel'
+
+
+def test_invalid_platform_selector_rejected(monkeypatch):
+    with pytest.raises(ValueError, match='platform_selector'):
+        graph(monkeypatch, platform_selector='hover')

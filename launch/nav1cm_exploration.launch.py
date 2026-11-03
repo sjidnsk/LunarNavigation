@@ -35,6 +35,7 @@ DEFAULTS = {'global_period_s': '15.0',
  'allow_unknown': 'false',
  'build_dir': '',
  'platform_config': '',
+ 'platform_selector': 'wheel',
  'use_sim_time': 'false',
  'map_frame': 'map',
  'odom_frame': 'odom',
@@ -53,6 +54,8 @@ DEFAULTS = {'global_period_s': '15.0',
 
 def _compose(context):
     values = {k: LaunchConfiguration(k).perform(context).strip() or v for k,v in DEFAULTS.items()}
+    if values['platform_selector'] not in {'wheel', 'legged'}:
+        raise ValueError('platform_selector must be wheel or legged')
     for name in ('coarse_resolution_m', 'policy_resolution_m'):
         values[name] = float(values[name])
         if not isfinite(values[name]) or values[name] < 0:
@@ -121,6 +124,7 @@ def _compose(context):
     actions = [
         node("lunar_incremental_navigation_ros", "lunar_exploration_map_node", {
             **frames, **inputs, **qos, "platform_config": config,
+            "platform_selector": values["platform_selector"],
             "exploration_map_topic": values["exploration_map_topic"], "policy_map_service": values["policy_map_service"],
             "coarse_resolution_m": values["coarse_resolution_m"],
             "base_map_facts_topic": facts_topic,
@@ -153,7 +157,7 @@ def _compose(context):
     if strategy == "frontier":
         actions.append(node("lunar_pure_exploration_ros", "incremental_exploration_node", {
             **shared_policy, **{k: values[k] for k in ("current_goal_topic","frontiers_topic","task_boundary_topic","task_map_markers_topic")},
-            "diagnostics_topic": values["exploration_diagnostics_topic"], "platform_selector": "wheel", "navigation_action": values["action_name"],
+            "diagnostics_topic": values["exploration_diagnostics_topic"], "platform_selector": values["platform_selector"], "navigation_action": values["action_name"],
             "exploration_map_topic": values["exploration_map_topic"],
             "coverage_target": values["coverage_target"]}))
     elif strategy == "drl":
