@@ -165,6 +165,9 @@ if(BUILD_TESTING)
   lunar_add_ros_gtest(elevation_pipeline_test
     test/elevation_pipeline_test.cpp)
   lunar_add_ros_gtest(exploration_map_node_test test/exploration_map_node_test.cpp)
+  lunar_add_ros_gtest(exploration_map_consumer_test test/exploration_map_consumer_test.cpp)
+  target_compile_definitions(exploration_map_consumer_test PRIVATE
+    PLATFORM_CONFIG_DIR="${LUNAR_INCREMENTAL_NAVIGATION_CONFIG_SOURCE_DIR}")
   lunar_add_ros_gtest(policy_map_exporter_test
     test/policy_map_exporter_test.cpp)
   lunar_add_ros_gtest(exploration_facts_codec_test test/exploration_facts_codec_test.cpp)
