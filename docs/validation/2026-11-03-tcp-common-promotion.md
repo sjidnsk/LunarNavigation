@@ -19,3 +19,12 @@
 ## 环境与产物
 
 本任务工作树/外部验证产物均在D盘，ignored ledger不提交。实施agent前期默认pytest在C:/Users/77634/AppData/Local/Temp/pytest-of-77634产生测试临时文件（查到pytest-258/259/260但不能唯一确认对应轮次）；这些是pytest临时目录，测试结束后经确认无其他测试使用可以删除，本轮不擅自删除。后续均显式使用D盘basetemp。
+
+## 批次2 公共交互
+
+实现29c5d70d，十路径最终源码与02b7ec45一致。探索清理后端、RViz专用图层DELETEALL、默认关闭任务图和重复候选显示、odometry Keep1、已有左右相机与点云显示接线。
+
+- 定向静态143pass/4skip/1deselect；独立复审无P1/P2，另话题13/13通过。
+- 42个C++源码逐项同源，Humble隔离域93直接运行RViz3组及活动探索3组全部通过；测试日志interaction-humble-results.json在前述P4/tmp目录。
+- 清理只作用探索持有的导航句柄和专用图层；相机只订阅现有话题，不新增采集节点。
+- 无正式RViz界面操作/现场交互验收，不重启正式P4。
