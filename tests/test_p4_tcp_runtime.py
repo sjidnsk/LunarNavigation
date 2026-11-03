@@ -728,3 +728,12 @@ def test_runtime_source_uses_selected_build_and_rejects_escape(tmp_path):
     import pytest
     with pytest.raises(ValueError,match='P4'):
         runtime_source(root,{'P4_SOURCE_DIR':str(tmp_path/'other')})
+
+
+
+def test_selected_build_uses_its_own_solver_cache(tmp_path,monkeypatch):
+    from scripts.simulation.p4_tcp_runtime import runtime_build_dir,runtime_environment
+    root=tmp_path/'P4';cache=root/'build/formal-test/solver-cache'
+    monkeypatch.setenv('NAV1CM_BUILD_DIR',str(cache))
+    assert runtime_build_dir(root)==cache
+    assert runtime_environment(root,root/'run/test')['NAV1CM_BUILD_DIR']==str(cache)

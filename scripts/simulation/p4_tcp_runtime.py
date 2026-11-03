@@ -281,12 +281,17 @@ def runtime_source(root,environ=None):
     return source
 
 
+def runtime_build_dir(root):
+    """生成求解器归属当前构建；旧入口保留原缓存默认值。"""
+    return Path(os.environ.get('NAV1CM_BUILD_DIR') or Path(root)/'.cache/nav1cm')
+
+
 def runtime_environment(root,out):
     root,out=Path(root),Path(out)
     env=dict(os.environ,ROS_DOMAIN_ID=str(control_domain()),ROS_LOCALHOST_ONLY='0',
         RMW_IMPLEMENTATION='rmw_cyclonedds_cpp',ROS_HOME=str(out/'ros-home'),ROS_LOG_DIR=str(out/'ros-log'),
         TMPDIR=str(root/'tmp'),XDG_CACHE_HOME=str(root/'.cache'),PYTHONDONTWRITEBYTECODE='1',
-        ACADOS_SOURCE_DIR=str(root/'deps/acados-v040'),NAV1CM_BUILD_DIR=str(root/'.cache/nav1cm'),
+        ACADOS_SOURCE_DIR=str(root/'deps/acados-v040'),NAV1CM_BUILD_DIR=str(runtime_build_dir(root)),
         OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1')
     env['PATH']=str(root/'.venv/bin')+os.pathsep+env['PATH']
     env['LD_LIBRARY_PATH']=str(root/'deps/acados-v040/lib')+':'+env.get('LD_LIBRARY_PATH','')
@@ -423,7 +428,7 @@ def main():
                 qos['goal']=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE)
                 display_worker,display_handles=attach_navigation_observer(source,target,dict(pose=PoseStamped,path=RosPath,odom=Odometry,marker=Marker),qos,budgets['odometry_timeout_s'],contract=contract)
                 handles.extend(display_handles)
-            args=launch_settings(source_root,root/'.cache/nav1cm',config,budgets,exploration_strategy=options.exploration_strategy,contract=contract)
+            args=launch_settings(source_root,runtime_build_dir(root),config,budgets,exploration_strategy=options.exploration_strategy,contract=contract)
             env=runtime_environment(root,out)
             commands=[('navigation',['ros2','launch','lunar_pure_exploration_ros','nav1cm_exploration.launch.py']+[k+':='+str(v) for k,v in args.items()])]
             if options.rviz_config is not None:

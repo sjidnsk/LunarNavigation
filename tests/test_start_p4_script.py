@@ -19,7 +19,7 @@ def fake_p4(tmp_path):
     if not LINUX:pytest.skip('requires Linux flock and /proc')
     root=tmp_path/'p4';(root/'config').mkdir(parents=True);(root/'run').mkdir();(root/'.venv/bin').mkdir(parents=True);(root/'source/scripts/simulation').mkdir(parents=True)
     (root/'.venv/bin/python').symlink_to(sys.executable)
-    (root/'config/p4_environment.sh').write_text('export P4_TEST_ENV=loaded\n')
+    (root/'config/p4_environment.sh').write_text('unset P4_SOURCE_DIR P4_FORMAL_BUILD P4_FORMAL_COMMIT\nexport P4_TEST_ENV=loaded\n')
     runtime=root/'source/scripts/simulation/p4_tcp_runtime.py'
     runtime.write_text('import json,os,sys,time\nfrom pathlib import Path\nroot=Path(sys.argv[sys.argv.index("--root")+1])\n(root/"run"/str(os.getpid())).write_text(json.dumps([os.environ["P4_TEST_ENV"],*sys.argv]))\nwhile True:time.sleep(.05)\n')
     processes=[]
@@ -86,6 +86,7 @@ def test_invalid_option_does_not_start_runtime(fake_p4):
 
 @pytest.mark.parametrize('default_root',[False,True])
 def test_pointer_probe_ignores_reused_and_zombie_pid_but_detects_runtime(tmp_path,monkeypatch,default_root):
+    monkeypatch.delenv('P4_SOURCE_DIR',raising=False)
     source=SCRIPT.read_text(encoding='utf-8')
     probe=source.split("<<'PY'\n",1)[1].split('\nPY',1)[0]
     root=Path('/home/yanfa/P4').resolve() if default_root else tmp_path/'p4'
