@@ -18,9 +18,15 @@ def _topic_defaults():
 
 
 DEFAULTS = {'global_period_s': '15.0',
+ 'global_budget_s': '1.0',
+ 'coverage_target': '0.80',
+ 'horizon_steps': '20',
+ 'horizon_dt_s': '0.2',
  'global_soft_clearance_m': '0.4',
  'global_clearance_weight': '1.0',
  'command_hold_s': '0.0',
+ 'command_prediction_enabled': 'false',
+ 'prediction_command_topic': '',
  'command_spin_prepare_s': '0.0',
  'control_backend': 'path_mppi',
  'exploration_strategy': 'none',
@@ -41,11 +47,17 @@ DEFAULTS = {'global_period_s': '15.0',
  'mppi_time_steps': '40',
  'mppi_compute_envelope_s': '0.05',
  'initial_travel_direction': '',
- 'coarse_resolution_m': '0.2',
+ 'shared_map_facts': 'true',
+ 'coarse_resolution_m': '0.0',
+ 'policy_resolution_m': '0.0',
  **_topic_defaults()}
 
 def _compose(context):
     values = {k: LaunchConfiguration(k).perform(context).strip() or v for k,v in DEFAULTS.items()}
+    for name in ('coarse_resolution_m', 'policy_resolution_m'):
+        values[name] = float(values[name])
+        if not isfinite(values[name]) or values[name] < 0:
+            raise ValueError(name + ' must be finite and nonnegative (0 follows source)')
     for name in ('global_soft_clearance_m','global_clearance_weight'):
         values[name] = float(values[name])
         if not isfinite(values[name]) or values[name] < 0:
@@ -53,6 +65,16 @@ def _compose(context):
     values["command_spin_prepare_s"] = float(values["command_spin_prepare_s"])
     if not isfinite(values["command_spin_prepare_s"]) or values["command_spin_prepare_s"] < 0:
         raise ValueError("command_spin_prepare_s must be finite and nonnegative")
+    values["horizon_steps"] = int(values["horizon_steps"])
+    values["horizon_dt_s"] = float(values["horizon_dt_s"])
+    if values["horizon_steps"] <= 0 or not isfinite(values["horizon_dt_s"]) or values["horizon_dt_s"] <= 0:
+        raise ValueError("local MPCC horizon must be finite and positive")
+    values["global_budget_s"] = float(values["global_budget_s"])
+    if not isfinite(values["global_budget_s"]) or values["global_budget_s"] < 0:
+        raise ValueError("global_budget_s must be finite and nonnegative")
+    values["coverage_target"] = float(values["coverage_target"])
+    if not isfinite(values["coverage_target"]) or not 0 < values["coverage_target"] <= 1:
+        raise ValueError("coverage_target must be finite and in (0, 1]")
     values["global_period_s"] = float(values["global_period_s"])
     if not isfinite(values["global_period_s"]) or values["global_period_s"] <= 0:
         raise ValueError("global_period_s must be finite and positive")
@@ -77,12 +99,17 @@ def _compose(context):
     strategy = values["exploration_strategy"]
     if strategy not in {"none", "frontier", "drl"}:
         raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
-    for key in ("enable_controller", "use_sim_time", "allow_unknown"):
+    for key in ("enable_controller", "use_sim_time", "allow_unknown", "command_prediction_enabled", "shared_map_facts"):
         if values[key] not in {"true", "false"}: raise RuntimeError(key+" 必须为 true/false")
+    if values['command_prediction_enabled']=='true' and (
+            values['control_backend']!='mpcc_cmd_vel' or values['enable_controller']!='true' or
+            not values['prediction_command_topic']):
+        raise RuntimeError('command prediction requires direct control and final command topic')
     if strategy == "drl" and not values["drl_actor"]:
         raise RuntimeError("drl 策略需要显式 drl_actor；权重加载与校验由可选 DRL 包负责")
     values["build_dir"] = values["build_dir"] or os.environ.get("NAV1CM_BUILD_DIR", "")
     if not values["build_dir"]: raise RuntimeError("build_dir 必须指定仓库外缓存，或设置 NAV1CM_BUILD_DIR")
+    facts_topic = values["base_map_facts_topic"] if values["shared_map_facts"] == "true" else ""
     config = values["platform_config"] or str(Path(get_package_share_directory("lunar_nav1cm_planner"))/"config/wheel.yaml")
     frames = {k: values[k] for k in ("map_frame","odom_frame","base_frame")}
     inputs = {k: values[k] for k in ("map_topic","odometry_topic","tf_topic","tf_static_topic")}
@@ -97,13 +124,21 @@ def _compose(context):
         node("lunar_incremental_navigation_ros", "lunar_exploration_map_node", {
             **frames, **inputs, **qos, "platform_config": config,
             "exploration_map_topic": values["exploration_map_topic"], "policy_map_service": values["policy_map_service"],
-            "coarse_resolution_m": float(values["coarse_resolution_m"])}),
+            "coarse_resolution_m": values["coarse_resolution_m"],
+            "base_map_facts_topic": facts_topic,
+            "policy_resolution_m": values["policy_resolution_m"]}),
         node("lunar_nav1cm_planner", "navigation_task_node", {
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
+            "base_map_facts_topic": facts_topic,
             "global_period_s":values["global_period_s"],
+            "global_budget_s":values["global_budget_s"],
+            "horizon_steps":values["horizon_steps"],
+            "horizon_dt_s":values["horizon_dt_s"],
             "global_soft_clearance_m":values["global_soft_clearance_m"],
             "global_clearance_weight":values["global_clearance_weight"],
             "command_hold_s":float(values["command_hold_s"]),
+            "command_prediction_enabled":values["command_prediction_enabled"]=="true",
+            "prediction_command_topic":values["prediction_command_topic"],
             "command_spin_prepare_s":values["command_spin_prepare_s"],
             "control_backend":values["control_backend"],
             "enable_controller":values["enable_controller"]=="true",
@@ -121,7 +156,8 @@ def _compose(context):
         actions.append(node("lunar_pure_exploration_ros", "incremental_exploration_node", {
             **shared_policy, **{k: values[k] for k in ("current_goal_topic","frontiers_topic","task_boundary_topic","task_map_markers_topic")},
             "diagnostics_topic": values["exploration_diagnostics_topic"], "platform_selector": "wheel", "navigation_action": values["action_name"],
-            "exploration_map_topic": values["exploration_map_topic"]}))
+            "exploration_map_topic": values["exploration_map_topic"],
+            "coverage_target": values["coverage_target"]}))
     elif strategy == "drl":
         actions.append(node("lunar_drl_exploration", "lunar_drl_inference_node", {
             **shared_policy, "navigation_backend": "nav1cm", "actor_path": values["drl_actor"],

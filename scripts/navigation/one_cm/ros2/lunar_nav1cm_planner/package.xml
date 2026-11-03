@@ -12,6 +12,7 @@
   <exec_depend>rcl_interfaces</exec_depend>
   <exec_depend>lunar_planning_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>grid_map_msgs</exec_depend>
   <exec_depend>tf2_msgs</exec_depend>

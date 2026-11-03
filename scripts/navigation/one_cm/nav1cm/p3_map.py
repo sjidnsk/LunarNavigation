@@ -14,6 +14,7 @@ from collections.abc import Mapping
 
 import numpy as np
 
+from .base_map import BaseMapFacts, SourceEvidence
 from .contracts import CellRect, CellState, WorldSnapshot
 from .p3_geometry import continuous_strip_intervals
 from .p3_sources import SourceContextLRU, retire_owners
@@ -439,6 +440,26 @@ def _cache_source_classifications(previous, regions):
     return rows
 
 
+def _next_facts(facts, snapshot, observations, update, terrain):
+    from .p3_evidence import update_evidence
+    if facts is None or not observations:
+        return facts
+    if update.source_id is None and not len(update.measurements):
+        return None
+    incoming = SourceEvidence(update.source_id, update.resolution_m, update.origin_xy_m,
+                              update.yaw, update.measurements, ())
+    direct_cells = {(x, y) for y, row in observations.items()
+                    for left, right, _ in row for x in range(left, right)}
+    indices = tuple(i for i, rec in enumerate(incoming.measurements)
+                    if (int(rec['x']), int(rec['y'])) in direct_cells)
+    if len(indices) != len(direct_cells):
+        raise ValueError("missing direct source measurements")
+    sources = update_evidence(facts.sources, incoming, indices, terrain)
+    if snapshot is facts.world and sources is facts.sources:
+        return facts
+    return BaseMapFacts(snapshot, facts.raw_revision + 1, sources)
+
+
 class P3MapStore:
     """线程内累计入口：apply(message, map_from_source) -> WorldSnapshot。
 
@@ -457,8 +478,15 @@ class P3MapStore:
         self._fresh_observations = {}
         self._source_classifications = {}
         self._snapshot = WorldSnapshot(0, (), ())
+        self._facts = BaseMapFacts(self._snapshot, 0, ())
         self._source_resolution_m = None
         self._lock = threading.RLock()
+
+    def capture_facts(self) -> BaseMapFacts:
+        with self._lock:
+            if self._facts is None:
+                raise RuntimeError("terrain backend omitted source measurements")
+            return self._facts
 
     @property
     def snapshot(self) -> WorldSnapshot:
@@ -544,6 +572,8 @@ class P3MapStore:
             snapshot = self._snapshot
             if blocked != snapshot.blocked or free != snapshot.known_free:
                 snapshot = WorldSnapshot(snapshot.epoch + 1, blocked, free)
+            facts = _next_facts(self._facts, snapshot, observations, update, self._terrain)
+            self._facts = facts
             self._rows = rows
             self._observation_owners = owners
             self._fresh_observations = fresh_sources

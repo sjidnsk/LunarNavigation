@@ -275,13 +275,13 @@ using GlobalProjectionCacheKey =
 using GlobalRouteCacheKey =
     RevisionCacheKey<GlobalRouteCacheDomain, 3U, 5U>;
 using LocalSnapshotCacheKey =
-    RevisionCacheKey<LocalSnapshotCacheDomain, 1U, 1U>;
+    RevisionCacheKey<LocalSnapshotCacheDomain, 1U, 0U>;
 using LocalProjectionCacheKey =
-    RevisionCacheKey<LocalProjectionCacheDomain, 1U, 2U>;
+    RevisionCacheKey<LocalProjectionCacheDomain, 1U, 1U>;
 using LeggedLocalProjectionCacheKey =
     RevisionCacheKey<LeggedLocalProjectionCacheDomain, 1U, 5U>;
 using GoalFieldCacheKey =
-    RevisionCacheKey<GoalFieldCacheDomain, 1U, 5U>;
+    RevisionCacheKey<GoalFieldCacheDomain, 1U, 4U>;
 
 [[nodiscard]] std::uint64_t StableCapabilityFingerprint(
     const PlatformCapability& capability) noexcept;
@@ -303,11 +303,9 @@ MakeLeggedTraversabilityProjectionCacheKey(
     std::uint64_t profile_hash,
     std::uint64_t capability_fingerprint) noexcept;
 [[nodiscard]] LocalSnapshotCacheKey MakeLocalSnapshotCacheKey(
-    std::uint64_t local_map_sequence,
-    std::uint64_t start_patch_identity = 0U) noexcept;
+    std::uint64_t local_map_sequence) noexcept;
 [[nodiscard]] LocalProjectionCacheKey MakeLocalProjectionCacheKey(
-    std::uint64_t local_map_sequence, double occupancy_threshold,
-    std::uint64_t start_patch_identity = 0U) noexcept;
+    std::uint64_t local_map_sequence, double occupancy_threshold) noexcept;
 [[nodiscard]] LeggedLocalProjectionCacheKey MakeLeggedLocalProjectionCacheKey(
     std::uint64_t local_map_sequence, std::size_t width, std::size_t height,
     double resolution_m, double occupancy_threshold,
@@ -315,8 +313,7 @@ MakeLeggedTraversabilityProjectionCacheKey(
 [[nodiscard]] GoalFieldCacheKey MakeGoalFieldCacheKey(
     std::uint64_t local_map_sequence, double occupancy_threshold,
     std::uint64_t capability_fingerprint, const LocalGoalSet& goals,
-    const AnytimeSearchConfig& search,
-    std::uint64_t start_patch_identity = 0U) noexcept;
+    const AnytimeSearchConfig& search) noexcept;
 
 class ActivePlannerCache final {
  public:

@@ -73,6 +73,37 @@ def test_complete_rviz_template_is_resolved_from_contract():
     assert actual['Panels'][1]['Task Topic'] == contract['launch']['task_topic']
     for display in actual['Visualization Manager']['Displays']:
         if 'Topic' in display:
-            assert display['Topic']['Value'].startswith(('/Car/T4/', '/Car/T3/'))
+            known = set(contract['launch'].values()) | set(contract['visualization'].values())
+            known.add(contract['launch']['global_route_topic']+'_reference')
+            assert display['Topic']['Value'] in known
     goal_tool = next(tool for tool in actual['Visualization Manager']['Tools'] if tool['Class'].endswith('/SetGoal'))
     assert goal_tool['Topic'] == contract['launch']['goal_topic']
+
+
+def test_stereo_images_use_shared_p3_topics_and_small_queues():
+    contract = load_topic_contract(ROOT)
+    template = yaml.safe_load((ROOT/'scripts/simulation/p4_navigation.rviz').read_text(encoding='utf-8'))
+    contract['visualization']['p3_left_image'] = '/test/left'
+    contract['visualization']['p3_right_image'] = '/test/right'
+    actual = render_rviz_config(template, contract)
+    images = [d for d in actual['Visualization Manager']['Displays'] if d['Class']=='rviz_default_plugins/Image']
+    assert [d['Topic']['Value'] for d in images] == ['/test/left','/test/right']
+    assert all(d['Enabled'] and d['Topic']['Depth']==1 and d['Topic']['Durability Policy']=='Volatile' for d in images)
+    assert next(d for d in actual['Visualization Manager']['Displays'] if d['Class']=='rviz_default_plugins/Odometry')['Keep']==1
+
+
+def test_exploration_task_map_is_opt_in_in_template_and_rendered_config():
+    template = yaml.safe_load((ROOT/'scripts/simulation/p4_navigation.rviz').read_text(encoding='utf-8'))
+    for document in (template, render_rviz_config(template, load_topic_contract(ROOT))):
+        task_map = next(d for d in document['Visualization Manager']['Displays'] if d['Name']=='Exploration task map')
+        assert task_map['Enabled'] is False
+
+
+def test_duplicate_pose_goal_is_disabled_while_deletable_candidate_markers_remain_enabled():
+    template = yaml.safe_load((ROOT/'scripts/simulation/p4_navigation.rviz').read_text(encoding='utf-8'))
+    actual = render_rviz_config(template, load_topic_contract(ROOT))
+    displays = {display['Name']: display for display in actual['Visualization Manager']['Displays']}
+    assert displays['Current exploration goal']['Enabled'] is False
+    assert displays['Exploration frontiers']['Enabled'] is True
+    assert displays['Exploration frontiers']['Class'] == 'rviz_default_plugins/MarkerArray'
+    assert displays['Current exploration goal']['Topic']['Value'] == load_topic_contract(ROOT)['launch']['current_goal_topic']

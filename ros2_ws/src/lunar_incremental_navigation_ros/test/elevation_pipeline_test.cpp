@@ -344,16 +344,21 @@ TEST(PolicyMapPipelineExport, ObservedOnlyDeltaMatchesFullWithUnchangedNavigatio
   std::get<WheeledCapability>(capability).footprint_xy_m = profile.planar_envelope_xy_m;
   ElevationPipeline pipeline(capability, profile, 1.0);
   PolicyMapExporter exporter(capability, profile);
-  auto evidence = Evidence(0.0F);
-  evidence.terrain_measurements.assign(49, {.center_known = true,
-      .neighborhood_complete = true, .slope_rad = 0, .relief_m = 2, .positive_rise_m = 2});
+  // 平台窗口从真实高程重测：交错台阶先阻塞全部导航格。
+  auto evidence = BlockedTerrainEvidence();
   ASSERT_EQ(pipeline.ApplyLocal(evidence, 10).status,
             lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
   ASSERT_TRUE(pipeline.RunFineDerivation());
   const auto base = ExportCaptured(pipeline, exporter);
   WireTiles reconstructed;
   ApplyWireTiles(base, reconstructed);
-  evidence.terrain_measurements[24] = {.center_known = true, .neighborhood_complete = true};
+  // 清平中心物理窗口，使中心本征观测变为FREE；周围台阶仍在包络内，
+  // 导航膨胀状态和代价保持不变，增量仍须携带新的观测分类。
+  for (std::size_t y = 2; y <= 4; ++y) {
+    for (std::size_t x = 2; x <= 4; ++x) {
+      evidence.elevation_m[y * 7 + x] = 0.0F;
+    }
+  }
   ASSERT_EQ(pipeline.ApplyLocal(evidence, 20).status,
             lunar::incremental_navigation::ElevationUpdateResult::Status::kApplied);
   ASSERT_TRUE(pipeline.RunFineDerivation());
@@ -361,6 +366,7 @@ TEST(PolicyMapPipelineExport, ObservedOnlyDeltaMatchesFullWithUnchangedNavigatio
   const auto delta = ExportCaptured(pipeline, exporter, base.fine_revision);
   const auto full = ExportCaptured(pipeline, exporter);
   ASSERT_FALSE(delta.full_snapshot);
+  ASSERT_FALSE(delta.tiles.empty());
   ASSERT_EQ(base.tiles.size(), 1U);
   ASSERT_EQ(full.tiles.size(), 1U);
   EXPECT_EQ(base.tiles[0].states, full.tiles[0].states);

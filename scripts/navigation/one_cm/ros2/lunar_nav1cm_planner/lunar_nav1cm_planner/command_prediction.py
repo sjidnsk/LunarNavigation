@@ -1,13 +1,15 @@
-"""P3实测运动的有界延迟预测；命令辅助减速，不作为已实现速度。"""
+"""P3源时刻锚定的延迟预测；可选回放已发布速度，保留旧实测限幅模式。"""
 from collections import deque
 import math
 from nav1cm.contracts import VehicleState
 
 
 class CommandPrediction:
-    def __init__(self, max_commands=512, spin_prepare_s=0.):
+    def __init__(self, max_commands=512, spin_prepare_s=0., use_published_velocity=False):
         if isinstance(spin_prepare_s,bool) or not math.isfinite(spin_prepare_s) or spin_prepare_s<0:
             raise ValueError('spin_prepare_s must be finite and nonnegative')
+        self.use_published_velocity=bool(use_published_velocity)
+        self._published_cache_limits=None
         self.spin_prepare_s=float(spin_prepare_s)
         self._spin_dir=0
         self._spin_ready_s=None
@@ -33,6 +35,9 @@ class CommandPrediction:
             self._spin_ready_s=now_s+self.spin_prepare_s if spin_dir else None
             self._spin_dir=spin_dir
         if not self.commands or command != self.commands[-1][1]:
+            # 接收的历史时刻若已被预测，必须从P3锚点重放，不能保留旧的未来缓存。
+            if self.use_published_velocity and self._cache is not None and now_s<self._cache[0]:
+                self._cache=None
             self.commands.append((now_s,command,self._spin_ready_s))
 
     def correct(self, state, stamp_ns, now_s, clock_ns):
@@ -48,10 +53,11 @@ class CommandPrediction:
             self.clock=clock_ns
             return
         self.clock=clock_ns
-        if self.stamp is not None and stamp_ns<=self.stamp:
+        if self.stamp is not None and (stamp_ns<self.stamp or
+                stamp_ns==self.stamp and (not self.use_published_velocity or state==self.state)):
             return
         velocity=(state.v,state.w)
-        if self.state is not None and self.stamp is not None:
+        if not self.use_published_velocity and self.state is not None and self.stamp is not None:
             dt=(stamp_ns-self.stamp)/1e9
             yaw_delta=math.atan2(math.sin(state.yaw-self.state.yaw),math.cos(state.yaw-self.state.yaw))
             mid=self.state.yaw+yaw_delta/2
@@ -67,11 +73,14 @@ class CommandPrediction:
 
     def covered(self, now_s):
         return (self.state is not None and self.sample_s is not None and
-                0<=now_s-self.sample_s<=30 and bool(self.commands) and
+                0<=now_s-self.sample_s and
+                (self.use_published_velocity or now_s-self.sample_s<=30) and bool(self.commands) and
                 self.commands[0][0]<=self.sample_s)
 
     def predict(self, now_s, limits):
         # 没有覆盖采样时刻的已发命令就保留实测，不推测此前命令。
+        if self.use_published_velocity:
+            return self._predict_published(now_s,limits)
         start=self.sample_s
         if (self.state is None or start is None or now_s<start or now_s-start>30 or
                 not self.commands or self.commands[0][0]>start):
@@ -115,4 +124,61 @@ class CommandPrediction:
                 duration-=dt
         value=VehicleState(x,y,yaw,v,w)
         self._cache=(now_s,value)
+        return value
+
+    def _predict_published(self, now_s, limits):
+        """回放最终已发布速度，锚点始终为P3实测；没有命令覆盖则返回P3。"""
+        if not self.covered(now_s):return self.state
+        start,state=self.sample_s,self.state
+        rates=(limits.linear_accel_mps2,limits.angular_accel_rps2)
+        if (self._cache is not None and self._published_cache_limits==rates and
+                start<=self._cache[0]<=now_s):
+            start,state=self._cache
+        if start==now_s:return state
+        x,y,yaw,v,w=state.x,state.y,state.yaw,state.v,state.w
+        entries=list(self.commands)
+        for i,(issued,command,ready_s) in enumerate(entries):
+            end=min(now_s,entries[i+1][0] if i+1<len(entries) else now_s)
+            cursor=max(start,issued)
+            while end-cursor>1e-12:
+                preparing=ready_s is not None and cursor<ready_s
+                target=(0.,0.) if preparing else command
+                dt=end-cursor
+                if preparing:dt=min(dt,ready_s-cursor)
+                for speed,requested,rate in zip((v,w),target,rates):
+                    reach=abs(requested-speed)/rate
+                    if reach>1e-12:dt=min(dt,reach)
+                dv,dw=target[0]-v,target[1]-w
+                if abs(dv)<1e-14 and abs(dw)<1e-14:
+                    # 稳态解析圆弧：长延迟与查询频率不增加积分次数。
+                    turn=w*dt
+                    half=turn/2.
+                    scale=1. if abs(half)<1e-12 else math.sin(half)/half
+                    distance=v*dt*scale
+                    x+=distance*math.cos(yaw+half)
+                    y+=distance*math.sin(yaw+half)
+                    yaw+=turn
+                else:
+                    dt=min(dt,.02)
+                    av=max(-rates[0],min(rates[0],dv/dt))
+                    aw=max(-rates[1],min(rates[1],dw/dt))
+                    # 5点Gauss积分平滑加速圆弧；分段查询与一次查询保持数值一致。
+                    dx=dy=0.
+                    for node,weight in ((0.,.5688888888888889),
+                            (-.5384693101056831,.4786286704993665),
+                            (.5384693101056831,.4786286704993665),
+                            (-.9061798459386640,.2369268850561891),
+                            (.9061798459386640,.2369268850561891)):
+                        t=dt*(node+1.)/2.
+                        angle=yaw+w*t+.5*aw*t*t
+                        speed=v+av*t
+                        dx+=weight*speed*math.cos(angle)
+                        dy+=weight*speed*math.sin(angle)
+                    x+=dt*dx/2.;y+=dt*dy/2.
+                    yaw+=w*dt+.5*aw*dt*dt
+                    v+=av*dt;w+=aw*dt
+                cursor+=dt
+        value=VehicleState(x,y,yaw,v,w)
+        self._cache=(now_s,value)
+        self._published_cache_limits=rates
         return value

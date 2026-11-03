@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -21,8 +23,8 @@ namespace core = lunar::incremental_navigation;
                             .origin_m = {}};
 }
 
-[[nodiscard]] std::shared_ptr<const core::ElevationSnapshot> MakeElevation() {
-  const core::GridGeometry geometry = DenseGeometry();
+[[nodiscard]] std::shared_ptr<const core::ElevationSnapshot> MakeElevation(
+    const core::GridGeometry geometry = DenseGeometry()) {
   const std::vector<float> elevation(geometry.CellCount(), 0.0F);
   core::PersistentElevationMap map;
   const auto result = map.Apply(core::ElevationEvidence{
@@ -40,8 +42,9 @@ namespace core = lunar::incremental_navigation;
 
 [[nodiscard]] std::shared_ptr<const core::FineTraversabilitySnapshot> MakeFine(
     const std::vector<std::pair<core::GridIndex, core::FineCellState>>& cells,
-    const std::uint64_t revision = 7U) {
-  const auto elevation = MakeElevation();
+    const std::uint64_t revision = 7U,
+    const core::GridGeometry geometry = DenseGeometry()) {
+  const auto elevation = MakeElevation(geometry);
   core::FineTraversabilityTile::StateArray states;
   states.fill(core::FineCellState::kUnknown);
   core::FineTraversabilityTile::CostArray costs;
@@ -181,13 +184,142 @@ TEST(ExplorationMapProjectorTest, ShiftedBoundaryKeepsUncoveredAreaUnknown) {
   }
 }
 
+// 相同格边界不应因大世界坐标下的面积减法精度损失而丢失 FREE。
+TEST(ExplorationMapProjectorTest, SameGridExportsStatesWithoutAreaRoundoff) {
+  for (const double resolution : {0.2, 0.05}) {
+    for (const double origin : {-1000000000.0, -2.0, 0.0}) {
+      SCOPED_TRACE(resolution);
+      SCOPED_TRACE(origin);
+      const core::GridGeometry geometry{.frame_id = "map", .width = 4U,
+          .height = 4U, .resolution_m = resolution,
+          .origin_m = {.x = origin, .y = origin}};
+      const auto fine = MakeFine({
+          {{.x = 0, .y = 0}, core::FineCellState::kFree},
+          {{.x = 1, .y = 0}, core::FineCellState::kBlocked}}, 41U, geometry);
+      const auto projected = ExplorationMapProjector{}.ProjectConservative(
+          *fine, fine->geometry());
+      ASSERT_EQ(projected.data.size(), 16U);
+      EXPECT_EQ(projected.data[0], 0);
+      EXPECT_EQ(projected.data[1], 100);
+      for (std::size_t i = 2; i < projected.data.size(); ++i) {
+        EXPECT_EQ(projected.data[i], -1);
+      }
+      EXPECT_EQ(projected.source_fine_traversability_revision, 41U);
+      EXPECT_EQ(projected.geometry.origin_m(), fine->geometry().origin_m());
+      EXPECT_EQ(projected.geometry.min_inclusive(), fine->geometry().min_inclusive());
+      EXPECT_EQ(projected.geometry.max_exclusive(), fine->geometry().max_exclusive());
+      EXPECT_DOUBLE_EQ(projected.geometry.resolution_m(), resolution);
+    }
+  }
+}
+
+TEST(ExplorationMapProjectorTest, EquivalentIndexOffsetRetainsRequestedGeometry) {
+  const auto fine = MakeFine({
+      {{.x = 0, .y = 0}, core::FineCellState::kFree},
+      {{.x = 1, .y = 0}, core::FineCellState::kBlocked}});
+  const core::SparseGridGeometry shifted("map", .5, {.x = -1.0, .y = 1.0},
+      {.x = 2, .y = -2}, {.x = 6, .y = 2});
+  const auto projected = ExplorationMapProjector{}.ProjectConservative(*fine, shifted);
+  EXPECT_EQ(projected.data, ExplorationMapProjector{}.ProjectConservative(
+      *fine, fine->geometry()).data);
+  EXPECT_EQ(projected.geometry.min_inclusive(), shifted.min_inclusive());
+  EXPECT_EQ(projected.geometry.origin_m(), shifted.origin_m());
+}
+
+TEST(ExplorationMapProjectorTest, DecimalResolutionIndexOffsetUsesIdenticalBoundaries) {
+  for (const double resolution : {.2, .05}) {
+    const core::GridGeometry geometry{.frame_id = "map", .width = 4U,
+        .height = 4U, .resolution_m = resolution, .origin_m = {}};
+    const auto fine = MakeFine({
+        {{.x = 0, .y = 0}, core::FineCellState::kFree},
+        {{.x = 1, .y = 0}, core::FineCellState::kBlocked}}, 7U, geometry);
+    const core::SparseGridGeometry shifted("map", resolution,
+        {.x = -resolution, .y = resolution},
+        {.x = 1, .y = -1}, {.x = 3, .y = 1});
+    // 明确验证表示不同的两个轴在每格实际下/上边界上精确一致。
+    for (std::int64_t i = 0; i < 2; ++i) {
+      const double source = std::fma(static_cast<double>(i), resolution, 0.0);
+      const double x = std::fma(static_cast<double>(i + 1), resolution, -resolution);
+      const double y = std::fma(static_cast<double>(i - 1), resolution, resolution);
+      ASSERT_EQ(source, x);
+      ASSERT_EQ(source, y);
+      ASSERT_EQ(source + resolution, x + resolution);
+      ASSERT_EQ(source + resolution, y + resolution);
+    }
+    const auto result = ExplorationMapProjector{}.ProjectConservative(*fine, shifted);
+    EXPECT_EQ(result.data, (std::vector<std::int8_t>{0, 100, -1, -1}));
+    EXPECT_EQ(result.geometry.origin_m(), shifted.origin_m());
+  }
+}
+
+TEST(ExplorationMapProjectorTest, SameResolutionMisalignmentDoesNotCopyFreeCell) {
+  const auto fine = MakeFine({
+      {{.x = 0, .y = 0}, core::FineCellState::kFree},
+      {{.x = 1, .y = 0}, core::FineCellState::kBlocked}});
+  for (const double shift : {.25, 1.0e-7}) {
+    const core::SparseGridGeometry shifted("map", .5, {.x = shift},
+        {.x = 0, .y = 0}, {.x = 1, .y = 1});
+    EXPECT_EQ(ExplorationMapProjector{}.ProjectConservative(*fine, shifted).data,
+              (std::vector<std::int8_t>{100}));
+    EXPECT_EQ(ExplorationMapProjector{}.Project(*fine, shifted).data,
+              (std::vector<std::int8_t>{0}));
+  }
+}
+
+TEST(ExplorationMapProjectorTest, MissingSparseTileRemainsUnknownOnSameGrid) {
+  const core::GridGeometry geometry{.frame_id = "map", .width = 128U,
+      .height = 1U, .resolution_m = .2, .origin_m = {}};
+  const auto fine = MakeFine({{{.x = 0, .y = 0}, core::FineCellState::kFree}},
+                             7U, geometry);
+  const auto projected = ExplorationMapProjector{}.ProjectConservative(
+      *fine, fine->geometry());
+  ASSERT_EQ(projected.data.size(), 128U);
+  EXPECT_EQ(projected.data[0], 0);
+  for (std::size_t i = 1; i < projected.data.size(); ++i) {
+    EXPECT_EQ(projected.data[i], -1);
+  }
+}
+
+TEST(ExplorationMapProjectorTest, ProjectionNeverExpandsCertifiedFreeArea) {
+  for (const double resolution : {.2, .05}) {
+    const core::GridGeometry geometry{.frame_id = "map", .width = 4U,
+        .height = 4U, .resolution_m = resolution,
+        .origin_m = {.x = -2.0, .y = -2.0}};
+    const auto fine = MakeFine({
+        {{.x = 0, .y = 0}, core::FineCellState::kFree},
+        {{.x = 1, .y = 0}, core::FineCellState::kFree},
+        {{.x = 0, .y = 1}, core::FineCellState::kFree},
+        {{.x = 1, .y = 1}, core::FineCellState::kFree},
+        {{.x = 2, .y = 0}, core::FineCellState::kBlocked}}, 7U, geometry);
+    for (const double scale : {.5, 1.0, 2.0}) {
+      for (const double shift : {0.0, .25 * resolution}) {
+        SCOPED_TRACE(resolution);
+        SCOPED_TRACE(scale);
+        SCOPED_TRACE(shift);
+        const core::SparseGridGeometry target("map", resolution * scale,
+            {.x = -2.0 + shift, .y = -2.0},
+            {.x = 0, .y = 0}, {.x = 8, .y = 8});
+        const auto result = ExplorationMapProjector{}.ProjectConservative(*fine, target);
+        const auto free_count = std::count(result.data.begin(), result.data.end(), 0);
+        const double exported_free_area = free_count * resolution * resolution * scale * scale;
+        EXPECT_LE(exported_free_area, 4.0 * resolution * resolution + 1.0e-12);
+        EXPECT_EQ(result.data.back(), -1);
+        if (scale == 1.0 && shift == 0.0) {
+          EXPECT_EQ(free_count, 4);
+          EXPECT_EQ(result.data[2], 100);
+        }
+      }
+    }
+  }
+}
+
 TEST(ExplorationMapProjectorTest, BothPoliciesRejectIncompatibleFrames) {
   const auto fine = MakeFine({});
   const core::SparseGridGeometry other(
       "odom", 1.0, {}, {.x = 0, .y = 0}, {.x = 1, .y = 1});
-  EXPECT_THROW(ExplorationMapProjector{}.Project(*fine, other),
+  EXPECT_THROW((void)ExplorationMapProjector{}.Project(*fine, other),
                std::invalid_argument);
-  EXPECT_THROW(ExplorationMapProjector{}.ProjectConservative(*fine, other),
+  EXPECT_THROW((void)ExplorationMapProjector{}.ProjectConservative(*fine, other),
                std::invalid_argument);
 }
 

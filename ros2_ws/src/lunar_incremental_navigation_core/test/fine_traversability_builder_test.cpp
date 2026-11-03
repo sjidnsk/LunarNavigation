@@ -194,12 +194,12 @@ TEST(FineTraversabilityGeometry,
   FineCellEvaluator maximum_evaluator(near_max, WheelCapability(), profile);
 
   EXPECT_EQ(minimum_evaluator.Evaluate({.x = kMinimum, .y = kMinimum}).state,
-            FineCellState::kUnknown);
+            FineCellState::kFree);
   EXPECT_EQ(
       maximum_evaluator
           .Evaluate({.x = kMaximum - 1, .y = kMaximum - 1})
           .state,
-      FineCellState::kUnknown);
+      FineCellState::kFree);
 }
 
 TEST(FineTraversabilityBuilder,
@@ -792,7 +792,10 @@ TEST(TerrainMeasurements, VisibleFloorRetainsWallClosureWithoutHiddenElevation) 
   auto with_centers = effective.Snapshot();
   EXPECT_EQ(with_centers->ElevationRangeAt(hidden_wall), std::nullopt);
   EXPECT_EQ(evaluator->Evaluate(*with_centers, floor).state, IntrinsicCellState::kBlocked);
-  auto derived = FineTraversabilityBuilder().Derive(with_centers, WheelCapability(), Profile());
+  // Transported legacy statistics use the explicit projected evidence entry.
+  auto derived = FineTraversabilityBuilder().DeriveProjected(
+      with_centers, WheelCapability(), Profile(),
+      MakePlatformElevationEvaluator(WheelCapability()));
   ASSERT_TRUE(derived);
   EXPECT_EQ(derived->State(floor), FineCellState::kBlocked);
   // Limits remain owned by each native platform evaluator.
@@ -841,7 +844,9 @@ TEST_P(StrengthenedPartialTerrain, NewBlockingEvidenceAdvancesRevision) {
   ASSERT_EQ(apply().status, ElevationUpdateResult::Status::kApplied);
   const auto before = map.Snapshot();
   auto evaluator = MakePlatformElevationEvaluator(WheelCapability());
-  auto fine_before = FineTraversabilityBuilder().Derive(before, WheelCapability(), Profile());
+  auto fine_before = FineTraversabilityBuilder().DeriveProjected(
+      before, WheelCapability(), Profile(),
+      MakePlatformElevationEvaluator(WheelCapability()));
   EXPECT_EQ(evaluator->Evaluate(*before, center).state,
       GetParam() ? IntrinsicCellState::kFree : IntrinsicCellState::kUnknown);
 
@@ -855,8 +860,9 @@ TEST_P(StrengthenedPartialTerrain, NewBlockingEvidenceAdvancesRevision) {
   ASSERT_EQ(blocked->changed_cells().size(), 1U);
   EXPECT_EQ(blocked->changed_cells()[0], center);
   EXPECT_EQ(evaluator->Evaluate(*blocked, center).state, IntrinsicCellState::kBlocked);
-  auto fine_blocked = FineTraversabilityBuilder().Derive(
-      blocked, WheelCapability(), Profile(), fine_before);
+  auto fine_blocked = FineTraversabilityBuilder().DeriveProjected(
+      blocked, WheelCapability(), Profile(),
+      MakePlatformElevationEvaluator(WheelCapability()), fine_before);
   EXPECT_EQ(fine_blocked->State(center), FineCellState::kBlocked);
   EXPECT_DOUBLE_EQ(before->TerrainMeasurementsAt(center)->relief_m, 0);
 
@@ -905,6 +911,70 @@ TEST(FineTraversabilityBuilderProjected, SameRawNewIntrinsicHasIndependentRevisi
   EXPECT_EQ(builder.Derive(elevation,WheelCapability(),Profile(),ordinary),ordinary);
   EXPECT_EQ(ordinary->State({10,10}),FineCellState::kFree);
   EXPECT_THROW(builder.DeriveProjected(elevation,WheelCapability(),Profile(),nullptr),std::invalid_argument);
+}
+
+TEST(FineTraversabilityBuilder,
+     PlatformWindowInfluenceBeyondLegacyHaloMatchesFullDerivation) {
+  // Deliberately separate the tiny collision envelope from the body's real
+  // measurement scale. A changed column 0.6m away affects the 1.182m terrain
+  // window but lies well outside the old collision + one-cell gradient halo.
+  constexpr double resolution = 0.1;
+  constexpr std::int64_t changed_x = 36;
+  const GridGeometry geometry = Geometry(61U, 61U, resolution);
+  const GridIndex center{.x = 30, .y = 30};
+  for (const double slope_limit :
+       {std::numbers::pi / 2.0, 9.0 * std::numbers::pi / 180.0}) {
+    auto capability = WheelCapability();
+    capability.body_extent_m = {.x = 1.182, .y = 0.818, .z = 0.3};
+    capability.maximum_slope_rad = slope_limit;
+    const auto profile = Profile(0.01, 0.01, 0.0,
+        {.slope = 1.0, .relief = 0.0, .clearance = 0.0});
+    std::vector<float> heights(geometry.CellCount());
+    for (std::int64_t y = 0; y < 61; ++y)
+      for (std::int64_t x = 0; x < 61; ++x)
+        heights[Offset(geometry, {x, y})] = static_cast<float>(
+            0.05 * x * resolution +
+            0.15 * std::max<std::int64_t>(0, x - 29) * resolution);
+    PersistentElevationMap map;
+    const auto first_raw = Snapshot(map, geometry, heights);
+    FineTraversabilityBuilder builder;
+    const auto first = builder.Derive(first_raw, capability, profile);
+
+    // Change only the final edge in the center's L window: five low and seven
+    // high gradients become six of each. Neither the center nor its immediate
+    // neighbors are updated. This changes both slope cost and, at 9deg, state.
+    const float new_height = static_cast<float>(
+        0.05 * (changed_x - 1) * resolution +
+        0.15 * (changed_x - 1 - 29) * resolution + 0.05 * resolution);
+    const GridGeometry column{
+        .frame_id = "map", .width = 1U, .height = 61U,
+        .resolution_m = resolution,
+        .origin_m = {.x = changed_x * resolution, .y = 0.0, .z = 0.0}};
+    ASSERT_EQ(Apply(map, column, std::vector<float>(61U, new_height)).status,
+              ElevationUpdateResult::Status::kApplied);
+    const auto second_raw = map.Snapshot();
+    const auto incremental = builder.Derive(second_raw, capability, profile, first);
+    const auto full = builder.Derive(second_raw, capability, profile);
+    ASSERT_TRUE(incremental);
+    ASSERT_TRUE(full);
+    if (slope_limit > 1.0) {
+      ASSERT_EQ(first->State(center), FineCellState::kFree);
+      ASSERT_EQ(full->State(center), FineCellState::kFree);
+      ASSERT_LT(full->TraversalCost(center), first->TraversalCost(center));
+    } else {
+      ASSERT_EQ(first->State(center), FineCellState::kBlocked);
+      ASSERT_EQ(full->State(center), FineCellState::kFree);
+    }
+    for (std::int64_t y = 0; y < 61; ++y)
+      for (std::int64_t x = 0; x < 61; ++x) {
+        const GridIndex index{x, y};
+        EXPECT_EQ(incremental->State(index), full->State(index))
+            << "cell=" << x << "," << y << " slope_limit=" << slope_limit;
+        EXPECT_NEAR(incremental->TraversalCost(index),
+                    full->TraversalCost(index), 1e-12)
+            << "cell=" << x << "," << y << " slope_limit=" << slope_limit;
+      }
+  }
 }
 
 }  // namespace

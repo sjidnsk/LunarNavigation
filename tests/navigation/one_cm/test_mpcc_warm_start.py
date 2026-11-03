@@ -79,7 +79,7 @@ def test_cross_map_warm_recomputes_parameters_and_candidate_field(monkeypatch):
         result=p.plan(state,grid,ref)
         assert result.attempts[0]['seed']=='warm'
         assert checked[-1] is fields[-1]
-        assert p._solvers['forward'].values[0,'p'][12]==pytest.approx(epoch-p.radius-.003)
+        assert p._solvers['forward'].values[0,'p'][12]==pytest.approx(epoch-p.radius)
         assert result.candidate.map_epoch==epoch
 
 

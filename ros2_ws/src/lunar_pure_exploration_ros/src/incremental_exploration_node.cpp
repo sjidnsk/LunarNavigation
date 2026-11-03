@@ -710,13 +710,25 @@ void PublishLocked(Runtime& runtime) {
   }
   runtime.status_publisher->publish(status);
 
+  const auto cleared_markers = [&status] {
+    visualization_msgs::msg::MarkerArray markers;
+    visualization_msgs::msg::Marker marker;
+    marker.header = status.header;
+    marker.action = visualization_msgs::msg::Marker::DELETEALL;
+    markers.markers.push_back(std::move(marker));
+    return markers;
+  };
   if (runtime.task_boundary) {
     runtime.task_boundary_publisher->publish(
         BoundaryMarkers(*runtime.task_boundary, runtime.parameters.map_frame));
+  } else {
+    runtime.task_boundary_publisher->publish(cleared_markers());
   }
   if (runtime.raster) {
     runtime.task_map_publisher->publish(
         runtime.task_map_marker_builder.Build(*runtime.raster, runtime.parameters.map_frame));
+  } else {
+    runtime.task_map_publisher->publish(cleared_markers());
   }
   std::optional<MarkerSelection> selected;
   if (runtime.active_goal &&
@@ -729,6 +741,13 @@ void PublishLocked(Runtime& runtime) {
   }
   auto frontier_markers = runtime.marker_builder.Build(
       runtime.frontiers, runtime.candidates, selected);
+  if (!runtime.task_boundary) {
+    // 专用探索话题的KeepLast(1)必须始终保留删除消息，不能被后续空包覆盖。
+    // 继续保留builder的逐ID删除，兼容现有订阅者与标记生命周期。
+    auto cleared = cleared_markers();
+    frontier_markers.markers.insert(frontier_markers.markers.begin(),
+                                    std::move(cleared.markers.front()));
+  }
   for (auto& marker : frontier_markers.markers) {
     marker.header = status.header;
     if (marker.ns == "candidates" && marker.action == marker.ADD &&
