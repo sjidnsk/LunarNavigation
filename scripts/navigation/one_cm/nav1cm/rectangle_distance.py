@@ -1,4 +1,4 @@
-"""实际旋转矩形到轴对齐矩形的欧氏距离；配置净空是圆盘膨胀。"""
+"""共享矩形障碍几何：点距、连续线段和原型矩形车体距离。"""
 import numpy as np
 
 
@@ -29,7 +29,7 @@ def point_box_distance_squared(point, boxes):
     point=np.asarray(point,dtype=float)
     boxes=np.asarray(boxes,dtype=float).reshape(-1,4)
     delta=np.maximum(np.maximum(boxes[:,:2]-point,point-boxes[:,2:]),0.)
-    return np.einsum('ij,ij->i',delta,delta)
+    return np.einsum('...j,...j->...',delta,delta)
 
 
 def point_box_clearance(point, boxes, bounds):
@@ -114,3 +114,23 @@ def segment_clear(a, b, boxes, corner_radius=0):
             lo = np.maximum(lo, np.minimum(near, far))
             hi = np.minimum(hi, np.maximum(near, far))
     return not bool(np.any(possible & (lo <= hi)))
+
+
+def points_box_clearance(points, boxes, bounds):
+    """批量精确距离/梯度；N×障碍数临时数组，仅用于局部小窗口。"""
+    points=np.asarray(points,dtype=float).reshape(-1,2)
+    boundary=np.column_stack((points[:,0]-bounds[0],points[:,1]-bounds[1],
+                              bounds[2]-points[:,0],bounds[3]-points[:,1]))
+    which=np.argmin(boundary,axis=1)
+    d=boundary[np.arange(len(points)),which]
+    gradient=np.array([[1.,0.],[0.,1.],[-1.,0.],[0.,-1.]])[which]
+    if len(boxes):
+        squared=point_box_distance_squared(points[:,None,:],boxes)
+        nearest=np.argmin(squared,axis=1)
+        obstacle=np.sqrt(squared[np.arange(len(points)),nearest])
+        selected=obstacle<d
+        delta=points-np.clip(points,boxes[nearest,:2],boxes[nearest,2:])
+        normal=np.divide(delta,obstacle[:,None],out=np.zeros_like(delta),where=obstacle[:,None]>0)
+        d=np.where(selected,obstacle,d)
+        gradient=np.where(selected[:,None],normal,gradient)
+    return np.column_stack((np.maximum(d,0.),gradient))

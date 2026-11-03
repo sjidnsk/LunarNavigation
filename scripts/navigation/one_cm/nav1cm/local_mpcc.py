@@ -256,6 +256,10 @@ class MpccPlanner:
 
     def _parameters(self, states, controls, reference, field, target_yaw, end, *, mode="forward", initial_travel_direction=""):
         params=[]
+        circle_positions=np.stack((states[:,0,None]+self.offsets*np.cos(states[:,2,None]),
+                                   states[:,1,None]+self.offsets*np.sin(states[:,2,None])),axis=-1)
+        samples=(field.sample_many(circle_positions.reshape(-1,2)).reshape(len(states),len(self.offsets),3)
+                 if hasattr(field,'sample_many') else None)
         for k,z in enumerate(states):
             s=float(max(reference.s[0],min(end,z[5])))
             i=max(0,min(len(reference.s)-2,int(np.searchsorted(reference.s,s,side='right'))-1))
@@ -275,7 +279,7 @@ class MpccPlanner:
             p[6:9]=controls[min(k,len(controls)-1)]
             for j,offset in enumerate(self.offsets):
                 cx=z[0]+offset*np.cos(z[2]); cy=z[1]+offset*np.sin(z[2])
-                d,gx,gy=field.sample(cx,cy)
+                d,gx,gy=field.sample(cx,cy) if samples is None else samples[k,j]
                 gyaw=offset*(-gx*np.sin(z[2])+gy*np.cos(z[2]))
                 p[9+4*j:13+4*j]=[gx,gy,gyaw,d-self.radius-gx*z[0]-gy*z[1]-gyaw*z[2]]
             p[-1]=end
@@ -422,6 +426,11 @@ class MpccPlanner:
             if np.min(sign*xs[:,3]) < -1e-9: return 'MODE'
             if l.motion_model=='curvature_limited' and np.any(np.abs(xs[:,4])>l.curvature_inv_m*np.abs(xs[:,3])+1e-9): return 'CURVATURE'
         if np.any(xs[:,5]+xs[:,3]**2/(2*l.linear_accel_mps2)>end+1e-6): return 'REFERENCE_BRAKING_BOUND'
+        if hasattr(field,'sample_many'):
+            positions=np.stack((xs[:,0,None]+self.offsets*np.cos(xs[:,2,None]),
+                                xs[:,1,None]+self.offsets*np.sin(xs[:,2,None])),axis=-1)
+            if np.any(field.sample_many(positions.reshape(-1,2))[:,0]<=self.radius):return 'CIRCLE_CLEARANCE'
+            return 'CANDIDATE'
         for z in xs:
             for offset in self.offsets:
                 d,_,_=field.sample(z[0]+offset*np.cos(z[2]),z[1]+offset*np.sin(z[2]))

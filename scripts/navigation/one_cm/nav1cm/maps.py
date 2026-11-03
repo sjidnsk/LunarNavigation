@@ -1,11 +1,11 @@
-"""原生厘米矩形地图、局部窗口及保守净空场。"""
+"""局部窗口保留原始障碍几何；无几何来源时兼容保守栅格距离场。"""
 
 from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 
-from .rectangle_distance import point_box_clearance
+from .rectangle_distance import point_box_clearance, points_box_clearance
 from .contracts import CellState, GridSnapshot, VehicleState, WorldSnapshot, _readonly_array
 
 
@@ -25,7 +25,7 @@ class DistanceField:
             object.__setattr__(self, name, _readonly_array(getattr(self, name), np.float64, 2))
 
     def sample(self, x: float, y: float) -> tuple[float, float, float]:
-        """中心下界再减查询点偏移；图外的保守净空为零。"""
+        """有来源几何时返回精确距离；纯栅格兼容路径返回保守下界。"""
         if self.obstacle_boxes_m is not None:
             boxes,bounds=self.obstacle_boxes_m
             return point_box_clearance((x,y),boxes,bounds)
@@ -37,6 +37,13 @@ class DistanceField:
         center_y = self.origin_xy[1] + (iy + 0.5) * self.resolution_m
         lower = max(0.0, float(self.distance_m[iy, ix]) - float(np.hypot(x - center_x, y - center_y)))
         return lower, float(self.gradient_x[iy, ix]), float(self.gradient_y[iy, ix])
+
+    def sample_many(self, points):
+        points=np.asarray(points,dtype=float).reshape(-1,2)
+        if self.obstacle_boxes_m is not None:
+            boxes,bounds=self.obstacle_boxes_m
+            return points_box_clearance(points,boxes,bounds)
+        return np.asarray([self.sample(x,y) for x,y in points]).reshape(-1,3)
 
 
 def _rect_slices(rect, origin, resolution, shape, *, contained):

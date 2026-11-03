@@ -165,6 +165,8 @@ def _state_limit_reason(state, limits, mode):
 def _sweep(start, control, dt, context, limits):
     """采样车体包络加运动上界余量；两样本之间无未覆盖位姿。"""
     if context.grid.obstacle_boxes_m is not None and limits.minimum_clearance_m>0:
+        if start[3]==0. and control[0]==0.:
+            return _body_collision(start,0.,context,limits),1
         # 圆的朝向不改变碰撞形状；直接检查中心运动线段。
         # 弯曲离散积分用二阶导数界覆盖弦偏差，不叠加角点扫掠膨胀。
         v=abs(float(start[3]));a=abs(float(control[0]));alpha=abs(float(control[1]))
@@ -296,6 +298,13 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
     if context is None:
         context = prepare_certification(grid, backend=backend)
     checked = 0
+    fixed_center_circle=(grid.obstacle_boxes_m is not None and limits.minimum_clearance_m>0
+        and np.all(states[:,3]==0.) and np.all(controls[:,0]==0.)
+        and np.all(states[:,:2]==states[0,:2]))
+    if fixed_center_circle:
+        reason=_body_collision(states[0],0.,context,limits)
+        checked=1
+        if reason is not None:return _reject(reason,checked)
     for index, state in enumerate(states):
         mode=prefix_mode if index<prefix_end else trajectory.mode
         reason = _state_limit_reason(state, limits, mode)
@@ -317,11 +326,13 @@ def _certify_impl(trajectory: Trajectory, grid: GridSnapshot, limits: WheelLimit
         reason = _state_limit_reason(midpoint, limits, mode)
         if reason is not None:
             return _reject(reason, checked)
-        collision, count = _sweep(state, controls[index], dt, context, limits)
+        # 仅当整条轨迹已证明中心固定且无平移输入时复用几何证据；
+        # 状态能力、每步积分与模式检查仍逐步执行，实际中心漂移不命中。
+        collision,count=(None,0) if fixed_center_circle else _sweep(state, controls[index], dt, context, limits)
         checked += count
         if collision is not None:
             return _reject(collision, checked)
-    if len(states) == 1:
+    if len(states) == 1 and not fixed_center_circle:
         collision = _body_collision(states[0], 0.0, context, limits)
         checked += 1
         if collision is not None:
