@@ -26,7 +26,7 @@ Visualization Manager:
       Reliability Policy: Best Effort
       Durability Policy: Volatile
       Depth: 1
-    Keep: 20
+    Keep: 1
   - Class: rviz_default_plugins/TF
     Name: TF
     Enabled: true
@@ -121,7 +121,7 @@ Visualization Manager:
       Depth: 1
   - Class: rviz_default_plugins/MarkerArray
     Name: Exploration task map
-    Enabled: true
+    Enabled: false
     Topic Key: task_map_markers_topic
     Topic:
       Reliability Policy: Reliable
@@ -137,12 +137,100 @@ Visualization Manager:
       Depth: 1
   - Class: rviz_default_plugins/Pose
     Name: Current exploration goal
-    Enabled: true
+    Enabled: false
     Topic Key: current_goal_topic
     Topic:
       Reliability Policy: Reliable
       Durability Policy: Volatile
       Depth: 1
+  - Class: rviz_default_plugins/Image
+    Name: P3 左相机
+    Enabled: true
+    Topic Key: p3_left_image
+    Topic:
+      Reliability Policy: Best Effort
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Depth: 1
+    Normalize Range: true
+  - Class: rviz_default_plugins/Image
+    Name: P3 右相机
+    Enabled: true
+    Topic Key: p3_right_image
+    Topic:
+      Reliability Policy: Best Effort
+      Durability Policy: Volatile
+      History Policy: Keep Last
+      Depth: 1
+    Normalize Range: true
+  - Alpha: 1
+    Autocompute Intensity Bounds: true
+    Autocompute Value Bounds:
+      Max Value: 10
+      Min Value: -10
+      Value: true
+    Axis: Z
+    Channel Name: intensity
+    Class: rviz_default_plugins/PointCloud2
+    Color: 255; 255; 255
+    Color Transformer: Intensity
+    Decay Time: 0
+    Enabled: false
+    Invert Rainbow: false
+    Max Color: 255; 255; 255
+    Max Intensity: 4096
+    Min Color: 0; 0; 0
+    Min Intensity: 0
+    Name: P3 点云地图
+    Position Transformer: XYZ
+    Selectable: true
+    Size (Pixels): 3
+    Size (m): 0.10000000149011612
+    Style: Flat Squares
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      Filter size: 10
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Use Fixed Frame: true
+    Use rainbow: true
+    Value: false
+    Topic Key: p3_lidar_cloud
+  - Alpha: 1
+    Autocompute Intensity Bounds: true
+    Autocompute Value Bounds:
+      Max Value: 10
+      Min Value: -10
+      Value: true
+    Axis: Z
+    Channel Name: intensity
+    Class: rviz_default_plugins/PointCloud2
+    Color: 255; 255; 255
+    Color Transformer: Intensity
+    Decay Time: 0
+    Enabled: true
+    Invert Rainbow: false
+    Max Color: 255; 255; 255
+    Max Intensity: 3.4900548458099365
+    Min Color: 0; 0; 0
+    Min Intensity: -0.2927413880825043
+    Name: P3 高程点云
+    Position Transformer: XYZ
+    Selectable: true
+    Size (Pixels): 3
+    Size (m): 0.05000000074505806
+    Style: Flat Squares
+    Topic:
+      Depth: 5
+      Durability Policy: Volatile
+      Filter size: 10
+      History Policy: Keep Last
+      Reliability Policy: Reliable
+    Use Fixed Frame: true
+    Use rainbow: true
+    Value: true
+    Topic Key: p3_elevation_cloud
   Tools:
   - Class: rviz_default_plugins/Interact
   - Class: lunar_navigation_rviz/BoundaryTool
@@ -165,7 +253,10 @@ Visualization Manager:
         Y: 0.0
         Z: 0.0
 Window Geometry:
-  Width: 1580
-  Height: 960
-  X: 30
-  Y: 30
+  Width: 1850
+  Height: 1016
+  X: 70
+  Y: 27
+  Hide Left Dock: false
+  Hide Right Dock: false
+  QMainWindow State: "000000ff00000000fd00000002000000000000012c000003affc0200000001fc00000011000003af000000c401000020fa000000010200000002fb000000100044006900730070006c0061007900730100000000ffffffff000000a300fffffffb0000000a5bfc822a4e0e63a27d220100000000ffffffff000000a300ffffff0000000100000168000003affc0200000002fb0000000c0050003300205de676f8673a0100000011000001d5000000a300fffffffb0000000c00500033002053f376f8673a01000001ec000001d4000000a300ffffff0000038c000003af00000004000000040000000800000008fc0000000100000002000000010000000a0054006f006f006c00730100000000ffffffff0000000000000000"

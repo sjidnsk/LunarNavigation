@@ -51,8 +51,9 @@ ExplorationPanel::ExplorationPanel(QWidget * parent) : rviz_common::Panel(parent
   connect(undo, &QPushButton::clicked, this, [this] { region_.undo(); renderRegion(); });
   connect(clear, &QPushButton::clicked, this, [this] {
     collecting_ = false; region_.clear();
-
     renderRegion();
+    // 草稿由面板删除；任务派生图形和所属导航目标由后端既有CANCEL清理。
+    sendCommand(Task::CANCEL);
   });
   connect(start_, &QPushButton::clicked, this, [this] { sendCommand(Task::START); });
   connect(pause_, &QPushButton::clicked, this, [this] { sendCommand(Task::PAUSE); });
@@ -180,7 +181,9 @@ void ExplorationPanel::refreshButtons() {
 }
 void ExplorationPanel::sendCommand(uint8_t command) {
   auto * button = command == Task::START ? start_ : command == Task::PAUSE ? pause_ : command == Task::RESUME ? resume_ : cancel_;
-  if (!task_pub_ || !button->isEnabled()) return;
+  if (!task_pub_ || (command != Task::CANCEL && !button->isEnabled()) ||
+      (command == Task::CANCEL && pending_ == Task::CANCEL)) return;
+  // 清空区域在空闲时也需清理后端历史显示，不能依赖结束按钮是否启用。
   if (command == Task::START || command == Task::RESUME) {
     if (QMessageBox::question(this, "确认替换导航目标",
       "开始或恢复探索将由现有导航入口替换当前导航目标（包括手动目标）。是否继续？",
