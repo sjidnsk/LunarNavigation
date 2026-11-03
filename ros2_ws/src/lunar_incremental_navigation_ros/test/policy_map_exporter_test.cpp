@@ -59,8 +59,7 @@ TEST(PolicyMapExporter, UsesFullSnapshotForBootstrapAndMapRevisionChanges) {
   const auto refresh = exporter.Export(refresh_input, fine->fine_traversability_revision());
   EXPECT_FALSE(refresh.full_snapshot);
   EXPECT_TRUE(refresh.tiles.empty());
-  // The measured map stays unknown; only a separate certified prefix may be
-  // used to leave the sensor blind zone. Connections themselves are FREE exits.
+  // 起点未知时，两个导出入口均保留未知，不推断起点支持或连接。
   auto states = fine->FindTile({})->states();
   const GridIndex start{3,3};
   states[TileCellOffset(start)] = FineCellState::kUnknown;
@@ -73,17 +72,12 @@ TEST(PolicyMapExporter, UsesFullSnapshotForBootstrapAndMapRevisionChanges) {
       std::vector<TileIndex>{}, FineSnapshotMetrics{});
   auto with_patch = exporter.Export({.fine=blind,
       .anchor=Pose2{.position_m={.7,.7}}, .local_window_size_m=32., .epoch="e", .processed_stamp_ns=12},0);
-  ASSERT_EQ(with_patch.assumed_start_x.size(), with_patch.assumed_start_y.size());
-  ASSERT_FALSE(with_patch.assumed_start_x.empty());
-  bool found=false;
-  for(std::size_t i=0;i<with_patch.assumed_start_x.size();++i) {
-    const GridIndex cell{with_patch.assumed_start_x[i],with_patch.assumed_start_y[i]};
-    EXPECT_EQ(blind->State(cell),FineCellState::kUnknown);
-    found |= cell == start;
-  }
-  EXPECT_TRUE(found);
-  EXPECT_TRUE(with_patch.stationary_support_ready);
-  // 新出口必须拒绝 UNKNOWN 起点，不借用旧接口的盲区补丁。
+  EXPECT_TRUE(with_patch.assumed_start_x.empty());
+  EXPECT_TRUE(with_patch.assumed_start_y.empty());
+  EXPECT_FALSE(with_patch.stationary_support_ready);
+  EXPECT_TRUE(with_patch.start_connection_x.empty());
+  EXPECT_EQ(with_patch.start_connection_status,
+      static_cast<std::uint8_t>(StartPatchResult::Status::kUnresolved));
   const auto observed = exporter.ExportObserved({.fine=blind,
       .anchor=Pose2{.position_m={.7,.7}}, .local_window_size_m=32., .epoch="e", .processed_stamp_ns=12}, 0);
   EXPECT_TRUE(observed.assumed_start_x.empty());
@@ -96,12 +90,20 @@ TEST(PolicyMapExporter, UsesFullSnapshotForBootstrapAndMapRevisionChanges) {
   EXPECT_TRUE(direct.stationary_support_ready);
   EXPECT_FALSE(direct.start_connection_x.empty());
   EXPECT_TRUE(direct.assumed_start_x.empty());
+  const auto legacy_direct = exporter.Export({.fine=fine,
+      .anchor=Pose2{.position_m={.7,.7}}, .local_window_size_m=32., .epoch="e", .processed_stamp_ns=12}, 0);
+  EXPECT_TRUE(legacy_direct.stationary_support_ready);
+  ASSERT_EQ(legacy_direct.start_connection_x.size(), 1U);
+  ASSERT_EQ(legacy_direct.start_connection_y.size(), 1U);
+  EXPECT_EQ(legacy_direct.start_connection_x.front(), start.x);
+  EXPECT_EQ(legacy_direct.start_connection_y.front(), start.y);
+  EXPECT_TRUE(legacy_direct.assumed_start_x.empty());
   const auto bad_delta = exporter.ExportObserved({.fine=fine, .epoch="e",
       .base_revision=999, .full_snapshot=false}, 999);
   EXPECT_TRUE(bad_delta.full_snapshot);
   EXPECT_EQ(bad_delta.base_revision, 0U);
 
-  // Flat measured support permits stationary yaw even with no FREE exit.
+  // 真实高程有限但细地图仍UNKNOWN时，也不能绕过已知支撑。
   auto unknown_states = fine->FindTile({})->states();
   std::fill(unknown_states.begin(), unknown_states.end(), FineCellState::kUnknown);
   const auto make_snapshot = [&](auto cell_states) {
@@ -115,7 +117,7 @@ TEST(PolicyMapExporter, UsesFullSnapshotForBootstrapAndMapRevisionChanges) {
   };
   const auto stationary = exporter.Export({.fine=make_snapshot(unknown_states),
       .anchor=Pose2{.position_m={.7,.7}}, .local_window_size_m=32., .epoch="e", .processed_stamp_ns=13},0);
-  EXPECT_TRUE(stationary.stationary_support_ready);
+  EXPECT_FALSE(stationary.stationary_support_ready);
   EXPECT_TRUE(stationary.start_connection_x.empty());
   for (const auto& tile : stationary.tiles)
     for (const auto state : tile.states) EXPECT_EQ(state, kPolicyMapUnknown);

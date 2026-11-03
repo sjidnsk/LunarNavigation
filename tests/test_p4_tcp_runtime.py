@@ -1,4 +1,4 @@
-"""P4域10接线与车辆租约回归；不依赖ROS。"""
+"""P4域继承接线与车辆租约回归；不依赖ROS。"""
 from types import SimpleNamespace as S
 import pytest
 from pathlib import Path
@@ -7,7 +7,7 @@ from scripts.simulation.p4_tcp_runtime import CONTROL_DOMAIN, P3_SOURCE_DOMAIN, 
 
 
 def test_control_launch_uses_existing_wheel_limits_and_private_adapter_input():
-    assert (CONTROL_DOMAIN,P3_SOURCE_DOMAIN)==(10,57)
+    assert (CONTROL_DOMAIN,P3_SOURCE_DOMAIN)==(57,57)
     args=launch_settings(ROOT,'/p4/cache','/p4/test-wheel.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=6.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
     assert args['command_topic']=='/Car/T4/control/cmd_vel'
     assert args['goal_topic']=='/Car/T4/navigation/goal'
@@ -24,7 +24,7 @@ def test_input_bridge_preserves_messages_stamps_and_latched_tf():
         subscriptions.append((topic,callback,qos));return object()
     source=S(create_subscription=subscription);target=S(create_publisher=publisher)
     classes=dict(map=object,odom=object,tf=object)
-    handles=input_bridge(source,target,classes,dict(map='latched-map',odom='odom',tf='tf',tf_static='latched-static'))
+    handles=input_bridge(source,target,classes,dict(map='latched-map',odom='odom',tf='tf',tf_static='latched-static'),target_domain=10)
     assert len(subscriptions)==4 and len(handles)==8
     for topic,callback,qos in subscriptions:
         msg=S(header=S(stamp=123));callback(msg)
@@ -36,7 +36,7 @@ def test_tf_output_accepts_reliable_rviz_without_changing_source_subscription():
     subscriptions=[];publishers=[]
     source=S(create_subscription=lambda cls,topic,callback,qos:subscriptions.append((topic,qos)))
     target=S(create_publisher=lambda cls,topic,qos:(publishers.append((topic,qos)) or S(publish=lambda msg:None)))
-    input_bridge(source,target,dict(map=object,odom=object,tf=object),dict(map=1,odom=2,tf='best_effort',tf_output='reliable',tf_static=4))
+    input_bridge(source,target,dict(map=object,odom=object,tf=object),dict(map=1,odom=2,tf='best_effort',tf_output='reliable',tf_static=4),target_domain=10)
     assert ('/tf','best_effort') in subscriptions and ('/tf','reliable') in publishers
 
 
@@ -166,7 +166,9 @@ def test_invalid_telemetry_is_not_measured_stop(changes):
     assert not r.measured_stopped()
 
 
-def test_reverse_limit_and_environment_come_from_shared_configuration():
+def test_reverse_limit_and_environment_come_from_shared_configuration(monkeypatch):
+    monkeypatch.delenv('ROS_DOMAIN_ID',raising=False)
+    monkeypatch.delenv('NAV1CM_BUILD_DIR',raising=False)
     from scripts.simulation.p4_tcp_runtime import TcpCommandRelay,low_speed_profile,runtime_environment
     source=profile();source['capability']['maximum_reverse_speed_mps']=.03
     events=[]
@@ -176,7 +178,7 @@ def test_reverse_limit_and_environment_come_from_shared_configuration():
     assert r.receive(message(-.02))
     with pytest.raises(ValueError):r.receive(message(-.04))
     env=runtime_environment('/home/yanfa/P4','/home/yanfa/P4/run/test')
-    assert env['ROS_DOMAIN_ID']=='10' and env['ROS_LOG_DIR'].replace(chr(92),'/').endswith('test/ros-log')
+    assert env['ROS_DOMAIN_ID']=='57' and env['ROS_LOG_DIR'].replace(chr(92),'/').endswith('test/ros-log')
     assert env['NAV1CM_BUILD_DIR'].replace(chr(92),'/').endswith('.cache/nav1cm')
 
 
@@ -407,13 +409,13 @@ def test_tcp_production_profile_overrides_only_speed_and_feeds_launch_and_relay(
     original=deepcopy(base)
     override=yaml.safe_load((root/'config/tcp_wheel_speed.yaml').read_text(encoding='utf-8'))
     merged=tcp_platform_profile(base,override)
-    assert profile_command_limits_for_test(merged)==(.2,.2,.1)
+    assert profile_command_limits_for_test(merged)==(.1,.1,.1)
     assert base==original
     for key in ('maximum_acceleration_mps2','maximum_braking_deceleration_mps2','maximum_yaw_acceleration_radps2'):
         assert merged['capability'][key]==base['capability'][key]==.5
     assert launch_settings(ROOT,'/p4/cache','/p4/final.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=0.,mppi_time_steps=140,mppi_compute_envelope_s=.2))['platform_config']=='/p4/final.yaml'
     relay=TcpCommandRelay(merged,publish_velocity=lambda x:None,publish_mode=lambda x:None,publish_lease=lambda x:None,make_zero=message)
-    assert relay.limits==(.2,.2,.1)
+    assert relay.limits==(.1,.1,.1)
 
 
 def profile_command_limits_for_test(profile):
@@ -433,9 +435,9 @@ def test_both_entries_use_shared_profile_and_preflight_precedes_acquire():
     root=Path(__file__).resolve().parents[1]
     main=(root/'scripts/simulation/p4_tcp_runtime.py').read_text(encoding='utf-8')
     check=(root/'scripts/simulation/check_tcp_navigation.py').read_text(encoding='utf-8')
-    assert "profile=load_tcp_platform_profile(root/'source')" in main
+    assert "profile=load_tcp_platform_profile(source_root)" in main
     assert "relay=TcpCommandRelay(profile," in main and "config.write_text(yaml.safe_dump(profile" in main
-    assert "profile=load_tcp_platform_profile(ROOT/'source')" in check
+    assert "profile=load_tcp_platform_profile(SOURCE)" in check
     assert check.index("if options.preflight_only:raise PreflightOnlyComplete()") < check.index("relay.acquire()")
 
 
@@ -443,7 +445,7 @@ def test_both_tcp_entries_load_same_configured_limits():
     from pathlib import Path
     from scripts.simulation.p4_tcp_runtime import load_tcp_platform_profile
     root=Path(__file__).resolve().parents[1]
-    assert profile_command_limits_for_test(load_tcp_platform_profile(root))==(.2,.2,.1)
+    assert profile_command_limits_for_test(load_tcp_platform_profile(root))==(.1,.1,.1)
 
 
 def test_direct_settings_and_body_only_telemetry():
@@ -671,3 +673,77 @@ def test_tcp_soft_clearance_override_reaches_existing_launch_interface():
     args=launch_settings(ROOT,'/cache','/wheel.yaml',profile)
     assert float(args['global_soft_clearance_m'])==.5
     assert args['platform_config']=='/wheel.yaml'
+
+
+def test_tcp_uses_sixteen_second_local_horizon_and_final_published_velocity():
+    from pathlib import Path
+    from scripts.simulation.p4_topics import load_topic_contract
+    from scripts.simulation.p4_tcp_runtime import launch_settings
+    root=Path(__file__).resolve().parents[1]
+    args=launch_settings(root,'/unused/build','/unused/profile.yaml',{'command_hold_s':1.2})
+    assert args['horizon_steps']=='80' and float(args['horizon_dt_s'])==.2
+    assert args['command_prediction_enabled']=='true'
+    assert args['prediction_command_topic']==load_topic_contract(root)['vehicle']['command_topic']
+    assert float(args['command_hold_s'])==1.2
+
+
+@pytest.mark.parametrize('inherited,expected',[(None,'57'),('','57'),('0','0'),('10','10'),('57','57')])
+def test_runtime_children_inherit_terminal_domain(monkeypatch,inherited,expected):
+    from scripts.simulation.p4_tcp_runtime import runtime_environment
+    if inherited is None:monkeypatch.delenv('ROS_DOMAIN_ID',raising=False)
+    else:monkeypatch.setenv('ROS_DOMAIN_ID',inherited)
+    assert runtime_environment('/home/yanfa/P4','/home/yanfa/P4/run/test')['ROS_DOMAIN_ID']==expected
+
+
+@pytest.mark.parametrize('domain',[0,10,57])
+def test_same_domain_creates_no_bridge_endpoints(domain):
+    def forbidden(*args,**kwargs):
+        pytest.fail('同域不应创建同话题转发端点')
+    source=S(create_subscription=forbidden)
+    target=S(create_publisher=forbidden)
+    assert input_bridge(source,target,{}, {},source_domain=domain,target_domain=domain)==[]
+
+
+@pytest.mark.parametrize('inherited,expected',[(None,57),('0',0),('10',10),('57',57)])
+def test_main_contexts_and_bridge_use_inherited_domain(monkeypatch,inherited,expected):
+    import ast
+    from scripts.simulation import p4_tcp_runtime as runtime
+    if inherited is None:monkeypatch.delenv('ROS_DOMAIN_ID',raising=False)
+    else:monkeypatch.setenv('ROS_DOMAIN_ID',inherited)
+    tree=ast.parse(Path(runtime.__file__).read_text(encoding='utf-8'))
+    main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+    start=next(i for i,n in enumerate(main.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='selected_domain' for t in n.targets))
+    end=next(i for i,n in enumerate(main.body[start:],start) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='handles' for t in n.targets))
+    domains=[];publishers=[];subscriptions=[]
+    def node(*args,**kwargs):
+        return S(create_publisher=lambda cls,topic,qos:(publishers.append(topic) or S(publish=lambda msg:None)),
+                 create_subscription=lambda cls,topic,cb,qos:subscriptions.append(topic))
+    scope=dict(vars(runtime),rclpy=S(Context=lambda:object(),init=lambda **kw:domains.append(kw['domain_id']),create_node=node),
+               SingleThreadedExecutor=lambda **kw:S(add_node=lambda node:None),
+               QoSProfile=lambda **kw:kw,ReliabilityPolicy=S(RELIABLE=1,BEST_EFFORT=2),
+               DurabilityPolicy=S(TRANSIENT_LOCAL=1),GridMap=object,Odometry=object,TFMessage=object,
+               contract=runtime.load_topic_contract(ROOT))
+    exec(compile(ast.Module(body=main.body[start:end+1],type_ignores=[]),'<main-domain-wiring>','exec'),scope)
+    assert domains==[57,expected]
+    assert len(publishers)==len(subscriptions)==(0 if expected==57 else 4)
+
+
+
+def test_runtime_source_uses_selected_build_and_rejects_escape(tmp_path):
+    from scripts.simulation.p4_tcp_runtime import runtime_source
+    root=tmp_path/'P4';legacy=root/'source';legacy.mkdir(parents=True)
+    selected=root/'build/formal-test/source';selected.mkdir(parents=True)
+    assert runtime_source(root,{})==legacy
+    assert runtime_source(root,{'P4_SOURCE_DIR':str(selected)})==selected
+    import pytest
+    with pytest.raises(ValueError,match='P4'):
+        runtime_source(root,{'P4_SOURCE_DIR':str(tmp_path/'other')})
+
+
+
+def test_selected_build_uses_its_own_solver_cache(tmp_path,monkeypatch):
+    from scripts.simulation.p4_tcp_runtime import runtime_build_dir,runtime_environment
+    root=tmp_path/'P4';cache=root/'build/formal-test/solver-cache'
+    monkeypatch.setenv('NAV1CM_BUILD_DIR',str(cache))
+    assert runtime_build_dir(root)==cache
+    assert runtime_environment(root,root/'run/test')['NAV1CM_BUILD_DIR']==str(cache)

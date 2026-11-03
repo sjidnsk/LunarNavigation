@@ -47,7 +47,6 @@ set(LUNAR_ANYTIME_PRODUCTION_SOURCES
   src/shared/map_snapshot.cpp
   src/shared/obstacle_height_estimator.cpp
   src/shared/planning_timing.cpp
-  src/shared/request_local_start_patch.cpp
   src/shared/search_control.cpp
   src/wheel/anytime_wheel_planner.cpp)
 

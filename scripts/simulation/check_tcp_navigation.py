@@ -2,7 +2,7 @@
 import argparse
 from p3_input_timing import record_sample,runtime_input_health,timing_statistics
 from p4_tcp_runtime import (CONTROL_DOMAIN, TcpCommandRelay, load_tcp_platform_profile,
-                            profile_command_limits, launch_settings, runtime_environment)
+                            profile_command_limits, launch_settings, runtime_environment, runtime_source, runtime_build_dir)
 import os,json,time,math,signal,subprocess,collections
 from pathlib import Path
 import yaml
@@ -33,13 +33,14 @@ samples={}
 start=time.monotonic();result={'scope':'one real UE TCP attempt using P3 map and odometry','allow_unknown':True,'reached':False};events=(OUT/'events.jsonl').open('w',buffering=1)
 def event(kind,**kw):events.write(json.dumps(dict(elapsed=time.monotonic()-start,kind=kind,**kw))+'\n')
 # 本轮独立命名空间；只管理自身launch和租约。
-profile=load_tcp_platform_profile(ROOT/'source')
+SOURCE=runtime_source(ROOT)
+profile=load_tcp_platform_profile(SOURCE)
 limits=profile_command_limits(profile)
 result['speed_limits']=dict(v=limits[0],reverse=limits[1],w=limits[2])
 config=OUT/'test-wheel.yaml';config.write_text(yaml.safe_dump(profile,sort_keys=False))
-feedback_budget=yaml.safe_load((ROOT/'source/config/tcp_p3_feedback.yaml').read_text())
-contract=load_topic_contract(ROOT/'source');vehicle=contract['vehicle']
-args=launch_settings(ROOT/'source',ROOT/'.cache/nav1cm',config,feedback_budget,
+feedback_budget=yaml.safe_load((SOURCE/'config/tcp_p3_feedback.yaml').read_text())
+contract=load_topic_contract(SOURCE);vehicle=contract['vehicle']
+args=launch_settings(SOURCE,runtime_build_dir(ROOT),config,feedback_budget,
                      prefix=PREFIX,contract=contract)
 result['feedback_budget']=feedback_budget
 env=runtime_environment(ROOT,OUT)

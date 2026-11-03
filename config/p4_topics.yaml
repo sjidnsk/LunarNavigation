@@ -6,6 +6,7 @@ launch:
   local_path_topic: /Car/T4/planning/local_path
   execution_reference_topic: /Car/T4/control/path_execution_reference
   tracking_status_topic: /Car/T4/control/tracking_status
+  base_map_facts_topic: /Car/T4/mapping/base_facts
   exploration_map_topic: /Car/T4/mapping/exploration_map
   policy_map_service: /Car/T4/mapping/get_policy_map
   task_topic: /Car/T4/exploration/task
@@ -26,6 +27,11 @@ visualization:
   goal_marker: /Car/T4/visualization/goal_marker
   actual_path: /Car/T4/visualization/actual_path
   boundary_draft: /Car/T4/exploration/boundary_draft
+  # P3已有的正常化图像，仅供显示；保持上游原生话题。
+  p3_left_image: /fusion/left
+  p3_right_image: /fusion/right
+  p3_lidar_cloud: /T3/mapping/lidar_map
+  p3_elevation_cloud: /T3/mapping/elevation_cloud
 vehicle:
   command_topic: /car/cmd_vel
   mode_topic: /car/set_mode

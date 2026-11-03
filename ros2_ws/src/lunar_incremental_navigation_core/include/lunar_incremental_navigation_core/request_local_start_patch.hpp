@@ -35,8 +35,8 @@ struct StartConnectionsResult final {
 
 class RequestLocalStartPatchBuilder final {
  public:
-  // Stationary wheel support is bounded at the actual anchor and does not
-  // certify any translation endpoint or mutate the persistent evidence.
+  // 兼容原起点接口；只消费实际已知FREE，不拟合或补全UNKNOWN。
+  // 静止轮式支撑仅认证实际锚点，不修改持久观测。
   [[nodiscard]] StartPatchResult BuildStationary(
       std::shared_ptr<const FineTraversabilitySnapshot> fine, const Pose2& p0,
       const PlatformCapability& capability, const TraversabilityProfile& profile) const;

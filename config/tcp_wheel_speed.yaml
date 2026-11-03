@@ -1,5 +1,5 @@
 # TCP 平台运行速度上限；其余能力继承 wheel.yaml。
-maximum_forward_speed_mps: 0.2
-maximum_reverse_speed_mps: 0.2
+maximum_forward_speed_mps: 0.1
+maximum_reverse_speed_mps: 0.1
 # 延迟定位联调：降低原地旋转与行进转弯的共同角速度上限。
 maximum_spin_rate_radps: 0.1

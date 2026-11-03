@@ -208,6 +208,10 @@ class FakeNavigationServer final {
     return goals_.size();
   }
   std::size_t cancel_count() const { return cancel_count_.load(); }
+  bool IsExecuting(const rclcpp_action::GoalUUID& goal_id) const {
+    std::scoped_lock lock{mutex_};
+    return active_ && active_->get_goal_id() == goal_id && active_->is_executing();
+  }
   Action::Goal goal(std::size_t index) const {
     std::scoped_lock lock{mutex_};
     return goals_.at(index);
@@ -659,13 +663,36 @@ TEST_F(IncrementalExplorationMapWaitTest,
                          [](const auto& marker) { return marker.action == Marker::DELETE; });
     });
   }));
+  bool saw_add = false;
+  bool saw_delete = false;
+  bool saw_cancel_delete_all = false;
   for (const auto& message : FrontierMessages()) {
     for (const auto& marker : message.markers) {
       EXPECT_EQ(marker.header.frame_id, "map");
-      EXPECT_EQ(marker.header.stamp.sec, marker.action == Marker::DELETE ? 101 : 100);
+      if (marker.action == Marker::ADD) {
+        saw_add = true;
+        EXPECT_EQ(marker.header.stamp.sec, 100);
+      } else if (marker.action == Marker::DELETE) {
+        saw_delete = true;
+        EXPECT_EQ(marker.header.stamp.sec, 101);
+      } else if (marker.action == Marker::DELETEALL) {
+        if (saw_add) {
+          // 已发布任务后，只有t=101的CANCEL清理可以删除整个探索图层。
+          saw_cancel_delete_all = true;
+          EXPECT_EQ(marker.header.stamp.sec, 101);
+        } else {
+          // 首个任务之前仅有构造发布(t=0)，或已收到时钟后的空闲输入(t=100)。
+          EXPECT_TRUE(marker.header.stamp.sec == 0 || marker.header.stamp.sec == 100);
+        }
+      } else {
+        ADD_FAILURE() << "unexpected marker action " << marker.action;
+      }
       EXPECT_EQ(marker.header.stamp.nanosec, 0U);
     }
   }
+  EXPECT_TRUE(saw_add);
+  EXPECT_TRUE(saw_delete);
+  EXPECT_TRUE(saw_cancel_delete_all);
 }
 
 
@@ -1385,6 +1412,76 @@ TEST_F(IncrementalExplorationMultiStaticTest, ReceivesRequiredTransformBeforeLas
   Start(false);
   EXPECT_EQ(server_->goal_count(), 1U);
   EXPECT_EQ(static_publisher_->get_subscription_count(), 1U);
+}
+TEST_F(IncrementalExplorationNodeTest, CancelReplacesAllTaskVisualizationHistoryForLateSubscribers) {
+  using Marker = visualization_msgs::msg::Marker;
+  using MarkerArray = visualization_msgs::msg::MarkerArray;
+  Start(false);
+  ASSERT_TRUE(WaitFor([this] { return LastTaskMap().has_value(); }));
+  task_publisher_->publish(Command(Task::CANCEL));
+  ASSERT_TRUE(WaitFor([this] { return LastStatus()->reason_code == "CANCELED"; }));
+  // 等待取消回执和新地图触发再次发布，验证删除不会被后续空消息覆盖。
+  ASSERT_TRUE(WaitFor([this] { return server_->cancel_count() == 1U; }));
+  server_->PublishFeedback(Action::Feedback::EXECUTING, "LATE_EXECUTING");
+  server_->Finish(Action::Result::GOAL_REACHED, "GOAL_REACHED");
+  PublishPoseAndMap(false);
+  ASSERT_TRUE(WaitFor([this] { return map_sequence_.load() >= 2U; }));
+  const std::vector<std::string> topics{parameters_.task_boundary_topic,
+      parameters_.task_map_markers_topic, parameters_.frontiers_topic};
+  struct Received {
+    std::mutex mutex;
+    std::vector<std::optional<MarkerArray>> latest{3U};
+  };
+  const auto received = std::make_shared<Received>();
+  std::vector<rclcpp::Subscription<MarkerArray>::SharedPtr> subscriptions;
+  for (std::size_t i = 0; i < topics.size(); ++i) {
+    subscriptions.push_back(observer_->create_subscription<MarkerArray>(
+        topics[i], rclcpp::QoS{1}.reliable().transient_local(),
+        [received, i](MarkerArray::ConstSharedPtr message) {
+          std::scoped_lock lock{received->mutex}; received->latest[i] = *message;
+        }));
+  }
+  EXPECT_TRUE(WaitFor([&] {
+    std::scoped_lock lock{received->mutex};
+    return std::all_of(received->latest.begin(), received->latest.end(), [](const auto& message) {
+      return message && !message->markers.empty() &&
+          std::all_of(message->markers.begin(), message->markers.end(), [](const auto& marker) {
+            return marker.header.frame_id == "map" &&
+                (marker.action == Marker::DELETEALL || marker.action == Marker::DELETE);
+          }) && std::any_of(message->markers.begin(), message->markers.end(), [](const auto& marker) {
+            return marker.action == Marker::DELETEALL;
+          });
+    });
+  })) << "结束任务后所有可视化话题必须保留明确删除消息，供重订阅者清除历史图形";
+  EXPECT_EQ(LastStatus()->state, Status::IDLE);
+  EXPECT_EQ(LastStatus()->candidate_count, 0U);
+  EXPECT_EQ(server_->goal_count(), 1U);
+}
+
+
+TEST_F(IncrementalExplorationNodeTest, CancelAfterManualReplacementLeavesManualActionExecuting) {
+  Start(false);
+  server_->Finish(Action::Result::CANCELED, "GOAL_REPLACED");
+  ASSERT_TRUE(WaitFor([this] { return LastStatus()->state == Status::PAUSED; }));
+  auto manual = rclcpp_action::create_client<Action>(observer_, parameters_.navigation_action);
+  ASSERT_TRUE(manual->wait_for_action_server(2s));
+  Action::Goal goal; goal.target_x_m = 99.; goal.target_y_m = 88.;
+  auto future = manual->async_send_goal(goal);
+  ASSERT_EQ(future.wait_for(2s), std::future_status::ready);
+  auto handle = future.get(); ASSERT_NE(handle, nullptr);
+  // ACCEPT_AND_EXECUTE已在服务端推进状态；客户端可能错过目标回执前的状态事件。
+  // 直接检查相同UUID的真实ServerGoalHandle，避免把客户端缓存当作执行证据。
+  const auto manual_id = handle->get_goal_id();
+  ASSERT_TRUE(WaitFor([this, manual_id] { return server_->IsExecuting(manual_id); }));
+  ASSERT_TRUE(WaitFor([this] { return server_->goal_count() == 2U; }));
+  const auto cancel_count = server_->cancel_count();
+  task_publisher_->publish(Command(Task::CANCEL));
+  ASSERT_TRUE(WaitFor([this] { return LastStatus()->state == Status::IDLE; }));
+  PublishPoseAndMap(false);
+  EXPECT_FALSE(WaitFor([this, cancel_count] { return server_->cancel_count() != cancel_count; }, 200ms));
+  EXPECT_TRUE(server_->IsExecuting(manual_id));
+  EXPECT_EQ(server_->goal_count(), 2U);
+  server_->Finish(Action::Result::GOAL_REACHED, "GOAL_REACHED");
 }
 }  // namespace
 }  // namespace lunar::pure_exploration_ros

@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numeric>
+#include <optional>
+#include <type_traits>
 #include <stdexcept>
 
 namespace lunar::incremental_navigation_ros {
@@ -65,6 +68,45 @@ struct ConservativeAggregation {
   }
 };
 
+// 严格核对实际浮点格边界，不用米制或相对容差把错位格当成同格。
+// 返回目标首格对应的源索引；目标必须完整落在源几何内。
+[[nodiscard]] std::optional<std::int64_t> MatchingAxisBegin(
+    const double fine_origin, const double coarse_origin,
+    const double resolution, const std::int64_t fine_begin,
+    const std::int64_t fine_end, const std::int64_t coarse_begin,
+    const std::int64_t coarse_end) {
+  std::int64_t begin = coarse_begin;
+  if (fine_origin != coarse_origin) {
+    const double first = CellMinimum(coarse_origin, resolution, coarse_begin);
+    // 单调边界二分查找避免浮点商转 int64 的溢出或整数偏移溢出。
+    std::int64_t low = fine_begin;
+    std::int64_t high = fine_end;
+    while (low < high) {
+      const std::int64_t mid = std::midpoint(low, high);
+      if (CellMinimum(fine_origin, resolution, mid) < first) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    begin = low;
+  }
+  if (begin < fine_begin || begin >= fine_end) return std::nullopt;
+  std::int64_t fine_index = begin;
+  for (std::int64_t coarse_index = coarse_begin; coarse_index < coarse_end;
+       ++coarse_index, ++fine_index) {
+    if (fine_index >= fine_end) return std::nullopt;
+    const double fine_min = CellMinimum(fine_origin, resolution, fine_index);
+    const double coarse_min = CellMinimum(coarse_origin, resolution, coarse_index);
+    if (fine_min != coarse_min ||
+        fine_min + resolution != coarse_min + resolution ||
+        !(fine_min + resolution > fine_min)) {
+      return std::nullopt;
+    }
+  }
+  return begin;
+}
+
 // 几何验证、索引裁剪和交叠遍历只维护此处；聚合器只决定状态语义。
 template <typename Aggregation>
 ExplorationMapProjection ProjectImpl(
@@ -90,6 +132,33 @@ ExplorationMapProjection ProjectImpl(
   const double area_tolerance = coarse_area * 1.0e-9;
   const core::GridIndex coarse_min = coarse_geometry.min_inclusive();
   const core::GridIndex coarse_max = coarse_geometry.max_exclusive();
+
+  // 仅保守出口允许逐状态导出，legacy AnyFree 仍使用原面积聚合。
+  if constexpr (std::is_same_v<Aggregation, ConservativeAggregation>) {
+    if (fine_resolution == coarse_resolution) {
+      const auto fine_x_begin = MatchingAxisBegin(
+          fine_origin.x, coarse_origin.x, fine_resolution,
+          fine_geometry.min_inclusive().x, fine_geometry.max_exclusive().x,
+          coarse_min.x, coarse_max.x);
+      const auto fine_y_begin = MatchingAxisBegin(
+          fine_origin.y, coarse_origin.y, fine_resolution,
+          fine_geometry.min_inclusive().y, fine_geometry.max_exclusive().y,
+          coarse_min.y, coarse_max.y);
+      if (fine_x_begin && fine_y_begin) {
+        std::size_t output = 0U;
+        std::int64_t fine_y = *fine_y_begin;
+        for (std::int64_t y = coarse_min.y; y < coarse_max.y; ++y, ++fine_y) {
+          std::int64_t fine_x = *fine_x_begin;
+          for (std::int64_t x = coarse_min.x; x < coarse_max.x; ++x, ++fine_x) {
+            const auto state = fine.State({.x = fine_x, .y = fine_y});
+            result.data[output++] = state == core::FineCellState::kBlocked ? 100
+                : state == core::FineCellState::kFree ? 0 : -1;
+          }
+        }
+        return result;
+      }
+    }
+  }
 
   std::size_t output_index = 0U;
   for (std::int64_t coarse_y = coarse_min.y; coarse_y < coarse_max.y;

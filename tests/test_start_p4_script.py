@@ -19,7 +19,7 @@ def fake_p4(tmp_path):
     if not LINUX:pytest.skip('requires Linux flock and /proc')
     root=tmp_path/'p4';(root/'config').mkdir(parents=True);(root/'run').mkdir();(root/'.venv/bin').mkdir(parents=True);(root/'source/scripts/simulation').mkdir(parents=True)
     (root/'.venv/bin/python').symlink_to(sys.executable)
-    (root/'config/p4_environment.sh').write_text('export P4_TEST_ENV=loaded\n')
+    (root/'config/p4_environment.sh').write_text('unset P4_SOURCE_DIR P4_FORMAL_BUILD P4_FORMAL_COMMIT\nexport P4_TEST_ENV=loaded\n')
     runtime=root/'source/scripts/simulation/p4_tcp_runtime.py'
     runtime.write_text('import json,os,sys,time\nfrom pathlib import Path\nroot=Path(sys.argv[sys.argv.index("--root")+1])\n(root/"run"/str(os.getpid())).write_text(json.dumps([os.environ["P4_TEST_ENV"],*sys.argv]))\nwhile True:time.sleep(.05)\n')
     processes=[]
@@ -86,6 +86,7 @@ def test_invalid_option_does_not_start_runtime(fake_p4):
 
 @pytest.mark.parametrize('default_root',[False,True])
 def test_pointer_probe_ignores_reused_and_zombie_pid_but_detects_runtime(tmp_path,monkeypatch,default_root):
+    monkeypatch.delenv('P4_SOURCE_DIR',raising=False)
     source=SCRIPT.read_text(encoding='utf-8')
     probe=source.split("<<'PY'\n",1)[1].split('\nPY',1)[0]
     root=Path('/home/yanfa/P4').resolve() if default_root else tmp_path/'p4'
@@ -108,3 +109,37 @@ def test_pointer_probe_ignores_reused_and_zombie_pid_but_detects_runtime(tmp_pat
     with pytest.raises(SystemExit):exec(compile(probe,'<pid-probe>','exec'),{})
     process('Z',actual);exec(compile(probe,'<pid-probe>','exec'),{})
     process('S',[sys.executable,'other.py']);exec(compile(probe,'<pid-probe>','exec'),{})
+
+
+
+def test_selected_build_supplies_runtime_and_rviz_without_editing_legacy_source(fake_p4):
+    root,start,ready=fake_p4
+    selected=root/'build/formal-test/source'
+    folder=selected/'scripts/simulation';folder.mkdir(parents=True)
+    old=root/'source/scripts/simulation/p4_tcp_runtime.py'
+    (folder/'p4_tcp_runtime.py').write_bytes(old.read_bytes())
+    (root/'config/p4_environment.sh').write_text(
+        'export P4_TEST_ENV=loaded\nexport P4_SOURCE_DIR="'+str(selected)+'"\n')
+    child=start();ready(child)
+    args=json.loads((root/'run'/str(child.pid)).read_text())
+    assert args[1]==str(folder/'p4_tcp_runtime.py')
+    assert args[-1]==str(folder/'p4_navigation.rviz')
+    assert old.exists()
+
+
+
+def test_pointer_blocks_unlocked_old_operator_from_other_source(fake_p4):
+    root,start,ready=fake_p4
+    legacy=root/'source/scripts/simulation/p4_tcp_runtime.py'
+    selected=root/'build/formal-new/source/scripts/simulation';selected.mkdir(parents=True)
+    (selected/'p4_tcp_runtime.py').write_bytes(legacy.read_bytes())
+    (root/'config/p4_environment.sh').write_text('export P4_TEST_ENV=loaded\nexport P4_SOURCE_DIR="'+str(selected.parents[1])+'"\n')
+    foreign=subprocess.Popen([sys.executable,str(legacy),'--root',str(root),'--artifact',str(root/'run/legacy')],env=dict(os.environ,P4_TEST_ENV='loaded'))
+    try:
+        ready(foreign)
+        (root/'run/p4-current.json').write_text(json.dumps(dict(operator_pid=foreign.pid)))
+        child=start();child.wait(timeout=5)
+        assert child.returncode!=0
+        assert not (root/'run'/str(child.pid)).exists()
+    finally:
+        foreign.terminate();foreign.wait(timeout=5)

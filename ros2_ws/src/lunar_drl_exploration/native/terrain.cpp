@@ -140,7 +140,7 @@ PyObject* derive(PyObject*, PyObject* args) {
       // halo.
       for (int by = 0; by < height; by += nav::kGridTileWidthCells)
         for (int bx = 0; bx < width; bx += nav::kGridTileWidthCells) {
-          nav::FineCellEvaluator fine(grid, capability, profile);
+          nav::FineCellEvaluator fine(grid, capability, profile, nav::MakePlatformElevationEvaluator(capability));
           for (int y = by;
                y < std::min(height, by + int(nav::kGridTileWidthCells)); ++y)
             for (int x = bx;
