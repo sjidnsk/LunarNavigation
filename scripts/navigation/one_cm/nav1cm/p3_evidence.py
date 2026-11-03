@@ -2,19 +2,13 @@
 
 from collections import defaultdict
 from dataclasses import replace
-import math
 import operator
 
 import numpy as np
 
 from .base_map import EvidenceFragment, SourceEvidence
-from .contracts import CellRect
 from .p3_map import _polygon, _rectangles
 from .terrain_native import NativeTerrain
-
-
-def _record_key(record):
-    return tuple(None if isinstance(v, float) and math.isnan(v) else v for v in record.tolist())
 
 
 def _cell(record):
@@ -133,9 +127,9 @@ def _update_source(old,incoming,indices,cells):
     geometry={cells[i] for i in indices if cells[i] not in support or not support[cells[i]][1]}
     if old is not None and same.all() and not geometry:return old,geometry
     records=np.empty(0,dtype=incoming.measurements.dtype) if old is None else old.measurements.copy()
-    fragments=[] if old is None else [f for f in old.observation_fragments
-        if _cell(old.measurements[f.measurement_index]) not in geometry]
-    index=support.copy();added=[]
+    fragments=[] if old is None else ([f for f in old.observation_fragments
+        if _cell(old.measurements[f.measurement_index]) not in geometry] if geometry else old.observation_fragments)
+    index=support.copy() if geometry else support;added=[]
     for position,i in enumerate(indices):
         cell=cells[i];record_index=int(old_indices[position])
         if record_index<0:

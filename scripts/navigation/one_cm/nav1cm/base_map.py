@@ -1,9 +1,4 @@
-"""Immutable source evidence values, independent of native accumulator lifetime.
-
-Polygons use world centimeter coordinates and preserve sub-centimeter support.
-Observation support and retained classification support are separate: a finite
-UNKNOWN observation can coexist with an older BLOCKED classification.
-"""
+"""共享地图只保存当前有效观测，导航分类由WorldSnapshot独立维护。"""
 from dataclasses import dataclass, field
 from functools import cached_property
 import math
@@ -49,7 +44,7 @@ class SourceEvidence:
         values = np.asarray(self.measurements)
         if values.dtype != MEASUREMENT_DTYPE or values.ndim != 1:
             raise ValueError('measurements require exact structured source dtype')
-        # 同一源格的历史值可由不同片段引用；数组索引标识记录，而非坐标。
+        # 只保留仍被有效观测引用的测量；部分覆盖可引用同格的不同值。
         if not np.isfinite(values['height_m']).all() or not np.isin(values['state'], [-1, 0, 1]).all():
             raise ValueError('measurements require finite observed height and intrinsic state')
         for name in ('slope_rad', 'relief_m'):

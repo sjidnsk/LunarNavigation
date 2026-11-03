@@ -30,28 +30,43 @@ def oracle(previous,incoming,indices,ops):
         for f in s.observation_fragments:
             pieces=[f.polygon_cm]
             for clip in clips:
-                pieces=[q for p in pieces for q in (ops.polygon_difference(p,clip) if ops.polygon_intersection(p,clip) else (p,))]
+                pieces=[q for p in pieces for q in reference_difference(p,clip)]
             fragments.extend(EvidenceFragment(f.measurement_index,p) for p in pieces)
         if fragments:result.append(replace(s,observation_fragments=tuple(fragments)))
     if indices:result.append(replace(incoming,observation_fragments=tuple(EvidenceFragment(i,p) for i,p in zip(indices,clips))))
     return tuple(result)
 
 
-def intersection_area(subject,clip):
-    # 独立Sutherland–Hodgman面积比较，不把内核产生的退化碎片再次交给内核验证。
-    out=list(subject)
+def reference_clip(subject,a,b,inside=True):
+    out=[]
+    if not subject:return out
+    def side(p):
+        value=(b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0])
+        return value if inside else -value
+    prior=subject[-1];vp=side(prior)
+    for current in subject:
+        vc=side(current)
+        if (vp>=0)!=(vc>=0):
+            t=vp/(vp-vc)
+            out.append((prior[0]+t*(current[0]-prior[0]),prior[1]+t*(current[1]-prior[1])))
+        if vc>=0:out.append(current)
+        prior,vp=current,vc
+    return out
+
+
+def reference_difference(subject,clip):
+    # 独立Python参考不再把自身产生的近共线碎片送回被测native验证器。
+    pieces=[];remaining=list(subject)
     for a,b in zip(clip,clip[1:]+clip[:1]):
-        if not out:break
-        def side(p):return (b[0]-a[0])*(p[1]-a[1])-(b[1]-a[1])*(p[0]-a[0])
-        prior=out[-1];vp=side(prior);result=[]
-        for current in out:
-            vc=side(current)
-            if (vp>=0)!=(vc>=0):
-                t=vp/(vp-vc)
-                result.append((prior[0]+t*(current[0]-prior[0]),prior[1]+t*(current[1]-prior[1])))
-            if vc>=0:result.append(current)
-            prior,vp=current,vc
-        out=result
+        outside=reference_clip(remaining,a,b,False)
+        if len(outside)>=3 and area((outside,))>0:pieces.append(tuple(outside))
+        remaining=reference_clip(remaining,a,b)
+    return pieces
+
+
+def intersection_area(subject,clip):
+    out=list(subject)
+    for a,b in zip(clip,clip[1:]+clip[:1]):out=reference_clip(out,a,b)
     return area((out,)) if len(out)>=3 else 0.
 
 
