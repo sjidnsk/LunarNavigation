@@ -22,3 +22,95 @@ def rectangle_distance_squared(dx,dy,rx,ry,c,s,hl,hw):
             qx,qy=np.maximum(np.abs(c*x+s*y)-hl,0.),np.maximum(np.abs(-s*x+c*y)-hw,0.)
             distance=np.minimum(distance,qx*qx+qy*qy)
     return np.where(intersects,0.,distance)
+
+
+def point_box_distance_squared(point, boxes):
+    """点到原始闭矩形的精确距离平方，不含车辆膨胀。"""
+    point=np.asarray(point,dtype=float)
+    boxes=np.asarray(boxes,dtype=float).reshape(-1,4)
+    delta=np.maximum(np.maximum(boxes[:,:2]-point,point-boxes[:,2:]),0.)
+    return np.einsum('ij,ij->i',delta,delta)
+
+
+def point_box_clearance(point, boxes, bounds):
+    """精确距离及对应梯度，包含局部窗口边界。"""
+    x,y=point
+    distances=[x-bounds[0],y-bounds[1],bounds[2]-x,bounds[3]-y]
+    gradients=[(1.,0.),(0.,1.),(-1.,0.),(0.,-1.)]
+    i=int(np.argmin(distances));d=float(distances[i]);gradient=gradients[i]
+    if len(boxes):
+        squared=point_box_distance_squared(point,boxes);j=int(np.argmin(squared))
+        obstacle=float(np.sqrt(squared[j]))
+        if obstacle<d:
+            d=obstacle
+            nearest=np.clip(np.asarray(point),boxes[j,:2],boxes[j,2:])
+            gradient=tuple((np.asarray(point)-nearest)/d) if d>0 else (0.,0.)
+    return max(0.,d),*gradient
+
+
+def segment_hits_box(a, b, box):
+    """闭区间slab相交；与向量参考同判据，接触算相交。"""
+    lo, hi = 0., 1.
+    for axis in (0, 1):
+        origin, end = float(a[axis]), float(b[axis])
+        low, high = float(box[axis]), float(box[axis+2])
+        delta = end-origin
+        if delta == 0:
+            if origin < low or origin > high:
+                return False
+        else:
+            near, far = (low-origin)/delta, (high-origin)/delta
+            lo = max(lo, min(near, far))
+            hi = min(hi, max(near, far))
+            if lo > hi:
+                return False
+    return True
+
+
+def segment_clear(a, b, boxes, corner_radius=0):
+    """连续认证整条线段；接触也视为碰撞，不做离散采样。
+
+    boxes是硬膨胀AABB；corner_radius>0时先内缩恢复原障碍矩形，
+    用线段到原矩形的最短距离认证圆形半径，0保留原AABB语义。
+    """
+    if not len(boxes):
+        return True
+    # 包围盒闭区间相交是必要条件；仅排除确定无关障碍。
+    boxes = boxes[(boxes[:, 0] <= max(a[0], b[0])) &
+                  (boxes[:, 2] >= min(a[0], b[0])) &
+                  (boxes[:, 1] <= max(a[1], b[1])) &
+                  (boxes[:, 3] >= min(a[1], b[1]))]
+    if not len(boxes):
+        return True
+    if corner_radius:
+        raw = boxes + np.array([corner_radius, corner_radius, -corner_radius, -corner_radius])
+        # 固定短前缀获得常见碰撞早退；余量沿原向量slab判据批量处理。
+        # 8仅限制Python循环工作量，不改变碰撞阈值或遗漏任何障碍。
+        if any(segment_hits_box(a, b, box) for box in raw[:8]):
+            return False
+        if len(raw) > 8 and not segment_clear(a, b, raw[8:]):
+            return False
+        a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+        # 凸矩形与线段的最短距离出现在端点到矩形或角点到线段。
+        distance2 = np.minimum(point_box_distance_squared(a,raw),point_box_distance_squared(b,raw))
+        corners = raw[:, ((0,1), (0,3), (2,1), (2,3))]
+        direction = b-a
+        norm2 = float(np.dot(direction, direction))
+        if norm2:
+            t = np.clip(np.sum((corners-a)*direction, axis=2)/norm2, 0., 1.)
+            delta = corners-a-t[:,:,None]*direction
+            distance2 = np.minimum(distance2, np.sum(delta*delta, axis=2).min(axis=1))
+        return not bool(np.any(distance2 <= corner_radius*corner_radius))
+    lo = np.zeros(len(boxes))
+    hi = np.ones(len(boxes))
+    possible = np.ones(len(boxes), dtype=bool)
+    for axis in (0, 1):
+        delta = b[axis] - a[axis]
+        if delta == 0:
+            possible &= (a[axis] >= boxes[:, axis]) & (a[axis] <= boxes[:, axis + 2])
+        else:
+            near = (boxes[:, axis] - a[axis]) / delta
+            far = (boxes[:, axis + 2] - a[axis]) / delta
+            lo = np.maximum(lo, np.minimum(near, far))
+            hi = np.minimum(hi, np.maximum(near, far))
+    return not bool(np.any(possible & (lo <= hi)))

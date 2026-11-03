@@ -11,6 +11,7 @@ import time
 
 import numpy as np
 
+from .rectangle_distance import point_box_distance_squared, segment_clear as _segment_clear, segment_hits_box as _segment_hits_box
 from .contracts import Route, WheelLimits, WorldSnapshot
 
 
@@ -40,76 +41,6 @@ def _point(value):
         raise ValueError("point must contain finite x,y")
     return point
 
-
-def _segment_hits_box(a, b, box):
-    """闭区间slab相交；与向量参考同判据，接触算相交。"""
-    lo, hi = 0., 1.
-    for axis in (0, 1):
-        origin, end = float(a[axis]), float(b[axis])
-        low, high = float(box[axis]), float(box[axis+2])
-        delta = end-origin
-        if delta == 0:
-            if origin < low or origin > high:
-                return False
-        else:
-            near, far = (low-origin)/delta, (high-origin)/delta
-            lo = max(lo, min(near, far))
-            hi = min(hi, max(near, far))
-            if lo > hi:
-                return False
-    return True
-
-
-def _segment_clear(a, b, boxes, corner_radius=0):
-    """连续认证整条线段；接触也视为碰撞，不做离散采样。
-
-    boxes是硬膨胀AABB；corner_radius>0时先内缩恢复原障碍矩形，
-    用线段到原矩形的最短距离认证圆形半径，0保留原AABB语义。
-    """
-    if not len(boxes):
-        return True
-    # 包围盒闭区间相交是必要条件；仅排除确定无关障碍。
-    boxes = boxes[(boxes[:, 0] <= max(a[0], b[0])) &
-                  (boxes[:, 2] >= min(a[0], b[0])) &
-                  (boxes[:, 1] <= max(a[1], b[1])) &
-                  (boxes[:, 3] >= min(a[1], b[1]))]
-    if not len(boxes):
-        return True
-    if corner_radius:
-        raw = boxes + np.array([corner_radius, corner_radius, -corner_radius, -corner_radius])
-        # 固定短前缀获得常见碰撞早退；余量沿原向量slab判据批量处理。
-        # 8仅限制Python循环工作量，不改变碰撞阈值或遗漏任何障碍。
-        if any(_segment_hits_box(a, b, box) for box in raw[:8]):
-            return False
-        if len(raw) > 8 and not _segment_clear(a, b, raw[8:]):
-            return False
-        a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
-        # 凸矩形与线段的最短距离出现在端点到矩形或角点到线段。
-        delta = np.maximum(np.maximum(raw[:, :2]-a, a-raw[:, 2:]), 0.)
-        distance2 = np.sum(delta*delta, axis=1)
-        delta = np.maximum(np.maximum(raw[:, :2]-b, b-raw[:, 2:]), 0.)
-        distance2 = np.minimum(distance2, np.sum(delta*delta, axis=1))
-        corners = raw[:, ((0,1), (0,3), (2,1), (2,3))]
-        direction = b-a
-        norm2 = float(np.dot(direction, direction))
-        if norm2:
-            t = np.clip(np.sum((corners-a)*direction, axis=2)/norm2, 0., 1.)
-            delta = corners-a-t[:,:,None]*direction
-            distance2 = np.minimum(distance2, np.sum(delta*delta, axis=2).min(axis=1))
-        return not bool(np.any(distance2 <= corner_radius*corner_radius))
-    lo = np.zeros(len(boxes))
-    hi = np.ones(len(boxes))
-    possible = np.ones(len(boxes), dtype=bool)
-    for axis in (0, 1):
-        delta = b[axis] - a[axis]
-        if delta == 0:
-            possible &= (a[axis] >= boxes[:, axis]) & (a[axis] <= boxes[:, axis + 2])
-        else:
-            near = (boxes[:, axis] - a[axis]) / delta
-            far = (boxes[:, axis + 2] - a[axis]) / delta
-            lo = np.maximum(lo, np.minimum(near, far))
-            hi = np.minimum(hi, np.maximum(near, far))
-    return not bool(np.any(possible & (lo <= hi)))
 
 
 def _path_cost_python(points, hard_boxes, soft_clearance_m=.4, clearance_weight=1.0, check=None, *, corner_radius=0):

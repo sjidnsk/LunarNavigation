@@ -57,7 +57,9 @@ def create_resources(limits, capability, settings):
             global_soft_clearance_m=settings.get('global_soft_clearance_m',.4),
             global_clearance_weight=settings.get('global_clearance_weight',1.0),
             reference_smoothing=settings['smooth_global_reference'],
-            planner_options={'n': settings['horizon_steps'], 'dt': settings['horizon_dt_s']})
+            planner_options={'n': settings['horizon_steps'], 'dt': settings['horizon_dt_s'],
+                'soft_clearance_m': settings.get('global_soft_clearance_m',.4),
+                'clearance_weight': settings.get('global_clearance_weight',1.0)})
     except Exception:
         terrain._terrain.close()
         raise

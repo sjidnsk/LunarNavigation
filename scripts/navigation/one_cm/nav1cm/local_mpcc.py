@@ -129,12 +129,16 @@ class MpccPlanner:
     N=20
     dt=.2
 
-    def __init__(self, limits, build_dir, *, n=20, dt=.2):
+    def __init__(self, limits, build_dir, *, n=20, dt=.2, soft_clearance_m=0., clearance_weight=1.):
         """build_dir 参数为可共享根目录；实例 build_dir 为配置指纹隔离目录。"""
         if type(n) is not int or n < 1 or not np.isfinite(dt) or dt <= 0:
             raise ValueError('horizon requires positive integer n and finite positive dt')
+        if not all(np.isfinite(v) and v>=0 for v in (soft_clearance_m,clearance_weight)):
+            raise ValueError('soft clearance and weight must be finite and nonnegative')
+        self.soft_clearance_m=float(soft_clearance_m)
+        self.clearance_weight=float(clearance_weight)
         self.N, self.dt = n, float(dt)
-        self.model_fingerprint = hashlib.sha256(f'pose-terminal-single-circle-v4:{self.N}:{self.dt.hex()}:{limits.digest()}'.encode()).hexdigest()[:12]
+        self.model_fingerprint = hashlib.sha256(f'exact-circle-soft-clearance-v5:{self.N}:{self.dt.hex()}:{limits.digest()}:{self.soft_clearance_m.hex()}:{self.clearance_weight.hex()}'.encode()).hexdigest()[:12]
         try:
             import casadi as ca
             from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -178,7 +182,13 @@ class MpccPlanner:
             hs=[]
             for j in range(len(self.offsets)):
                 q=p[9+4*j:13+4*j]
-                hs.append(q[0]*x[0]+q[1]*x[1]+q[2]*x[2]+q[3])
+                clearance=q[0]*x[0]+q[1]*x[1]+q[2]*x[2]+q[3]
+                hs.append(clearance)
+                if self.soft_clearance_m>0 and self.clearance_weight>0:
+                    # 同一硬圆外的有限软带；只改变偏好，不增加硬约束或障碍膨胀。
+                    penalty=self.clearance_weight*ca.fmax(0.,1.-clearance/self.soft_clearance_m)**2/len(self.offsets)
+                    model.cost_expr_ext_cost+=penalty
+                    model.cost_expr_ext_cost_e+=penalty
             sign=-1 if mode=='reverse' else 1
             if mode!='spin' and limits.motion_model=='curvature_limited':
                 hs += [sign*limits.curvature_inv_m*x[3]-x[4],sign*limits.curvature_inv_m*x[3]+x[4]]
@@ -267,7 +277,7 @@ class MpccPlanner:
                 cx=z[0]+offset*np.cos(z[2]); cy=z[1]+offset*np.sin(z[2])
                 d,gx,gy=field.sample(cx,cy)
                 gyaw=offset*(-gx*np.sin(z[2])+gy*np.cos(z[2]))
-                p[9+4*j:13+4*j]=[gx,gy,gyaw,d-self.radius-.003-gx*z[0]-gy*z[1]-gyaw*z[2]]
+                p[9+4*j:13+4*j]=[gx,gy,gyaw,d-self.radius-gx*z[0]-gy*z[1]-gyaw*z[2]]
             p[-1]=end
             params.append(p)
         return params
@@ -320,7 +330,7 @@ class MpccPlanner:
             end=min(float(reference.s[-1]),reference.progress_s+self.N*self.dt*self.limits.linear_speed_mps)
             initial=np.array([state.x,state.y,state.yaw,state.v,state.w,reference.progress_s])
             initial_circle_feasible=all(field.sample(state.x+offset*np.cos(state.yaw),
-                state.y+offset*np.sin(state.yaw))[0]>=self.radius+.003 for offset in self.offsets)
+                state.y+offset*np.sin(state.yaw))[0]>self.radius for offset in self.offsets)
             key=(reference.route_version,mode,reference.terminal_yaw)
             timing['reference']+=(perf_counter()-t)*1000
             solver=self._solvers[mode]
@@ -415,5 +425,5 @@ class MpccPlanner:
         for z in xs:
             for offset in self.offsets:
                 d,_,_=field.sample(z[0]+offset*np.cos(z[2]),z[1]+offset*np.sin(z[2]))
-                if d<self.radius: return 'CIRCLE_CLEARANCE'
+                if d<=self.radius: return 'CIRCLE_CLEARANCE'
         return 'CANDIDATE'

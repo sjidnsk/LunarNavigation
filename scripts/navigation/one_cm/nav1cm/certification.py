@@ -7,7 +7,7 @@ import numpy as np
 
 from .contracts import Certification, CertificationReason, CellState, GridSnapshot, Trajectory, WheelLimits, circumscribed_radius
 from .dynamics import step
-from .rectangle_distance import rectangle_distance_squared
+from .rectangle_distance import rectangle_distance_squared, point_box_distance_squared, segment_clear
 
 
 def _reject(reason, checked, detail=""):
@@ -46,6 +46,14 @@ class _CollisionContext:
 
 def _body_collision(pose, radius_margin, context, limits):
     """生产圆或零净空原型矩形到原始格面积的距离；窗口外阻断。"""
+    if context.grid.obstacle_boxes_m is not None and limits.minimum_clearance_m>0:
+        grid=context.grid;x,y=map(float,pose[:2]);ox,oy=grid.origin_xy;h,w=grid.cells.shape
+        radius=circumscribed_radius(limits.body_length_m,limits.body_width_m,limits.minimum_clearance_m)+radius_margin
+        if min(x-ox,y-oy,ox+w*grid.resolution_m-x,oy+h*grid.resolution_m-y)<radius:
+            return CertificationReason.OUT_OF_BOUNDS
+        if np.any(point_box_distance_squared((x,y),grid.obstacle_boxes_m)<=radius*radius):
+            return CertificationReason.COLLISION
+        return None
     if context.backend is not None:
         return context.backend.check_poses(np.asarray(pose[:3]).reshape(1,3),radius_margin,context,limits)[0]
     grid = context.grid
@@ -102,6 +110,11 @@ def _body_collision(pose, radius_margin, context, limits):
 
 def _batch_body_collision(poses, radius_margin, context, limits):
     """批量执行轴对齐粗筛；疑似碰撞复用标量精确几何。"""
+    if context.grid.obstacle_boxes_m is not None and limits.minimum_clearance_m>0:
+        for i,pose in enumerate(poses):
+            reason=_body_collision(pose,radius_margin,context,limits)
+            if reason is not None:return reason,i+1
+        return None,len(poses)
     if context.backend is not None:
         return context.backend.check_poses(poses,radius_margin,context,limits)
     grid = context.grid
@@ -151,6 +164,30 @@ def _state_limit_reason(state, limits, mode):
 
 def _sweep(start, control, dt, context, limits):
     """采样车体包络加运动上界余量；两样本之间无未覆盖位姿。"""
+    if context.grid.obstacle_boxes_m is not None and limits.minimum_clearance_m>0:
+        # 圆的朝向不改变碰撞形状；直接检查中心运动线段。
+        # 弯曲离散积分用二阶导数界覆盖弦偏差，不叠加角点扫掠膨胀。
+        v=abs(float(start[3]));a=abs(float(control[0]));alpha=abs(float(control[1]))
+        vmax=max(v,abs(float(start[3]+control[0]*dt)))
+        wmax=max(abs(float(start[4])),abs(float(start[4]+control[1]*dt)))
+        curvature_bound=a+vmax*wmax+vmax*dt*(.5*alpha+.25*wmax*wmax)
+        straight=wmax==0 or vmax==0
+        count=1 if straight else max(1,int(math.ceil(dt*math.sqrt(curvature_bound/(8e-5)))))
+        deviation=0. if straight else curvature_bound*(dt/count)**2/8
+        radius=circumscribed_radius(limits.body_length_m,limits.body_width_m,limits.minimum_clearance_m)
+        raw=np.asarray(context.grid.obstacle_boxes_m,dtype=float).reshape(-1,4)
+        boxes=raw+np.array([-radius-deviation,-radius-deviation,radius+deviation,radius+deviation])
+        previous=start
+        for i in range(1,count+1):
+            current=step(start,control,dt*i/count)
+            # 端点/弦到窗口边界也保持同一圆半径。
+            for pose in (previous,current):
+                reason=_body_collision(pose,deviation,context,limits)
+                if reason is not None:return reason,i
+            if not segment_clear(previous[:2],current[:2],boxes,radius+deviation):
+                return CertificationReason.COLLISION,i
+            previous=current
+        return None,count+1
     v0, w0 = abs(float(start[3])), abs(float(start[4]))
     vmax = max(v0, abs(float(start[3] + control[0] * dt)))
     wmax = max(w0, abs(float(start[4] + control[1] * dt)))

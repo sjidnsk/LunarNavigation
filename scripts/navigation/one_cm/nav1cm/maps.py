@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 
+from .rectangle_distance import point_box_clearance
 from .contracts import CellState, GridSnapshot, VehicleState, WorldSnapshot, _readonly_array
 
 
@@ -17,12 +18,17 @@ class DistanceField:
     gradient_x: np.ndarray = field(repr=False)
     gradient_y: np.ndarray = field(repr=False)
 
+    obstacle_boxes_m: object = field(default=None, repr=False)
+
     def __post_init__(self):
         for name in ("distance_m", "gradient_x", "gradient_y"):
             object.__setattr__(self, name, _readonly_array(getattr(self, name), np.float64, 2))
 
     def sample(self, x: float, y: float) -> tuple[float, float, float]:
         """中心下界再减查询点偏移；图外的保守净空为零。"""
+        if self.obstacle_boxes_m is not None:
+            boxes,bounds=self.obstacle_boxes_m
+            return point_box_clearance((x,y),boxes,bounds)
         ix = int(np.floor((x - self.origin_xy[0]) / self.resolution_m))
         iy = int(np.floor((y - self.origin_xy[1]) / self.resolution_m))
         if ix < 0 or iy < 0 or iy >= self.distance_m.shape[0] or ix >= self.distance_m.shape[1]:
@@ -93,11 +99,21 @@ def extract_window(world: WorldSnapshot, state: VehicleState, allow_unknown: boo
     """提取以车体中心为中心的轴对齐 5 m 窗口，不改变来源 UNKNOWN。"""
     origin = (state.x - 2.5, state.y - 2.5)
     cells = rasterize_world(world, origin, (500, 500))
-    return GridSnapshot(world.epoch, origin, world.resolution_m, cells, bool(allow_unknown))
+    boxes=tuple((b.x0*world.resolution_m,b.y0*world.resolution_m,b.x1*world.resolution_m,b.y1*world.resolution_m)
+                for b in world.blocked if b.x0*world.resolution_m<=origin[0]+5 and b.x1*world.resolution_m>=origin[0]
+                and b.y0*world.resolution_m<=origin[1]+5 and b.y1*world.resolution_m>=origin[1])
+    return GridSnapshot(world.epoch, origin, world.resolution_m, cells, bool(allow_unknown),
+                        obstacle_boxes_m=boxes if allow_unknown else None)
 
 
 def build_distance_field(grid: GridSnapshot, *, backend=None) -> DistanceField:
     """对占据格面积及窗口边界给出不高估的欧氏净空下界。"""
+    if grid.obstacle_boxes_m is not None:
+        boxes=_readonly_array(np.asarray(grid.obstacle_boxes_m).reshape(-1,4),np.float64,2)
+        ox,oy=grid.origin_xy;h,w=grid.cells.shape
+        bounds=(ox,oy,ox+w*grid.resolution_m,oy+h*grid.resolution_m)
+        empty=np.empty((0,0))
+        return DistanceField(grid.epoch,grid.origin_xy,grid.resolution_m,empty,empty,empty,(boxes,bounds))
     if backend is not None:
         return backend.build(grid)
     passable = grid.cells != CellState.BLOCKED
@@ -129,6 +145,19 @@ class DistanceFieldCache:
         self.last_reused = False
 
     def get(self, grid: GridSnapshot) -> DistanceField:
+        if grid.obstacle_boxes_m is not None:
+            key=('exact',grid.obstacle_boxes_m)
+            self.last_reused=key==self._key
+            if not self.last_reused:
+                self._field=build_distance_field(grid)
+            else:
+                from dataclasses import replace
+                boxes,_=self._field.obstacle_boxes_m
+                ox,oy=grid.origin_xy;h,w=grid.cells.shape
+                self._field=replace(self._field,epoch=grid.epoch,origin_xy=grid.origin_xy,
+                    resolution_m=grid.resolution_m,obstacle_boxes_m=(boxes,(ox,oy,ox+w*grid.resolution_m,oy+h*grid.resolution_m)))
+            self._key=key
+            return self._field
         passable = grid.cells != CellState.BLOCKED
         if not grid.allow_unknown:
             passable &= grid.cells != CellState.UNKNOWN
