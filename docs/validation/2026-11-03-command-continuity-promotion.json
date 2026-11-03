@@ -1,0 +1,49 @@
+{
+  "task": "TCP-COMMAND-CONTINUITY-20261103",
+  "source_implementation": "4a4c9e23fb9b28941c28b8d18a7db7fc7e7c5c01",
+  "source_deployment_evidence": "8f5be5ad7eed7688891e854e8f565a2221c2890c",
+  "public_implementation": "3fbc8fd9",
+  "reviewed_anchors_before_document_closure": {
+    "integration/pure-planner-orin": "fcded592b54d56da5da5a2d73c10f9fb5aa9cb3f",
+    "app/orin-unreal-simulation": "561bec8b915727c466f06f33d118074a12ff3ed3",
+    "app/orin-real-vehicle": "21f6c6ee5e565872b431d76286659e70e3aa9056",
+    "app/orin-legged-vehicle": "3a90a688c3a17b6b93b768ecf928bc800a7d6040"
+  },
+  "tcp_contains_original_source": true,
+  "tests": {
+    "public_one_cm_runtime": {
+      "passed": 1547,
+      "skipped": 29
+    },
+    "public_planner_applicable": {
+      "passed": 147,
+      "skipped": 12,
+      "deselected": 2
+    },
+    "independent_public": {
+      "passed": 70
+    },
+    "humble_dds": {
+      "passed": 194,
+      "skipped": 1
+    },
+    "tcp_applicable": {
+      "passed": 171,
+      "skipped": 2
+    },
+    "wheel_applicable": {
+      "passed": 187
+    },
+    "legged_applicable": {
+      "passed": 193
+    }
+  },
+  "reviews": "public, three-app combination, source-lineage and final cross-line reviews clean; no open P1/P2",
+  "formal_active": "/home/yanfa/P4/build/formal-20261103-continuity",
+  "formal_previous": "/home/yanfa/P4/build/formal-20261103-unified",
+  "formal_source": "4a4c9e23",
+  "this_stage_runtime_changes": "none; no restart, replacement, goal or command",
+  "real_vehicle_acceptance": "NOT_RUN",
+  "git_push": "NOT_RUN",
+  "resource_disposition": "preserved; no branch/worktree deletion"
+}
