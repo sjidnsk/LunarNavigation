@@ -2,7 +2,7 @@
 
 地图线程独占 P3MapStore，tick 线程独占 session/coordinator。只在交接最新
 输入、不可变地图及发布 guard 时短暂加锁；不会持锁执行 native 地图计算。
-直控发布循环只消费已交接速度和原证明截止时刻，不访问session或运行认证。
+直控发布循环持续发送当前交接速度；更新、撤销由现有任务和输入状态决定，不按认证预测时长归零。
 """
 from collections import deque
 import json
@@ -156,7 +156,7 @@ class PlannerRuntime:
             command=(0.,0.) if selected is None else selected[0]
             now=time.monotonic()
             if (self._stopping or selected is not None and
-                    (selected[2]!=self._goal_sequence or now>=selected[1]) or
+                    selected[1]!=self._goal_sequence or
                     self._pose_integrity_fault is not None or
                     self._pose_timeout_s is not None and not self._pose_source_current(
                         self._odometry,self._odometry_received_s,now)[0]):
@@ -184,17 +184,16 @@ class PlannerRuntime:
             due=time.monotonic()+period
 
     def _command(self, packet, command, source_stamp=None, diagnostics=None, *,
-                 valid_until_s=None, input_sequence=None, previous_command=None):
+                 input_sequence=None, previous_command=None):
         if self.publish_command is None:
             return
         with self._command_lock:
             previous=self._last_issued_command
-            # 若旧证明已到期并实际归零，必须按新的已发速度重算slew与证明。
+            # 若真实输入失效等原因已改变实际指令，按新的已发速度重算slew与证明。
             # 这里只拒绝交接，不清空仍有效的当前命令，也不额外插零。
             if command!=(0.,0.) and previous_command is not None and previous!=previous_command:
                 return False
             self._pending_command=(tuple(command),
-                time.monotonic()+self.command_hold_s if valid_until_s is None else valid_until_s,
                 self._goal_sequence if input_sequence is None else input_sequence)
             if not self._command_threaded:
                 # 供离线单步验证复用同一发布入口；正式start后只有发布循环发令。
@@ -204,7 +203,6 @@ class PlannerRuntime:
             diagnostics=dict(diagnostics or {})
             diagnostics['actual_published_vw']=list(actual)
             diagnostics['publication_state']='queued' if self._command_threaded else 'published'
-            diagnostics['command_valid_until_s']=valid_until_s
             diagnostics.setdefault('final_publish_override_reason',None)
             self._notice('MPCC_COMMAND', json.dumps(dict(v=command[0], w=command[1],
                 status=getattr(packet.result, 'status', None),
@@ -465,7 +463,6 @@ class PlannerRuntime:
             self.event_sink(snapshot)
 
     def _tick_once(self, now_s):
-        proof_started_s=time.monotonic()
         with self._command_lock:
             error,self._command_publish_error=self._command_publish_error,None
         if error:self._notice('COMMAND_PUBLISH_ERROR',error)
@@ -631,13 +628,11 @@ class PlannerRuntime:
                      packet.candidate,self.ros_now_ns(),self.map_frame,global_reference=packet.route)
         # ROS 时间仅给本次 Path 定 t0；调度/轨迹年龄始终使用单调时钟。
         published_brake = False
-        # 发布期间旧证明可能到期归零。交接锁内核对实际速度基准，最多补算一次；
-        # 补算不刷新本周期起点，也不等待发布线程追赶。
+        # 交接锁内核对实际已发速度基准，最多补算一次；不持锁认证。
         for command_attempt in range(2):
             command=(0.,0.)
             previous_command=None
             command_diagnostics={}
-            proof_durations=[]
             if self.publish_command is not None:
                 from nav1cm.execution import certified_velocity_command
                 with self._command_lock:
@@ -650,15 +645,11 @@ class PlannerRuntime:
                     command=certified_velocity_command(packet.result,proof_state,self.session.coordinator.limits,
                         reference_interval_s=self.reference_interval_s,last_command=previous_command,
                         elapsed_s=elapsed,command_hold_s=self.command_hold_s,
-                        backend=self.session.coordinator.backend,diagnostics=command_diagnostics,
-                        proof_sink=proof_durations.append)
+                        backend=self.session.coordinator.backend,diagnostics=command_diagnostics)
                 else:
                     command_diagnostics['command_reject_reason']='NO_INPUT' if packet.waiting else 'CANCELING'
                 command_diagnostics.update(p3_new_sample=p3_new_sample,
                     source_identity=dict(getattr(self.session.coordinator.buffer, 'source_identity', {})))
-            # 控制使用认证结果，不依赖诊断日志；无额外响应时长时仅消费有限持令窗口。
-            valid_until_s=proof_started_s+(proof_durations[0] if proof_durations else
-                                          getattr(self,'command_hold_s',0.))
             with self._condition:
                 if (self._pose_timeout_s is not None and not self._pose_source_current(
                         self._odometry,self._odometry_received_s,time.monotonic())[0]):
@@ -689,7 +680,7 @@ class PlannerRuntime:
                         command_diagnostics['final_publish_override_reason']='POSE_INTEGRITY_FAULT'
                     handed_off=self._command(packet,command if self.session.state is not None and
                                   self._pose_integrity_fault is None else (0.,0.), proof_stamp, command_diagnostics,
-                                  valid_until_s=valid_until_s,input_sequence=input_sequence,
+                                  input_sequence=input_sequence,
                                   previous_command=previous_command)
                     if handed_off is False:continue
                     self.publish(data)
@@ -701,7 +692,7 @@ class PlannerRuntime:
                             packet.generation != self.session.accepted_generation else
                         'MAP_NOT_CURRENT' if not physical_map_current else 'PUBLICATION_NOT_CURRENT')
                     self._command(packet,(0.,0.),proof_stamp,command_diagnostics,
-                                  valid_until_s=valid_until_s,input_sequence=input_sequence)
+                                  input_sequence=input_sequence)
             break
         if published_brake:
             try:
