@@ -1,4 +1,4 @@
-"""P4域10接线与车辆租约回归；不依赖ROS。"""
+"""P4域继承接线与车辆租约回归；不依赖ROS。"""
 from types import SimpleNamespace as S
 import pytest
 from pathlib import Path
@@ -7,7 +7,7 @@ from scripts.simulation.p4_tcp_runtime import CONTROL_DOMAIN, P3_SOURCE_DOMAIN, 
 
 
 def test_control_launch_uses_existing_wheel_limits_and_private_adapter_input():
-    assert (CONTROL_DOMAIN,P3_SOURCE_DOMAIN)==(10,57)
+    assert (CONTROL_DOMAIN,P3_SOURCE_DOMAIN)==(57,57)
     args=launch_settings(ROOT,'/p4/cache','/p4/test-wheel.yaml',dict(command_hold_s=1.2,odometry_timeout_s=4.5,p3_map_timeout_s=6.,mppi_time_steps=140,mppi_compute_envelope_s=.2))
     assert args['command_topic']=='/Car/T4/control/cmd_vel'
     assert args['goal_topic']=='/Car/T4/navigation/goal'
@@ -24,7 +24,7 @@ def test_input_bridge_preserves_messages_stamps_and_latched_tf():
         subscriptions.append((topic,callback,qos));return object()
     source=S(create_subscription=subscription);target=S(create_publisher=publisher)
     classes=dict(map=object,odom=object,tf=object)
-    handles=input_bridge(source,target,classes,dict(map='latched-map',odom='odom',tf='tf',tf_static='latched-static'))
+    handles=input_bridge(source,target,classes,dict(map='latched-map',odom='odom',tf='tf',tf_static='latched-static'),target_domain=10)
     assert len(subscriptions)==4 and len(handles)==8
     for topic,callback,qos in subscriptions:
         msg=S(header=S(stamp=123));callback(msg)
@@ -36,7 +36,7 @@ def test_tf_output_accepts_reliable_rviz_without_changing_source_subscription():
     subscriptions=[];publishers=[]
     source=S(create_subscription=lambda cls,topic,callback,qos:subscriptions.append((topic,qos)))
     target=S(create_publisher=lambda cls,topic,qos:(publishers.append((topic,qos)) or S(publish=lambda msg:None)))
-    input_bridge(source,target,dict(map=object,odom=object,tf=object),dict(map=1,odom=2,tf='best_effort',tf_output='reliable',tf_static=4))
+    input_bridge(source,target,dict(map=object,odom=object,tf=object),dict(map=1,odom=2,tf='best_effort',tf_output='reliable',tf_static=4),target_domain=10)
     assert ('/tf','best_effort') in subscriptions and ('/tf','reliable') in publishers
 
 
@@ -166,7 +166,8 @@ def test_invalid_telemetry_is_not_measured_stop(changes):
     assert not r.measured_stopped()
 
 
-def test_reverse_limit_and_environment_come_from_shared_configuration():
+def test_reverse_limit_and_environment_come_from_shared_configuration(monkeypatch):
+    monkeypatch.delenv('ROS_DOMAIN_ID',raising=False)
     from scripts.simulation.p4_tcp_runtime import TcpCommandRelay,low_speed_profile,runtime_environment
     source=profile();source['capability']['maximum_reverse_speed_mps']=.03
     events=[]
@@ -176,7 +177,7 @@ def test_reverse_limit_and_environment_come_from_shared_configuration():
     assert r.receive(message(-.02))
     with pytest.raises(ValueError):r.receive(message(-.04))
     env=runtime_environment('/home/yanfa/P4','/home/yanfa/P4/run/test')
-    assert env['ROS_DOMAIN_ID']=='10' and env['ROS_LOG_DIR'].replace(chr(92),'/').endswith('test/ros-log')
+    assert env['ROS_DOMAIN_ID']=='57' and env['ROS_LOG_DIR'].replace(chr(92),'/').endswith('test/ros-log')
     assert env['NAV1CM_BUILD_DIR'].replace(chr(92),'/').endswith('.cache/nav1cm')
 
 
@@ -674,3 +675,44 @@ def test_tcp_uses_sixteen_second_local_horizon_and_final_published_velocity():
     assert args['command_prediction_enabled']=='true'
     assert args['prediction_command_topic']==load_topic_contract(root)['vehicle']['command_topic']
     assert float(args['command_hold_s'])==1.2
+
+
+@pytest.mark.parametrize('inherited,expected',[(None,'57'),('','57'),('0','0'),('10','10'),('57','57')])
+def test_runtime_children_inherit_terminal_domain(monkeypatch,inherited,expected):
+    from scripts.simulation.p4_tcp_runtime import runtime_environment
+    if inherited is None:monkeypatch.delenv('ROS_DOMAIN_ID',raising=False)
+    else:monkeypatch.setenv('ROS_DOMAIN_ID',inherited)
+    assert runtime_environment('/home/yanfa/P4','/home/yanfa/P4/run/test')['ROS_DOMAIN_ID']==expected
+
+
+@pytest.mark.parametrize('domain',[0,10,57])
+def test_same_domain_creates_no_bridge_endpoints(domain):
+    def forbidden(*args,**kwargs):
+        pytest.fail('同域不应创建同话题转发端点')
+    source=S(create_subscription=forbidden)
+    target=S(create_publisher=forbidden)
+    assert input_bridge(source,target,{}, {},source_domain=domain,target_domain=domain)==[]
+
+
+@pytest.mark.parametrize('inherited,expected',[(None,57),('0',0),('10',10),('57',57)])
+def test_main_contexts_and_bridge_use_inherited_domain(monkeypatch,inherited,expected):
+    import ast
+    from scripts.simulation import p4_tcp_runtime as runtime
+    if inherited is None:monkeypatch.delenv('ROS_DOMAIN_ID',raising=False)
+    else:monkeypatch.setenv('ROS_DOMAIN_ID',inherited)
+    tree=ast.parse(Path(runtime.__file__).read_text(encoding='utf-8'))
+    main=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+    start=next(i for i,n in enumerate(main.body) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='selected_domain' for t in n.targets))
+    end=next(i for i,n in enumerate(main.body[start:],start) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='handles' for t in n.targets))
+    domains=[];publishers=[];subscriptions=[]
+    def node(*args,**kwargs):
+        return S(create_publisher=lambda cls,topic,qos:(publishers.append(topic) or S(publish=lambda msg:None)),
+                 create_subscription=lambda cls,topic,cb,qos:subscriptions.append(topic))
+    scope=dict(vars(runtime),rclpy=S(Context=lambda:object(),init=lambda **kw:domains.append(kw['domain_id']),create_node=node),
+               SingleThreadedExecutor=lambda **kw:S(add_node=lambda node:None),
+               QoSProfile=lambda **kw:kw,ReliabilityPolicy=S(RELIABLE=1,BEST_EFFORT=2),
+               DurabilityPolicy=S(TRANSIENT_LOCAL=1),GridMap=object,Odometry=object,TFMessage=object,
+               contract=runtime.load_topic_contract(ROOT))
+    exec(compile(ast.Module(body=main.body[start:end+1],type_ignores=[]),'<main-domain-wiring>','exec'),scope)
+    assert domains==[57,expected]
+    assert len(publishers)==len(subscriptions)==(0 if expected==57 else 4)

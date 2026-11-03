@@ -1,4 +1,4 @@
-"""P4控制域10入口：P3单向输入桥、导航启动及同域TCP租约适配。"""
+"""P4 ROS域继承入口：P3按需跨域输入、导航启动及TCP租约适配。"""
 import argparse
 from copy import deepcopy
 import json
@@ -11,7 +11,7 @@ import time
 import threading
 from collections import deque
 
-CONTROL_DOMAIN=10
+CONTROL_DOMAIN=57
 P3_SOURCE_DOMAIN=57
 PREFIX='/Car/T4'
 TRANSPORT_TIMEOUT_S=.5
@@ -45,7 +45,14 @@ def launch_settings(source,build_dir,profile_path,budgets,*,prefix=None,goal_top
     return args
 
 
-def input_bridge(source,target,classes,qos,contract=None):
+def control_domain():
+    return int(os.environ.get('ROS_DOMAIN_ID') or CONTROL_DOMAIN)
+
+
+def input_bridge(source,target,classes,qos,contract=None,*,source_domain=P3_SOURCE_DOMAIN,target_domain=None):
+    if target_domain is None:target_domain=control_domain()
+    # 同域直接订阅源话题，禁止同话题重发形成反馈环。
+    if source_domain==target_domain:return []
     topics=(load_topic_contract() if contract is None else contract)['launch']
     # 回调直接交付原消息，禁止重标源时间、反向转发或控制转发。
     handles=[]
@@ -267,7 +274,7 @@ def low_speed_profile(profile,*,linear_mps=.1,angular_rps=.1950770225306774):
 
 def runtime_environment(root,out):
     root,out=Path(root),Path(out)
-    env=dict(os.environ,ROS_DOMAIN_ID=str(CONTROL_DOMAIN),ROS_LOCALHOST_ONLY='0',
+    env=dict(os.environ,ROS_DOMAIN_ID=str(control_domain()),ROS_LOCALHOST_ONLY='0',
         RMW_IMPLEMENTATION='rmw_cyclonedds_cpp',ROS_HOME=str(out/'ros-home'),ROS_LOG_DIR=str(out/'ros-log'),
         TMPDIR=str(root/'tmp'),XDG_CACHE_HOME=str(root/'.cache'),PYTHONDONTWRITEBYTECODE='1',
         ACADOS_SOURCE_DIR=str(root/'deps/acados-v040'),NAV1CM_BUILD_DIR=str(root/'.cache/nav1cm'),
@@ -367,8 +374,9 @@ def main():
     from std_msgs.msg import Bool,String
     from lunar_car_ctrl.msg import VehicleTelemetry
     contract=load_topic_contract(root/'source');topics=contract['launch'];vehicle=contract['vehicle']
+    selected_domain=control_domain()
     contexts=[];nodes=[];executors=[];children=[];logs=[];stopping=[False]
-    for domain,name in [(P3_SOURCE_DOMAIN,'p4_p3_input_reader'),(CONTROL_DOMAIN,'p4_tcp_runtime')]:
+    for domain,name in [(P3_SOURCE_DOMAIN,'p4_p3_input_reader'),(selected_domain,'p4_tcp_runtime')]:
         context=rclpy.Context();rclpy.init(context=context,domain_id=domain)
         node=rclpy.create_node(name,context=context);executor=SingleThreadedExecutor(context=context)
         executor.add_node(node);contexts.append(context);nodes.append(node);executors.append(executor)
@@ -379,7 +387,7 @@ def main():
              tf_output=QoSProfile(depth=100,reliability=ReliabilityPolicy.RELIABLE),
              odom_output=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE),
              tf_static=QoSProfile(depth=100,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL))
-    handles=input_bridge(source,target,dict(map=GridMap,odom=Odometry,tf=TFMessage),qos,contract=contract)
+    handles=input_bridge(source,target,dict(map=GridMap,odom=Odometry,tf=TFMessage),qos,contract=contract,target_domain=selected_domain)
     display_worker=None
     source_counts={};relay=None;lease=None;mode=None;vel=None
     for topic,cls in [(topics['map_topic'],GridMap),(topics['odometry_topic'],Odometry),(topics['tf_topic'],TFMessage),(topics['tf_static_topic'],TFMessage)]:
@@ -392,7 +400,7 @@ def main():
             for executor in executors:executor.spin_once(timeout_sec=.005)
     def stop(*unused):stopping[0]=True
     signal.signal(signal.SIGINT,stop);signal.signal(signal.SIGTERM,stop)
-    started=time.monotonic();last_report=0.;result=dict(control_domain=CONTROL_DOMAIN,p3_source_domain=P3_SOURCE_DOMAIN,check_only=options.check_only)
+    started=time.monotonic();last_report=0.;result=dict(control_domain=selected_domain,p3_source_domain=P3_SOURCE_DOMAIN,check_only=options.check_only)
     try:
         if not options.check_only:
             profile=load_tcp_platform_profile(root/'source')
