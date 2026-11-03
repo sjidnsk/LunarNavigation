@@ -645,8 +645,7 @@ def continuous_runtime(monkeypatch, *, hold_s=.8, pose_timeout=None):
         calls.append(dict(kwargs))
         if len(calls) == 2:
             entered.set()
-            assert release.wait(3.)
-        kwargs['proof_sink'](hold_s)
+            assert release.wait(8.)
         return .05, .02
     monkeypatch.setattr(execution, 'certified_velocity_command', certified)
     if pose_timeout is not None:
@@ -681,18 +680,37 @@ def test_command_continues_while_certification_is_blocked(monkeypatch):
         release.set(); assert not runtime.close()['threads_alive']
 
 
-def test_repeated_command_expires_without_renewing_its_proof(monkeypatch):
+def test_repeated_command_survives_check_window_while_computation_waits(monkeypatch):
     runtime, sent, entered, release, _ = continuous_runtime(monkeypatch, hold_s=.18)
     runtime.start()
     try:
         assert entered.wait(1.)
         assert wait_runtime(lambda: any(x[1:3]==(.05,.02) for x in sent))
-        assert wait_runtime(lambda: sent[-1][1:3]==(0.,0.), .5), sent
-        count=len(sent)
-        assert wait_runtime(lambda: len(sent)>=count+2)
-        assert all(x[1:3]==(0.,0.) for x in sent[count:]), sent
+        mark=time.monotonic()
+        assert wait_runtime(lambda: len([x for x in sent if x[0]>=mark])>=8,.7)
+        assert sent[-1][0]-mark>.18
+        assert all(x[1:3]==(.05,.02) for x in sent if x[0]>=mark), sent
     finally:
         release.set(); runtime.close()
+
+
+def test_spin_remains_continuous_across_chassis_preparation(monkeypatch):
+    import nav1cm.execution as execution
+    runtime, sent, entered, release, _ = continuous_runtime(monkeypatch, hold_s=.18)
+    original=execution.certified_velocity_command
+    def spin(*args,**kwargs):
+        original(*args,**kwargs)
+        return 0.,.1
+    monkeypatch.setattr(execution,'certified_velocity_command',spin)
+    runtime.start()
+    try:
+        assert entered.wait(1.)
+        assert wait_runtime(lambda:any(x[1:3]==(0.,.1) for x in sent))
+        first=next(x[0] for x in sent if x[1:3]==(0.,.1))
+        assert wait_runtime(lambda:sent[-1][0]-first>=3.2,3.6)
+        assert all(x[1:3]==(0.,.1) for x in sent if x[0]>=first),sent
+    finally:
+        release.set();runtime.close()
 
 
 @pytest.mark.parametrize('change', ['cancel','goal','close','pose'])
@@ -720,14 +738,13 @@ def test_stop_inputs_do_not_wait_for_slow_command_computation(monkeypatch, chang
 
 
 
-def test_stale_computation_cannot_start_a_new_hold_window(monkeypatch):
+def test_slow_first_result_is_not_discarded_by_a_publish_deadline(monkeypatch):
     import nav1cm.execution as execution
     runtime, sent, _, release, _ = continuous_runtime(monkeypatch, hold_s=.1)
     entered=threading.Event()
     def slow(*args, **kwargs):
-        entered.set(); assert release.wait(3.)
-        release.clear()  # 下一次计算仍阻塞，观察第一次迟到结果能否错误续期。
-        kwargs['proof_sink'](.1)
+        entered.set(); assert release.wait(8.)
+        release.clear()
         return .05,.02
     monkeypatch.setattr(execution,'certified_velocity_command',slow)
     runtime.start()
@@ -735,8 +752,10 @@ def test_stale_computation_cannot_start_a_new_hold_window(monkeypatch):
         assert entered.wait(1.)
         time.sleep(.16)
         release.set()
-        assert wait_runtime(lambda: len(sent)>=5)
-        assert all(x[1:3]==(0.,0.) for x in sent), sent
+        assert wait_runtime(lambda:any(x[1:3]==(.05,.02) for x in sent))
+        mark=time.monotonic()
+        assert wait_runtime(lambda:len([x for x in sent if x[0]>=mark])>=4)
+        assert all(x[1:3]==(.05,.02) for x in sent if x[0]>=mark),sent
     finally:
         release.set(); runtime.close()
 
@@ -744,7 +763,7 @@ def test_stale_computation_cannot_start_a_new_hold_window(monkeypatch):
 def test_reference_path_publication_does_not_block_command_publication(monkeypatch):
     runtime, sent, _, release, calls = continuous_runtime(monkeypatch)
     entered=threading.Event()
-    def slow_paths(data): entered.set(); assert release.wait(3.)
+    def slow_paths(data): entered.set(); assert release.wait(8.)
     runtime.publish=slow_paths
     runtime.start()
     try:
@@ -781,34 +800,35 @@ def test_tick_failure_revokes_the_held_command(monkeypatch):
 
 
 
-def test_expired_previous_command_rebases_late_result_before_handoff(monkeypatch):
+def test_late_result_connects_to_last_issued_command_without_zero(monkeypatch):
     import nav1cm.execution as execution
     runtime,sent,_,_,_=continuous_runtime(monkeypatch,hold_s=.18)
     second,release,paths_entered,paths_release=(threading.Event() for _ in range(4))
     bases=[];path_calls=[]
     def certify(*args,**kwargs):
         bases.append(kwargs['last_command'])
-        kwargs['proof_sink'](.18 if len(bases)==1 else .8)
         if len(bases)==1:return .06,0.
         if len(bases)==2:
-            second.set();assert release.wait(3.)
+            second.set();assert release.wait(8.)
             return .07,0.
-        return .01,0.
+        return .08,0.
     def paths(data):
         path_calls.append(1)
         if len(path_calls)==2:
-            paths_entered.set();assert paths_release.wait(3.)
+            paths_entered.set();assert paths_release.wait(8.)
     monkeypatch.setattr(execution,'certified_velocity_command',certify)
     runtime.publish=paths
     runtime.start()
     try:
         assert second.wait(1.)
         assert wait_runtime(lambda:any(x[1:3]==(.06,0.) for x in sent))
-        assert wait_runtime(lambda:sent[-1][1:3]==(0.,0.),.5)
+        first=next(x[0] for x in sent if x[1:3]==(.06,0.))
+        assert wait_runtime(lambda:sent[-1][0]-first>.35)
+        assert all(x[1:3]==(.06,0.) for x in sent if x[0]>=first),sent
         release.set()
         assert paths_entered.wait(1.)
-        assert wait_runtime(lambda:sent[-1][1:3]!=(0.,0.))
-        assert sent[-1][1:3]==(.01,0.), sent
-        assert bases[2]==(0.,0.)
+        assert wait_runtime(lambda:sent[-1][1:3]==(.07,0.))
+        assert bases==[(0.,0.),(.06,0.)]
+        assert all(x[1:3]!=(0.,0.) for x in sent if x[0]>=first)
     finally:
         release.set();paths_release.set();runtime.close()

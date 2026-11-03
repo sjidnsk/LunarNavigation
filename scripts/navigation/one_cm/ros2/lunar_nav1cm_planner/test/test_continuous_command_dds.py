@@ -45,9 +45,9 @@ def test_slow_computation_keeps_dds_command_stream_and_cancel_stops(monkeypatch,
         runtime.start()
         assert entered.wait(2.)
         assert wait_runtime(lambda:len([m for m in received if m[1:] == (.05,.02)])>=7,.6)
-        if rolling:
-            assert wait_runtime(lambda:len(received)>1 and
-                received[-1][0]-next(m[0] for m in received if m[1:]==(.05,.02))>=3.2,3.5)
+        # 跨越1.2秒检查范围与车辆3秒准备期；停更计算也不能自行插零。
+        assert wait_runtime(lambda:len(received)>1 and
+            received[-1][0]-next(m[0] for m in received if m[1:]==(.05,.02))>=3.2,3.5)
         moving=[m for m in received if m[1:] == (.05,.02)]
         assert all(m[1:]==(.05,.02) for m in received if m[0]>=moving[0][0])
         gaps=[b[0]-a[0] for a,b in zip(moving,moving[1:])]
