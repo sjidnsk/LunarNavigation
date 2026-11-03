@@ -18,11 +18,11 @@ def launch_args(tmp_path,mode=None):
     return json.loads(log.read_text())
 
 
-def test_hardware_default_is_navigation_only_standard_path(tmp_path):
+def test_hardware_default_uses_shared_navigation_entry(tmp_path):
     args=launch_args(tmp_path)
-    assert args[:3]==['launch','lunar_pure_wheeled_controller','nav1cm_wheel.launch.py']
-    assert 'start_controller:=false' in args
-    assert 'tf_topic:=/P4/input/map_to_odom' in args
+    assert args[:3]==['launch','lunar_pure_exploration_ros','wheel_navigation.launch.py']
+    assert 'enable_controller:=false' in args
+    assert 'planner_params_file:=' in args
     assert not any('exploration_navigation' in item for item in args)
 
 
