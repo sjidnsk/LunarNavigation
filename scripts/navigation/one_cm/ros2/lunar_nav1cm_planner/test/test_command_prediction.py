@@ -155,7 +155,7 @@ def test_runtime_configures_platform_prepare_without_changing_issued_command():
     assert not hasattr(runtime,"_command_prediction")
 
 
-def test_same_source_revision_updates_state_without_new_completion_evidence(monkeypatch):
+def test_same_source_revision_is_ignored_until_source_stamp_advances(monkeypatch):
     from types import SimpleNamespace as S
     from test_runtime import build_runtime
     import lunar_nav1cm_planner.runtime as runtime_module
@@ -170,7 +170,7 @@ def test_same_source_revision_updates_state_without_new_completion_evidence(monk
     runtime._observe_body_stamp()
     observed[0]=VehicleState(.01,0,0,0,0)
     runtime._apply_pose_input(message,1.,1.,None)
-    assert session.state==observed[0]
+    assert session.state==VehicleState(.3,0,0,0,0)
     assert not runtime._new_body_observation(0)
     message.header.stamp.sec=2
     runtime._apply_pose_input(message,2.,2.,None)

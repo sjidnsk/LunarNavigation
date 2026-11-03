@@ -1,5 +1,6 @@
 # P3同时间戳位姿修正接收
 
+> 历史方案：用户后续已要求取消同戳位姿修正。当前公共晋级版本只接收严格递增源戳；本文保留当时诊断与验收来源，不代表现行行为。
 P3-POSE-CORRECTION-20261102；owner integration/pure-planner-orin，专题hk/p3-pose-correction-20261102，基线b1575f9b；ROOT，Windows/TCP ARM64隔离。
 
 用户确认三类输入：完全重复忽略；同戳有效修正更新状态但不增加完成/停稳/判活观测；旧戳不覆盖当前状态。
