@@ -7,6 +7,7 @@ repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 stack_mode="${5:-${LUNAR_NAVIGATION_MODE:-nav1cm}}"
 source "${ROS_SETUP:-/opt/ros/humble/setup.bash}"
 source "${LUNAR_INSTALL_ROOT:-$repository_root/ros2_ws/install}/setup.bash"
+source "$repository_root/scripts/orin/p3_environment.sh"
 set -u
 extra_args=()
 if (( $# > 5 )); then extra_args=("${@:6}"); fi

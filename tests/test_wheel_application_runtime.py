@@ -86,7 +86,7 @@ def test_scripts_default_to_shared_entry_and_keep_legacy_paths():
     assert "enable_controller:=false" in navigation
     assert "incremental_v2" in navigation and "legged" in navigation
     hardware = (ROOT / "scripts/orin/start_hardware_navigation.sh").read_text(encoding="utf-8")
-    assert "${ROS_DOMAIN_ID:-10}" in hardware
+    assert 'source "$repository_root/scripts/orin/p3_environment.sh"' in hardware
     assert "/home/yanfa/program" not in hardware and "P4/input/map_to_odom" not in hardware
     assert "start_navigation.sh" in hardware
     exploration = (ROOT / "scripts/orin/start_exploration.sh").read_text(encoding="utf-8")
