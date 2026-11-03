@@ -3,6 +3,7 @@ from dataclasses import fields
 import json
 import math
 import os
+import time
 from pathlib import Path
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
@@ -57,7 +58,9 @@ def create_resources(limits, capability, settings):
             global_soft_clearance_m=settings.get('global_soft_clearance_m',.4),
             global_clearance_weight=settings.get('global_clearance_weight',1.0),
             reference_smoothing=settings['smooth_global_reference'],
-            planner_options={'n': settings['horizon_steps'], 'dt': settings['horizon_dt_s']})
+            planner_options={'n': settings['horizon_steps'], 'dt': settings['horizon_dt_s'],
+                'soft_clearance_m': settings.get('global_soft_clearance_m',.4),
+                'clearance_weight': settings.get('global_clearance_weight',1.0)})
     except Exception:
         terrain._terrain.close()
         raise
@@ -108,6 +111,7 @@ class PlannerNode(Node):
             'goal_tolerance_m': .1, 'goal_position_target_m': .02, 'goal_yaw_tolerance_rad': .08726646259971647,
             'stopped_linear_mps': .01, 'stopped_angular_rps': .01,
             'map_topic': '/Car/T3/mapping/grid_map',
+            'base_map_facts_topic': '',
             'map_qos_reliability': 'best_effort', 'map_qos_durability': 'volatile',
             'odometry_topic': '/Car/T3/localization/odometry',
             'goal_topic': '/Car/T4/navigation/goal',
@@ -116,6 +120,7 @@ class PlannerNode(Node):
             'local_path_topic': '/Car/T4/planning/local_path',
             'control_backend':'path_mppi', 'enable_controller':False, 'command_hold_s':0., 'command_spin_prepare_s':0.,
             'command_topic':'/Car/T4/control/cmd_vel',
+            'command_prediction_enabled':False,'prediction_command_topic':'',
             'execution_contract_enabled':False,'execution_feedback_timeout_s':2.,
             'odometry_timeout_s':.5,
             'execution_reference_topic':'/Car/T4/control/path_execution_reference',
@@ -132,6 +137,10 @@ class PlannerNode(Node):
             hold=settings['command_hold_s']
             if isinstance(hold,bool) or not math.isfinite(hold) or hold<=0:
                 raise ValueError('command_hold_s must be explicitly finite and positive')
+        if settings['command_prediction_enabled'] and (
+                settings['control_backend']!='mpcc_cmd_vel' or not settings['enable_controller'] or
+                not settings['prediction_command_topic']):
+            raise ValueError('command prediction requires direct control and final command topic')
         if not settings['global_reference_topic']:
             settings['global_reference_topic']=settings['global_route_topic']+'_reference'
             self.set_parameters([Parameter('global_reference_topic',value=settings['global_reference_topic'])])
@@ -161,13 +170,16 @@ class PlannerNode(Node):
         self.runtime = PlannerRuntime(session, store, publish=self._publish,
                                       ros_now_ns=lambda: self.get_clock().now().nanoseconds,
                                       notice=lambda kind, detail: self.get_logger().info(f'{kind}: {detail}'),
-                                      map_frame=frame_name(settings['map_frame']) or 'map')
+                                      map_frame=frame_name(settings['map_frame']) or 'map',
+                                      facts_sink=self._configure_facts_publisher(settings['base_map_facts_topic']))
         direct=settings['control_backend']=='mpcc_cmd_vel' and settings['enable_controller']
         if direct:
             self._command_publisher=self.create_publisher(Twist,settings['command_topic'],1)
             self.runtime.configure_direct_control(self._publish_command,command_hold_s=float(settings['command_hold_s']),
                 reference_interval_s=float(settings['horizon_dt_s']),
                 command_spin_prepare_s=float(settings['command_spin_prepare_s']))
+        if settings['command_prediction_enabled']:
+            self.runtime.configure_command_prediction(spin_prepare_s=float(settings['command_spin_prepare_s']))
         self.runtime.configure_pose_input(float(settings['odometry_timeout_s']))
         latest = QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT,
                             durability=DurabilityPolicy.VOLATILE)
@@ -178,6 +190,8 @@ class PlannerNode(Node):
                                durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.create_subscription(GridMap, settings['map_topic'], self.runtime.offer_map, source_qos)
         self.create_subscription(Odometry, settings['odometry_topic'], self.runtime.offer_odometry, latest)
+        if settings['command_prediction_enabled']:
+            self.create_subscription(Twist,settings['prediction_command_topic'],self._on_published_command,latest)
         self.create_subscription(PoseStamped, settings['goal_topic'], self.runtime.offer_goal, 10)
         self.create_subscription(TFMessage, settings['tf_topic'], self._tf_input, dynamic_tf)
         self.create_subscription(TFMessage, settings['tf_static_topic'], self._tf_input, static_tf)
@@ -194,6 +208,36 @@ class PlannerNode(Node):
             self._execution_publisher=self.create_publisher(PathExecutionReference,settings['execution_reference_topic'],10)
             self.create_subscription(TrackingStatus,settings['tracking_status_topic'],self._on_execution_status,10)
         self.runtime.start()
+
+    def _configure_facts_publisher(self, topic):
+        # 空topic不创建publisher、epoch或事实编码；参数随其他启动参数冻结。
+        self._facts_publisher = None
+        if not topic:
+            return None
+        from std_msgs.msg import String
+        self._facts_epoch = max(1, time.time_ns())
+        qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                         durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self._facts_publisher = self.create_publisher(String, topic, qos)
+        return self._publish_facts
+
+    def _publish_facts(self, facts, *, source_resolution_m, frame_id, processed_stamp_ns):
+        # 仅由地图提交线程调用；只序列化已提交的物理事实，不作地形判定。
+        from std_msgs.msg import String
+        from nav1cm.facts_codec import encode_observation_facts
+        message = String()
+        message.data = encode_observation_facts(facts,
+            source_resolution_m=source_resolution_m, frame_id=frame_id,
+            epoch=self._facts_epoch, processed_stamp_ns=processed_stamp_ns)
+        self._facts_publisher.publish(message)
+        self.get_logger().info(
+            f'BASE_MAP_FACTS raw_revision={facts.raw_revision} epoch={self._facts_epoch} '
+            f'source_resolution_m={source_resolution_m}')
+
+    def _on_published_command(self, message):
+        try:self.runtime.offer_published_command(message)
+        except (ValueError,AttributeError,TypeError):
+            self.get_logger().warning('PUBLISHED_COMMAND_REJECTED: invalid velocity')
 
     def _publish_command(self, v, w):
         message=Twist()

@@ -9,6 +9,7 @@ from .seeds import brake_candidate
 from .execution import action_prefix
 from .coordinator import CycleResult, NavigationCoordinator
 from .local_worker import LocalWorker, close_pool
+from .local_mpcc import INITIAL_ALIGNMENT_ANGLE_RAD
 from .global_worker import GlobalWorker
 from .trajectory_buffer import TrajectoryBuffer
 from .reference_buffer import ReferenceTrajectoryBuffer
@@ -65,7 +66,7 @@ class AsyncNavigationCoordinator(NavigationCoordinator):
         delta=reference.points[1]-reference.points[0]
         target=float(np.arctan2(delta[1],delta[0]))+(np.pi if sign<0 else 0.)
         error=float(np.arctan2(np.sin(target-state.yaw),np.cos(target-state.yaw)))
-        if abs(error)>.08 or abs(state.w)>self.stopped_angular_rps:
+        if abs(error)>INITIAL_ALIGNMENT_ANGLE_RAD or abs(state.w)>self.stopped_angular_rps:
             self._initial_direction_aligned=False
         elif abs(state.v)<=self.stopped_linear_mps:
             self._initial_direction_aligned=True

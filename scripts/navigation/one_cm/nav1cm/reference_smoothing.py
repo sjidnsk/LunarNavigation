@@ -5,7 +5,7 @@ from time import perf_counter
 import numpy as np
 
 from .contracts import Route, _readonly_array
-from .global_planner import _segment_clear, path_cost
+from .global_planner import _segment_clear
 
 
 @dataclass(frozen=True)
@@ -94,7 +94,7 @@ class _Exhausted(Exception):
 
 
 def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
-                step_m=.05, max_points=4096, clock=perf_counter,
+                step_m=.05, max_points=4096, clock=perf_counter, deadline_s=None,
                 raw_verified=False, terminal_yaw=None, soft_clearance_m=0.,
                 clearance_weight=0., corner_radius=0.) -> ShapedRoute:
     """新全局路线的有界后处理；耗尽回退整条已验证原路线，不留部分曲线。
@@ -118,7 +118,10 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
             or not np.isfinite(corner_radius) or corner_radius < 0
             or (terminal_yaw is not None and not np.isfinite(terminal_yaw))):
         raise ValueError("invalid smoothing budget, trim, step or point limit")
+    if deadline_s is not None and (isinstance(deadline_s, bool) or not np.isfinite(deadline_s)):
+        raise ValueError("invalid smoothing deadline")
     began = clock()
+    deadline = began + budget_s if deadline_s is None else min(began + budget_s, deadline_s)
     points = route.points
 
     def fallback(reason):
@@ -126,20 +129,27 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
 
     def check():
         now = clock()
-        if not np.isfinite(now) or now - began >= budget_s:
+        if not np.isfinite(now) or now >= deadline:
             raise _Exhausted("BUDGET_EXHAUSTED")
+
+    verified_segments = set()  # 仅本次不可变障碍快照内复用精确几何证明。
 
     def segments_clear(starts, ends):
         check()
-        # 两个维度均分块，避免 4096×1024 的大临时矩阵吞掉本次预算。
-        for first in range(0, len(starts), 64):
+        keys = [tuple(a)+tuple(b) for a,b in zip(starts,ends)]
+        pending = [i for i,key in enumerate(keys) if key not in verified_segments]
+        # 两个维度均分块；每段通过全部障碍检查之后才缓存，不缓存失败/部分证明。
+        for first in range(0, len(pending), 64):
+            selected=pending[first:first+64]
             for offset in range(0, len(blocked), 1024):
                 check()
-                clear = _segments_clear(starts[first:first + 64], ends[first:first + 64],
+                clear = _segments_clear(starts[selected], ends[selected],
                                         blocked[offset:offset + 1024],corner_radius=corner_radius)
                 check()
                 if not clear:
                     return False
+            verified_segments.update(keys[i] for i in selected)
+        check()
         return True
 
     def overlaps(boxes):
@@ -320,17 +330,8 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
             return fallback("GEOMETRY_REJECTED")
         if np.any(overlaps(shaped.proof_boxes)):
             return fallback("GEOMETRY_REJECTED")
-        if soft_clearance_m > 0 and clearance_weight > 0:
-            # 搜索、拉直与Bezier整形复用同一路径代价，避免安全的剪角重新贴障。
-            original_cost = path_cost(points, blocked, soft_clearance_m, clearance_weight, check,corner_radius=corner_radius)
-            shaped_cost = path_cost(shaped.route.points, blocked, soft_clearance_m, clearance_weight, check,corner_radius=corner_radius)
-            original_length = np.linalg.norm(np.diff(points, axis=0), axis=1).sum()
-            shaped_length = np.linalg.norm(np.diff(shaped.route.points, axis=0), axis=1).sum()
-            has_clearance_cost = (original_cost > original_length + 1e-9 or
-                                  shaped_cost > shaped_length + 1e-9)
-            # 无近障代价时仍允许为最终朝向生成稍长的平滑末段。
-            if has_clearance_cost and shaped_cost > original_cost + 1e-9:
-                return fallback("CLEARANCE_COST")
+        # 平滑仅由连续几何证明决定接受；软净空代价继续用于上游搜索和拉直，
+        # 不因曲线更靠近障碍而撤销已经通过碰撞检查的平滑结果。
         check()
         return shaped
     except _Exhausted as exhausted:

@@ -48,9 +48,9 @@ class FineTraversabilityTile final {
   FineTraversabilityTile& operator=(const FineTraversabilityTile&) = delete;
   FineTraversabilityTile& operator=(FineTraversabilityTile&&) = delete;
 
-  FineTraversabilityTile(StateArray states, CostArray traversal_costs)
-      : states_(std::move(states)),
-        traversal_costs_(std::move(traversal_costs)) {
+  FineTraversabilityTile(const StateArray& states, const CostArray& traversal_costs)
+      : states_(states),
+        traversal_costs_(traversal_costs) {
     for (std::size_t offset = 0U; offset < kGridTileCellCount; ++offset) {
       if (!ValidState(states_[offset]) ||
           !std::isfinite(traversal_costs_[offset]) ||

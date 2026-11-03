@@ -57,6 +57,10 @@ def _approach_yaw(reference, progress_s, travel_yaw, approach_distance_m):
     return travel_yaw + weight * angle_error(reference.terminal_yaw, travel_yaw)
 
 
+# 起步模式偏好与协调器的起步完成判断共用，不影响终点判据。
+INITIAL_ALIGNMENT_ANGLE_RAD = float(np.deg2rad(15.))
+
+
 # 局部阶段切换滞回（弧度），不放宽最终到达角度判据。
 _APPROACH_YAW_HYSTERESIS_RAD = .05
 
@@ -108,7 +112,7 @@ def select_mode(state, reference, *, approach_distance_m=TERMINAL_APPROACH_DISTA
     if initial_travel_direction:
         if abs(state.v)>1e-8:return 'brake'
         aligned=_wrap(error-(np.pi if desired=='reverse' else 0.))
-        return 'spin' if abs(aligned)>.08 or abs(state.w)>initial_stopped_angular_rps else desired
+        return 'spin' if abs(aligned)>INITIAL_ALIGNMENT_ANGLE_RAD or abs(state.w)>initial_stopped_angular_rps else desired
     if abs(state.v)>1e-8:
         current='forward' if state.v>0 else 'reverse'
         return current if current==desired else 'brake'
@@ -118,19 +122,23 @@ def select_mode(state, reference, *, approach_distance_m=TERMINAL_APPROACH_DISTA
     travel_yaw = state.yaw + aligned
     if not initial_travel_direction and _continuing_approach(state, reference, travel_yaw, approach_distance_m):
         return desired
-    return 'spin' if abs(aligned)>(.08 if initial_travel_direction else .3) else desired
+    return 'spin' if abs(aligned)>np.deg2rad(30.) else desired
 
 
 class MpccPlanner:
     N=20
     dt=.2
 
-    def __init__(self, limits, build_dir, *, n=20, dt=.2):
+    def __init__(self, limits, build_dir, *, n=20, dt=.2, soft_clearance_m=0., clearance_weight=1.):
         """build_dir 参数为可共享根目录；实例 build_dir 为配置指纹隔离目录。"""
         if type(n) is not int or n < 1 or not np.isfinite(dt) or dt <= 0:
             raise ValueError('horizon requires positive integer n and finite positive dt')
+        if not all(np.isfinite(v) and v>=0 for v in (soft_clearance_m,clearance_weight)):
+            raise ValueError('soft clearance and weight must be finite and nonnegative')
+        self.soft_clearance_m=float(soft_clearance_m)
+        self.clearance_weight=float(clearance_weight)
         self.N, self.dt = n, float(dt)
-        self.model_fingerprint = hashlib.sha256(f'pose-terminal-single-circle-v4:{self.N}:{self.dt.hex()}:{limits.digest()}'.encode()).hexdigest()[:12]
+        self.model_fingerprint = hashlib.sha256(f'exact-circle-soft-clearance-v5:{self.N}:{self.dt.hex()}:{limits.digest()}:{self.soft_clearance_m.hex()}:{self.clearance_weight.hex()}'.encode()).hexdigest()[:12]
         try:
             import casadi as ca
             from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
@@ -174,7 +182,13 @@ class MpccPlanner:
             hs=[]
             for j in range(len(self.offsets)):
                 q=p[9+4*j:13+4*j]
-                hs.append(q[0]*x[0]+q[1]*x[1]+q[2]*x[2]+q[3])
+                clearance=q[0]*x[0]+q[1]*x[1]+q[2]*x[2]+q[3]
+                hs.append(clearance)
+                if self.soft_clearance_m>0 and self.clearance_weight>0:
+                    # 同一硬圆外的有限软带；只改变偏好，不增加硬约束或障碍膨胀。
+                    penalty=self.clearance_weight*ca.fmax(0.,1.-clearance/self.soft_clearance_m)**2/len(self.offsets)
+                    model.cost_expr_ext_cost+=penalty
+                    model.cost_expr_ext_cost_e+=penalty
             sign=-1 if mode=='reverse' else 1
             if mode!='spin' and limits.motion_model=='curvature_limited':
                 hs += [sign*limits.curvature_inv_m*x[3]-x[4],sign*limits.curvature_inv_m*x[3]+x[4]]
@@ -242,6 +256,10 @@ class MpccPlanner:
 
     def _parameters(self, states, controls, reference, field, target_yaw, end, *, mode="forward", initial_travel_direction=""):
         params=[]
+        circle_positions=np.stack((states[:,0,None]+self.offsets*np.cos(states[:,2,None]),
+                                   states[:,1,None]+self.offsets*np.sin(states[:,2,None])),axis=-1)
+        samples=(field.sample_many(circle_positions.reshape(-1,2)).reshape(len(states),len(self.offsets),3)
+                 if hasattr(field,'sample_many') else None)
         for k,z in enumerate(states):
             s=float(max(reference.s[0],min(end,z[5])))
             i=max(0,min(len(reference.s)-2,int(np.searchsorted(reference.s,s,side='right'))-1))
@@ -261,9 +279,9 @@ class MpccPlanner:
             p[6:9]=controls[min(k,len(controls)-1)]
             for j,offset in enumerate(self.offsets):
                 cx=z[0]+offset*np.cos(z[2]); cy=z[1]+offset*np.sin(z[2])
-                d,gx,gy=field.sample(cx,cy)
+                d,gx,gy=field.sample(cx,cy) if samples is None else samples[k,j]
                 gyaw=offset*(-gx*np.sin(z[2])+gy*np.cos(z[2]))
-                p[9+4*j:13+4*j]=[gx,gy,gyaw,d-self.radius-.003-gx*z[0]-gy*z[1]-gyaw*z[2]]
+                p[9+4*j:13+4*j]=[gx,gy,gyaw,d-self.radius-gx*z[0]-gy*z[1]-gyaw*z[2]]
             p[-1]=end
             params.append(p)
         return params
@@ -310,75 +328,92 @@ class MpccPlanner:
                 raise ValueError('distance field identity mismatch')
         else: field=build_distance_field(grid)
         timing['field']=(perf_counter()-t)*1000
-        t=perf_counter()
-        yaw=travel_target_yaw(state,reference,mode,self.N*self.dt*self.limits.linear_speed_mps,initial_travel_direction=initial_travel_direction)
-        end=min(float(reference.s[-1]),reference.progress_s+self.N*self.dt*self.limits.linear_speed_mps)
-        initial=np.array([state.x,state.y,state.yaw,state.v,state.w,reference.progress_s])
-        initial_circle_feasible=all(field.sample(state.x+offset*np.cos(state.yaw),
-            state.y+offset*np.sin(state.yaw))[0]>=self.radius+.003 for offset in self.offsets)
-        key=(reference.route_version,mode,reference.terminal_yaw)
-        timing['reference']=(perf_counter()-t)*1000
-        solver=self._solvers[mode]
-        for attempt,side in enumerate((0,1,-1)):
+        def solve_mode(mode,state):
             t=perf_counter()
-            warm=self._warm_seed(initial,key) if attempt==0 else None
-            warmed=warm is not None
-            if warmed:
-                states,controls=warm
-            else: states,controls=initial_seed(initial,mode,self.limits,yaw,side,n=self.N,dt=self.dt)
-            params=self._parameters(states,controls,reference,field,yaw,end,mode=mode,initial_travel_direction=initial_travel_direction)
-            timing['seed']+=(perf_counter()-t)*1000
-            row={'seed':(('warm' if warmed else 'nominal') if attempt==0 else ('left' if side>0 else 'right'))}
-            def measure(stage, operation):
-                wall,cpu=perf_counter(),process_time()
-                value=operation()
-                row[stage+'_ms']=(perf_counter()-wall)*1000
-                row[stage+'_cpu_ms']=(process_time()-cpu)*1000
-                timing[stage]+=row[stage+'_ms']
-                timing[stage+'_cpu']+=row[stage+'_cpu_ms']
-                return value
-            measure('reset',solver.reset)
-            def set_inputs():
-                solver.set(0,'lbx',initial); solver.set(0,'ubx',initial)
-                for k in range(self.N+1):
-                    solver.set(k,'x',states[k]); solver.set(k,'p',params[k])
-                    if k<self.N: solver.set(k,'u',controls[k])
-            measure('input_set',set_inputs)
-            status=int(measure('solve_call',solver.solve))
-            # 旧 solve 精确包含 reset + input_set + solve_call，不含诊断及候选读取。
-            row['status']=status
-            for suffix, aggregate in (('_ms','solve'),('_cpu_ms','solve_cpu')):
-                row['solve'+suffix]=sum(row[k+suffix] for k in ('reset','input_set','solve_call'))
-                timing[aggregate]+=row['solve'+suffix]
-            row['acados_stats'],row['acados_stats_unavailable']=measure('diagnostics',lambda:_solver_stats(solver))
-            row['read_validate_ms']=row['read_validate_cpu_ms']=0.
-            attempts.append(row)
-            if status!=0:
-                row['reason']='SOLVER_STATUS'
-                # x0 被实测初值固定；该处硬圆约束不可行时左右初始化不可能修复。
-                # 保留真实首次求解失败，只跳过已知无益的重试，不返回停车为 MPCC。
-                if not initial_circle_feasible:
-                    row['reason']='FIXED_INITIAL_CIRCLE_INFEASIBLE'
-                    break
-                continue
-            def read_validate():
-                us=np.array([solver.get(k,'u') for k in range(self.N)])
-                # 非线性预测状态不充当动力学证据；从实测初值按相同离散模型滚动。
-                # 仅清理等式约束的机器舍入，绝不修改实测初值或放宽限制。
-                if mode=='spin': us[:,0]=0.; us[:,2]=0.
-                us[np.abs(us)<1e-12]=0.
-                xs=rollout(initial,us,self.dt)
-                reason=self._candidate_reason(xs,us,mode,field,end)
-                return us,xs,reason
-            us,xs,reason=measure('read_validate',read_validate)
-            timing['candidate']+=row['read_validate_ms']
-            row['reason']=reason
-            if reason!='CANDIDATE': continue
-            candidate=Trajectory(grid.epoch,reference.route_version,np.arange(self.N+1)*self.dt,xs,us,mode,'mpcc:acados-sqp-rti')
-            self._warm=(key,xs,us,0.)
-            return finish(candidate,'CANDIDATE_UNCERTIFIED')
-        self._warm=None
-        return finish(None,'NO_FEASIBLE_MPCC_CANDIDATE')
+            yaw=travel_target_yaw(state,reference,mode,self.N*self.dt*self.limits.linear_speed_mps,initial_travel_direction=initial_travel_direction)
+            end=min(float(reference.s[-1]),reference.progress_s+self.N*self.dt*self.limits.linear_speed_mps)
+            initial=np.array([state.x,state.y,state.yaw,state.v,state.w,reference.progress_s])
+            initial_circle_feasible=all(field.sample(state.x+offset*np.cos(state.yaw),
+                state.y+offset*np.sin(state.yaw))[0]>self.radius for offset in self.offsets)
+            key=(reference.route_version,mode,reference.terminal_yaw)
+            timing['reference']+=(perf_counter()-t)*1000
+            solver=self._solvers[mode]
+            for attempt,side in enumerate((0,1,-1)):
+                t=perf_counter()
+                warm=self._warm_seed(initial,key) if attempt==0 else None
+                warmed=warm is not None
+                if warmed:
+                    states,controls=warm
+                else: states,controls=initial_seed(initial,mode,self.limits,yaw,side,n=self.N,dt=self.dt)
+                params=self._parameters(states,controls,reference,field,yaw,end,mode=mode,initial_travel_direction=initial_travel_direction)
+                timing['seed']+=(perf_counter()-t)*1000
+                row={'mode':mode,'seed':(('warm' if warmed else 'nominal') if attempt==0 else ('left' if side>0 else 'right'))}
+                def measure(stage, operation):
+                    wall,cpu=perf_counter(),process_time()
+                    value=operation()
+                    row[stage+'_ms']=(perf_counter()-wall)*1000
+                    row[stage+'_cpu_ms']=(process_time()-cpu)*1000
+                    timing[stage]+=row[stage+'_ms']
+                    timing[stage+'_cpu']+=row[stage+'_cpu_ms']
+                    return value
+                measure('reset',solver.reset)
+                def set_inputs():
+                    solver.set(0,'lbx',initial); solver.set(0,'ubx',initial)
+                    for k in range(self.N+1):
+                        solver.set(k,'x',states[k]); solver.set(k,'p',params[k])
+                        if k<self.N: solver.set(k,'u',controls[k])
+                measure('input_set',set_inputs)
+                status=int(measure('solve_call',solver.solve))
+                # 旧 solve 精确包含 reset + input_set + solve_call，不含诊断及候选读取。
+                row['status']=status
+                for suffix, aggregate in (('_ms','solve'),('_cpu_ms','solve_cpu')):
+                    row['solve'+suffix]=sum(row[k+suffix] for k in ('reset','input_set','solve_call'))
+                    timing[aggregate]+=row['solve'+suffix]
+                row['acados_stats'],row['acados_stats_unavailable']=measure('diagnostics',lambda:_solver_stats(solver))
+                row['read_validate_ms']=row['read_validate_cpu_ms']=0.
+                attempts.append(row)
+                if status!=0:
+                    row['reason']='SOLVER_STATUS'
+                    # x0 被实测初值固定；该处硬圆约束不可行时左右初始化不可能修复。
+                    # 保留真实首次求解失败，只跳过已知无益的重试，不返回停车为 MPCC。
+                    if not initial_circle_feasible:
+                        row['reason']='FIXED_INITIAL_CIRCLE_INFEASIBLE'
+                        break
+                    continue
+                def read_validate():
+                    us=np.array([solver.get(k,'u') for k in range(self.N)])
+                    # 非线性预测状态不充当动力学证据；从实测初值按相同离散模型滚动。
+                    # 仅清理等式约束的机器舍入，绝不修改实测初值或放宽限制。
+                    if mode=='spin': us[:,0]=0.; us[:,2]=0.
+                    us[np.abs(us)<1e-12]=0.
+                    xs=rollout(initial,us,self.dt)
+                    reason=self._candidate_reason(xs,us,mode,field,end)
+                    return us,xs,reason
+                us,xs,reason=measure('read_validate',read_validate)
+                timing['candidate']+=row['read_validate_ms']
+                row['reason']=reason
+                if reason!='CANDIDATE': continue
+                candidate=Trajectory(grid.epoch,reference.route_version,np.arange(self.N+1)*self.dt,xs,us,mode,'mpcc:acados-sqp-rti')
+                self._warm=(key,xs,us,0.)
+                return finish(candidate,'CANDIDATE_UNCERTIFIED')
+            self._warm=None
+            return finish(None,'NO_FEASIBLE_MPCC_CANDIDATE')
+
+        preferred=solve_mode(mode,state)
+        if preferred.candidate is not None or mode=='spin':return preferred
+        if any(row.get('reason')=='FIXED_INITIAL_CIRCLE_INFEASIBLE' for row in attempts):return preferred
+        yaw=travel_target_yaw(state,reference,'spin',self.N*self.dt*self.limits.linear_speed_mps,
+                             initial_travel_direction=initial_travel_direction)
+        if abs(angle_error(yaw,state.yaw))<=1e-10:return preferred
+        prefix=None
+        spin_state=state
+        if abs(state.v)>1e-10:
+            prefix=braking_prefix(state,grid,reference,self.limits,retain_angular=True)
+            spin_state=VehicleState(*prefix.states[-1,:5])
+        fallback=solve_mode('spin',spin_state)
+        if fallback.candidate is None:return fallback
+        candidate=fallback.candidate if prefix is None else join_trajectories(prefix,fallback.candidate)
+        return finish(candidate,'CANDIDATE_UNCERTIFIED')
 
     def _candidate_reason(self,xs,us,mode,field,end):
         l=self.limits
@@ -391,8 +426,13 @@ class MpccPlanner:
             if np.min(sign*xs[:,3]) < -1e-9: return 'MODE'
             if l.motion_model=='curvature_limited' and np.any(np.abs(xs[:,4])>l.curvature_inv_m*np.abs(xs[:,3])+1e-9): return 'CURVATURE'
         if np.any(xs[:,5]+xs[:,3]**2/(2*l.linear_accel_mps2)>end+1e-6): return 'REFERENCE_BRAKING_BOUND'
+        if hasattr(field,'sample_many'):
+            positions=np.stack((xs[:,0,None]+self.offsets*np.cos(xs[:,2,None]),
+                                xs[:,1,None]+self.offsets*np.sin(xs[:,2,None])),axis=-1)
+            if np.any(field.sample_many(positions.reshape(-1,2))[:,0]<=self.radius):return 'CIRCLE_CLEARANCE'
+            return 'CANDIDATE'
         for z in xs:
             for offset in self.offsets:
                 d,_,_=field.sample(z[0]+offset*np.cos(z[2]),z[1]+offset*np.sin(z[2]))
-                if d<self.radius: return 'CIRCLE_CLEARANCE'
+                if d<=self.radius: return 'CIRCLE_CLEARANCE'
         return 'CANDIDATE'

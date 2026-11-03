@@ -13,6 +13,7 @@ find_package(grid_map_msgs REQUIRED)
 find_package(lunar_incremental_navigation_core REQUIRED)
 find_package(lunar_planning_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(tf2_msgs REQUIRED)
@@ -20,6 +21,7 @@ find_package(visualization_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 set(LUNAR_INCREMENTAL_NAVIGATION_ROS_SOURCES
+  src/exploration_facts_codec.cpp
   src/exploration_map.cpp
   src/exploration_map_node.cpp
   src/elevation_pipeline.cpp
@@ -56,6 +58,7 @@ ament_target_dependencies(${PROJECT_NAME}
   lunar_incremental_navigation_core
   lunar_planning_msgs
   nav_msgs
+  std_msgs
   rclcpp
   rclcpp_action
   tf2_msgs
@@ -87,7 +90,7 @@ add_executable(incremental_demo_scenario_node
 target_compile_features(incremental_demo_scenario_node PUBLIC cxx_std_20)
 target_link_libraries(incremental_demo_scenario_node ${PROJECT_NAME})
 ament_target_dependencies(incremental_demo_scenario_node
-  geometry_msgs grid_map_msgs lunar_planning_msgs nav_msgs rclcpp tf2_msgs
+  geometry_msgs grid_map_msgs lunar_planning_msgs nav_msgs std_msgs rclcpp tf2_msgs
   visualization_msgs)
 
 add_executable(incremental_demo_motion_emulator_node
@@ -166,6 +169,7 @@ if(BUILD_TESTING)
   lunar_add_ros_gtest(exploration_map_node_test test/exploration_map_node_test.cpp)
   lunar_add_ros_gtest(policy_map_exporter_test
     test/policy_map_exporter_test.cpp)
+  lunar_add_ros_gtest(exploration_facts_codec_test test/exploration_facts_codec_test.cpp)
   lunar_add_ros_gtest(exploration_map_projector_test
     test/exploration_map_projector_test.cpp)
   lunar_add_ros_gtest(incremental_map_publisher_test

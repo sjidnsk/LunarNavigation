@@ -325,14 +325,18 @@ def test_velocity_diagnostics_preserve_command_and_single_certification(monkeypa
     result=S(candidate=full,certificate=certification.certify(full,grid,limits,1),grid=grid,status='TRACKING')
     calls=[]; original=certification.certify
     def certify(*args,**kwargs):
-        calls.append(1); return original(*args,**kwargs)
+        calls.append(float(args[0].times[-1])); return original(*args,**kwargs)
     monkeypatch.setattr(certification,'certify',certify)
     kwargs=dict(reference_interval_s=.2,last_command=(0.,.06),elapsed_s=.05,command_hold_s=.1)
     plain=execution.certified_velocity_command(result,state,limits,**kwargs)
-    diagnostics={}
-    observed=execution.certified_velocity_command(result,state,limits,diagnostics=diagnostics,**kwargs)
+    diagnostics={}; coverage=[]
+    observed=execution.certified_velocity_command(result,state,limits,diagnostics=diagnostics,
+        proof_sink=coverage.append,**kwargs)
     assert observed == plain
     assert len(calls)==2
+    assert coverage == pytest.approx([calls[-1]])
+    assert diagnostics['command_proof_duration_s'] == pytest.approx(calls[-1])
+    assert diagnostics['command_proof_duration_s'] >= .1
     assert diagnostics['command_reject_reason'] is None
     assert diagnostics['target_raw_vw'] == pytest.approx([0.,.08])
     assert diagnostics['target_vw'] == pytest.approx([0.,.08])

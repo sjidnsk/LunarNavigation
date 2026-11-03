@@ -296,3 +296,76 @@ def test_approach_spin_target_is_reference_blend_across_deceleration():
     for yaw, angular_speed in ((.5,.1), (.8,.03), (.85,.015)):
         state = VehicleState(0,0,yaw,0,angular_speed)
         assert mpcc.travel_target_yaw(state,ref,'spin',.8) == pytest.approx(.84375)
+
+
+@pytest.mark.parametrize('direction',[1,-1])
+@pytest.mark.parametrize('angle,expected',[(20.,'travel'),(29.9,'travel'),(29.999999,'travel'),(30.1,'spin'),(-29.9,'travel'),(-30.1,'spin')])
+def test_normal_stopped_spin_threshold_is_thirty_degrees(direction,angle,expected):
+    mpcc,_=modules()
+    state,_,ref=scene(points=((0,0),(2*direction,0)),state=VehicleState(0,0,np.deg2rad(angle),0,0))
+    desired='forward' if direction>0 else 'reverse'
+    assert mpcc.select_mode(state,ref)==(desired if expected=='travel' else 'spin')
+
+
+def test_thirty_degree_change_preserves_initial_fifteen_degree_alignment_and_moving_mode():
+    mpcc,_=modules()
+    state,_,ref=scene(state=VehicleState(0,0,np.deg2rad(16),0,0))
+    assert mpcc.select_mode(state,ref,initial_travel_direction='forward')=='spin'
+    state,_,ref=scene(state=VehicleState(0,0,np.deg2rad(40),.1,0))
+    assert mpcc.select_mode(state,ref)=='forward'
+
+
+@pytest.mark.parametrize('direction',['forward','reverse'])
+@pytest.mark.parametrize('angle,spin',[(10.,False),(14.9,False),(14.999999,False),(15.1,True),(-14.9,False),(-15.1,True)])
+def test_initial_alignment_spin_threshold_is_fifteen_degrees(direction,angle,spin):
+    mpcc,_=modules()
+    sign=1 if direction=='forward' else -1
+    state,_,ref=scene(points=((0,0),(sign*2,0)),state=VehicleState(0,0,np.deg2rad(angle),0,0))
+    assert mpcc.select_mode(state,ref,initial_travel_direction=direction)==('spin' if spin else direction)
+
+
+@pytest.mark.parametrize('moving',[False,True])
+@pytest.mark.parametrize('travel_success',[False,True])
+@pytest.mark.parametrize('spin_success',[False,True])
+def test_travel_and_spin_fallback_are_bounded_and_certified(moving,travel_success,spin_success):
+    mpcc,_=modules()
+    planner=mpcc.MpccPlanner.__new__(mpcc.MpccPlanner)
+    planner.N=20;planner.dt=.2
+    planner.limits=WheelLimits(motion_model='differential_drive',minimum_clearance_m=.0312775222660697)
+    planner.offsets=np.array([0.]);planner.radius=.75;planner._warm=None
+    calls=[]
+    class Solver:
+        def __init__(self,mode):self.mode=mode
+        def reset(self):pass
+        def set(self,*args):pass
+        def solve(self):calls.append(self.mode);return 0 if travel_success or (spin_success and self.mode=='spin') else 1
+        def get_stats(self,*args):return 0
+        def get(self,k,field):
+            if self.mode=='spin':return np.array([0.,-.1 if k<2 else 0.,0.])
+            return np.array([.1 if k<2 else 0.,0.,.02])
+    planner._solvers={mode:Solver(mode) for mode in ('forward','reverse','spin')}
+    state,grid,ref=scene(state=VehicleState(0,0,np.deg2rad(10),.1 if moving else 0.,0.))
+    before=grid.digest()
+    result=planner.plan(state,grid,ref)
+    assert calls==(['forward'] if travel_success else ['forward']*3+['spin']*(1 if spin_success else 3))
+    if not travel_success and not spin_success:
+        assert result.candidate is None and result.reason=='NO_FEASIBLE_MPCC_CANDIDATE'
+        assert grid.digest()==before
+        return
+    assert result.candidate is not None
+    assert result.candidate.mode==('forward' if travel_success else 'spin')
+    np.testing.assert_array_equal(result.candidate.states[0,:5],[state.x,state.y,state.yaw,state.v,state.w])
+    assert certify(result.candidate,grid,planner.limits,ref.route_version).valid
+    assert grid.digest()==before
+    assert [row['mode'] for row in result.attempts]==calls
+
+
+def test_real_solver_fallback_after_travel_status_failures(planner,monkeypatch):
+    state,grid,ref=scene(state=VehicleState(0,0,np.deg2rad(10),0.,0.))
+    monkeypatch.setattr(planner._solvers['forward'],'solve',lambda:1)
+    result=planner.plan(state,grid,ref,initial_travel_direction='forward')
+    assert result.candidate is not None,result
+    assert result.candidate.mode=='spin'
+    assert [row['mode'] for row in result.attempts[:3]]==['forward']*3
+    assert result.attempts[3]['mode']=='spin'
+    assert certify(result.candidate,grid,planner.limits,ref.route_version).valid

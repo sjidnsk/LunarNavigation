@@ -286,3 +286,19 @@ def test_ordinary_alignment_request_uses_configured_stop_tolerance():
     c.tick(world, VehicleState(0,0,0,0,.02), (3,0), 0., need_action=False)
     assert worker.requests[-1]['initial_stopped_angular_rps'] == .025
     assert not worker.requests[-1].get('initial_travel_direction')
+
+
+@pytest.mark.parametrize('direction,target,velocity', [('forward',0.,.02),('reverse',np.pi,-.02)])
+@pytest.mark.parametrize('error_deg,aligned', [(10.,True),(14.9,True),(15.1,False)])
+def test_initial_alignment_retirement_matches_planner_threshold(direction,target,velocity,error_deg,aligned):
+    from scripts.navigation.one_cm.nav1cm.contracts import LocalReference
+    c=AsyncNavigationCoordinator(local_worker=ManualLocal(),global_runner=PendingGlobal(),initial_travel_direction=direction)
+    try:
+        c.replace_goal((3.,0.),goal_yaw=0.,generation=1)
+        reference=LocalReference(1,1,[[0.,0.],[3.,0.]],[0.,3.])
+        yaw=target+np.deg2rad(error_deg)
+        assert c._initial_start_direction(VehicleState(0.,0.,yaw,0.,0.),reference)==direction
+        assert c._initial_direction_aligned is aligned
+        assert c._initial_start_direction(VehicleState(.1,0.,yaw,velocity,0.),reference)==('' if aligned else direction)
+    finally:
+        c.close()

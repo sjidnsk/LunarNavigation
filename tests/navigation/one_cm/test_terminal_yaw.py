@@ -67,6 +67,18 @@ def test_opposing_or_overshooting_angular_motion_brakes_physically(w):
     assert certify(tr, grid, limits, 1).valid
 
 
+@pytest.mark.parametrize('direction', [-1., 1.])
+def test_tiny_opposing_angular_velocity_keeps_actual_state_and_completes(direction):
+    state = VehicleState(0, 0, 0, 0, -direction * 1e-14)
+    grid, ref, limits = terminal_scene(state, direction * .2)
+    tr = api().terminal_candidate(state, grid, ref, limits)
+    np.testing.assert_array_equal(tr.states[0, :5], [state.x, state.y, state.yaw, state.v, state.w])
+    assert tr.times[-1] > 0. and np.all(np.diff(tr.times) > 0.)
+    assert tr.states[-1, 2] == pytest.approx(ref.terminal_yaw, abs=1e-12)
+    assert abs(tr.states[-1, 4]) < 1e-12
+    assert certify(tr, grid, limits, ref.route_version).valid
+
+
 def test_large_yaw_uses_bounded_rolling_horizon_and_braking_tail():
     state = VehicleState(0, 0, 0, 0, 0)
     grid, ref, limits = terminal_scene(state, 2.)
