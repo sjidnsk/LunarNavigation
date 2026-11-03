@@ -22,17 +22,24 @@ def create_navigation_adapter(node, *, navigation_backend='incremental_v2', **kw
 
 
 def owned_nav1cm_specs(namespace, *, platform_config, build_dir, use_sim_time,
-                       goal_position_tolerance_m=.1, goal_yaw_tolerance_rad=.05):
+                       goal_position_tolerance_m=.1, goal_yaw_tolerance_rad=.05,
+                       map_resolution_m=0.0):
     """与公共组合一致的进程规格，全部主题在调用者私有命名空间内。"""
+    import math
+    resolution = float(map_resolution_m)
+    if not math.isfinite(resolution) or resolution < 0:
+        raise ValueError("map_resolution_m must be finite and nonnegative")
     ns=namespace
     inputs=dict(map_topic=ns+'/grid',odometry_topic=ns+'/odom',tf_topic=ns+'/tf',
         tf_static_topic=ns+'/tf_static',use_sim_time=use_sim_time,
         goal_yaw_tolerance_rad=goal_yaw_tolerance_rad,
         map_qos_reliability='reliable',map_qos_durability='transient_local')
     mapping=dict(inputs,platform_config=platform_config,exploration_map_topic=ns+'/map',
-                 policy_map_service=ns+'/get_map',coarse_resolution_m=.2,
+                 policy_map_service=ns+'/get_map',policy_resolution_m=resolution,coarse_resolution_m=0.0,
+                 base_map_facts_topic=ns+'/base_facts',
                  goal_position_tolerance_m=goal_position_tolerance_m)
     planning=dict(inputs,wheel_config=platform_config,action_name=ns+'/navigate',
+        base_map_facts_topic=ns+'/base_facts',
         goal_topic=ns+'/goal',global_route_topic=ns+'/route',local_path_topic=ns+'/path',
         build_dir=build_dir,allow_unknown=False,goal_tolerance_m=goal_position_tolerance_m,
         execution_contract_enabled=True,execution_reference_topic=ns+'/execution_reference',tracking_status_topic=ns+'/tracking_status')

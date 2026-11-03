@@ -29,3 +29,13 @@ Humble隔离141通过；首轮打包漏benchmark_global.py导致29失败，补�
 真实64m/20cm三帧组合重建发现新的运行性能缺陷：P3MapStore.apply超过80秒CPU100%，SIGINT traceback定位_next_facts→update_evidence→accepted_spans逐项全扫描classes/candidates及_cut重复对象构造。已通知tcp2仅在其独立专题修复并交付，本会话负责真实数据留216测量；没有停用共享事实或用小地图掩盖问题。组合实图性能尚未验收，正式P4未切换。
 
 独立精确碰撞批次使用原地图管线构建同一冻结几何，并用实际全局目标重规划：PLAN_FOUND（0.436s），三轮均一次spin求解并通过连续认证。80步纯圆心固定旋转曾重复检查160次相同圆，现在仅复用一次几何证据，状态/动力学逐步验证不减；新增漂移及动力学错误回归。再将MPCC各预测节点精确距离/梯度批量计算。三次样本中位：规划43.74→30.84ms，认证47.85→14.82ms；只是同主机小样本离线对照，不是车辆实时保证。原始数据留/home/yanfa/P4/tmp/exact-collision-20261103/exact-route-before-static.json、exact-route-before-batch.json、exact-route-result.json。曲线切弯及实际中心漂移仍必须过连续认证，未做真实车辆新目标测试。
+
+## 最终组合结论
+
+独立碰撞提交57e61f91，性能提交4827f536。tcp2地图来源bd5b8937及空间索引2df554c7/55e43995已整合到当前专题，不移动长期线、不push。
+
+最终本机组合1581通过29跳过（55.71s），原生DLL按当前接口加载。新增独立距离oracle/解析梯度差分、批量/标量一致、静止圆复用后动力学错误仍拒绝等回归。真实Humble组合定向与包测试、DDS结果见前述；最新Python包重建后13组复验结果以indexed-planner-test.log为准。
+
+真实三帧空间索引后：apply 6556.25 / 15518.33 / 15409.99ms；每帧1个来源、19538观测碎片、29854分类碎片、59障碍矩形。组合全局PLAN_FOUND，局部三轮候选均连续认证通过，求解约30ms、认证约14–15ms；这不是车辆闭环通过。性能瓶颈在地图事实更新：第二帧带cProfile总29.84s，_next_facts28.95s、update_evidence28.05s，90034次BoxIndex.query累计15.42s、11165093次_overlaps；128638次EvidenceFragment构造4.19s、37056次polygon_intersection2.96s。profile会增加开销，无profile第二帧15.52s才是实际测量。
+
+处置：公共碰撞修复已提交待晋级；地图组合已提交待实时性能资格，不部署正式P4、不续跑旧任务、不发新目标，不修改P3/Env_X。源采样和profile留在216 P4隔离目录，没有下载地图或配置。剩余地图性能由tcp2独立专题继续给出最小优化边界，后续仍由本会话作为统一正式部署入口。legacy长距离性能未通过，真实车辆绕障/终点/足式/DRL闭环仍NOT_RUN。

@@ -41,11 +41,12 @@ def brake_diagnostic(packet, cycle_s, buffer):
 
 class PlannerRuntime:
     """factory/消息回调注入只用于内部验证，不构成对外延迟或控制协议。"""
-    def __init__(self, session, map_store, *, publish, ros_now_ns, notice=None, map_frame='map', event_sink=None):
+    def __init__(self, session, map_store, *, publish, ros_now_ns, notice=None, map_frame='map', event_sink=None, facts_sink=None):
         self.session, self.map_store = session, map_store
         self.publish, self.ros_now_ns = publish, ros_now_ns
         self.notice = notice or (lambda *args: None)
         self.map_frame = map_frame
+        self.facts_sink = facts_sink
         self.event_sink = event_sink or (lambda event: None)
         # task事件先由唯一tick线程入内部队列；外部sink不得在输入锁内重入。
         self._task_events = deque()
@@ -357,6 +358,24 @@ class PlannerRuntime:
                 processed = sequence
                 self._world = snapshot
                 self._condition.notify_all()
+            # 已提交输入先交接导航；事实传输失败不得回滚world或重试apply。
+            # map线程是store唯一写入者，捕获与本次apply之间不存在另一地图提交。
+            if self.facts_sink is not None:
+                try:
+                    facts = self.map_store.capture_facts()
+                    if facts.world is not snapshot:
+                        raise RuntimeError('committed map/facts snapshot identity mismatch')
+                    stamp = message.header.stamp
+                    self.facts_sink(facts,
+                        source_resolution_m=self.map_store.source_resolution_m,
+                        frame_id=self.map_frame,
+                        processed_stamp_ns=int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec))
+                except Exception as exc:
+                    # 包含编码/发布/诊断异常；不改变processed，也不终止地图线程。
+                    try:
+                        self._notice('MAP_FACTS_REJECTED', f'{type(exc).__name__}: {exc}')
+                    except Exception:
+                        pass
             self._notice('MAP_APPLIED', json.dumps({'epoch': snapshot.epoch,
                          'source_resolution_m': getattr(self.map_store, 'source_resolution_m', None)}, sort_keys=True))
 

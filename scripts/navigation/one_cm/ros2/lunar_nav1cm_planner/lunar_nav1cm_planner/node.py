@@ -3,6 +3,7 @@ from dataclasses import fields
 import json
 import math
 import os
+import time
 from pathlib import Path
 
 from ament_index_python.packages import get_package_prefix, get_package_share_directory
@@ -110,6 +111,7 @@ class PlannerNode(Node):
             'goal_tolerance_m': .1, 'goal_position_target_m': .02, 'goal_yaw_tolerance_rad': .08726646259971647,
             'stopped_linear_mps': .01, 'stopped_angular_rps': .01,
             'map_topic': '/Car/T3/mapping/grid_map',
+            'base_map_facts_topic': '',
             'map_qos_reliability': 'best_effort', 'map_qos_durability': 'volatile',
             'odometry_topic': '/Car/T3/localization/odometry',
             'goal_topic': '/Car/T4/navigation/goal',
@@ -168,7 +170,8 @@ class PlannerNode(Node):
         self.runtime = PlannerRuntime(session, store, publish=self._publish,
                                       ros_now_ns=lambda: self.get_clock().now().nanoseconds,
                                       notice=lambda kind, detail: self.get_logger().info(f'{kind}: {detail}'),
-                                      map_frame=frame_name(settings['map_frame']) or 'map')
+                                      map_frame=frame_name(settings['map_frame']) or 'map',
+                                      facts_sink=self._configure_facts_publisher(settings['base_map_facts_topic']))
         direct=settings['control_backend']=='mpcc_cmd_vel' and settings['enable_controller']
         if direct:
             self._command_publisher=self.create_publisher(Twist,settings['command_topic'],1)
@@ -205,6 +208,31 @@ class PlannerNode(Node):
             self._execution_publisher=self.create_publisher(PathExecutionReference,settings['execution_reference_topic'],10)
             self.create_subscription(TrackingStatus,settings['tracking_status_topic'],self._on_execution_status,10)
         self.runtime.start()
+
+    def _configure_facts_publisher(self, topic):
+        # 空topic不创建publisher、epoch或事实编码；参数随其他启动参数冻结。
+        self._facts_publisher = None
+        if not topic:
+            return None
+        from std_msgs.msg import String
+        self._facts_epoch = max(1, time.time_ns())
+        qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                         durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self._facts_publisher = self.create_publisher(String, topic, qos)
+        return self._publish_facts
+
+    def _publish_facts(self, facts, *, source_resolution_m, frame_id, processed_stamp_ns):
+        # 仅由地图提交线程调用；只序列化已提交的物理事实，不作地形判定。
+        from std_msgs.msg import String
+        from nav1cm.facts_codec import encode_observation_facts
+        message = String()
+        message.data = encode_observation_facts(facts,
+            source_resolution_m=source_resolution_m, frame_id=frame_id,
+            epoch=self._facts_epoch, processed_stamp_ns=processed_stamp_ns)
+        self._facts_publisher.publish(message)
+        self.get_logger().info(
+            f'BASE_MAP_FACTS raw_revision={facts.raw_revision} epoch={self._facts_epoch} '
+            f'source_resolution_m={source_resolution_m}')
 
     def _on_published_command(self, message):
         try:self.runtime.offer_published_command(message)

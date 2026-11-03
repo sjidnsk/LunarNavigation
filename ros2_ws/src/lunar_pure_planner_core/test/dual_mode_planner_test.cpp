@@ -1059,7 +1059,7 @@ TEST(DualModePlanner, DefaultBackendsSolveAllThreePlatformsInBothModes) {
 }
 
 TEST(DualModePlanner,
-     WheelEscapesARequestLocalSelfOccludedStartIntoKnownForwardTerrain) {
+     WheelPreservesUnknownStartWithoutAssumedEscape) {
   PlanningRequest input =
       RealRequest(PlatformType::kWheeled, EnvironmentMode::kLavaTube);
   auto& state = std::get<WheeledState>(input.current_state);
@@ -1079,16 +1079,26 @@ TEST(DualModePlanner,
 
   const PlanningResult output = Planner{}.Plan(input);
 
-  ASSERT_EQ(output.status, PlanningStatus::kSuccess) << output.reason_code;
-  ASSERT_TRUE(output.reference.has_value());
-  const auto* trajectory =
-      std::get_if<TrajectoryReference>(&output.reference->data);
-  ASSERT_NE(trajectory, nullptr);
-  ASSERT_FALSE(trajectory->points.empty());
-  EXPECT_NEAR(trajectory->points.back().pose.position_m.x, 2.1, 0.05);
-  EXPECT_NEAR(trajectory->points.back().pose.position_m.y, 1.5, 0.05);
+  EXPECT_EQ(output.status, PlanningStatus::kNoPath) << output.reason_code;
+  EXPECT_FALSE(output.reference.has_value());
   EXPECT_TRUE(std::isnan(occupancy[kStartCell]));
   EXPECT_TRUE(std::isnan(elevation[kStartCell]));
+}
+
+TEST(DualModePlanner, WheelKnownStartStillConnectsIntoKnownForwardTerrain) {
+  PlanningRequest input = RealRequest(PlatformType::kWheeled, EnvironmentMode::kLavaTube);
+  std::get<WheeledState>(input.current_state).pose.position_m = {.x=1.5,.y=1.5,.z=0.0};
+  std::get<WheeledCapability>(input.capability).minimum_clearance_m = .1;
+  input.goal_map=PointTarget(2.1,1.5);
+  input.goal_map.yaw_rad.reset();
+  const auto output=Planner{}.Plan(input);
+  ASSERT_EQ(output.status,PlanningStatus::kSuccess) << output.reason_code;
+  ASSERT_TRUE(output.reference);
+  const auto* trajectory=std::get_if<TrajectoryReference>(&output.reference->data);
+  ASSERT_NE(trajectory,nullptr);
+  ASSERT_FALSE(trajectory->points.empty());
+  EXPECT_NEAR(trajectory->points.back().pose.position_m.x,2.1,.05);
+  EXPECT_NEAR(trajectory->points.back().pose.position_m.y,1.5,.05);
 }
 
 TEST(DualModePlanner, WheelStartPatchNeverOverwritesAFiniteObstacle) {
@@ -1178,7 +1188,7 @@ TEST(DualModePlanner, WheelStartPatchDoesNotExpandIntoUnknownAhead) {
   EXPECT_TRUE(std::isnan(elevation[kUnknownAheadCell]));
 }
 
-TEST(DualModePlanner, WheelStartPatchIdentityIsolatesCachedLocalArtifacts) {
+TEST(DualModePlanner, WheelUnknownStartsRemainUnsafeWhenLocalArtifactsAreCached) {
   PlanningRequest first =
       RealRequest(PlatformType::kWheeled, EnvironmentMode::kLavaTube);
   auto& first_state = std::get<WheeledState>(first.current_state);
@@ -1210,13 +1220,16 @@ TEST(DualModePlanner, WheelStartPatchIdentityIsolatesCachedLocalArtifacts) {
   const PlanningResult first_output = planner.Plan(first);
   const PlanningResult second_output = planner.Plan(second);
 
-  ASSERT_EQ(first_output.status, PlanningStatus::kSuccess)
-      << first_output.reason_code;
-  ASSERT_EQ(second_output.status, PlanningStatus::kSuccess)
-      << second_output.reason_code;
-  EXPECT_FALSE(second_output.local_snapshot_cache_hit);
-  EXPECT_FALSE(second_output.local_projection_cache_hit);
-  EXPECT_FALSE(second_output.goal_field_cache_hit);
+  EXPECT_EQ(first_output.status, PlanningStatus::kNoPath) << first_output.reason_code;
+  EXPECT_EQ(second_output.status, PlanningStatus::kNoPath) << second_output.reason_code;
+  EXPECT_FALSE(first_output.reference.has_value());
+  EXPECT_FALSE(second_output.reference.has_value());
+  EXPECT_TRUE(second_output.local_snapshot_cache_hit);
+  EXPECT_TRUE(second_output.local_projection_cache_hit);
+  for (const std::size_t cell : {kFirstStartCell, kSecondStartCell}) {
+    EXPECT_TRUE(std::isnan(occupancy[cell]));
+    EXPECT_TRUE(std::isnan(elevation[cell]));
+  }
 }
 
 void SetCacheableSequences(PlanningRequest& input) {

@@ -52,7 +52,8 @@ def test_terrain_update_owns_immutable_validated_regions():
 @pytest.fixture(scope="module")
 def compiled(tmp_path_factory):
     compiler = shutil.which("g++")
-    if compiler is None:
+    reference_library = os.environ.get("NAV1CM_TERRAIN_REFERENCE_LIB")
+    if compiler is None and not reference_library:
         pytest.skip("g++ unavailable; real core terrain comparison NOT_RUN")
     output = tmp_path_factory.mktemp("p3-native-terrain")
     bridge = output / ("nav1cm_terrain.dll" if os.name == "nt" else "libnav1cm_terrain.so")
@@ -63,10 +64,11 @@ def compiled(tmp_path_factory):
     sources = [str(core / "src/map" / name) for name in
                ("persistent_elevation_map.cpp", "platform_elevation_physics.cpp", "platform_terrain_window.cpp", "fine_traversability_builder.cpp")]
     explicit = os.environ.get("NAV1CM_TERRAIN_LIB")
-    if not explicit:
+    if not explicit and not reference_library:
         subprocess.run(common + [str(ROOT / "scripts/navigation/one_cm/nav1cm/terrain_bridge.cpp")] + sources + ["-o", str(bridge)], check=True)
-    subprocess.run(common + [str(Path(__file__).with_name("p3_terrain_reference.cpp"))] + sources + ["-o", str(oracle)], check=True)
-    lib = ctypes.CDLL(str(oracle))
+    if not reference_library:
+        subprocess.run(common + [str(Path(__file__).with_name("p3_terrain_reference.cpp"))] + sources + ["-o", str(oracle)], check=True)
+    lib = ctypes.CDLL(str(reference_library or oracle))
     reference = lib.nav1cm_terrain_reference_v1
     array_f = np.ctypeslib.ndpointer(dtype=np.float32, ndim=2, flags="C_CONTIGUOUS")
     array_b = np.ctypeslib.ndpointer(dtype=np.int8, ndim=2, flags=("C_CONTIGUOUS", "WRITEABLE"))
@@ -377,3 +379,57 @@ def test_observed_709_cell_disk_projects_without_interior_seams(compiled):
     # 固定车体 1.182 x .818、净空 .2 与 solver .003 均不放宽。
     required_circle = np.hypot(1.182, .818) / 2 + .2 + .003
     assert build_distance_field(grid).sample(.1, .1)[0] >= required_circle
+
+
+def test_native_measurements_are_immutable_snapshots_and_preserve_v2_regions(compiled):
+    api = _api()
+    data = np.zeros((5, 5), dtype=np.float32)
+    with api.NativeTerrain(compiled[0]) as terrain:
+        first = terrain.apply(data, resolution_m=.1, origin_xy_m=(.3, -.2), yaw=.2)
+        saved = first.measurements.copy()
+        assert set(first.measurements.dtype.names) == {"x", "y", "height_m", "state", "slope_rad", "relief_m"}
+        center = first.measurements[(first.measurements["x"] == 2) & (first.measurements["y"] == 2)][0]
+        assert center["height_m"] == 0
+        with pytest.raises(ValueError): first.measurements.setflags(write=True)
+        second = terrain.apply(data + .001, resolution_m=.1, origin_xy_m=(.3, -.2), yaw=.2)
+        np.testing.assert_array_equal(first.measurements, saved)
+        np.testing.assert_array_equal(first.regions, second.regions)
+        assert np.allclose(second.measurements["height_m"], .001)
+        assert (second.resolution_m, second.origin_xy_m, second.yaw) == (first.resolution_m, first.origin_xy_m, first.yaw)
+        lib = terrain._lib
+        query = lib.nav1cm_terrain_measurements_v3
+        query.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t)]
+        query.restype = ctypes.c_int
+        ptr, count = ctypes.c_void_p(), ctypes.c_size_t()
+        assert query(terrain._handle, ctypes.byref(ptr), ctypes.byref(count)) == 0
+        original = ctypes.string_at(ptr, count.value * second.measurements.dtype.itemsize)
+        assert query(terrain._handle, ctypes.byref(ptr), ctypes.byref(count)) == 0
+        assert ctypes.string_at(ptr, len(original)) == original
+
+
+def test_terrain_update_exposes_empty_immutable_measurements():
+    update = _api().TerrainUpdate(.1, (0., 0.), 0., np.empty((0, 5), dtype=np.int64))
+    assert update.measurements.shape == (0,)
+    with pytest.raises(ValueError): update.measurements.setflags(write=True)
+
+
+def test_failed_native_apply_preserves_last_successful_measurement_query(compiled):
+    api = _api()
+    with api.NativeTerrain(compiled[0]) as terrain:
+        terrain.apply(np.zeros((5, 5), dtype=np.float32), resolution_m=.1, origin_xy_m=(0., 0.))
+        query = terrain._lib.nav1cm_terrain_measurements_v3
+        query.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_size_t)]
+        query.restype = ctypes.c_int
+
+        def capture():
+            ptr, count = ctypes.c_void_p(), ctypes.c_size_t()
+            assert query(terrain._handle, ctypes.byref(ptr), ctypes.byref(count)) == 0
+            return count.value, ctypes.string_at(ptr, count.value * api.MEASUREMENT_DTYPE.itemsize)
+
+        before = capture()
+        assert before[0] > 0
+        # 有限但极大的源分辨率通过 bridge 初始检查，投影坐标溢出，
+        # 由真实累计器拒绝，发生在测量缓冲区创建之后。
+        with pytest.raises(RuntimeError, match="rejected"):
+            terrain.apply(np.zeros((5, 5), dtype=np.float32), resolution_m=1e308, origin_xy_m=(0., 0.))
+        assert capture() == before

@@ -134,17 +134,18 @@ def test_invalid_publication_envelope_is_rejected(monkeypatch,budget):
     with pytest.raises(ValueError):graph(monkeypatch,enable_controller='true',mppi_compute_envelope_s=budget)
 
 
-def test_current_exploration_default_matches_twenty_centimeter_p3(monkeypatch):
+def test_current_exploration_default_follows_p3(monkeypatch):
     maps=nodes(graph(monkeypatch,exploration_strategy='frontier'))[0]['parameters'][0]
-    assert maps['coarse_resolution_m']==.2
+    assert maps['coarse_resolution_m']==0.0
 
 
-def test_owned_nav1cm_map_uses_same_twenty_centimeter_exploration_default():
+def test_owned_nav1cm_map_uses_source_following_exploration_default():
     path=ROOT/'ros2_ws/src/lunar_drl_exploration/lunar_drl_exploration/navigation_backend.py'
     spec=importlib.util.spec_from_file_location('owned_nav1cm_resolution',path)
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     maps=module.owned_nav1cm_specs('/private',platform_config='/wheel.yaml',build_dir='/cache',use_sim_time=False)[0][2]
-    assert maps['coarse_resolution_m']==.2
+    assert maps['coarse_resolution_m']==0.0
+    assert maps['policy_resolution_m']==0.0
 
 
 @pytest.mark.parametrize('direction',['forward','reverse'])
@@ -272,3 +273,34 @@ def test_tcp_global_budget_and_coverage_target_reach_owners(monkeypatch):
 def test_budget_and_coverage_reject_invalid_parameters(monkeypatch, values):
     with pytest.raises(ValueError):
         graph(monkeypatch, **values)
+
+
+@pytest.mark.parametrize('name', ['policy_resolution_m', 'coarse_resolution_m'])
+@pytest.mark.parametrize('value', ['0', '.05', '.2', '.35'])
+def test_exploration_resolution_override_remains_supported(monkeypatch, name, value):
+    maps=nodes(graph(monkeypatch,**{name:value}))[0]['parameters'][0]
+    assert maps[name]==float(value)
+
+@pytest.mark.parametrize('name', ['policy_resolution_m', 'coarse_resolution_m'])
+@pytest.mark.parametrize('value', ['-.1', 'nan', 'inf'])
+def test_invalid_exploration_resolution_rejected(monkeypatch, name, value):
+    with pytest.raises(ValueError):graph(monkeypatch,**{name:value})
+
+@pytest.mark.parametrize("strategy", ["frontier", "drl"])
+def test_shared_facts_connects_one_producer_and_existing_map_view(monkeypatch, strategy):
+    values = dict(exploration_strategy=strategy, base_map_facts_topic="/private/facts")
+    if strategy == "drl":
+        values["drl_actor"] = "/private/actor.pt"
+    g = nodes(graph(monkeypatch, **values))
+    mapping = next(n["parameters"][0] for n in g if n["executable"] == "lunar_exploration_map_node")
+    planner = next(n["parameters"][0] for n in g if n["executable"] == "navigation_task_node")
+    assert mapping["base_map_facts_topic"] == "/private/facts"
+    assert planner["base_map_facts_topic"] == "/private/facts"
+    assert sum("base_map_facts_topic" in n["parameters"][0] for n in g) == 2
+
+
+def test_independent_map_mode_remains_explicitly_available(monkeypatch):
+    g = nodes(graph(monkeypatch, shared_map_facts="false"))
+    participants = [n["parameters"][0] for n in g if n["executable"] in
+                    ("lunar_exploration_map_node", "navigation_task_node")]
+    assert all(p["base_map_facts_topic"] == "" for p in participants)

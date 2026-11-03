@@ -163,14 +163,6 @@ lunar_planning_msgs::srv::GetPolicyMap::Response PolicyMapExporter::ExportImpl(
       const auto connections = core::RequestLocalStartPatchBuilder{}.BuildStartConnections(
           input.fine, *local.geometry, *input.anchor, capability_, profile_);
       response.start_connection_status = static_cast<std::uint8_t>(connections.status);
-      const auto patch = core::RequestLocalStartPatchBuilder{}.Build(
-          input.fine, *local.geometry, *input.anchor, capability_, profile_);
-      if (patch.view && patch.status == core::StartPatchResult::Status::kReady) {
-        for (const auto& cell : patch.view->overrides()) {
-          response.assumed_start_x.push_back(cell.index.x);
-          response.assumed_start_y.push_back(cell.index.y);
-        }
-      }
       for (const auto& connection : connections.connections) {
         response.start_connection_x.push_back(connection.index.x);
         response.start_connection_y.push_back(connection.index.y);

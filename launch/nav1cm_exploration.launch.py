@@ -46,11 +46,17 @@ DEFAULTS = {'global_period_s': '15.0',
  'mppi_time_steps': '40',
  'mppi_compute_envelope_s': '0.05',
  'initial_travel_direction': '',
- 'coarse_resolution_m': '0.2',
+ 'shared_map_facts': 'true',
+ 'coarse_resolution_m': '0.0',
+ 'policy_resolution_m': '0.0',
  **_topic_defaults()}
 
 def _compose(context):
     values = {k: LaunchConfiguration(k).perform(context).strip() or v for k,v in DEFAULTS.items()}
+    for name in ('coarse_resolution_m', 'policy_resolution_m'):
+        values[name] = float(values[name])
+        if not isfinite(values[name]) or values[name] < 0:
+            raise ValueError(name + ' must be finite and nonnegative (0 follows source)')
     for name in ('global_soft_clearance_m','global_clearance_weight'):
         values[name] = float(values[name])
         if not isfinite(values[name]) or values[name] < 0:
@@ -92,7 +98,7 @@ def _compose(context):
     strategy = values["exploration_strategy"]
     if strategy not in {"none", "frontier", "drl"}:
         raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
-    for key in ("enable_controller", "use_sim_time", "allow_unknown", "command_prediction_enabled"):
+    for key in ("enable_controller", "use_sim_time", "allow_unknown", "command_prediction_enabled", "shared_map_facts"):
         if values[key] not in {"true", "false"}: raise RuntimeError(key+" 必须为 true/false")
     if values['command_prediction_enabled']=='true' and (
             values['control_backend']!='mpcc_cmd_vel' or values['enable_controller']!='true' or
@@ -102,6 +108,7 @@ def _compose(context):
         raise RuntimeError("drl 策略需要显式 drl_actor；权重加载与校验由可选 DRL 包负责")
     values["build_dir"] = values["build_dir"] or os.environ.get("NAV1CM_BUILD_DIR", "")
     if not values["build_dir"]: raise RuntimeError("build_dir 必须指定仓库外缓存，或设置 NAV1CM_BUILD_DIR")
+    facts_topic = values["base_map_facts_topic"] if values["shared_map_facts"] == "true" else ""
     config = values["platform_config"] or str(Path(get_package_share_directory("lunar_nav1cm_planner"))/"config/wheel.yaml")
     frames = {k: values[k] for k in ("map_frame","odom_frame","base_frame")}
     inputs = {k: values[k] for k in ("map_topic","odometry_topic","tf_topic","tf_static_topic")}
@@ -115,9 +122,12 @@ def _compose(context):
         node("lunar_incremental_navigation_ros", "lunar_exploration_map_node", {
             **frames, **inputs, **qos, "platform_config": config,
             "exploration_map_topic": values["exploration_map_topic"], "policy_map_service": values["policy_map_service"],
-            "coarse_resolution_m": float(values["coarse_resolution_m"])}),
+            "coarse_resolution_m": values["coarse_resolution_m"],
+            "base_map_facts_topic": facts_topic,
+            "policy_resolution_m": values["policy_resolution_m"]}),
         node("lunar_nav1cm_planner", "navigation_task_node", {
             **inputs, **qos, "map_frame": frames["map_frame"], "wheel_config": config,
+            "base_map_facts_topic": facts_topic,
             "global_period_s":values["global_period_s"],
             "global_budget_s":values["global_budget_s"],
             "horizon_steps":values["horizon_steps"],

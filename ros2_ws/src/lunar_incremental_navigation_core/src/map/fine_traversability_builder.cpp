@@ -482,8 +482,11 @@ FineTraversabilityBuilder::DeriveImpl(
     const std::shared_ptr<const FineTraversabilityTile> old_tile =
         incremental ? previous->FindTile(tile_index) : nullptr;
 
-    FineTraversabilityTile::StateArray states;
-    FineTraversabilityTile::CostArray costs;
+    // 大格块放在堆上；保留栈保护，避免旧AArch64工具链的大帧展开缺陷。
+    auto state_storage = std::make_unique<FineTraversabilityTile::StateArray>();
+    auto cost_storage = std::make_unique<FineTraversabilityTile::CostArray>();
+    auto& states = *state_storage;
+    auto& costs = *cost_storage;
     if (old_tile) {
       states = old_tile->states();
       costs = old_tile->traversal_costs();
@@ -491,8 +494,6 @@ FineTraversabilityBuilder::DeriveImpl(
       states.fill(FineCellState::kUnknown);
       costs.fill(0.0);
     }
-    const auto old_states = states;
-    const auto old_costs = costs;
     const auto update_cell = [&](const GridIndex cell) {
       const FineCellEvaluation evaluation = cell_evaluator.Evaluate(cell);
       const std::size_t offset = TileCellOffset(cell);
@@ -533,15 +534,16 @@ FineTraversabilityBuilder::DeriveImpl(
     }
 
     const bool unobserved = TileIsUnobserved(states, costs);
-    const bool changed = old_tile ? states != old_states || costs != old_costs
-                                  : !unobserved;
+    const bool changed = old_tile
+        ? states != old_tile->states() || costs != old_tile->traversal_costs()
+        : !unobserved;
     if (!changed) {
       continue;
     }
     changed_tiles.push_back(tile_index);
     directory = directory.WithTile(
         tile_index, std::make_shared<const FineTraversabilityTile>(
-                        std::move(states), std::move(costs)));
+                        states, costs));
   }
 
   std::vector<TileIndex> changed_halo_tiles(halo_tiles.begin(),

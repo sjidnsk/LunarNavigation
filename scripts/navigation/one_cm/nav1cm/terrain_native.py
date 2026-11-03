@@ -66,6 +66,11 @@ def load_wheel_capability(path=None) -> WheelTerrainCapability:
         return WheelTerrainCapability.from_mapping(yaml.safe_load(stream))
 
 
+MEASUREMENT_DTYPE = np.dtype([("x", np.int64), ("y", np.int64), ("height_m", np.float64),
+                              ("state", np.int64), ("slope_rad", np.float64),
+                              ("relief_m", np.float64)])
+
+
 @dataclass(frozen=True)
 class TerrainUpdate:
     """源格闭开矩形 [x0,y0,x1,y1,state]；state 使用 nav1cm 的 -1/0/1。"""
@@ -77,6 +82,7 @@ class TerrainUpdate:
     source_id: int | None = None
     evicted_source_ids: tuple[int, ...] = ()
     cache_capacity: int = 8
+    measurements: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=MEASUREMENT_DTYPE), repr=False)
 
     def __post_init__(self):
         origin = tuple(float(value) for value in self.origin_xy_m)
@@ -91,6 +97,11 @@ class TerrainUpdate:
                 np.any(regions[:, 1] >= regions[:, 3]) or
                 not np.isin(regions[:, 4], [-1, 0, 1]).all()):
             raise ValueError("terrain regions must be integer positive rectangles with -1/0/1 state")
+        measurements = np.asarray(self.measurements, dtype=MEASUREMENT_DTYPE)
+        if measurements.ndim != 1:
+            raise ValueError("terrain measurements must be a one-dimensional structured array")
+        # bytes 拥有独立不可写内存，后续 native apply 不会修改此快照。
+        object.__setattr__(self, "measurements", np.frombuffer(measurements.tobytes(), dtype=MEASUREMENT_DTYPE))
         object.__setattr__(self, "origin_xy_m", origin)
         object.__setattr__(self, "regions", _readonly_array(regions, np.int64, 2, 5))
 
@@ -136,6 +147,22 @@ class NativeTerrain:
                                np.ctypeslib.ndpointer(dtype=np.float32, ndim=2, flags="C_CONTIGUOUS"),
                                ctypes.c_size_t, ctypes.c_size_t] + [ctypes.c_double] * 5 + [ctypes.POINTER(_NativeResult)]
         self._apply.restype = ctypes.c_int
+        self._measurements = self._lib.nav1cm_terrain_measurements_v3
+        self._measurements.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p),
+                                       ctypes.POINTER(ctypes.c_size_t)]
+        self._measurements.restype = ctypes.c_int
+        self._polygon = self._lib.nav1cm_polygon_boolean_v1
+        double_ptr = ctypes.POINTER(ctypes.c_double)
+        self._polygon.argtypes = [ctypes.c_int, double_ptr, ctypes.c_size_t, double_ptr,
+                                  ctypes.c_size_t, ctypes.c_double, ctypes.POINTER(ctypes.c_void_p)]
+        self._polygon.restype = ctypes.c_int
+        self._polygon_query = self._lib.nav1cm_polygon_query_v1
+        self._polygon_query.argtypes = [ctypes.c_void_p, ctypes.POINTER(double_ptr),
+                                        ctypes.POINTER(ctypes.POINTER(ctypes.c_size_t)),
+                                        ctypes.POINTER(ctypes.c_size_t)]
+        self._polygon_query.restype = ctypes.c_int
+        self._polygon_destroy = self._lib.nav1cm_polygon_destroy_v1
+        self._polygon_destroy.argtypes, self._polygon_destroy.restype = [ctypes.c_void_p], None
         self.capability = (load_wheel_capability() if capability is None else
                            capability if isinstance(capability, WheelTerrainCapability) else
                            WheelTerrainCapability.from_mapping(capability))
@@ -199,16 +226,51 @@ class NativeTerrain:
                 regions = np.ctypeslib.as_array(result.regions, shape=(result.region_count * 5,)).reshape(-1, 5)
             else:
                 regions = np.empty((0, 5), dtype=np.int64)
+            measurement_ptr, measurement_count = ctypes.c_void_p(), ctypes.c_size_t()
+            if self._measurements(self._handle, ctypes.byref(measurement_ptr), ctypes.byref(measurement_count)):
+                raise RuntimeError(f"native terrain measurement query failed: {self._last_error()}")
+            count = measurement_count.value
+            if count and (not measurement_ptr.value or count > np.iinfo(np.intp).max // MEASUREMENT_DTYPE.itemsize):
+                raise RuntimeError("native terrain returned invalid measurement buffer")
+            measurements = np.frombuffer(ctypes.string_at(measurement_ptr, count * MEASUREMENT_DTYPE.itemsize),
+                                         dtype=MEASUREMENT_DTYPE) if count else np.empty(0, dtype=MEASUREMENT_DTYPE)
             source_id = int(result.source_id) or None
             evicted = (int(result.evicted_source_id),) if result.evicted_source_id else ()
             update = TerrainUpdate(result.resolution_m, (result.origin_x_m, result.origin_y_m),
-                                   result.yaw, regions, source_id, evicted, int(result.cache_capacity))
+                                   result.yaw, regions, source_id, evicted, int(result.cache_capacity), measurements)
             if source_id is not None:
                 self._active_source_ids = tuple(identity for identity in self._active_source_ids
                                                 if identity != source_id and identity not in evicted) + (source_id,)
             self._lattice_count = int(result.lattice_count)
             self._cache_capacity = update.cache_capacity
             return update
+
+    def _polygon_boolean(self, operation, subject, clipper, epsilon):
+        arrays = [np.ascontiguousarray(value, dtype=np.float64) for value in (subject, clipper)]
+        if any(array.ndim != 2 or array.shape[1] != 2 for array in arrays):
+            raise ValueError("polygon coordinates must have shape (n, 2)")
+        with self._lock:
+            if not self._finalizer.alive:
+                raise RuntimeError("native terrain instance is closed")
+            result = ctypes.c_void_p()
+            try:
+                ptr = ctypes.POINTER(ctypes.c_double)
+                if self._polygon(operation, arrays[0].ctypes.data_as(ptr), len(arrays[0]),
+                                 arrays[1].ctypes.data_as(ptr), len(arrays[1]), epsilon, ctypes.byref(result)):
+                    raise ValueError(f"native polygon failed: {self._last_error()}")
+                xy, offsets, count = ptr(), ctypes.POINTER(ctypes.c_size_t)(), ctypes.c_size_t()
+                if self._polygon_query(result, ctypes.byref(xy), ctypes.byref(offsets), ctypes.byref(count)):
+                    raise RuntimeError(f"native polygon query failed: {self._last_error()}")
+                return tuple(tuple((float(xy[2*j]), float(xy[2*j+1]))
+                                   for j in range(offsets[i], offsets[i+1])) for i in range(count.value))
+            finally:
+                self._polygon_destroy(result)
+
+    def polygon_intersection(self, subject, clipper):
+        return self._polygon_boolean(0, subject, clipper, 0.)
+
+    def polygon_difference(self, subject, clipper, *, area_epsilon=0.0):
+        return self._polygon_boolean(1, subject, clipper, area_epsilon)
 
     def close(self):
         with self._lock:

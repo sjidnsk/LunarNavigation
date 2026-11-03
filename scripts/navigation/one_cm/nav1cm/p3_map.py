@@ -14,6 +14,7 @@ from collections.abc import Mapping
 
 import numpy as np
 
+from .base_map import BaseMapFacts, SourceEvidence
 from .contracts import CellRect, CellState, WorldSnapshot
 from .p3_geometry import continuous_strip_intervals
 from .p3_sources import SourceContextLRU, retire_owners
@@ -439,6 +440,43 @@ def _cache_source_classifications(previous, regions):
     return rows
 
 
+def _same_evidence(old, new):
+    # 片段顺序和局部记录索引不是公开物理量。
+    def layer(source, fragments):
+        values = [tuple(None if np.isnan(v) else v for v in record)
+                  for record in source.measurements]
+        return {(values[f.measurement_index], f.polygon_cm) for f in fragments}
+
+    if old is new or (len(old) == len(new) and all(a is b for a, b in zip(old, new))):
+        return True
+    if tuple(s.source_id for s in old) != tuple(s.source_id for s in new):
+        return False
+    return all(a is b or (
+        layer(a, a.observation_fragments) == layer(b, b.observation_fragments) and
+        layer(a, a.classification_fragments) == layer(b, b.classification_fragments))
+        for a, b in zip(old, new))
+
+
+def _next_facts(facts, snapshot, observations, update, spans, terrain):
+    from .p3_evidence import update_evidence
+    if facts is None or not observations:
+        return facts
+    if update.source_id is None and not len(update.measurements):
+        return None
+    incoming = SourceEvidence(update.source_id, update.resolution_m, update.origin_xy_m,
+                              update.yaw, update.measurements, (), ())
+    direct_cells = {(x, y) for y, row in observations.items()
+                    for left, right, _ in row for x in range(left, right)}
+    indices = tuple(i for i, rec in enumerate(incoming.measurements)
+                    if (int(rec['x']), int(rec['y'])) in direct_cells)
+    if len(indices) != len(direct_cells):
+        raise ValueError("missing direct source measurements")
+    sources = update_evidence(facts.sources, incoming, indices, tuple(spans), terrain)
+    if snapshot is facts.world and _same_evidence(facts.sources, sources):
+        return facts
+    return BaseMapFacts(snapshot, facts.raw_revision + 1, sources)
+
+
 class P3MapStore:
     """线程内累计入口：apply(message, map_from_source) -> WorldSnapshot。
 
@@ -457,8 +495,15 @@ class P3MapStore:
         self._fresh_observations = {}
         self._source_classifications = {}
         self._snapshot = WorldSnapshot(0, (), ())
+        self._facts = BaseMapFacts(self._snapshot, 0, ())
         self._source_resolution_m = None
         self._lock = threading.RLock()
+
+    def capture_facts(self) -> BaseMapFacts:
+        with self._lock:
+            if self._facts is None:
+                raise RuntimeError("terrain backend omitted source measurements")
+            return self._facts
 
     @property
     def snapshot(self) -> WorldSnapshot:
@@ -483,6 +528,7 @@ class P3MapStore:
             classifications = self._source_classifications.copy()
             rows = self._rows.copy()
             owners = self._observation_owners
+            spans = []
             if observations:
                 source, retired = contexts.activate(key, update)
                 owners = retire_owners(owners, {identity for _, identity in retired})
@@ -511,6 +557,7 @@ class P3MapStore:
                 fresh_classified = _rectangles(eligible)
                 for selected in (CellState.FREE, CellState.BLOCKED, CellState.UNKNOWN):
                     for packet, historical in ((regions, True), (fresh_classified, False)):
+                        accepted = {}
                         candidates = (_free_rows(packet, update) if selected == CellState.FREE else
                                       (cell for region in packet if region[4] == selected
                                        for cell in _blocked_rows(region, update)))
@@ -528,12 +575,16 @@ class P3MapStore:
                                         if old_state != CellState.FREE or x1 <= lo or x0 >= hi:
                                             remaining.append((x0, x1, old_state))
                                         else:
+                                            accepted[y] = _paint(accepted.get(y, ()), max(x0, lo), min(x1, hi), selected)
                                             if x0 < lo: remaining.append((x0, lo, old_state))
                                             if x1 > hi: remaining.append((hi, x1, old_state))
                                     if remaining: rows[y] = tuple(remaining)
                                     else: rows.pop(y, None)
                                 else:
                                     rows[y] = _paint(rows.get(y, ()), lo, hi, state)
+                                    accepted[y] = _paint(accepted.get(y, ()), lo, hi, state)
+                        spans.extend((state, CellRect(x0, y0, x1, y1))
+                                     for x0, y0, x1, y1, state in _rectangles(accepted))
                 fresh_regions = _rectangles(_clip_row_maps(fresh, mask))
                 owners = _record_observation_owners(owners, source,
                                                     observation_regions, fresh_regions, update)
@@ -544,6 +595,8 @@ class P3MapStore:
             snapshot = self._snapshot
             if blocked != snapshot.blocked or free != snapshot.known_free:
                 snapshot = WorldSnapshot(snapshot.epoch + 1, blocked, free)
+            facts = _next_facts(self._facts, snapshot, observations, update, spans, self._terrain)
+            self._facts = facts
             self._rows = rows
             self._observation_owners = owners
             self._fresh_observations = fresh_sources

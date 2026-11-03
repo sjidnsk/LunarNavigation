@@ -261,19 +261,15 @@ GlobalRouteCacheKey MakeLeggedTraversabilityRouteCacheKey(
 }
 
 LocalSnapshotCacheKey MakeLocalSnapshotCacheKey(
-    const std::uint64_t local_map_sequence,
-    const std::uint64_t start_patch_identity) noexcept {
-  return {.source_sequences = {local_map_sequence},
-          .semantic_identities = {start_patch_identity}};
+    const std::uint64_t local_map_sequence) noexcept {
+  return {.source_sequences = {local_map_sequence}};
 }
 
 LocalProjectionCacheKey MakeLocalProjectionCacheKey(
     const std::uint64_t local_map_sequence,
-    const double occupancy_threshold,
-    const std::uint64_t start_patch_identity) noexcept {
+    const double occupancy_threshold) noexcept {
   return {.source_sequences = {local_map_sequence},
-          .semantic_identities = {DoubleIdentity(occupancy_threshold),
-                                  start_patch_identity}};
+          .semantic_identities = {DoubleIdentity(occupancy_threshold)}};
 }
 
 LeggedLocalProjectionCacheKey MakeLeggedLocalProjectionCacheKey(
@@ -293,15 +289,13 @@ GoalFieldCacheKey MakeGoalFieldCacheKey(
     const std::uint64_t local_map_sequence,
     const double occupancy_threshold,
     const std::uint64_t capability_fingerprint, const LocalGoalSet& goals,
-    const AnytimeSearchConfig& search,
-    const std::uint64_t start_patch_identity) noexcept {
+    const AnytimeSearchConfig& search) noexcept {
   return {
       .source_sequences = {local_map_sequence},
       .semantic_identities = {DoubleIdentity(occupancy_threshold),
                               capability_fingerprint,
                               GoalSetFingerprint(goals),
-                              SearchFingerprint(search),
-                              start_patch_identity},
+                              SearchFingerprint(search)},
   };
 }
 
