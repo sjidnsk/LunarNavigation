@@ -104,13 +104,18 @@ def _cut(fragment, cutters, ops, *, rectangles=False):
 
 def _compact(source, records, observations):
     """仅保留有效观测引用的记录；不再为导航分类复制一份历史。"""
-    used=sorted({f.measurement_index for f in observations})
+    used={f.measurement_index for f in observations}
     if not used:return None
-    indices={old:new for new,old in enumerate(used)}
-    fragments=tuple(f if indices[f.measurement_index]==f.measurement_index else
-                    EvidenceFragment(indices[f.measurement_index],f.polygon_cm) for f in observations)
-    return replace(source,measurements=records[used],observation_fragments=fragments)
-
+    size=len(used)
+    # 交换尾部有效记录填洞，不因删除前面的单格而重编号全部后续片段。
+    holes=[i for i in range(size) if i not in used]
+    tails=sorted(i for i in used if i>=size)
+    moved=dict(zip(tails,holes))
+    values=records[:size].copy()
+    for old,new in moved.items():values[new]=records[old]
+    fragments=tuple(f if f.measurement_index not in moved else
+                    EvidenceFragment(moved[f.measurement_index],f.polygon_cm) for f in observations)
+    return replace(source,measurements=values,observation_fragments=fragments)
 
 
 def _update_source(old,incoming,indices,cells):
@@ -176,10 +181,16 @@ def update_evidence(previous_sources: tuple[SourceEvidence,...], incoming_source
         if source.source_id==incoming.source_id:continue
         if source._support_bounds_cm is None or not any(_overlaps(source._support_bounds_cm,b) for b,_ in coverage):
             result.append(source);continue
+        candidates=set()
+        for bounds,_ in coverage:candidates.update(source._fragment_index.query(bounds))
+        if not candidates:
+            result.append(source);continue
         fragments=[]
-        for f in source.observation_fragments:
+        for index,f in enumerate(source.observation_fragments):
+            if index not in candidates:
+                fragments.append(f);continue
             cutters=(coverage[i] for i in coverage_index.query(_bounds(f.polygon_cm)))
-            fragments.extend(_cut(f,cutters,geometry_ops))
+            fragments.extend(_cut(f,cutters,geometry_ops,rectangles=incoming.yaw==0.))
         if tuple(fragments)==source.observation_fragments:result.append(source)
         else:
             trimmed=_compact(source,source.measurements,fragments)

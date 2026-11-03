@@ -44,3 +44,17 @@ def test_new_local_cell_preserves_unaffected_fragment_objects(compiled):
         second=kernel.update_evidence(first,incoming(.1,x=1),(0,),ops)
         assert second[0].observation_fragments[0] is first[0].observation_fragments[0]
         assert len(second[0].measurements)==2
+
+
+def test_foreign_local_update_only_cuts_intersecting_fragments(compiled,monkeypatch):
+    values=np.array([(x,0,0.,0,np.nan,np.nan) for x in range(128)],dtype=MEASUREMENT_DTYPE)
+    with _api().NativeTerrain(compiled[0]) as ops:
+        first=kernel.update_evidence((),SourceEvidence(1,.01,(0.,0.),0.,values,()),tuple(range(128)),ops)
+        calls=[];cut=kernel._cut
+        def counted(*args,**kwargs):calls.append(1);return cut(*args,**kwargs)
+        monkeypatch.setattr(kernel,'_cut',counted)
+        second=kernel.update_evidence(first,incoming(identity=2),(0,),ops)
+        assert len(calls)==1
+        previous=first[0].observation_fragments
+        unchanged=sum(any(f is p for f in second[0].observation_fragments) for p in previous)
+        assert unchanged>=126

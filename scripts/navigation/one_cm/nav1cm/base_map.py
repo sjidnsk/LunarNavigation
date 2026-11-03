@@ -71,6 +71,11 @@ class SourceEvidence:
         return min(xs),min(ys),max(xs),max(ys)
 
     @cached_property
+    def _fragment_index(self):
+        from .p3_evidence import _BoxIndex,_bounds
+        return _BoxIndex(_bounds(f.polygon_cm) for f in self.observation_fragments)
+
+    @cached_property
     def _observation_index(self):
         # 私有几何缓存，不记录测量历史；快照发布后不会修改。
         from .p3_map import _polygon
