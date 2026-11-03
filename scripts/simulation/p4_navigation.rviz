@@ -26,7 +26,7 @@ Visualization Manager:
       Reliability Policy: Best Effort
       Durability Policy: Volatile
       Depth: 1
-    Keep: 20
+    Keep: 1
   - Class: rviz_default_plugins/TF
     Name: TF
     Enabled: true
