@@ -272,6 +272,15 @@ def low_speed_profile(profile,*,linear_mps=.1,angular_rps=.1950770225306774):
     return result
 
 
+def runtime_source(root,environ=None):
+    """从选定正式构建读取同版脚本/配置；旧入口默认仍为P4/source。"""
+    root=Path(root).resolve();environ=os.environ if environ is None else environ
+    source=Path(environ.get('P4_SOURCE_DIR') or root/'source').resolve()
+    if not source.is_relative_to(root) or not source.is_dir():
+        raise ValueError('selected source must exist inside P4')
+    return source
+
+
 def runtime_environment(root,out):
     root,out=Path(root),Path(out)
     env=dict(os.environ,ROS_DOMAIN_ID=str(control_domain()),ROS_LOCALHOST_ONLY='0',
@@ -373,7 +382,8 @@ def main():
     from tf2_msgs.msg import TFMessage
     from std_msgs.msg import Bool,String
     from lunar_car_ctrl.msg import VehicleTelemetry
-    contract=load_topic_contract(root/'source');topics=contract['launch'];vehicle=contract['vehicle']
+    source_root=runtime_source(root)
+    contract=load_topic_contract(source_root);topics=contract['launch'];vehicle=contract['vehicle']
     selected_domain=control_domain()
     contexts=[];nodes=[];executors=[];children=[];logs=[];stopping=[False]
     for domain,name in [(P3_SOURCE_DOMAIN,'p4_p3_input_reader'),(selected_domain,'p4_tcp_runtime')]:
@@ -400,18 +410,20 @@ def main():
             for executor in executors:executor.spin_once(timeout_sec=.005)
     def stop(*unused):stopping[0]=True
     signal.signal(signal.SIGINT,stop);signal.signal(signal.SIGTERM,stop)
-    started=time.monotonic();last_report=0.;result=dict(control_domain=selected_domain,p3_source_domain=P3_SOURCE_DOMAIN,check_only=options.check_only)
+    started=time.monotonic();last_report=0.;result=dict(control_domain=selected_domain,p3_source_domain=P3_SOURCE_DOMAIN,check_only=options.check_only,
+        source_root=str(source_root),formal_build=os.environ.get('P4_FORMAL_BUILD'),
+        source_commit=os.environ.get('P4_FORMAL_COMMIT'))
     try:
         if not options.check_only:
-            profile=load_tcp_platform_profile(root/'source')
+            profile=load_tcp_platform_profile(source_root)
             config=out/'test-wheel.yaml';config.write_text(yaml.safe_dump(profile,sort_keys=False))
-            budgets=yaml.safe_load((root/'source/config/tcp_p3_feedback.yaml').read_text())
+            budgets=yaml.safe_load((source_root/'config/tcp_p3_feedback.yaml').read_text())
             if options.rviz_config is not None and not options.check_only:
                 qos['display']=QoSProfile(depth=1,reliability=ReliabilityPolicy.RELIABLE,durability=DurabilityPolicy.TRANSIENT_LOCAL)
                 qos['goal']=QoSProfile(depth=10,reliability=ReliabilityPolicy.RELIABLE)
                 display_worker,display_handles=attach_navigation_observer(source,target,dict(pose=PoseStamped,path=RosPath,odom=Odometry,marker=Marker),qos,budgets['odometry_timeout_s'],contract=contract)
                 handles.extend(display_handles)
-            args=launch_settings(root/'source',root/'.cache/nav1cm',config,budgets,exploration_strategy=options.exploration_strategy,contract=contract)
+            args=launch_settings(source_root,root/'.cache/nav1cm',config,budgets,exploration_strategy=options.exploration_strategy,contract=contract)
             env=runtime_environment(root,out)
             commands=[('navigation',['ros2','launch','lunar_pure_exploration_ros','nav1cm_exploration.launch.py']+[k+':='+str(v) for k,v in args.items()])]
             if options.rviz_config is not None:

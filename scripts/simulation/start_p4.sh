@@ -12,17 +12,19 @@ if (( $# )); then echo "不支持多余参数" >&2; exit 2; fi
 if [[ ! -f "$root/config/p4_environment.sh" ]]; then
   echo "缺少P4环境: $root/config/p4_environment.sh" >&2; exit 1
 fi
-source "$root/config/p4_environment.sh"
-python="$root/.venv/bin/python"
 # 文件锁由前台exec继承，进程退出即释放；不改变导航任务语义。
 mkdir -p "$root/run"
 exec 9>"$root/run/p4-start.lock"
 if ! flock -n 9; then
   echo "P4启动入口已经运行，请使用现有会话" >&2; exit 1
 fi
+source "$root/config/p4_environment.sh"
+python="$root/.venv/bin/python"
+source_root="${P4_SOURCE_DIR:-$root/source}"
 if [[ -f "$root/run/p4-current.json" ]]; then
   "$python" - "$root/run/p4-current.json" "$root" <<'PY'
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -46,7 +48,7 @@ def argument(name):
         if value==name and index+1<len(command):return command[index+1]
         if value.startswith(name+'='):return value[len(name)+1:]
     return None
-runtime=str(root/'source/scripts/simulation/p4_tcp_runtime.py')
+runtime=str(Path(os.environ.get('P4_SOURCE_DIR',root/'source'))/'scripts/simulation/p4_tcp_runtime.py')
 root_arg=argument('--root') or str(Path('/home/yanfa/P4').resolve());artifact=argument('--artifact')
 matching=(runtime in command and Path(root_arg).is_absolute() and Path(root_arg).resolve()==root
           and artifact is not None and Path(artifact).is_absolute() and Path(artifact).resolve().is_relative_to(root/'run'))
@@ -57,6 +59,6 @@ fi
 artifact="$root/run/p4-$(date +%Y%m%d-%H%M%S)-$$"
 args=(--root "$root" --artifact "$artifact")
 if [[ "$rviz" == true ]]; then
-  args+=(--rviz-config "$root/source/scripts/simulation/p4_navigation.rviz")
+  args+=(--rviz-config "$source_root/scripts/simulation/p4_navigation.rviz")
 fi
-exec "$python" "$root/source/scripts/simulation/p4_tcp_runtime.py" "${args[@]}"
+exec "$python" "$source_root/scripts/simulation/p4_tcp_runtime.py" "${args[@]}"

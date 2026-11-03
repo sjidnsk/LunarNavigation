@@ -108,3 +108,19 @@ def test_pointer_probe_ignores_reused_and_zombie_pid_but_detects_runtime(tmp_pat
     with pytest.raises(SystemExit):exec(compile(probe,'<pid-probe>','exec'),{})
     process('Z',actual);exec(compile(probe,'<pid-probe>','exec'),{})
     process('S',[sys.executable,'other.py']);exec(compile(probe,'<pid-probe>','exec'),{})
+
+
+
+def test_selected_build_supplies_runtime_and_rviz_without_editing_legacy_source(fake_p4):
+    root,start,ready=fake_p4
+    selected=root/'build/formal-test/source'
+    folder=selected/'scripts/simulation';folder.mkdir(parents=True)
+    old=root/'source/scripts/simulation/p4_tcp_runtime.py'
+    (folder/'p4_tcp_runtime.py').write_bytes(old.read_bytes())
+    (root/'config/p4_environment.sh').write_text(
+        'export P4_TEST_ENV=loaded\nexport P4_SOURCE_DIR="'+str(selected)+'"\n')
+    child=start();ready(child)
+    args=json.loads((root/'run'/str(child.pid)).read_text())
+    assert args[1]==str(folder/'p4_tcp_runtime.py')
+    assert args[-1]==str(folder/'p4_navigation.rviz')
+    assert old.exists()

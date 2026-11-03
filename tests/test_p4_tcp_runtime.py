@@ -434,9 +434,9 @@ def test_both_entries_use_shared_profile_and_preflight_precedes_acquire():
     root=Path(__file__).resolve().parents[1]
     main=(root/'scripts/simulation/p4_tcp_runtime.py').read_text(encoding='utf-8')
     check=(root/'scripts/simulation/check_tcp_navigation.py').read_text(encoding='utf-8')
-    assert "profile=load_tcp_platform_profile(root/'source')" in main
+    assert "profile=load_tcp_platform_profile(source_root)" in main
     assert "relay=TcpCommandRelay(profile," in main and "config.write_text(yaml.safe_dump(profile" in main
-    assert "profile=load_tcp_platform_profile(ROOT/'source')" in check
+    assert "profile=load_tcp_platform_profile(SOURCE)" in check
     assert check.index("if options.preflight_only:raise PreflightOnlyComplete()") < check.index("relay.acquire()")
 
 
@@ -716,3 +716,15 @@ def test_main_contexts_and_bridge_use_inherited_domain(monkeypatch,inherited,exp
     exec(compile(ast.Module(body=main.body[start:end+1],type_ignores=[]),'<main-domain-wiring>','exec'),scope)
     assert domains==[57,expected]
     assert len(publishers)==len(subscriptions)==(0 if expected==57 else 4)
+
+
+
+def test_runtime_source_uses_selected_build_and_rejects_escape(tmp_path):
+    from scripts.simulation.p4_tcp_runtime import runtime_source
+    root=tmp_path/'P4';legacy=root/'source';legacy.mkdir(parents=True)
+    selected=root/'build/formal-test/source';selected.mkdir(parents=True)
+    assert runtime_source(root,{})==legacy
+    assert runtime_source(root,{'P4_SOURCE_DIR':str(selected)})==selected
+    import pytest
+    with pytest.raises(ValueError,match='P4'):
+        runtime_source(root,{'P4_SOURCE_DIR':str(tmp_path/'other')})
