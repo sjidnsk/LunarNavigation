@@ -1,5 +1,7 @@
 # P4计算与持续发布解耦
 
+> 历史说明：本文记录旧版认证到期自动归零行为。该行为已由命令连续性晋级（来源4a4c9e23、部署证据8f5be5ad）替代；独立发布保留，真实输入失效、取消及异常仍撤销命令。下文原始证据按历史状态保留。
+
 任务TCP-CONTINUOUS-PUBLISH-20261103；基线7f4376e0，执行ROOT，复用hk/tcp-terrain-window-deploy-20261102。通用owner integration/pure-planner-orin；当前为TCP专题验证与部署，尚未移动长期线或push。
 
 ## 变化和职责
