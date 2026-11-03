@@ -55,6 +55,8 @@ DEFAULTS = {'global_period_s': '15.0',
 
 def _compose(context):
     values = {k: LaunchConfiguration(k).perform(context).strip() or v for k,v in DEFAULTS.items()}
+    if values['platform_selector'] not in {'wheel', 'legged'}:
+        raise ValueError('platform_selector must be wheel or legged')
     for name in ('coarse_resolution_m', 'policy_resolution_m'):
         values[name] = float(values[name])
         if not isfinite(values[name]) or values[name] < 0:
@@ -97,8 +99,6 @@ def _compose(context):
         raise ValueError('mppi_compute_envelope_s must be finite and positive')
     if values["control_backend"] not in {"path_mppi", "mpcc_cmd_vel"}:
         raise RuntimeError("control_backend 必须为 path_mppi/mpcc_cmd_vel")
-    if values['platform_selector'] not in {'wheel', 'legged'}:
-        raise ValueError('unsupported platform_selector')
     strategy = values["exploration_strategy"]
     if strategy not in {"none", "frontier", "drl"}:
         raise RuntimeError("exploration_strategy 必须为 none/frontier/drl")
@@ -126,6 +126,7 @@ def _compose(context):
     actions = [
         node("lunar_incremental_navigation_ros", "lunar_exploration_map_node", {
             **frames, **inputs, **qos, "platform_config": config,
+            "platform_selector": values["platform_selector"],
             "exploration_map_topic": values["exploration_map_topic"], "policy_map_service": values["policy_map_service"],
             "coarse_resolution_m": values["coarse_resolution_m"],
             "base_map_facts_topic": facts_topic,
