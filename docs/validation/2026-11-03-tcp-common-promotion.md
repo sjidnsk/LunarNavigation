@@ -28,3 +28,11 @@
 - 42个C++源码逐项同源，Humble隔离域93直接运行RViz3组及活动探索3组全部通过；测试日志interaction-humble-results.json在前述P4/tmp目录。
 - 清理只作用探索持有的导航句柄和专用图层；相机只订阅现有话题，不新增采集节点。
 - 无正式RViz界面操作/现场交互验收，不重启正式P4。
+
+## 最终复审 fix wave：平台配置消费者
+
+最终复审发现P1：足式launch传legged_orin.yaml，但共享地图节点硬编码按wheel加载，构造失败。公共修复efded1fc复用PlatformProfileFor既有能力变体/轮廓及净空，仅将已有platform_selector贯穿map/frontier，不新增地图实体或阈值。轮式默认及原地图权重保持。
+
+新增真实ROS目标exploration_map_consumer_test：实际足式配置创建节点、发布facts、接OccupancyGrid；含默认wheel与非法selector。Windows launch RED4failed后GREEN84pass；ARM独立CMake构建地图库及节点成功，旧源码RED足式platform wheel mismatch，新源码GREEN3/3。首次GREEN误加载正式旧库；显式LD_LIBRARY_PATH选择隔离build并ldd确认后全部通过，原日志保留。
+
+隔离路径P4/tmp/branch-sync-20261103/platform-map-fix，编译与测试未更改正式source/install。足式候选75389f22已接修复且独立最终复审确认P1关闭，轮式/TCP接收相同公共修复后再结案。
