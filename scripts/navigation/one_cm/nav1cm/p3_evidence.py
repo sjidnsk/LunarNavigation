@@ -112,6 +112,45 @@ def _compact(source, records, observations):
     return replace(source,measurements=records[used],observation_fragments=fragments)
 
 
+
+def _update_source(old,incoming,indices,cells):
+    """同格网值更新保留几何索引，只有覆盖形状变化才重建相应片段。"""
+    support={} if old is None else old._observation_index
+    old_indices=np.array([support[cells[i]][0][0].measurement_index if cells[i] in support else -1 for i in indices])
+    present=old_indices>=0
+    same=np.zeros(len(indices),dtype=bool)
+    if old is not None and present.any():
+        a=old.measurements[old_indices[present]];b=incoming.measurements[np.asarray(indices)[present]]
+        equal=np.ones(len(a),dtype=bool)
+        for name in a.dtype.names:
+            equal &= (a[name]==b[name]) | (np.isnan(a[name]) & np.isnan(b[name]))
+        same[present]=equal
+    geometry={cells[i] for i in indices if cells[i] not in support or not support[cells[i]][1]}
+    if old is not None and same.all() and not geometry:return old,geometry
+    records=np.empty(0,dtype=incoming.measurements.dtype) if old is None else old.measurements.copy()
+    fragments=[] if old is None else [f for f in old.observation_fragments
+        if _cell(old.measurements[f.measurement_index]) not in geometry]
+    index=support.copy();added=[]
+    for position,i in enumerate(indices):
+        cell=cells[i];record_index=int(old_indices[position])
+        if record_index<0:
+            record_index=len(records)+len(added);added.append(incoming.measurements[i])
+        elif not same[position]:records[record_index]=incoming.measurements[i]
+        if cell in geometry:
+            x,y=cell;f=EvidenceFragment(record_index,tuple(_polygon((x,y,x+1,y+1,0),incoming)))
+            fragments.append(f);index[cell]=((f,),True)
+    if added:records=np.concatenate((records,np.array(added,dtype=records.dtype)))
+    geometry_unchanged=old is not None and not geometry
+    fs=old.observation_fragments if geometry_unchanged else tuple(fragments)
+    value=replace(incoming,measurements=records,observation_fragments=fs)
+    if len({f.measurement_index for f in fs})!=len(records):
+        value=_compact(value,records,fs)
+    else:
+        value.__dict__['_observation_index']=index
+        if geometry_unchanged and '_support_bounds_cm' in old.__dict__:
+            value.__dict__['_support_bounds_cm']=old._support_bounds_cm
+    return value,geometry
+
 def update_evidence(previous_sources: tuple[SourceEvidence,...], incoming_source: SourceEvidence,
                     direct_measurement_indices: tuple[int,...], geometry_ops: NativeTerrain) -> tuple[SourceEvidence,...]:
     """只维护当前有效观测；导航分类由P3MapStore既有存储独立维护。"""
@@ -127,8 +166,10 @@ def update_evidence(previous_sources: tuple[SourceEvidence,...], incoming_source
     if len(set(cells))!=len(cells) or len(set(indices))!=len(indices):raise ValueError('duplicate incoming cell or direct index')
     if any(i<0 or i>=len(cells) for i in indices):raise ValueError('invalid direct measurement index')
     if not indices:return previous_sources
-    direct={cells[i] for i in indices}
-    coverage=tuple(_coverage(direct,incoming))
+    value,geometry_cells=_update_source(old,incoming,indices,cells)
+    if old is value:return previous_sources
+    # 同格网只有测量值变化时，覆盖没有变化，不必裁剪任何其他来源。
+    coverage=tuple(_coverage(geometry_cells,incoming))
     coverage_index=_BoxIndex(box for box,_ in coverage)
     result=[]
     for source in previous_sources:
@@ -141,23 +182,8 @@ def update_evidence(previous_sources: tuple[SourceEvidence,...], incoming_source
             fragments.extend(_cut(f,cutters,geometry_ops))
         if tuple(fragments)==source.observation_fragments:result.append(source)
         else:
-            value=_compact(source,source.measurements,fragments)
-            if value is not None:result.append(value)
-    records=incoming.measurements
-    fragments=[]
-    if old:
-        retained=[f for f in old.observation_fragments if _cell(old.measurements[f.measurement_index]) not in direct]
-        used=sorted({f.measurement_index for f in retained})
-        records=np.concatenate((old.measurements[used],incoming.measurements[list(indices)]))
-        remap={index:i for i,index in enumerate(used)}
-        fragments=[EvidenceFragment(remap[f.measurement_index],f.polygon_cm) for f in retained]
-        base=len(used)
-    else:
-        records=incoming.measurements[list(indices)];base=0
-    for position,index in enumerate(indices):
-        x,y=cells[index]
-        fragments.append(EvidenceFragment(base+position,tuple(_polygon((x,y,x+1,y+1,0),incoming))))
-    value=replace(incoming,measurements=records,observation_fragments=tuple(fragments))
+            trimmed=_compact(source,source.measurements,fragments)
+            if trimmed is not None:result.append(trimmed)
     # 保持源顺序稳定，来源身份不是本次更新的顺序。
     by_id={s.source_id:s for s in result};by_id[value.source_id]=value
     return tuple(by_id[s.source_id] for s in previous_sources if s.source_id in by_id)+(() if old else (value,))

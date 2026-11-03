@@ -440,22 +440,6 @@ def _cache_source_classifications(previous, regions):
     return rows
 
 
-def _same_evidence(old, new):
-    # 片段顺序和局部记录索引不是公开物理量。
-    def layer(source, fragments):
-        values = [tuple(None if np.isnan(v) else v for v in record)
-                  for record in source.measurements]
-        return {(values[f.measurement_index], f.polygon_cm) for f in fragments}
-
-    if old is new or (len(old) == len(new) and all(a is b for a, b in zip(old, new))):
-        return True
-    if tuple(s.source_id for s in old) != tuple(s.source_id for s in new):
-        return False
-    return all(a is b or (
-        layer(a, a.observation_fragments) == layer(b, b.observation_fragments))
-        for a, b in zip(old, new))
-
-
 def _next_facts(facts, snapshot, observations, update, terrain):
     from .p3_evidence import update_evidence
     if facts is None or not observations:
@@ -471,7 +455,7 @@ def _next_facts(facts, snapshot, observations, update, terrain):
     if len(indices) != len(direct_cells):
         raise ValueError("missing direct source measurements")
     sources = update_evidence(facts.sources, incoming, indices, terrain)
-    if snapshot is facts.world and _same_evidence(facts.sources, sources):
+    if snapshot is facts.world and sources is facts.sources:
         return facts
     return BaseMapFacts(snapshot, facts.raw_revision + 1, sources)
 
@@ -555,7 +539,6 @@ class P3MapStore:
                 fresh_classified = _rectangles(eligible)
                 for selected in (CellState.FREE, CellState.BLOCKED, CellState.UNKNOWN):
                     for packet, historical in ((regions, True), (fresh_classified, False)):
-                        accepted = {}
                         candidates = (_free_rows(packet, update) if selected == CellState.FREE else
                                       (cell for region in packet if region[4] == selected
                                        for cell in _blocked_rows(region, update)))
@@ -573,14 +556,12 @@ class P3MapStore:
                                         if old_state != CellState.FREE or x1 <= lo or x0 >= hi:
                                             remaining.append((x0, x1, old_state))
                                         else:
-                                            accepted[y] = _paint(accepted.get(y, ()), max(x0, lo), min(x1, hi), selected)
                                             if x0 < lo: remaining.append((x0, lo, old_state))
                                             if x1 > hi: remaining.append((hi, x1, old_state))
                                     if remaining: rows[y] = tuple(remaining)
                                     else: rows.pop(y, None)
                                 else:
                                     rows[y] = _paint(rows.get(y, ()), lo, hi, state)
-                                    accepted[y] = _paint(accepted.get(y, ()), lo, hi, state)
                 fresh_regions = _rectangles(_clip_row_maps(fresh, mask))
                 owners = _record_observation_owners(owners, source,
                                                     observation_regions, fresh_regions, update)

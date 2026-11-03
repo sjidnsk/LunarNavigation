@@ -5,6 +5,7 @@ Observation support and retained classification support are separate: a finite
 UNKNOWN observation can coexist with an older BLOCKED classification.
 """
 from dataclasses import dataclass, field
+from functools import cached_property
 import math
 import operator
 import numpy as np
@@ -39,7 +40,6 @@ class SourceEvidence:
     yaw: float
     measurements: np.ndarray = field(repr=False)
     observation_fragments: tuple[EvidenceFragment, ...]
-    _support_bounds_cm: tuple[float, float, float, float] | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self):
         identity = operator.index(self.source_id)
@@ -63,11 +63,23 @@ class SourceEvidence:
             if any(not isinstance(f, EvidenceFragment) or f.measurement_index >= len(values) for f in fragments):
                 raise ValueError('fragment references a missing measurement')
             object.__setattr__(self, name, fragments)
-        # 不可变源只计算一次包围盒；远处局部更新无需扫描其历史测量/片段。
-        points = [point for fragment in self.observation_fragments for point in fragment.polygon_cm]
-        if points:
-            xs, ys = zip(*points)
-            object.__setattr__(self, '_support_bounds_cm', (min(xs), min(ys), max(xs), max(ys)))
+    @cached_property
+    def _support_bounds_cm(self):
+        points=[p for f in self.observation_fragments for p in f.polygon_cm]
+        if not points:return None
+        xs,ys=zip(*points)
+        return min(xs),min(ys),max(xs),max(ys)
+
+    @cached_property
+    def _observation_index(self):
+        # 私有几何缓存，不记录测量历史；快照发布后不会修改。
+        from .p3_map import _polygon
+        groups={}
+        for f in self.observation_fragments:
+            r=self.measurements[f.measurement_index];cell=int(r['x']),int(r['y'])
+            groups.setdefault(cell,[]).append(f)
+        return {cell:(tuple(fs),len(fs)==1 and fs[0].polygon_cm==tuple(_polygon((*cell,cell[0]+1,cell[1]+1,0),self)))
+                for cell,fs in groups.items()}
 
 
 @dataclass(frozen=True)
