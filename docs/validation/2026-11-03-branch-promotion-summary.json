@@ -1,0 +1,50 @@
+{
+  "task": "TCP-COMMON-PROMOTION-20261103",
+  "source": "02b7ec45",
+  "formal_payload_unchanged": "7fcc7362",
+  "reviewed_integration_anchors": {
+    "integration/pure-planner-orin": "53ab85da735679f24a49acd6b85a7ed743542f42",
+    "app/orin-unreal-simulation": "42154a0c5d65a9623af32611fc5586c8d0ddc610",
+    "app/orin-real-vehicle": "fa1a70cfe32d525bf59cffa097b853321b43d174",
+    "app/orin-legged-vehicle": "046e7cb1345347a7aa10554fb514e3f230d32f1f"
+  },
+  "public_algorithm": "443b9eb2",
+  "public_interaction": "29c5d70d",
+  "public_platform_consumer_fix": "efded1fc",
+  "tcp_test_readiness_fix": "5836a8f6",
+  "wheel_test_contract_fix": "9d568282",
+  "legged_window_adapter": "70571a3c",
+  "legged_environment_fix": "0d080910",
+  "legged_launch_merge": "75389f22",
+  "platform_configs_preserved": {
+    "app/orin-real-vehicle": {
+      "config/legged.yaml": true,
+      "config/legged_orin.yaml": true,
+      "config/orin_controller.yaml": true,
+      "config/orin_hardware.yaml": true,
+      "config/orin_legged_controller.yaml": true,
+      "config/wheel.yaml": true,
+      "config/wheel_isaac_navigation_demo.yaml": true,
+      "config/wheel_navigation.yaml": true,
+      "config/wheel_orin.yaml": true
+    },
+    "app/orin-legged-vehicle": {
+      "config/legged.yaml": true,
+      "config/legged_navigation.yaml": true,
+      "config/legged_orin.yaml": true,
+      "config/orin_controller.yaml": true,
+      "config/orin_hardware.yaml": true,
+      "config/orin_legged_controller.yaml": true,
+      "config/p3_hardware237_5cm.yaml": true,
+      "config/p3_hardware237_bag_5cm.yaml": true,
+      "config/wheel.yaml": true,
+      "config/wheel_isaac_navigation_demo.yaml": true,
+      "config/wheel_navigation.yaml": true,
+      "config/wheel_orin.yaml": true
+    }
+  },
+  "runtime_deployment": "NOT_RUN; formal P4 not replaced or restarted",
+  "device_navigation_and_exploration": "NOT_RUN",
+  "push": "NOT_RUN",
+  "resource_disposition": "temporary branches and worktrees retained pending authorized recycling"
+}
