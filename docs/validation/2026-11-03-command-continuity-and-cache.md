@@ -28,3 +28,14 @@
 ## 部署边界
 
 隔离路径/home/yanfa/P4/build/qualification-command-continuity-20261103。只上传必要源码和测试，原正式封存构建未零散覆盖。P3/Env_X未修改、未发现场目标/速度。现场导航、真实转向与轨迹稳定性NOT_RUN；不能用私域DDS代替车辆验收。后续完整候选构建/选择回执追加记录，不覆盖这些边界。
+
+
+## 完整正式构建落地
+
+源码提交4a4c9e23fb9b28941c28b8d18a7db7fc7e7c5c01。新构建/home/yanfa/P4/build/formal-20261103-continuity：复用父构建formal-20261103-unified的完整source/install，797源码逐项匹配新提交，三份安装Python随本轮更新；35份原生动态库源码未变且摘要与父构建相同，未将其包装成本轮重编译。10项目包全部解析到新install，旧污染环境与ldd检查通过。所有正式配置保持不变。
+
+在最终安装位置预编译三套求解器13283.94ms，第二全新进程加载61.01ms，产物mtime不变；前进/倒退/旋转实际求解23.75/22.24/20.29ms且完整认证通过。封存1987文件，p4_build_selection --check-only和实际原子选择通过；active=continuity，previous=unified；实际稳定环境入口再次核验10包一致。
+
+切换时P4已退出，本轮未启动导航、恢复目标或发布车控；P3/Env_X未改。下一次bash ~/P4/start_p4.sh加载本轮版本。车辆首次导航/轨迹稳定性仍NOT_RUN；原输入锁内同步Path/日志问题已定位但未修改。独立收尾审查无新增阻断问题。
+
+处置：已提交并完整选为TCP正式构建，待owner主线晋级及相关应用线同步；不merge/push、不删除历史构建或工作树。小型部署回执和本轮验证记录保存在D:/CodexDownloads/lunar_navigation/command-continuity-20261103。
