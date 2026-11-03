@@ -67,11 +67,13 @@ def terminal_candidate(state, grid, reference, limits, *, horizon_s=4.):
     angular_brake=(speed<0 or abs(state.w)>maximum or speed*speed/(2*alpha)>distance+1e-12)
     if abs(state.v)>1e-10 or angular_brake:
         prefix=braking_prefix(state,grid,reference,limits,retain_angular=not angular_brake)
-        remaining=horizon_s-prefix.times[-1]
-        if remaining<=1e-12:return prefix
-        endpoint=VehicleState(*prefix.states[-1,:5])
-        continuation=terminal_candidate(endpoint,grid,reference,limits,horizon_s=remaining)
-        return join_trajectories(prefix,continuation)
+        # 零时长前缀没有改变实测初态，直接沿用解析转向，避免原状态递归。
+        if prefix.times[-1]>0.:
+            remaining=horizon_s-prefix.times[-1]
+            if remaining<=1e-12:return prefix
+            endpoint=VehicleState(*prefix.states[-1,:5])
+            continuation=terminal_candidate(endpoint,grid,reference,limits,horizon_s=remaining)
+            return join_trajectories(prefix,continuation)
     peak = min(maximum, math.sqrt(alpha * distance + speed * speed / 2))
     accelerate_s = max(0., (peak - speed) / alpha)
     acceleration_distance = (peak * peak - speed * speed) / (2 * alpha)

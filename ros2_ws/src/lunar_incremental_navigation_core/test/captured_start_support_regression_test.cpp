@@ -72,21 +72,21 @@ CapturedFixture Captured() {
   return f;
 }
 
-TEST(CapturedStartSupportRegression, ShiftedStoppedPoseRetainsNativeConnections) {
+TEST(CapturedStartSupportRegression, ShiftedUnknownPoseDoesNotReceiveAssumedSupport) {
   const auto f = Captured();
   const Pose2 anchor{.position_m = {2.697352191150726, 2.79620491463381},
                      .yaw_rad = 1.58025788508474};
   ASSERT_EQ(f.fine->State({13, 13}), FineCellState::kUnknown);
   const auto result = RequestLocalStartPatchBuilder{}.BuildStartConnections(
       f.fine, f.fine->geometry(), anchor, f.capability, f.profile);
-  EXPECT_EQ(result.status, StartPatchResult::Status::kReady);
-  EXPECT_FALSE(result.connections.empty());
-  // Request support never turns a virtual height into persistent evidence.
+  EXPECT_EQ(result.status, StartPatchResult::Status::kUnresolved);
+  EXPECT_TRUE(result.connections.empty());
+  // 起点未知时不拟合高程，也不修改持久观测。
   EXPECT_EQ(f.fine->State({13, 13}), FineCellState::kUnknown);
   EXPECT_FALSE(f.raw->ElevationAt({17, 10}));
 }
 
-TEST(CapturedStartSupportRegression, FractionalCellMotionDoesNotCreateStencilHoles) {
+TEST(CapturedStartSupportRegression, FractionalMotionDoesNotFillUnknownSupport) {
   const auto f = Captured();
   for (const double dx : {-.09, -.03, 0., .03, .09}) {
     for (const double dy : {0., .03, .096, .099}) {
@@ -94,31 +94,22 @@ TEST(CapturedStartSupportRegression, FractionalCellMotionDoesNotCreateStencilHol
       const Pose2 anchor{.position_m = {2.7 + dx, 2.7 + dy}};
       const auto result = RequestLocalStartPatchBuilder{}.BuildStartConnections(
           f.fine, f.fine->geometry(), anchor, f.capability, f.profile);
-      EXPECT_EQ(result.status, StartPatchResult::Status::kReady);
-      EXPECT_FALSE(result.connections.empty());
+      EXPECT_EQ(result.status, StartPatchResult::Status::kUnresolved);
+      EXPECT_TRUE(result.connections.empty());
     }
   }
 }
 
-TEST(CapturedStartSupportRegression, DerivativeHaloDoesNotBecomeMovementSupport) {
+TEST(CapturedStartSupportRegression, MissingDerivativeHaloRemainsUnknown) {
   const auto f = Captured();
   const Pose2 anchor{.position_m = {2.697352191150726, 2.79620491463381}};
   const auto result = RequestLocalStartPatchBuilder{}.Build(
       f.fine, anchor, f.capability, f.profile);
-  ASSERT_TRUE(result.view);
-  const GridIndex halo{17, 10};
-  EXPECT_EQ(f.fine->State(halo), FineCellState::kUnknown);
-  EXPECT_EQ(result.view->Source(halo), LocalCellSource::kUnknown);
-  for (const auto& override : result.view->overrides()) {
-    const auto lo = f.fine->geometry().origin_m();
-    const double r = f.fine->geometry().resolution_m();
-    const double x = std::clamp(anchor.position_m.x,
-        lo.x + override.index.x * r, lo.x + (override.index.x + 1) * r);
-    const double y = std::clamp(anchor.position_m.y,
-        lo.y + override.index.y * r, lo.y + (override.index.y + 1) * r);
-    EXPECT_LE(std::hypot(anchor.position_m.x - x, anchor.position_m.y - y),
-              result.view->start_patch_radius_m());
-  }
+  EXPECT_EQ(result.status, StartPatchResult::Status::kUnresolved);
+  EXPECT_FALSE(result.view);
+  EXPECT_EQ(result.assumed_cells, 0U);
+  EXPECT_EQ(f.fine->State({17,10}), FineCellState::kUnknown);
+  EXPECT_FALSE(f.raw->ElevationAt({17,10}));
 }
 
 }  // namespace

@@ -7,6 +7,7 @@ launch:
   execution_reference_topic: /Car/T4/control/path_execution_reference
   tracking_status_topic: /Car/T4/control/tracking_status
   exploration_map_topic: /Car/T4/mapping/exploration_map
+  base_map_facts_topic: /Car/T4/mapping/base_facts
   policy_map_service: /Car/T4/mapping/get_policy_map
   task_topic: /Car/T4/exploration/task
   status_topic: /Car/T4/exploration/status

@@ -149,6 +149,7 @@ class GridSnapshot:
     resolution_m: float
     cells: np.ndarray = field(repr=False)
     allow_unknown: bool = False
+    obstacle_boxes_m: tuple | None = field(default=None, repr=False)
     _digest: str = field(init=False, repr=False, compare=False)
 
     def __post_init__(self):
@@ -173,6 +174,15 @@ class GridSnapshot:
         digest.update(np.asarray(cells.shape, dtype="<i8").tobytes())
         digest.update(b"\x01" if self.allow_unknown else b"\x00")
         digest.update(cells.tobytes())
+        if self.obstacle_boxes_m is not None:
+            if not self.allow_unknown:
+                raise ValueError('original obstacle geometry requires traversable UNKNOWN')
+            boxes=tuple(tuple(float(v) for v in b) for b in self.obstacle_boxes_m)
+            if any(len(b)!=4 or not all(np.isfinite(b)) or b[0]>=b[2] or b[1]>=b[3] for b in boxes):
+                raise ValueError('invalid original obstacle rectangles')
+            object.__setattr__(self,'obstacle_boxes_m',boxes)
+            digest.update(b'original-rectangles-v1')
+            digest.update(np.asarray(boxes,dtype='<f8').tobytes())
         object.__setattr__(self, "_digest", digest.hexdigest())
 
     def digest(self) -> str:

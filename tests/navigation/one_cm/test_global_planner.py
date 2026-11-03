@@ -194,3 +194,86 @@ def test_benchmark_rejects_route_identity_mismatch(changed):
               "path": altered.route.points.tolist(), "validation": evidence,
               "rss_after": {}, "storage": altered.storage}
     assert benchmark.summarize([record])["successes"] == 0
+
+def test_soft_edge_costs_are_only_evaluated_on_search_demand():
+    api = load_api()
+    source = world([CellRect(200, -100, 210, 100)])
+    result = api.AdaptiveGlobalPlanner(WheelLimits(), soft_clearance_m=.5).plan(
+        source, (0, 0), (5, 0), 1, budget_s=10.)
+    assert result.has_reference
+    assert 0 < result.storage['edge_cost_evaluations'] < result.storage['edges']
+
+
+def test_lazy_cost_keeps_connection_direction_when_reverse_is_expanded_first(monkeypatch):
+    import sys
+    api = load_api()
+    original_cost = api.path_cost
+    directions = {}
+    observed = []
+
+    def profile(frame, event, arg):
+        if event == 'return' and frame.f_code.co_name == 'connect':
+            values = frame.f_locals
+            points = (values['nodes'][values['i']], values['nodes'][values['j']])
+            directions[frozenset(points)] = points
+
+    def recording_cost(points, *args, **kwargs):
+        plan_frame = sys._getframe(1).f_back
+        if 'search_began' in plan_frame.f_locals and 'shortcut_began' not in plan_frame.f_locals:
+            expected = directions[frozenset(points)]
+            observed.append(plan_frame.f_locals['nodes'][plan_frame.f_locals['current']] != expected[0])
+            assert tuple(points) == expected
+        return original_cost(points, *args, **kwargs)
+
+    monkeypatch.setattr(api, 'path_cost', recording_cost)
+    previous = sys.getprofile()
+    sys.setprofile(profile)
+    try:
+        result = api.AdaptiveGlobalPlanner(WheelLimits(), soft_clearance_m=.5).plan(
+            world([CellRect(200, -100, 210, 100)]), (5, 0), (0, 0), 1, budget_s=10.)
+    finally:
+        sys.setprofile(previous)
+    assert result.has_reference
+    assert any(observed), '必须覆盖反向首先展开的连接'
+
+
+def test_zero_soft_band_does_not_integrate_edges(monkeypatch):
+    api = load_api()
+    def forbidden(*args, **kwargs):
+        raise AssertionError('零软带不能积分')
+    monkeypatch.setattr(api, 'path_cost', forbidden)
+    result = api.AdaptiveGlobalPlanner(WheelLimits(), soft_clearance_m=0).plan(
+        world([CellRect(200, -100, 210, 100)]), (0, 0), (5, 0), 1, budget_s=10.)
+    assert result.has_reference
+    assert result.storage['edge_cost_evaluations'] == 0
+
+
+def test_lazy_edge_integration_obeys_budget(monkeypatch):
+    api = load_api()
+    clock = [0.]
+    monkeypatch.setattr(api.time, 'perf_counter', lambda: clock[0])
+    def exhausted(points, boxes, soft, weight, check, **kwargs):
+        clock[0] = 2.
+        check()
+        raise AssertionError('预算耗尽后不得继续积分')
+    monkeypatch.setattr(api, 'path_cost', exhausted)
+    result = api.AdaptiveGlobalPlanner(WheelLimits(), soft_clearance_m=.5).plan(
+        world([CellRect(200, -100, 210, 100)]), (0, 0), (5, 0), 1, budget_s=1.)
+    assert result.reason_code == 'BUDGET_EXHAUSTED'
+    assert result.route is None and not result.has_reference
+    assert result.storage['edges'] > 0
+
+
+def test_scalar_segment_box_overlap_matches_vector_reference():
+    api = load_api()
+    rng = np.random.default_rng(71)
+    for _ in range(600):
+        low = rng.uniform(-3, 3, 2)
+        box = np.r_[low, low+rng.uniform(.01, 2, 2)]
+        a, b = rng.uniform(-5, 5, (2, 2))
+        assert api._segment_hits_box(a, b, box) == (not api._segment_clear(a, b, box[None, :]))
+    box = (0., 0., 1., 1.)
+    for a, b in [((-1., 0.), (2., 0.)), ((0., 0.), (0., 0.)),
+                 ((-1., -1.), (0., 0.)), ((.5, -1.), (.5, 2.))]:
+        assert api._segment_hits_box(a, b, box)
+    assert not api._segment_hits_box((-1., -.01), (2., -.01), box)

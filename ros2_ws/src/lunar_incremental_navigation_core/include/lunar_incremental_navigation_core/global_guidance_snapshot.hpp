@@ -33,8 +33,8 @@ class GlobalGuidanceTile final {
   GlobalGuidanceTile& operator=(const GlobalGuidanceTile&) = delete;
   GlobalGuidanceTile& operator=(GlobalGuidanceTile&&) = delete;
 
-  GlobalGuidanceTile(StateArray states, RiskArray terrain_risks)
-      : states_(std::move(states)), terrain_risks_(std::move(terrain_risks)) {
+  GlobalGuidanceTile(const StateArray& states, const RiskArray& terrain_risks)
+      : states_(states), terrain_risks_(terrain_risks) {
     for (std::size_t offset = 0U; offset < kGridTileCellCount; ++offset) {
       if (!ValidState(states_[offset]) ||
           !std::isfinite(terrain_risks_[offset]) ||

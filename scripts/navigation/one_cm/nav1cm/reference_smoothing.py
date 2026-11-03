@@ -5,7 +5,7 @@ from time import perf_counter
 import numpy as np
 
 from .contracts import Route, _readonly_array
-from .global_planner import _segment_clear, path_cost
+from .global_planner import _segment_clear
 
 
 @dataclass(frozen=True)
@@ -330,17 +330,8 @@ def shape_route(route: Route, blocked_boxes, *, budget_s=.025, max_trim_m=.75,
             return fallback("GEOMETRY_REJECTED")
         if np.any(overlaps(shaped.proof_boxes)):
             return fallback("GEOMETRY_REJECTED")
-        if soft_clearance_m > 0 and clearance_weight > 0:
-            # 搜索、拉直与Bezier整形复用同一路径代价，避免安全的剪角重新贴障。
-            original_cost = path_cost(points, blocked, soft_clearance_m, clearance_weight, check,corner_radius=corner_radius)
-            shaped_cost = path_cost(shaped.route.points, blocked, soft_clearance_m, clearance_weight, check,corner_radius=corner_radius)
-            original_length = np.linalg.norm(np.diff(points, axis=0), axis=1).sum()
-            shaped_length = np.linalg.norm(np.diff(shaped.route.points, axis=0), axis=1).sum()
-            has_clearance_cost = (original_cost > original_length + 1e-9 or
-                                  shaped_cost > shaped_length + 1e-9)
-            # 无近障代价时仍允许为最终朝向生成稍长的平滑末段。
-            if has_clearance_cost and shaped_cost > original_cost + 1e-9:
-                return fallback("CLEARANCE_COST")
+        # 平滑仅由连续几何证明决定接受；软净空代价继续用于上游搜索和拉直，
+        # 不因曲线更靠近障碍而撤销已经通过碰撞检查的平滑结果。
         check()
         return shaped
     except _Exhausted as exhausted:

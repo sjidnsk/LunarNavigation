@@ -6,12 +6,16 @@
 #include <cmath>
 #include <condition_variable>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <optional>
 #include <thread>
+#include <std_msgs/msg/string.hpp>
+#include <utility>
 
 #include "lunar_incremental_navigation_ros/exploration_map.hpp"
+#include "lunar_incremental_navigation_ros/exploration_facts_codec.hpp"
 #include "lunar_incremental_navigation_ros/exploration_map_node.hpp"
 #include "lunar_incremental_navigation_ros/input_store.hpp"
 #include "lunar_incremental_navigation_ros/platform_config.hpp"
@@ -41,13 +45,17 @@ bool EquivalentTransform(const geometry_msgs::msg::Transform& a,
 
 struct ExplorationMapNode::Impl {
   ExplorationMapNode& node;
-  std::string map_frame, odom_frame, base_frame, epoch;
+  std::string map_frame, odom_frame, base_frame, epoch, base_map_facts_topic;
   double window;
   std::unique_ptr<InputStore> inputs;
   std::unique_ptr<ExplorationMap> map;
+  std::function<std::unique_ptr<ExplorationMap>()> make_map;
   std::unique_ptr<PolicyMapExporter> exporter;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr publisher;
   rclcpp::Subscription<grid_map_msgs::msg::GridMap>::SharedPtr map_subscription;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr facts_subscription;
+  std_msgs::msg::String::ConstSharedPtr latest_facts;
+  std::optional<nav_msgs::msg::OccupancyGrid> last_published_grid;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_subscription;
   rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_subscription,
       static_subscription;
@@ -56,7 +64,7 @@ struct ExplorationMapNode::Impl {
   std::condition_variable condition;
   bool stop = false, pending = false;
   std::thread worker;
-  std::shared_ptr<const PolicyService::Response> published;
+  std::shared_ptr<const PublishedExplorationMap> published;
   explicit Impl(ExplorationMapNode& n) : node(n) {
     auto text = [&](const char* key, const std::string& value) {
       return node.declare_parameter<std::string>(key, value);
@@ -97,10 +105,14 @@ struct ExplorationMapNode::Impl {
         !std::isfinite(profile.goal_yaw_tolerance_rad) ||
         profile.goal_yaw_tolerance_rad < 0)
       throw std::invalid_argument("invalid map query profile");
-    map = std::make_unique<ExplorationMap>(
-        capability, profile,
-        node.declare_parameter<double>("policy_resolution_m", .2),
-        node.declare_parameter<double>("coarse_resolution_m", .2));
+    const double policy_resolution = node.declare_parameter<double>("policy_resolution_m", 0.);
+    const double coarse_resolution = node.declare_parameter<double>("coarse_resolution_m", 0.);
+    if (!std::isfinite(policy_resolution) || policy_resolution < 0. ||
+        !std::isfinite(coarse_resolution) || coarse_resolution < 0.)
+      throw std::invalid_argument("invalid map resolution (0 follows source)");
+    make_map = [capability, profile, policy_resolution, coarse_resolution] {
+      return std::make_unique<ExplorationMap>(capability, profile, policy_resolution, coarse_resolution);
+    };
     exporter = std::make_unique<PolicyMapExporter>(capability, profile);
     inputs = std::make_unique<InputStore>(map_frame, odom_frame);
     epoch = "observed-projection-v1-" +
@@ -113,16 +125,29 @@ struct ExplorationMapNode::Impl {
         MakeTraversabilityInputQos(text("map_qos_reliability", "reliable"),
                                    text("map_qos_durability", "volatile"));
     if (!map_qos) throw std::invalid_argument("invalid map input QoS");
-    map_subscription = node.create_subscription<grid_map_msgs::msg::GridMap>(
-        text("map_topic", "/Car/T3/mapping/grid_map"), *map_qos,
-        [this](grid_map_msgs::msg::GridMap::ConstSharedPtr message) {
-          RCLCPP_DEBUG(
-              node.get_logger(), "地图接收 stamp=%d res=%.6f cells=%zu",
-              message->header.stamp.sec, message->info.resolution,
-              message->data.empty() ? 0UL : message->data.front().data.size());
-          inputs->UpdateLocal(std::move(message));
-          Wake();
-        });
+    base_map_facts_topic = text("base_map_facts_topic", "");
+    if (!base_map_facts_topic.empty()) {
+      facts_subscription = node.create_subscription<std_msgs::msg::String>(
+          base_map_facts_topic, rclcpp::QoS(1).reliable().transient_local(),
+          [this](std_msgs::msg::String::ConstSharedPtr message) {
+            {
+              std::lock_guard lock(mutex);
+              latest_facts = std::move(message);
+            }
+            Wake();
+          });
+    } else {
+      map_subscription = node.create_subscription<grid_map_msgs::msg::GridMap>(
+          text("map_topic", "/Car/T3/mapping/grid_map"), *map_qos,
+          [this](grid_map_msgs::msg::GridMap::ConstSharedPtr message) {
+            RCLCPP_DEBUG(
+                node.get_logger(), "地图接收 stamp=%d res=%.6f cells=%zu",
+                message->header.stamp.sec, message->info.resolution,
+                message->data.empty() ? 0UL : message->data.front().data.size());
+            inputs->UpdateLocal(std::move(message));
+            Wake();
+          });
+    }
     odom_subscription = node.create_subscription<nav_msgs::msg::Odometry>(
         text("odometry_topic", "/Car/T3/localization/odometry"),
         rclcpp::QoS(1).best_effort(),
@@ -150,25 +175,8 @@ struct ExplorationMapNode::Impl {
             response->reason_code = "INPUT_UNAVAILABLE";
             return;
           }
-          *response = *snapshot;
-          const auto stamp =
-              static_cast<std::int64_t>(response->processed_stamp.sec) *
-                  1000000000LL +
-              response->processed_stamp.nanosec;
-          const auto requested = request->minimum_map_stamp_ns;
-          if (stamp < requested) {
-            response->ready = false;
-            response->reason_code = "MAP_STAMP_TOO_OLD";
-            return;
-          }
-          // 旧版本可用全部当前tile形成保守delta；同版本不重复传输tile。
-          if (request->since_revision > 0 &&
-              request->since_revision <= response->fine_revision) {
-            response->full_snapshot = false;
-            response->base_revision = request->since_revision;
-            if (request->since_revision == response->fine_revision)
-              response->tiles.clear();
-          }
+          *response = SelectExplorationMapResponse(*snapshot, request->since_revision,
+                                                   request->minimum_map_stamp_ns);
         });
     worker = std::thread([this] { Run(); });
   }
@@ -191,21 +199,36 @@ struct ExplorationMapNode::Impl {
     std::uint64_t local_sequence = 0;
     std::optional<geometry_msgs::msg::Transform> applied_transform;
     while (true) {
+      std_msgs::msg::String::ConstSharedPtr facts_message;
       {
         std::unique_lock lock(mutex);
         condition.wait(lock, [this] { return stop || pending; });
         if (stop) return;
         pending = false;
+        facts_message = std::exchange(latest_facts, {});
       }
       try {
         auto input = inputs->Capture();
+        if (facts_message) {
+          auto [facts, stamp] = ParseExplorationFacts(facts_message->data);
+          if (facts.frame != map_frame)
+            throw std::invalid_argument("base map facts frame does not match configured map_frame");
+          auto candidate = map ? nullptr : make_map();
+          auto* active_map = map ? map.get() : candidate.get();
+          if (!active_map->ApplyFacts(facts, stamp))
+            throw std::invalid_argument("base map facts snapshot rejected");
+          if (candidate) map = std::move(candidate);
+          RCLCPP_INFO_THROTTLE(node.get_logger(), *node.get_clock(), 10000,
+              "共享事实 epoch=%s raw_revision=%lu source_resolution=%.9f",
+              map->SourceEpoch().c_str(), map->SourceRawRevision(), facts.source_resolution_m);
+        }
         const bool transform_changed =
             input.local_map && input.local_map->header.frame_id != map_frame &&
             input.map_from_odom &&
             (!applied_transform ||
              !EquivalentTransform(*applied_transform,
                                   input.map_from_odom->transform));
-        if (input.local_map &&
+        if (base_map_facts_topic.empty() && input.local_map &&
             (local_sequence != input.local_sequence || transform_changed)) {
           // 同map坐标输入不需要虚构TF；odom坐标仍使用最新/静态TF，不检查stamp。
           auto map_input = input;
@@ -224,7 +247,21 @@ struct ExplorationMapNode::Impl {
                 static_cast<std::int64_t>(input.local_map->header.stamp.sec) *
                     1000000000LL +
                 input.local_map->header.stamp.nanosec;
-            if (map->Apply(*evidence.value, stamp)) {
+            // 首次有效源证据才安装地图实例；无图时服务仍保持not ready。
+            auto candidate = map ? nullptr : make_map();
+            auto* active_map = map ? map.get() : candidate.get();
+            if (active_map->Apply(*evidence.value, stamp)) {
+              if (candidate) map = std::move(candidate);
+              const auto effective = map->Capture().map.fine;
+              if (effective) {
+                RCLCPP_INFO_THROTTLE(node.get_logger(), *node.get_clock(), 10000,
+                    "地图分辨率 source=%.9f policy=%.9f coarse=%.9f (0参数为auto)",
+                    evidence.value->geometry.resolution_m,
+                    effective->geometry().resolution_m(),
+                    node.get_parameter("coarse_resolution_m").as_double() == 0.
+                        ? effective->geometry().resolution_m()
+                        : node.get_parameter("coarse_resolution_m").as_double());
+              }
               const auto storage = map->StorageStats();
               RCLCPP_DEBUG(node.get_logger(),
                            "地图历史 policy_cells=%zu fragments=%zu",
@@ -250,9 +287,26 @@ struct ExplorationMapNode::Impl {
                                  "地图适配未就绪: %s",
                                  evidence.reason_code.c_str());
         }
+        if (!map) continue;
         auto capture = map->Capture();
-        if (!capture.map.fine) continue;
-        capture.map.epoch = epoch;
+        capture.map.epoch = base_map_facts_topic.empty() ? epoch : map->SourceEpoch();
+        if (!capture.map.fine) {
+          const auto previous = std::atomic_load(&published);
+          auto unavailable = BuildExplorationMapPublication(capture, previous.get(), *exporter,
+              map->MinimumCompatibleRevision(), map_frame);
+          std::atomic_store(&published,
+              std::make_shared<const PublishedExplorationMap>(std::move(unavailable)));
+          // 空完整快照直接撤销旧已知图，不等待超时；沿用旧图几何清除同一空间。
+          if (last_published_grid && std::any_of(last_published_grid->data.begin(),
+              last_published_grid->data.end(), [](auto state) { return state != -1; })) {
+            auto cleared = *last_published_grid;
+            std::fill(cleared.data.begin(), cleared.data.end(), -1);
+            cleared.header.stamp = node.now();
+            publisher->publish(cleared);
+            last_published_grid = std::move(cleared);
+          }
+          continue;
+        }
         capture.map.local_window_size_m = window;
         if (input.odometry && input.map_from_odom) {
           const auto transform = AdaptDirectMapFromOdom(*input.map_from_odom,
@@ -265,31 +319,17 @@ struct ExplorationMapNode::Impl {
           }
         }
         const auto previous = std::atomic_load(&published);
-        const bool same_fine =
-            previous && previous->fine_revision ==
-                            capture.map.fine->fine_traversability_revision();
-        if (same_fine) {
-          capture.map.full_snapshot = false;
-          capture.map.base_revision = previous->fine_revision;
-        }
+        const bool same_fine = previous && previous->response.epoch == capture.map.epoch &&
+            previous->response.fine_revision == capture.map.fine->fine_traversability_revision();
         const auto export_started = std::chrono::steady_clock::now();
-        auto response = exporter->ExportObserved(
-            capture, same_fine ? previous->fine_revision : 0);
-        if (same_fine) response.tiles = previous->tiles;
-        response.full_snapshot = true;
-        response.base_revision = 0;
+        auto publication = BuildExplorationMapPublication(capture, previous.get(), *exporter,
+            map->MinimumCompatibleRevision(), map_frame);
         RCLCPP_DEBUG(node.get_logger(), "地图导出 revision=%lu export_ms=%.3f",
-                     response.fine_revision,
-                     std::chrono::duration<double, std::milli>(
-                         std::chrono::steady_clock::now() - export_started)
-                         .count());
-        if (!capture.map.anchor) {
-          response.ready = false;
-          response.reason_code = "INPUT_UNAVAILABLE";
-        }
+            publication.response.fine_revision,
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - export_started).count());
         std::atomic_store(&published,
-                          std::make_shared<const PolicyService::Response>(
-                              std::move(response)));
+            std::make_shared<const PublishedExplorationMap>(std::move(publication)));
         // 位姿/等价TF只刷新当前anchor与支撑；源receipt仍通过Apply更新processed_stamp。
         if (same_fine) continue;
         const auto projection = map->Project();
@@ -306,7 +346,8 @@ struct ExplorationMapNode::Impl {
             g.origin_m().y + g.min_inclusive().y * g.resolution_m();
         message.info.origin.orientation.w = 1.;
         message.data = projection.data;
-        publisher->publish(std::move(message));
+        publisher->publish(message);
+        last_published_grid = std::move(message);
       } catch (const std::exception& error) {
         RCLCPP_ERROR(node.get_logger(), "地图更新失败: %s", error.what());
       }

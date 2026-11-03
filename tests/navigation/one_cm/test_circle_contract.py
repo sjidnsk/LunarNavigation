@@ -10,7 +10,7 @@ from scripts.navigation.one_cm.nav1cm.contracts import WheelLimits,LocalReferenc
 from scripts.navigation.one_cm.nav1cm.local_mpcc import MpccPlanner
 
 
-def assembled(monkeypatch,tmp_path,margin,model='differential_drive'):
+def assembled(monkeypatch,tmp_path,margin,model='differential_drive',**options):
     built=[]
     class Ocp:
         def __init__(self):
@@ -19,11 +19,11 @@ def assembled(monkeypatch,tmp_path,margin,model='differential_drive'):
         built.append(ocp);return NS()
     fake_ca=NS(SX=NS(sym=lambda name,n:np.zeros(n)),sin=np.sin,cos=np.cos,
                vertcat=lambda *v:np.concatenate([np.atleast_1d(x) for x in v]),
-               sumsqr=lambda v:np.sum(v*v))
+               sumsqr=lambda v:np.sum(v*v),fmax=np.maximum)
     monkeypatch.setitem(sys.modules,'casadi',fake_ca)
     monkeypatch.setitem(sys.modules,'acados_template',NS(AcadosModel=NS,AcadosOcp=Ocp,AcadosOcpSolver=solver))
     limits=replace(WheelLimits(),minimum_clearance_m=margin,motion_model=model)
-    return MpccPlanner(limits,tmp_path,n=2),built
+    return MpccPlanner(limits,tmp_path,n=2,**options),built
 
 
 @pytest.mark.parametrize('margin',[.2,.4])
@@ -57,7 +57,7 @@ def test_positive_margin_parameters_query_one_circle_per_state(monkeypatch,tmp_p
     params=p._parameters(states,controls,ref,field,0.,1.)
     assert len(calls)==len(states)
     assert all(len(row)==14 and row[-1]==1. for row in params)
-    assert params[0][12]==pytest.approx(2.-p.radius-.003)
+    assert params[0][12]==pytest.approx(2.-p.radius)
 
 
 
@@ -94,3 +94,13 @@ def test_new_circle_layout_does_not_reuse_old_generated_model(monkeypatch,tmp_pa
     old=hashlib.sha256(f'pose-terminal-clearance-v3:{p.N}:{p.dt.hex()}:{p.limits.digest()}'.encode()).hexdigest()[:12]
     assert p.model_fingerprint!=old
     assert p.build_dir.name==p.model_fingerprint
+
+
+def test_soft_clearance_prefers_distance_without_changing_hard_constraints(monkeypatch,tmp_path):
+    a,old=assembled(monkeypatch,tmp_path,.2)
+    b,new=assembled(monkeypatch,tmp_path,.2,soft_clearance_m=.5,clearance_weight=1.)
+    assert a.model_fingerprint!=b.model_fingerprint
+    for before,after in zip(old,new):
+        np.testing.assert_equal(before.model.con_h_expr,after.model.con_h_expr)
+        assert after.model.cost_expr_ext_cost>before.model.cost_expr_ext_cost
+        assert after.model.cost_expr_ext_cost_e>before.model.cost_expr_ext_cost_e

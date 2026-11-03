@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "map/grid_bounds.hpp"
+#include "lunar_incremental_navigation_core/platform_terrain_window.hpp"
 
 namespace lunar::incremental_navigation {
 namespace {
@@ -389,8 +390,9 @@ FineTraversabilityBuilder::Derive(
     const TraversabilityProfile& profile,
     std::shared_ptr<const FineTraversabilitySnapshot> previous,
     std::optional<FineElevationChangeSet> merged_changes) const {
-  return DeriveImpl(std::move(raw),capability,profile,std::move(previous),merged_changes,
-      MakePlatformElevationEvaluator(capability),false);
+  if (!raw) throw std::invalid_argument("terrain derivation requires elevation");
+  return DeriveImpl(raw,capability,profile,std::move(previous),merged_changes,
+      MakePlatformWindowElevationEvaluator(*raw, capability),false);
 }
 
 std::shared_ptr<const FineTraversabilitySnapshot>
@@ -446,7 +448,9 @@ FineTraversabilityBuilder::DeriveImpl(
     const std::set<GridIndex> changed_raw(changed.begin(), changed.end());
     const double influence_m =
         hard_radius_m + profile.preferred_clearance_m +
-        std::sqrt(2.0) * raw->geometry().resolution_m();
+        std::sqrt(2.0) * raw->geometry().resolution_m() *
+          PlatformTerrainWindowRadiusCells(PlatformTerrainLongSide(capability),
+                                           raw->geometry().resolution_m());
     recompute_cells =
         InfluenceCells(raw->geometry(), changed_raw, influence_m);
     IncludeNewGeometryCells(*raw, previous->geometry(), hard_radius_m,
@@ -478,8 +482,11 @@ FineTraversabilityBuilder::DeriveImpl(
     const std::shared_ptr<const FineTraversabilityTile> old_tile =
         incremental ? previous->FindTile(tile_index) : nullptr;
 
-    FineTraversabilityTile::StateArray states;
-    FineTraversabilityTile::CostArray costs;
+    // 大格块放在堆上；保留栈保护，避免旧AArch64工具链的大帧展开缺陷。
+    auto state_storage = std::make_unique<FineTraversabilityTile::StateArray>();
+    auto cost_storage = std::make_unique<FineTraversabilityTile::CostArray>();
+    auto& states = *state_storage;
+    auto& costs = *cost_storage;
     if (old_tile) {
       states = old_tile->states();
       costs = old_tile->traversal_costs();
@@ -487,8 +494,6 @@ FineTraversabilityBuilder::DeriveImpl(
       states.fill(FineCellState::kUnknown);
       costs.fill(0.0);
     }
-    const auto old_states = states;
-    const auto old_costs = costs;
     const auto update_cell = [&](const GridIndex cell) {
       const FineCellEvaluation evaluation = cell_evaluator.Evaluate(cell);
       const std::size_t offset = TileCellOffset(cell);
@@ -529,15 +534,16 @@ FineTraversabilityBuilder::DeriveImpl(
     }
 
     const bool unobserved = TileIsUnobserved(states, costs);
-    const bool changed = old_tile ? states != old_states || costs != old_costs
-                                  : !unobserved;
+    const bool changed = old_tile
+        ? states != old_tile->states() || costs != old_tile->traversal_costs()
+        : !unobserved;
     if (!changed) {
       continue;
     }
     changed_tiles.push_back(tile_index);
     directory = directory.WithTile(
         tile_index, std::make_shared<const FineTraversabilityTile>(
-                        std::move(states), std::move(costs)));
+                        states, costs));
   }
 
   std::vector<TileIndex> changed_halo_tiles(halo_tiles.begin(),

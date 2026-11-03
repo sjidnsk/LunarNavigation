@@ -11,6 +11,7 @@ import time
 
 import numpy as np
 
+from .rectangle_distance import point_box_distance_squared, segment_clear as _segment_clear, segment_hits_box as _segment_hits_box
 from .contracts import Route, WheelLimits, WorldSnapshot
 
 
@@ -40,51 +41,6 @@ def _point(value):
         raise ValueError("point must contain finite x,y")
     return point
 
-
-def _segment_clear(a, b, boxes, corner_radius=0):
-    """连续认证整条线段；接触也视为碰撞，不做离散采样。
-
-    boxes是硬膨胀AABB；corner_radius>0时先内缩恢复原障碍矩形，
-    用线段到原矩形的最短距离认证圆形半径，0保留原AABB语义。
-    """
-    if not len(boxes):
-        return True
-    # 包围盒闭区间相交是必要条件；仅排除确定无关障碍。
-    boxes = boxes[(boxes[:, 0] <= max(a[0], b[0])) &
-                  (boxes[:, 2] >= min(a[0], b[0])) &
-                  (boxes[:, 1] <= max(a[1], b[1])) &
-                  (boxes[:, 3] >= min(a[1], b[1]))]
-    if corner_radius:
-        raw = boxes + np.array([corner_radius, corner_radius, -corner_radius, -corner_radius])
-        if not _segment_clear(a, b, raw):
-            return False
-        a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
-        # 凸矩形与线段的最短距离出现在端点到矩形或角点到线段。
-        delta = np.maximum(np.maximum(raw[:, :2]-a, a-raw[:, 2:]), 0.)
-        distance2 = np.sum(delta*delta, axis=1)
-        delta = np.maximum(np.maximum(raw[:, :2]-b, b-raw[:, 2:]), 0.)
-        distance2 = np.minimum(distance2, np.sum(delta*delta, axis=1))
-        corners = raw[:, ((0,1), (0,3), (2,1), (2,3))]
-        direction = b-a
-        norm2 = float(np.dot(direction, direction))
-        if norm2:
-            t = np.clip(np.sum((corners-a)*direction, axis=2)/norm2, 0., 1.)
-            delta = corners-a-t[:,:,None]*direction
-            distance2 = np.minimum(distance2, np.sum(delta*delta, axis=2).min(axis=1))
-        return not bool(np.any(distance2 <= corner_radius*corner_radius))
-    lo = np.zeros(len(boxes))
-    hi = np.ones(len(boxes))
-    possible = np.ones(len(boxes), dtype=bool)
-    for axis in (0, 1):
-        delta = b[axis] - a[axis]
-        if delta == 0:
-            possible &= (a[axis] >= boxes[:, axis]) & (a[axis] <= boxes[:, axis + 2])
-        else:
-            near = (boxes[:, axis] - a[axis]) / delta
-            far = (boxes[:, axis + 2] - a[axis]) / delta
-            lo = np.maximum(lo, np.minimum(near, far))
-            hi = np.minimum(hi, np.maximum(near, far))
-    return not bool(np.any(possible & (lo <= hi)))
 
 
 def _path_cost_python(points, hard_boxes, soft_clearance_m=.4, clearance_weight=1.0, check=None, *, corner_radius=0):
@@ -305,7 +261,7 @@ class AdaptiveGlobalPlanner:
         nodes, edges, boundary = [], [], []
         portals = {}
         storage = {"obstacles": len(world.blocked), "nodes": 0, "edges": 0, "slabs": 0,
-                   "free_cells": 0, "dense_cells": 0}
+                   "free_cells": 0, "dense_cells": 0, "edge_cost_evaluations": 0}
         timing = {}
         expanded = 0
 
@@ -342,9 +298,12 @@ class AdaptiveGlobalPlanner:
             # 仅同一凸自由矩形内部或其portal边界可复用分解几何证明。
             if not proven_free and not _segment_clear(nodes[i], nodes[j], physical, corner_radius=self.clearance_radius_m):
                 return
-            length = cost([nodes[i], nodes[j]],cost_boxes) if soft_enabled else math.dist(nodes[i], nodes[j])
-            edges[i].append((j, length))
-            edges[j].append((i, length))
+            # 候选连接先保留几何证明，搜索真正展开时才积分软代价。
+            # 两个方向共享一个记录，保留connect端点顺序以稳定浮点积分。
+            # 求值后释放局部障碍数组和端点索引引用。
+            value = [None, cost_boxes, (i, j)] if soft_enabled else [math.dist(nodes[i], nodes[j]), None, None]
+            edges[i].append((j, value))
+            edges[j].append((i, value))
             storage["edges"] += 1
 
         try:
@@ -561,7 +520,14 @@ class AdaptiveGlobalPlanner:
                 reaches_boundary |= boundary[current]
                 if current == target_id:
                     break
-                for neighbor, length in edges[current]:
+                for neighbor, value in edges[current]:
+                    check()
+                    if value[0] is None:
+                        first, second = value[2]
+                        value[0] = cost([nodes[first], nodes[second]], value[1])
+                        value[1] = value[2] = None
+                        storage["edge_cost_evaluations"] += 1
+                    length = value[0]
                     new_cost = g_cost + length
                     if new_cost < dist.get(neighbor, math.inf):
                         dist[neighbor] = new_cost
