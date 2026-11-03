@@ -73,6 +73,20 @@ def test_complete_rviz_template_is_resolved_from_contract():
     assert actual['Panels'][1]['Task Topic'] == contract['launch']['task_topic']
     for display in actual['Visualization Manager']['Displays']:
         if 'Topic' in display:
-            assert display['Topic']['Value'].startswith(('/Car/T4/', '/Car/T3/'))
+            known = set(contract['launch'].values()) | set(contract['visualization'].values())
+            known.add(contract['launch']['global_route_topic']+'_reference')
+            assert display['Topic']['Value'] in known
     goal_tool = next(tool for tool in actual['Visualization Manager']['Tools'] if tool['Class'].endswith('/SetGoal'))
     assert goal_tool['Topic'] == contract['launch']['goal_topic']
+
+
+def test_stereo_images_use_shared_p3_topics_and_small_queues():
+    contract = load_topic_contract(ROOT)
+    template = yaml.safe_load((ROOT/'scripts/simulation/p4_navigation.rviz').read_text(encoding='utf-8'))
+    contract['visualization']['p3_left_image'] = '/test/left'
+    contract['visualization']['p3_right_image'] = '/test/right'
+    actual = render_rviz_config(template, contract)
+    images = [d for d in actual['Visualization Manager']['Displays'] if d['Class']=='rviz_default_plugins/Image']
+    assert [d['Topic']['Value'] for d in images] == ['/test/left','/test/right']
+    assert all(d['Enabled'] and d['Topic']['Depth']==1 and d['Topic']['Durability Policy']=='Volatile' for d in images)
+    assert next(d for d in actual['Visualization Manager']['Displays'] if d['Class']=='rviz_default_plugins/Odometry')['Keep']==1
