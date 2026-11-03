@@ -121,7 +121,7 @@ Visualization Manager:
       Depth: 1
   - Class: rviz_default_plugins/MarkerArray
     Name: Exploration task map
-    Enabled: true
+    Enabled: false
     Topic Key: task_map_markers_topic
     Topic:
       Reliability Policy: Reliable
@@ -137,7 +137,7 @@ Visualization Manager:
       Depth: 1
   - Class: rviz_default_plugins/Pose
     Name: Current exploration goal
-    Enabled: true
+    Enabled: false
     Topic Key: current_goal_topic
     Topic:
       Reliability Policy: Reliable

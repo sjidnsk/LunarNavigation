@@ -178,5 +178,21 @@ TEST(ExplorationPanelDds, PublishesValidatedCommandsWithConfirmationAndBackendAc
   ASSERT_TRUE(wait([&] { return reloaded_panel->findChild<QLabel *>("state")->text().contains("EXECUTING"); }));
   EXPECT_FALSE(reloaded_panel->findChild<QLabel *>("details")->text().contains("OLD_ENDPOINT"));
   reloaded_panel.reset();
-  panel.reset(); pump(); EXPECT_EQ(tasks.size(),5u) << "关闭面板不得自动发送CANCEL";
+  // 清空区域复用CANCEL，草稿同步删除；连续点击只发送一次。
+  const auto draft_count = draft_markers.size();
+  button("clear")->click(); button("clear")->click();
+  ASSERT_TRUE(wait([&] { return tasks.size()==6u && draft_markers.size()>draft_count; }));
+  EXPECT_EQ(tasks.back().command,Task::CANCEL);
+  EXPECT_EQ(tasks.back().task_id,status.task_id);
+  EXPECT_TRUE(panel->findChild<QLabel *>("region")->text().contains("0 点"));
+  EXPECT_EQ(draft_markers.back().action,visualization_msgs::msg::Marker::DELETE);
+  EXPECT_FALSE(button("start")->isEnabled());
+  status.state=Status::IDLE; status.task_id.clear(); status.reason_code="CANCELED"; status_pub->publish(status);
+  ASSERT_TRUE(wait([&] { return panel->findChild<QLabel *>("state")->text().contains("IDLE"); }));
+  // 空闲时清理历史显示也必须发送，不能依赖结束按钮是否启用。
+  button("clear")->click();
+  ASSERT_TRUE(wait([&] { return tasks.size()==7u; }));
+  EXPECT_EQ(tasks.back().command,Task::CANCEL);
+  EXPECT_TRUE(tasks.back().task_id.empty());
+  panel.reset(); pump(); EXPECT_EQ(tasks.size(),7u) << "关闭面板不得自动发送CANCEL";
 }
