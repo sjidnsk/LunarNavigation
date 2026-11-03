@@ -629,3 +629,186 @@ def test_ignored_pose_correction_does_not_change_arrival_evidence(corrected_yaw)
     assert runtime.tasks._arrived_since==1.
     runtime.offer_odometry(feedback(3,0.));runtime._tick_once(3.)
     assert runtime.tasks.active.outcome=='GOAL_REACHED'
+
+
+# 仅隔离调度：速度认证替身不代表规划或车辆安全验收。
+def continuous_runtime(monkeypatch, *, hold_s=.8, pose_timeout=None):
+    import nav1cm.execution as execution
+    runtime, session, *_ = build_runtime()
+    sent = []
+    runtime.configure_direct_control(
+        lambda v,w: sent.append((time.monotonic(), v, w, threading.current_thread().name)),
+        command_hold_s=hold_s)
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def certified(*args, **kwargs):
+        calls.append(dict(kwargs))
+        if len(calls) == 2:
+            entered.set()
+            assert release.wait(3.)
+        kwargs['proof_sink'](hold_s)
+        return .05, .02
+    monkeypatch.setattr(execution, 'certified_velocity_command', certified)
+    if pose_timeout is not None:
+        runtime.ros_now_ns = lambda: 2_000_000_000
+        runtime.configure_pose_input(pose_timeout)
+        runtime.offer_odometry(NS(header=NS(frame_id='map', stamp=NS(sec=1,nanosec=0)),
+            pose=NS(pose=pose().pose), twist=NS(twist=NS(linear=NS(x=0.),angular=NS(z=0.)))))
+    runtime.tasks.submit('continuous', (0.,3.,0.), time.monotonic())
+    return runtime, sent, entered, release, calls
+
+
+def wait_runtime(predicate, timeout=.8):
+    deadline = time.monotonic()+timeout
+    while time.monotonic()<deadline:
+        if predicate(): return True
+        time.sleep(.005)
+    return bool(predicate())
+
+
+def test_command_continues_while_certification_is_blocked(monkeypatch):
+    runtime, sent, entered, release, calls = continuous_runtime(monkeypatch)
+    runtime.start()
+    try:
+        assert entered.wait(1.)
+        start = time.monotonic()
+        assert wait_runtime(lambda: len([x for x in sent if x[0]>=start and x[1:3]==(.05,.02)])>=4, .35), sent
+        moving=[x for x in sent if x[0]>=start]
+        assert all(x[1:3]==(.05,.02) for x in moving), moving
+        assert {x[3] for x in moving}=={'nav1cm-command'}
+        assert len(calls)==2  # 发布循环没有再次认证。
+    finally:
+        release.set(); assert not runtime.close()['threads_alive']
+
+
+def test_repeated_command_expires_without_renewing_its_proof(monkeypatch):
+    runtime, sent, entered, release, _ = continuous_runtime(monkeypatch, hold_s=.18)
+    runtime.start()
+    try:
+        assert entered.wait(1.)
+        assert wait_runtime(lambda: any(x[1:3]==(.05,.02) for x in sent))
+        assert wait_runtime(lambda: sent[-1][1:3]==(0.,0.), .5), sent
+        count=len(sent)
+        assert wait_runtime(lambda: len(sent)>=count+2)
+        assert all(x[1:3]==(0.,0.) for x in sent[count:]), sent
+    finally:
+        release.set(); runtime.close()
+
+
+@pytest.mark.parametrize('change', ['cancel','goal','close','pose'])
+def test_stop_inputs_do_not_wait_for_slow_command_computation(monkeypatch, change):
+    runtime, sent, entered, release, _ = continuous_runtime(
+        monkeypatch, hold_s=1.2, pose_timeout=.16 if change=='pose' else None)
+    runtime.start()
+    try:
+        assert entered.wait(1.)
+        assert wait_runtime(lambda: any(x[1:3]==(.05,.02) for x in sent))
+        mark=time.monotonic()
+        if change=='cancel': runtime.request_cancel('continuous')
+        elif change=='goal': runtime.offer_goal(pose(1.,4.))
+        elif change=='close':
+            result=runtime.close(timeout_s=.02)
+            assert result['threads_alive']  # 不能销毁仍被阻塞计算使用的session。
+        assert wait_runtime(lambda: any(x[0]>=mark and x[1:3]==(0.,0.) for x in sent), .35), sent
+        zero=next(i for i,x in enumerate(sent) if x[0]>=mark and x[1:3]==(0.,0.))
+        release.set()
+        if change!='goal':
+            assert wait_runtime(lambda: len(sent)>zero+1 or change=='close')
+            assert all(x[1:3]==(0.,0.) for x in sent[zero:]), sent
+    finally:
+        release.set(); assert not runtime.close()['threads_alive']
+
+
+
+def test_stale_computation_cannot_start_a_new_hold_window(monkeypatch):
+    import nav1cm.execution as execution
+    runtime, sent, _, release, _ = continuous_runtime(monkeypatch, hold_s=.1)
+    entered=threading.Event()
+    def slow(*args, **kwargs):
+        entered.set(); assert release.wait(3.)
+        release.clear()  # 下一次计算仍阻塞，观察第一次迟到结果能否错误续期。
+        kwargs['proof_sink'](.1)
+        return .05,.02
+    monkeypatch.setattr(execution,'certified_velocity_command',slow)
+    runtime.start()
+    try:
+        assert entered.wait(1.)
+        time.sleep(.16)
+        release.set()
+        assert wait_runtime(lambda: len(sent)>=5)
+        assert all(x[1:3]==(0.,0.) for x in sent), sent
+    finally:
+        release.set(); runtime.close()
+
+
+def test_reference_path_publication_does_not_block_command_publication(monkeypatch):
+    runtime, sent, _, release, calls = continuous_runtime(monkeypatch)
+    entered=threading.Event()
+    def slow_paths(data): entered.set(); assert release.wait(3.)
+    runtime.publish=slow_paths
+    runtime.start()
+    try:
+        assert entered.wait(1.)
+        assert wait_runtime(lambda: len([x for x in sent if x[1:3]==(.05,.02)])>=4, .35)
+        assert len(calls)==1
+    finally:
+        release.set(); runtime.close()
+
+
+def test_repeated_publication_does_not_reset_command_slew_time(monkeypatch):
+    runtime, _, _, _, calls = continuous_runtime(monkeypatch)
+    runtime._tick_once(0.)
+    selected_s=runtime._last_command_selection_s
+    issued_s=runtime._last_issued_s
+    for _ in range(3):
+        time.sleep(.015); runtime._publish_command_once()
+    assert runtime._last_issued_s>issued_s
+    assert runtime._last_command_selection_s==selected_s
+
+
+def test_tick_failure_revokes_the_held_command(monkeypatch):
+    runtime, sent, entered, release, _=continuous_runtime(monkeypatch)
+    runtime.start()
+    try:
+        assert entered.wait(1.)
+        def failed_tick(*args,**kwargs): raise RuntimeError('planning failed')
+        runtime.session.tick=failed_tick
+        release.set()
+        assert wait_runtime(lambda: any(x[1:3]==(.05,.02) for x in sent))
+        assert wait_runtime(lambda: sent[-1][1:3]==(0.,0.))
+    finally:
+        release.set(); runtime.close()
+
+
+
+def test_expired_previous_command_rebases_late_result_before_handoff(monkeypatch):
+    import nav1cm.execution as execution
+    runtime,sent,_,_,_=continuous_runtime(monkeypatch,hold_s=.18)
+    second,release,paths_entered,paths_release=(threading.Event() for _ in range(4))
+    bases=[];path_calls=[]
+    def certify(*args,**kwargs):
+        bases.append(kwargs['last_command'])
+        kwargs['proof_sink'](.18 if len(bases)==1 else .8)
+        if len(bases)==1:return .06,0.
+        if len(bases)==2:
+            second.set();assert release.wait(3.)
+            return .07,0.
+        return .01,0.
+    def paths(data):
+        path_calls.append(1)
+        if len(path_calls)==2:
+            paths_entered.set();assert paths_release.wait(3.)
+    monkeypatch.setattr(execution,'certified_velocity_command',certify)
+    runtime.publish=paths
+    runtime.start()
+    try:
+        assert second.wait(1.)
+        assert wait_runtime(lambda:any(x[1:3]==(.06,0.) for x in sent))
+        assert wait_runtime(lambda:sent[-1][1:3]==(0.,0.),.5)
+        release.set()
+        assert paths_entered.wait(1.)
+        assert wait_runtime(lambda:sent[-1][1:3]!=(0.,0.))
+        assert sent[-1][1:3]==(.01,0.), sent
+        assert bases[2]==(0.,0.)
+    finally:
+        release.set();paths_release.set();runtime.close()
