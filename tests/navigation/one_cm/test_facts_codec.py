@@ -22,8 +22,8 @@ def facts():
                        (3, 4, 2., -1, float("nan"), float("nan"))], dtype=MEASUREMENT_DTYPE)
     old = EvidenceFragment(0, ((-100., 0.), (0., 100.), (100., 0.), (0., -100.)))
     current = EvidenceFragment(1, ((-50., 0.), (0., 50.), (50., 0.)))
-    one = SourceEvidence(17, .2, (-1., 2.), .7, values, (old, current, current), (old,))
-    two = SourceEvidence(99, .05, (3., 4.), -.2, values[:1], (old,), ())
+    one = SourceEvidence(17, .2, (-1., 2.), .7, values, (old, current, current))
+    two = SourceEvidence(99, .05, (3., 4.), -.2, values[:1], (old,))
     return BaseMapFacts(WorldSnapshot(0, (), ()), 2**63 + 123, (one, two))
 
 
@@ -62,7 +62,7 @@ def test_observation_state_is_independent_of_retained_blocked_classification(obs
     polygon = ((0., 0.), (10., 0.), (0., 10.))
     old = EvidenceFragment(0, polygon)
     new = EvidenceFragment(1, polygon)
-    source = SourceEvidence(1, .05, (0., 0.), 0., values, (new,), (old,))
+    source = SourceEvidence(1, .05, (0., 0.), 0., values, (new,))
     value = BaseMapFacts(WorldSnapshot(0, (), ()), 9, (source,))
     fragments = codec().decode_observation_facts(encoded(value))["observation_fragments"]
     assert len(fragments) == 1
@@ -174,7 +174,7 @@ def test_height_capacity_matches_existing_float32_elevation_storage():
             codec().decode_observation_facts(json.dumps(data))
     values = np.array([(0, 0, 1e39, -1, float("nan"), float("nan"))], dtype=MEASUREMENT_DTYPE)
     fragment = EvidenceFragment(0, ((0., 0.), (1., 0.), (0., 1.)))
-    source = SourceEvidence(1, .05, (0., 0.), 0., values, (fragment,), ())
+    source = SourceEvidence(1, .05, (0., 0.), 0., values, (fragment,))
     with pytest.raises(ValueError):
         encoded(BaseMapFacts(WorldSnapshot(0, (), ()), 1, (source,)))
 

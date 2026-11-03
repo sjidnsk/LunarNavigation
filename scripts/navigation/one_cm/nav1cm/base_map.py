@@ -39,7 +39,6 @@ class SourceEvidence:
     yaw: float
     measurements: np.ndarray = field(repr=False)
     observation_fragments: tuple[EvidenceFragment, ...]
-    classification_fragments: tuple[EvidenceFragment, ...]
     _support_bounds_cm: tuple[float, float, float, float] | None = field(init=False, repr=False, default=None)
 
     def __post_init__(self):
@@ -59,14 +58,13 @@ class SourceEvidence:
         object.__setattr__(self, 'source_id', identity)
         object.__setattr__(self, 'origin_xy_m', origin)
         object.__setattr__(self, 'measurements', np.frombuffer(values.tobytes(), dtype=MEASUREMENT_DTYPE))
-        for name in ('observation_fragments', 'classification_fragments'):
+        for name in ('observation_fragments',):
             fragments = tuple(getattr(self, name))
             if any(not isinstance(f, EvidenceFragment) or f.measurement_index >= len(values) for f in fragments):
                 raise ValueError('fragment references a missing measurement')
             object.__setattr__(self, name, fragments)
         # 不可变源只计算一次包围盒；远处局部更新无需扫描其历史测量/片段。
-        points = [point for layer in (self.observation_fragments, self.classification_fragments)
-                  for fragment in layer for point in fragment.polygon_cm]
+        points = [point for fragment in self.observation_fragments for point in fragment.polygon_cm]
         if points:
             xs, ys = zip(*points)
             object.__setattr__(self, '_support_bounds_cm', (min(xs), min(ys), max(xs), max(ys)))

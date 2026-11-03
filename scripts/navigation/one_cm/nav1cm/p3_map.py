@@ -452,26 +452,25 @@ def _same_evidence(old, new):
     if tuple(s.source_id for s in old) != tuple(s.source_id for s in new):
         return False
     return all(a is b or (
-        layer(a, a.observation_fragments) == layer(b, b.observation_fragments) and
-        layer(a, a.classification_fragments) == layer(b, b.classification_fragments))
+        layer(a, a.observation_fragments) == layer(b, b.observation_fragments))
         for a, b in zip(old, new))
 
 
-def _next_facts(facts, snapshot, observations, update, spans, terrain):
+def _next_facts(facts, snapshot, observations, update, terrain):
     from .p3_evidence import update_evidence
     if facts is None or not observations:
         return facts
     if update.source_id is None and not len(update.measurements):
         return None
     incoming = SourceEvidence(update.source_id, update.resolution_m, update.origin_xy_m,
-                              update.yaw, update.measurements, (), ())
+                              update.yaw, update.measurements, ())
     direct_cells = {(x, y) for y, row in observations.items()
                     for left, right, _ in row for x in range(left, right)}
     indices = tuple(i for i, rec in enumerate(incoming.measurements)
                     if (int(rec['x']), int(rec['y'])) in direct_cells)
     if len(indices) != len(direct_cells):
         raise ValueError("missing direct source measurements")
-    sources = update_evidence(facts.sources, incoming, indices, tuple(spans), terrain)
+    sources = update_evidence(facts.sources, incoming, indices, terrain)
     if snapshot is facts.world and _same_evidence(facts.sources, sources):
         return facts
     return BaseMapFacts(snapshot, facts.raw_revision + 1, sources)
@@ -528,7 +527,6 @@ class P3MapStore:
             classifications = self._source_classifications.copy()
             rows = self._rows.copy()
             owners = self._observation_owners
-            spans = []
             if observations:
                 source, retired = contexts.activate(key, update)
                 owners = retire_owners(owners, {identity for _, identity in retired})
@@ -583,8 +581,6 @@ class P3MapStore:
                                 else:
                                     rows[y] = _paint(rows.get(y, ()), lo, hi, state)
                                     accepted[y] = _paint(accepted.get(y, ()), lo, hi, state)
-                        spans.extend((state, CellRect(x0, y0, x1, y1))
-                                     for x0, y0, x1, y1, state in _rectangles(accepted))
                 fresh_regions = _rectangles(_clip_row_maps(fresh, mask))
                 owners = _record_observation_owners(owners, source,
                                                     observation_regions, fresh_regions, update)
@@ -595,7 +591,7 @@ class P3MapStore:
             snapshot = self._snapshot
             if blocked != snapshot.blocked or free != snapshot.known_free:
                 snapshot = WorldSnapshot(snapshot.epoch + 1, blocked, free)
-            facts = _next_facts(self._facts, snapshot, observations, update, spans, self._terrain)
+            facts = _next_facts(self._facts, snapshot, observations, update, self._terrain)
             self._facts = facts
             self._rows = rows
             self._observation_owners = owners

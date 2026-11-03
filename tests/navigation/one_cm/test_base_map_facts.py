@@ -18,7 +18,7 @@ def test_evidence_owns_immutable_measurement_bytes_and_polygon_fragments():
     module = api()
     measurements = np.array([(-3, 4, 2., -1, float('nan'), float('nan'))], dtype=MEASUREMENT_DTYPE)
     fragment = module.EvidenceFragment(0, ((0., 0.), (.5, 0.), (.5, 1.), (0., 1.)))
-    source = module.SourceEvidence(1, .005, (0., 0.), 0., measurements, (fragment,), ())
+    source = module.SourceEvidence(1, .005, (0., 0.), 0., measurements, (fragment,))
     facts = module.BaseMapFacts(WorldSnapshot(0, (), ()), 1, (source,))
     measurements['height_m'] = 8.
     assert facts.sources[0].measurements['height_m'][0] == 2.
@@ -28,14 +28,14 @@ def test_evidence_owns_immutable_measurement_bytes_and_polygon_fragments():
     with pytest.raises(FrozenInstanceError):
         facts.raw_revision = 2
     assert source.observation_fragments[0].polygon_cm[1] == (.5, 0.)
-    assert source.classification_fragments == ()
+    assert not hasattr(source, "classification_fragments")
 
 
 def test_fragment_reference_validation():
     module = api()
     fragment = module.EvidenceFragment(0, ((0., 0.), (1., 0.), (1., 1.)))
     with pytest.raises(ValueError, match='measurement'):
-        module.SourceEvidence(1, .01, (0., 0.), 0., np.empty(0, dtype=MEASUREMENT_DTYPE), (fragment,), ())
+        module.SourceEvidence(1, .01, (0., 0.), 0., np.empty(0, dtype=MEASUREMENT_DTYPE), (fragment,))
 
 
 def test_same_cell_historical_values_have_independent_fragment_references():
@@ -45,15 +45,12 @@ def test_same_cell_historical_values_have_independent_fragment_references():
     old_fragment = module.EvidenceFragment(0, ((0., 0.), (.5, 0.), (.5, 1.), (0., 1.)))
     new_fragment = module.EvidenceFragment(1, ((.5, 0.), (1., 0.), (1., 1.), (.5, 1.)))
     source = module.SourceEvidence(1, .01, (0., 0.), 0., values,
-                                   (old_fragment, new_fragment), (old_fragment,))
+                                   (old_fragment, new_fragment))
     facts = module.BaseMapFacts(WorldSnapshot(0, (), ()), 1, (source,))
     values['height_m'] = 99.
     retained = facts.sources[0]
     assert [retained.measurements[f.measurement_index]['height_m']
             for f in retained.observation_fragments] == [1., 2.]
-    classified = retained.measurements[retained.classification_fragments[0].measurement_index]
-    assert classified['height_m'] == 1.
-    assert classified['state'] == 1
     assert list(retained.measurements['x']) == [-3, -3]
     with pytest.raises(ValueError):
         retained.measurements.setflags(write=True)

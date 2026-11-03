@@ -102,128 +102,62 @@ def _cut(fragment, cutters, ops, *, rectangles=False):
     return [EvidenceFragment(fragment.measurement_index, p) for p in pieces] if changed else [fragment]
 
 
-def _compact(source, records, observations, classes):
-    used = {f.measurement_index for layer in (observations, classes) for f in layer}
-    if not used:
-        return None
-    # 相同记录以最后一次出现排序，保留同格历史与最新可用记录的顺序。
-    keys = {}
-    canonical = {}
-    for index in sorted(used):
-        row = records[index].tolist()
-        key = tuple(None if isinstance(v, float) and math.isnan(v) else v for v in row)
-        keys[index] = key
-        canonical[key] = index
-    ordered = sorted(canonical, key=canonical.get)
-    indices = {key: i for i, key in enumerate(ordered)}
-
-    def remap(layer):
-        return tuple(EvidenceFragment(indices[keys[f.measurement_index]], f.polygon_cm) for f in layer)
-
-    return replace(source, measurements=records[[canonical[k] for k in ordered]],
-                   observation_fragments=remap(observations), classification_fragments=remap(classes))
+def _compact(source, records, observations):
+    """仅保留有效观测引用的记录；不再为导航分类复制一份历史。"""
+    used=sorted({f.measurement_index for f in observations})
+    if not used:return None
+    indices={old:new for new,old in enumerate(used)}
+    fragments=tuple(f if indices[f.measurement_index]==f.measurement_index else
+                    EvidenceFragment(indices[f.measurement_index],f.polygon_cm) for f in observations)
+    return replace(source,measurements=records[used],observation_fragments=fragments)
 
 
-def update_evidence(previous_sources: tuple[SourceEvidence, ...], incoming_source: SourceEvidence,
-                    direct_measurement_indices: tuple[int, ...], accepted_spans: tuple[tuple[int, CellRect], ...],
-                    geometry_ops: NativeTerrain) -> tuple[SourceEvidence, ...]:
-    """只使用已融合的测量和实际获准的范围，不改变输入快照。"""
-    incoming = incoming_source
-    sources = {s.source_id: s for s in previous_sources}
-    if len(sources) != len(previous_sources) or incoming.observation_fragments or incoming.classification_fragments:
+def update_evidence(previous_sources: tuple[SourceEvidence,...], incoming_source: SourceEvidence,
+                    direct_measurement_indices: tuple[int,...], geometry_ops: NativeTerrain) -> tuple[SourceEvidence,...]:
+    """只维护当前有效观测；导航分类由P3MapStore既有存储独立维护。"""
+    incoming=incoming_source
+    sources={s.source_id:s for s in previous_sources}
+    if len(sources)!=len(previous_sources) or incoming.observation_fragments:
         raise ValueError('expected unique history sources and uncommitted incoming measurements')
-    old = sources.get(incoming.source_id)
-    lattice = ('resolution_m', 'origin_xy_m', 'yaw')
-    if old and any(getattr(old, name) != getattr(incoming, name) for name in lattice):
+    old=sources.get(incoming.source_id)
+    if old and any(getattr(old,n)!=getattr(incoming,n) for n in ('resolution_m','origin_xy_m','yaw')):
         raise ValueError('source lattice changed')
-    indices = tuple(operator.index(i) for i in direct_measurement_indices)
-    cells = [_cell(r) for r in incoming.measurements]
-    if len(set(cells)) != len(cells) or len(set(indices)) != len(indices):
-        raise ValueError('duplicate incoming cell or direct index')
-    if any(i < 0 or i >= len(cells) for i in indices):
-        raise ValueError('invalid direct measurement index')
-    direct = {cells[i] for i in indices}
-    coverage = tuple(_coverage(direct, incoming))
-    coverage_index = _BoxIndex(box for box, _ in coverage)
-    sources.setdefault(incoming.source_id, incoming)
-    # 只处理与直接观测或已获准分类范围相交的源，远处源原样共享。
-    bounds = [box for box, _ in coverage]
-    for state, rect in accepted_spans:
-        if state not in (-1, 0, 1) or not isinstance(rect, CellRect):
-            raise ValueError('invalid accepted classification span')
-        bounds.append((rect.x0, rect.y0, rect.x1, rect.y1))
-    active = {sid: source for sid, source in sources.items()
-              if sid == incoming.source_id or (source._support_bounds_cm is not None and
-                  any(_overlaps(source._support_bounds_cm, box) for box in bounds))}
-    observations, classes, records = {}, {}, {}
-    for sid, source in active.items():
-        same = sid == incoming.source_id
-        records[sid] = source.measurements
-        observations[sid] = []
-        classes[sid] = list(source.classification_fragments)
+    indices=tuple(operator.index(i) for i in direct_measurement_indices)
+    cells=[_cell(r) for r in incoming.measurements]
+    if len(set(cells))!=len(cells) or len(set(indices))!=len(indices):raise ValueError('duplicate incoming cell or direct index')
+    if any(i<0 or i>=len(cells) for i in indices):raise ValueError('invalid direct measurement index')
+    if not indices:return previous_sources
+    direct={cells[i] for i in indices}
+    coverage=tuple(_coverage(direct,incoming))
+    coverage_index=_BoxIndex(box for box,_ in coverage)
+    result=[]
+    for source in previous_sources:
+        if source.source_id==incoming.source_id:continue
+        if source._support_bounds_cm is None or not any(_overlaps(source._support_bounds_cm,b) for b,_ in coverage):
+            result.append(source);continue
+        fragments=[]
         for f in source.observation_fragments:
-            if same:
-                if _cell(source.measurements[f.measurement_index]) not in direct:
-                    observations[sid].append(f)
-            else:
-                cutters = (coverage[i] for i in coverage_index.query(_bounds(f.polygon_cm)))
-                observations[sid].extend(_cut(f, cutters, geometry_ops))
-
-    sid = incoming.source_id
-    if old:
-        latest = {_cell(r): i for i, r in enumerate(old.measurements)}
-        added = [r for r in incoming.measurements
-                 if _cell(r) not in latest or _record_key(r) != _record_key(old.measurements[latest[_cell(r)]])]
-        if added:
-            records[sid] = np.concatenate((old.measurements, np.array(added, dtype=old.measurements.dtype)))
-    latest = {_cell(r): i for i, r in enumerate(records[sid])}
-    candidates = []
-    for (x, y), index in latest.items():
-        polygon = tuple(_polygon((x, y, x + 1, y + 1, 0), incoming))
-        candidates.append((index, polygon, _bounds(polygon)))
-        if (x, y) in direct:
-            observations[sid].append(EvidenceFragment(index, polygon))
-
-    spans = tuple((state, (rect.x0, rect.y0, rect.x1, rect.y1),
-                   ((rect.x0, rect.y0), (rect.x1, rect.y0), (rect.x1, rect.y1), (rect.x0, rect.y1)))
-                  for state, rect in accepted_spans)
-    span_index = _BoxIndex(box for _, box, _ in spans)
-
-    def later_cutters(box, intrinsic_state, after=-1):
-        # UNKNOWN 只能清除 FREE；保留旧 BLOCKED，与逐 span 更新完全一致。
-        return ((spans[i][1], spans[i][2]) for i in span_index.query(box)
-                if i > after and (spans[i][0] != -1 or intrinsic_state == 0))
-
-    # 每个旧片段只扫描相交的 spans；片段及裁剪器都保持原有顺序。
-    for owner, fragments in classes.items():
-        remaining = []
-        for f in fragments:
-            cutters = later_cutters(_bounds(f.polygon_cm), records[owner][f.measurement_index]['state'])
-            remaining.extend(_cut(f, cutters, geometry_ops, rectangles=True))
-        classes[owner] = remaining
-
-    candidate_index = _BoxIndex(box for _, _, box in candidates)
-    for span_number, (state, bounds, clip) in enumerate(spans):
-        if state != -1:
-            for candidate_number in candidate_index.query(bounds):
-                index, polygon, box = candidates[candidate_number]
-                if records[sid][index]['state'] == state:
-                    pieces = (polygon,) if _contains(bounds, box) else geometry_ops.polygon_intersection(polygon, clip)
-                    for piece in pieces:
-                        fragment = EvidenceFragment(index, piece)
-                        cutters = later_cutters(_bounds(piece), state, span_number)
-                        classes[sid].extend(_cut(fragment, cutters, geometry_ops, rectangles=True))
-
-    result = []
-    for owner, source in sources.items():
-        if owner in active and not observations[owner] and not classes[owner]:
-            continue
-        if owner not in active or (records[owner] is source.measurements and
-                set(observations[owner]) == set(source.observation_fragments) and
-                set(classes[owner]) == set(source.classification_fragments)):
-            result.append(source)
+            cutters=(coverage[i] for i in coverage_index.query(_bounds(f.polygon_cm)))
+            fragments.extend(_cut(f,cutters,geometry_ops))
+        if tuple(fragments)==source.observation_fragments:result.append(source)
         else:
-            value = _compact(source, records[owner], observations[owner], classes[owner])
-            if value is not None:
-                result.append(value)
-    return tuple(result)
+            value=_compact(source,source.measurements,fragments)
+            if value is not None:result.append(value)
+    records=incoming.measurements
+    fragments=[]
+    if old:
+        retained=[f for f in old.observation_fragments if _cell(old.measurements[f.measurement_index]) not in direct]
+        used=sorted({f.measurement_index for f in retained})
+        records=np.concatenate((old.measurements[used],incoming.measurements[list(indices)]))
+        remap={index:i for i,index in enumerate(used)}
+        fragments=[EvidenceFragment(remap[f.measurement_index],f.polygon_cm) for f in retained]
+        base=len(used)
+    else:
+        records=incoming.measurements[list(indices)];base=0
+    for position,index in enumerate(indices):
+        x,y=cells[index]
+        fragments.append(EvidenceFragment(base+position,tuple(_polygon((x,y,x+1,y+1,0),incoming))))
+    value=replace(incoming,measurements=records,observation_fragments=tuple(fragments))
+    # 保持源顺序稳定，来源身份不是本次更新的顺序。
+    by_id={s.source_id:s for s in result};by_id[value.source_id]=value
+    return tuple(by_id[s.source_id] for s in previous_sources if s.source_id in by_id)+(() if old else (value,))

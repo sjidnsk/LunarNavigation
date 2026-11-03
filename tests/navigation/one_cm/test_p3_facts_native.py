@@ -109,7 +109,6 @@ def test_finite_unknown_changes_height_and_only_retracts_free(compiled, obstacle
         facts = store.capture_facts()
         assert state_at(facts.world, .225, .225) == (1 if obstacle else -1)
         assert [r["height_m"] for r in support_at(facts, "observation", 22.5, 22.5)] == [.75]
-        assert [r["state"] for r in support_at(facts, "classification", 22.5, 22.5)] == ([1] if obstacle else [])
 
 
 def test_partial_subcentimeter_reobservation_preserves_foreign_support(compiled):
@@ -123,12 +122,10 @@ def test_partial_subcentimeter_reobservation_preserves_foreign_support(compiled)
         store.apply(grid_map(left, .005, (.003, .003)))
         partial = store.capture_facts()
         assert state_at(partial.world, .045, .045) == 1
-        assert [r["state"] for r in support_at(partial, "classification", 4.7, 4.7)] == [1]
         assert [r["height_m"] for r in support_at(partial, "observation", 4.7, 4.7)] == pytest.approx([.4])
         store.apply(grid_map(right, .005, (.003, .003)))
         complete = store.capture_facts()
         assert state_at(complete.world, .045, .045) == 0
-        assert [r["state"] for r in support_at(complete, "classification", 4.7, 4.7)] == [0]
 
 
 def test_rotated_rolling_keeps_signed_source_coordinates(compiled):
