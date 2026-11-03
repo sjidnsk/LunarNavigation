@@ -23,15 +23,23 @@ def test_selected_profile_uses_total_hard_radius_075(profile,tmp_path,monkeypatc
     limits,_=load_configuration(path)
     assert limits.global_clearance_radius()==pytest.approx(.75)
     # MPCC真实装配前即计算radius；测试替身只替换求解器构建。
+    from nav1cm import local_mpcc
     from nav1cm.local_mpcc import MpccPlanner
     class Ocp:
         def __init__(self):
             self.solver_options=SimpleNamespace();self.constraints=SimpleNamespace();self.cost=SimpleNamespace()
-    fake_ca=SimpleNamespace(SX=SimpleNamespace(sym=lambda name,n:np.zeros(n)),sin=np.sin,cos=np.cos,
+            self.acados_lib_path=str(tmp_path/'sdk/lib')
+    fake_ca=SimpleNamespace(__version__='test',SX=SimpleNamespace(sym=lambda name,n:np.zeros(n)),sin=np.sin,cos=np.cos,
         vertcat=lambda *v:np.concatenate([np.atleast_1d(x) for x in v]),sumsqr=lambda v:np.sum(v*v))
     monkeypatch.setitem(sys.modules,'casadi',fake_ca)
-    monkeypatch.setitem(sys.modules,'acados_template',SimpleNamespace(AcadosModel=SimpleNamespace,
+    monkeypatch.setitem(sys.modules,'acados_template',SimpleNamespace(__file__=str(tmp_path/'sdk/__init__.py'),AcadosModel=SimpleNamespace,
         AcadosOcp=Ocp,AcadosOcpSolver=lambda *a,**k:SimpleNamespace()))
+    # 这里只验证平台参数装配；缓存命中/产物校验由专用测试和真实acados验收。
+    monkeypatch.setitem(sys.modules,'acados_template.utils',SimpleNamespace(
+        get_shared_lib_prefix=lambda:'lib',get_shared_lib_ext=lambda:'.so',get_shared_lib_dir=lambda:'lib'))
+    monkeypatch.setattr(local_mpcc,'_acados_cache_identity',lambda *a,**k:'test-sdk')
+    monkeypatch.setattr(local_mpcc,'_cached_acados_solver',
+        lambda solver_type,ocp,json_file,identity,**k:solver_type(ocp,json_file=str(json_file)))
     planner=MpccPlanner(limits,tmp_path)
     assert planner.radius==pytest.approx(.75)
     assert planner.offsets==[0.]

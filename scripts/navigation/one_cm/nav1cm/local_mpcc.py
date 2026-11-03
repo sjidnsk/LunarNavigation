@@ -3,6 +3,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter, process_time
 import hashlib
+import json
+import os
+import platform
+import sys
+import sysconfig
+from contextlib import contextmanager
+from threading import Lock
+from time import sleep
 import numpy as np
 from .contracts import CellState, Trajectory, VehicleState, circumscribed_radius
 from .maps import build_distance_field
@@ -33,6 +41,93 @@ def _solver_stats(solver):
 
 class SolverUnavailable(RuntimeError):
     pass
+
+
+# SDK 生成流程会使用进程级状态；线程与进程都必须在核验/生成/加载期间持锁。
+_ACADOS_BUILD_LOCK = Lock()
+
+
+def _file_digest(path):
+    digest = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _acados_cache_identity(template_dir, library_dir, casadi_version, *,
+                           runtime_dir=None, generator_source=__file__):
+    """只扫描模板包直接源码与运行库，不遍历 SDK/build 树。"""
+    template_dir, library_dir = Path(template_dir), Path(library_dir)
+    files = sorted(template_dir.glob('*.py'))
+    files += sorted(template_dir.glob('c_templates_tera/**/*'))
+    runtime_path = library_dir if runtime_dir is None else library_dir.parent / runtime_dir
+    files += sorted(path for path in runtime_path.iterdir()
+                    if path.suffix in ('.so', '.dll', '.dylib') or '.so.' in path.name)
+    files.append(Path(generator_source))
+    identity = [sys.platform, platform.machine(), sysconfig.get_config_var('SOABI'),
+                casadi_version]
+    for path in files:
+        if path.is_file():
+            identity.append((str(path.resolve()), _file_digest(path)))
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
+@contextmanager
+def _acados_cache_lock(path):
+    with _ACADOS_BUILD_LOCK, Path(path).open('a+b') as lock:
+        if os.name == 'nt':
+            import msvcrt
+            if lock.tell() == 0:
+                lock.write(b'0')
+                lock.flush()
+            lock.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    sleep(.05)
+            try:
+                yield
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _cached_acados_solver(solver_type, ocp, json_file, identity, *, library_name):
+    """有效且完整的编译产物只加载；旧无清单缓存首次重建。失败不回退。"""
+    json_file = Path(json_file)
+    manifest = json_file.with_suffix('.cache.json')
+    library = Path(ocp.code_export_directory) / library_name
+    artifacts = (json_file, library)
+    with _acados_cache_lock(json_file.with_suffix('.lock')):
+        try:
+            saved = json.loads(manifest.read_text(encoding='utf-8'))
+            complete = saved == {'identity': identity,
+                                 'artifacts': {str(p): _file_digest(p) for p in artifacts}}
+        except (OSError, ValueError):
+            complete = False
+        if complete:
+            return solver_type(ocp, json_file=str(json_file), verbose=False,
+                               generate=False, build=False)
+        # 先撤销完成标记，避免失败生成的半成品被其他进程使用。
+        manifest.unlink(missing_ok=True)
+        solver = solver_type(ocp, json_file=str(json_file), verbose=False,
+                             generate=True, build=True)
+        saved = {'identity': identity,
+                 'artifacts': {str(p): _file_digest(p) for p in artifacts}}
+        pending = manifest.with_suffix('.tmp')
+        pending.write_text(json.dumps(saved, sort_keys=True), encoding='utf-8')
+        pending.replace(manifest)
+        return solver
 
 
 @dataclass(frozen=True)
@@ -131,6 +226,7 @@ class MpccPlanner:
 
     def __init__(self, limits, build_dir, *, n=20, dt=.2, soft_clearance_m=0., clearance_weight=1.):
         """build_dir 参数为可共享根目录；实例 build_dir 为配置指纹隔离目录。"""
+        started=perf_counter()
         if type(n) is not int or n < 1 or not np.isfinite(dt) or dt <= 0:
             raise ValueError('horizon requires positive integer n and finite positive dt')
         if not all(np.isfinite(v) and v>=0 for v in (soft_clearance_m,clearance_weight)):
@@ -141,12 +237,17 @@ class MpccPlanner:
         self.model_fingerprint = hashlib.sha256(f'exact-circle-soft-clearance-v5:{self.N}:{self.dt.hex()}:{limits.digest()}:{self.soft_clearance_m.hex()}:{self.clearance_weight.hex()}'.encode()).hexdigest()[:12]
         try:
             import casadi as ca
+            import acados_template
+            from acados_template.utils import get_shared_lib_prefix, get_shared_lib_ext, get_shared_lib_dir
             from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
         except ImportError as exc:
             raise SolverUnavailable('real acados_template/CasADi dependencies unavailable; no fallback') from exc
         self.limits=limits
         self.build_root=Path(build_dir).resolve()
-        self.build_dir=self.build_root/self.model_fingerprint
+        sdk_identity = _acados_cache_identity(
+            Path(acados_template.__file__).parent, AcadosOcp().acados_lib_path, ca.__version__,
+            runtime_dir=get_shared_lib_dir())
+        self.build_dir=self.build_root/self.model_fingerprint/sdk_identity[:12]
         self.build_dir.mkdir(parents=True,exist_ok=True)
         self._warm=None
         self._solvers={}
@@ -159,7 +260,6 @@ class MpccPlanner:
         else:
             self.offsets=np.array([-limits.body_length_m/3,0.,limits.body_length_m/3])
             self.radius=float(np.hypot(limits.body_length_m/6,limits.body_width_m/2))
-        started=perf_counter()
         for mode in ('forward','reverse','spin'):
             ocp=AcadosOcp()
             model=AcadosModel()
@@ -223,7 +323,9 @@ class MpccPlanner:
             ocp.constraints.lh_e=ocp.constraints.lh.copy(); ocp.constraints.uh_e=ocp.constraints.uh.copy()
             ocp.constraints.x0=np.zeros(6); ocp.parameter_values=np.zeros(self.parameter_count)
             ocp.code_export_directory=str(self.build_dir/mode)
-            self._solvers[mode]=AcadosOcpSolver(ocp,json_file=str(self.build_dir/(mode+'.json')),verbose=False)
+            self._solvers[mode]=_cached_acados_solver(
+                AcadosOcpSolver, ocp, self.build_dir/(mode+'.json'), sdk_identity,
+                library_name=get_shared_lib_prefix()+'acados_ocp_solver_'+model.name+get_shared_lib_ext())
         self.build_ms=(perf_counter()-started)*1000
 
     @property

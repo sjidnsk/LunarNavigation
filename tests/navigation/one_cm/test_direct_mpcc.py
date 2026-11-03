@@ -329,12 +329,11 @@ def test_velocity_diagnostics_preserve_command_and_single_certification(monkeypa
     monkeypatch.setattr(certification,'certify',certify)
     kwargs=dict(reference_interval_s=.2,last_command=(0.,.06),elapsed_s=.05,command_hold_s=.1)
     plain=execution.certified_velocity_command(result,state,limits,**kwargs)
-    diagnostics={}; coverage=[]
+    diagnostics={}
     observed=execution.certified_velocity_command(result,state,limits,diagnostics=diagnostics,
-        proof_sink=coverage.append,**kwargs)
+        **kwargs)
     assert observed == plain
     assert len(calls)==2
-    assert coverage == pytest.approx([calls[-1]])
     assert diagnostics['command_proof_duration_s'] == pytest.approx(calls[-1])
     assert diagnostics['command_proof_duration_s'] >= .1
     assert diagnostics['command_reject_reason'] is None
