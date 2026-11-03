@@ -10,7 +10,11 @@
 namespace lunar::incremental_navigation::convex_polygon {
 using Polygon = std::vector<Point2>;
 inline double Cross(Point2 a, Point2 b, Point2 p) {
-  return (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+  // 两项乘积各自舍入，避免ARM的FMA收缩把Cross(a,b,b)变成微小负数。
+  // 这不是面积容差；保持原有零阈值和跨平台一致的乘积差语义。
+  volatile double left = (b.x - a.x) * (p.y - a.y);
+  volatile double right = (b.y - a.y) * (p.x - a.x);
+  return left - right;
 }
 inline double Area(const Polygon& p) {
   if (p.size() < 3) return 0.;

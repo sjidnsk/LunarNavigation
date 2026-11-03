@@ -80,3 +80,12 @@ def test_clipped_result_can_be_used_as_subject(compiled):
     with _api().NativeTerrain(compiled[0]) as terrain:
         part, = terrain.polygon_intersection(square, triangle)
         assert area(terrain.polygon_intersection(part, square)) == pytest.approx(area((part,)))
+
+
+def test_rotated_rectangle_endpoint_cancellation_is_not_nonconvex(compiled):
+    diamond=((0.,0.),(1.4142135623730951,1.414213562373095),
+             (3.469446951953614e-16,2.8284271247461903),(-1.414213562373095,1.4142135623730951))
+    square=((0.,0.),(2.,0.),(2.,2.),(0.,2.))
+    with _api().NativeTerrain(compiled[0]) as ops:
+        assert area(ops.polygon_intersection(diamond,diamond))==pytest.approx(4.)
+        assert area(ops.polygon_intersection(square,diamond))==pytest.approx(4.*2**.5-4.)
